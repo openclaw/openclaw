@@ -1,16 +1,18 @@
 import { createSignal, createUniqueId, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { isCronJobRunning } from "../../lib/cron-status.ts";
+import { isCronJobRunning, resolveCronJobAttention } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 /** Saved-job diagnostics remain available even when the run is no longer retained. */
-export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }) {
+export function AttentionDetails(props: { job: CronJob; onReviewRun?: () => void }) {
   const causeId = createUniqueId();
   // Raw errors are diagnostics: collapsed unless the reader asks for them.
   const [open, setOpen] = createSignal(false);
+  const attention = () => resolveCronJobAttention(props.job);
+  const executionFailed = () => attention() === "error";
   const formatTimestamp = () => createMsFormatter(undefined, t("common.na"));
   const cause = () => {
     const error = formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));
@@ -39,7 +41,9 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
             {t(
               props.job.state.autoDisabled
                 ? "cron.attention.autoDisabledTitle"
-                : "cron.attention.title",
+                : executionFailed()
+                  ? "cron.attention.title"
+                  : `cron.result.${attention()}`,
             )}
           </strong>
           <span class="cron-failure-details__outcome">
@@ -60,19 +64,26 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
             </>
           ) : undefined}
         </span>
-        <button
-          type="button"
-          class="cron-failure-details__toggle"
-          data-test-id="cron-failure-details-toggle"
-          aria-expanded={open() ? "true" : "false"}
-          aria-controls={causeId}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {t("cron.attention.errorDetails")}
-          <Icon name="chevronDown" />
-        </button>
+        <Show when={executionFailed()}>
+          <button
+            type="button"
+            class="cron-failure-details__toggle"
+            data-test-id="cron-failure-details-toggle"
+            aria-expanded={open() ? "true" : "false"}
+            aria-controls={causeId}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {t("cron.attention.errorDetails")}
+            <Icon name="chevronDown" />
+          </button>
+        </Show>
       </div>
-      <Show when={open()}>
+      <Show when={!executionFailed()}>
+        <div class="cron-failure-details__outcome">
+          {formatUiExternalText(props.job.state.lastMeaningfulResult?.summary)}
+        </div>
+      </Show>
+      <Show when={executionFailed() && open()}>
         <pre id={causeId} class="cron-error-details__text">
           {cause()}
         </pre>

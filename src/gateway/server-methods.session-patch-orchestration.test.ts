@@ -4,9 +4,13 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { captureSelfSnooze } from "../sessions/session-self-snooze.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
+import * as patchEffects from "./server-methods/sessions-patch-effects.js";
+import { bindDeferredSelfSnoozePatch } from "./server-methods/sessions-patch-self-snooze.js";
 import * as sessionPatchPreflight from "./server-methods/sessions-shared.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
@@ -153,6 +157,82 @@ const patchContext = (overrides: Record<string, unknown> = {}) =>
   }) as never;
 
 describe("sessions.patchMany orchestration", () => {
+  it.each(["deadline", "wake"])(
+    "a sidebar %s supersedes self-snooze at commit, not publication",
+    async (action) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        const key = "agent:main:dashboard:sidebar-snooze";
+        const target = { agentId: "main", sessionKey: key, sessionId: "generation", storePath: "" };
+        await seedEntry(key, target.sessionId);
+        target.storePath = (
+          await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg: {}, key })
+        ).storePath;
+        const older = captureSelfSnooze(target);
+        let newer: typeof older | undefined;
+        let olderCurrentAtPublication: boolean | undefined;
+        const publish = patchEffects.publishSessionPatchEffects;
+        using _ = vi
+          .spyOn(patchEffects, "publishSessionPatchEffects")
+          .mockImplementation((params) => {
+            olderCurrentAtPublication = older.current();
+            newer = captureSelfSnooze(target);
+            newer.admit();
+            return publish(params);
+          });
+        try {
+          older.admit();
+          const respond = await patchMany({
+            targets: [{ key, expectedSessionId: target.sessionId }],
+            patch: { snoozedUntil: action === "wake" ? null : Date.now() + 60_000 },
+          });
+          expectOutcomes(respond, [success(key)]);
+          expect(olderCurrentAtPublication).toBe(false);
+          expect(newer?.current()).toBe(true);
+        } finally {
+          older.release();
+          newer?.release();
+        }
+      });
+    },
+  );
+
+  it("settling one agent snooze does not revoke a later intent", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const key = "agent:main:dashboard:agent-snooze";
+      await seedEntry(key, "original-transcript");
+      const target = await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg: {}, key });
+      const chat = chatRef({
+        agentId: "main",
+        sessionKey: key,
+        storePath: target.readSource!.path,
+      });
+      const later = captureSelfSnooze(chat);
+      try {
+        // Rotation alone is not a new chat. An accepted input is tested at its owner.
+        await seedEntry(key, "next-transcript");
+        const params = { key, snoozedUntil: Date.now() + 60_000 };
+        const settle = async (address: typeof chat) => {
+          const respond = vi.fn();
+          await sessionMutationHandlers["sessions.patch"]!({
+            params: bindDeferredSelfSnoozePatch({ ...params }, address),
+            respond,
+            context: patchContext(),
+          } as never);
+          return respond.mock.calls[0]?.[0];
+        };
+        expect(await settle(chatRef({ ...chat, storePath: "another-store" }))).toBe(false);
+        expect(readEntry(key)?.snoozedUntil).toBeUndefined();
+        expect(await settle(chat)).toBe(true);
+        expect(readEntry(key)?.snoozedUntil).toBe(params.snoozedUntil);
+        expect(later.current()).toBe(true);
+      } finally {
+        later.release();
+      }
+    });
+  });
+
   it("preserves request-order outcomes while isolating expected-identity failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});

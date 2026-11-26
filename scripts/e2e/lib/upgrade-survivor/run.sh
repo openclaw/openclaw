@@ -2152,6 +2152,11 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
+    if [ "${last_update_restart_route:-}" = resident ]; then
+      # A resident Gateway finishes the core run before its watcher records plugin
+      # maintenance; the plugin assertions below read that terminal result.
+      phase await-recovery-plugin-maintenance await_recovery_plugin_maintenance || return "$?"
+    fi
     if [ "$membership_mode" = absent ] && [ "${last_update_restart_route:-}" != resident ]; then
       phase recovery-membership-warning assert_managed_membership_warning || return "$?"
     fi
@@ -2166,6 +2171,52 @@ repair_update_restart_auth() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+await_recovery_plugin_maintenance() {
+  local status_json="$ARTIFACT_ROOT/recovery-plugin-status.json" state
+  local deadline=$((SECONDS + ${RECOVERY_PLUGIN_MAINTENANCE_TIMEOUT_SECONDS:-720}))
+  while :; do
+    state=pending
+    if openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
+      >"$status_json" 2>"$ARTIFACT_ROOT/recovery-plugin-status.err"; then
+      state="$(node --input-type=module - "$ARTIFACT_ROOT/recovery-update.json" "$status_json" <<'NODE'
+import fs from "node:fs";
+const read = (file) => {
+  const text = fs.readFileSync(file, "utf8");
+  return JSON.parse(text.slice(text.indexOf("{")));
+};
+const { runId } = read(process.argv[2]);
+if (!runId) throw new Error("recovery update receipt has no runId");
+let status;
+try {
+  status = read(process.argv[3]);
+} catch {
+  process.stdout.write("pending");
+  process.exit(0);
+}
+const step = status.lastRun?.runId === runId
+  ? status.lastRun.steps?.find((entry) => entry.step === "plugins")
+  : undefined;
+if (step?.detail) console.error(`recovery plugin maintenance: ${step.detail}`);
+process.stdout.write(step?.status === "completed" || step?.status === "failed" ? step.status : "pending");
+NODE
+)" || return "$?"
+    fi
+    case "$state" in
+      completed) return 0 ;;
+      failed)
+        echo "Resident plugin maintenance failed for the recovery update" >&2
+        return 1
+        ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "Resident plugin maintenance did not finish for the recovery update" >&2
+      openclaw_e2e_print_log "$status_json" >&2
+      return 1
+    fi
+    sleep 1
+  done
 }
 
 assert_managed_membership_warning() {

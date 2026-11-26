@@ -21,8 +21,13 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -69,7 +74,16 @@ class SessionBrowserRefreshTest {
     val scopedReads = AtomicInteger()
     val widenedRead = CompletableDeferred<Unit>()
     try {
-      drainWithMainLooper { runtime.chat.sessions.first { it.isNotEmpty() } }
+      drainWithMainLooper {
+        runtime.chat.sessions.first { it.isNotEmpty() }
+        // The screenshot history bootstrap awaits a health-driven roster refresh after publishing its rows.
+        val chatScope = ReflectionHelpers.getField<CoroutineScope>(runtime.chat, "scope")
+        val startupReads =
+          chatScope.coroutineContext.job.children
+            .filterIsInstance<Deferred<*>>()
+            .toList()
+        withTimeout(5_000) { startupReads.joinAll() }
+      }
       val original = ReflectionHelpers.getField<suspend (String, String?) -> String>(runtime.chat, "requestGateway")
       val request: suspend (String, String?) -> String = { method, params ->
         if (method != "sessions.list") {
@@ -108,7 +122,16 @@ class SessionBrowserRefreshTest {
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
       // Bind the live runtime state before mounting; the test counts subsequent wire reads.
       runtime.chat.refreshSessions(limit = 1)
-      drainWithMainLooper { model.chatSessions.first { rows -> rows.any { it.key == "first" } } }
+      drainWithMainLooper {
+        model.chatSessions.first { rows -> rows.any { it.key == "first" } }
+        withTimeout(5_000) {
+          model.isConnected.first { it == runtime.gatewayConnectionDisplay.value.isConnected }
+          model.gatewayCatalogRevision.first { it == runtime.gatewayCatalogRevision.value }
+          model.sessionBrowserRevision.first { it == runtime.chat.sessionBrowserRevision.value }
+          combine(model.chatSessionOwnerAgentId, model.gatewayDefaultAgentId) { owner, fallback -> owner ?: fallback }
+            .first { it == (runtime.chat.sessionOwnerAgentId.value ?: runtime.gatewayDefaultAgentId.value) }
+        }
+      }
       compose.setContent {
         if (mounted.value) {
           val state = rememberSessionBrowserSearchState(model, model.chatSessions.collectAsState().value, query.value, archived = true)

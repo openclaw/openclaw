@@ -21,6 +21,67 @@ function entryText(entry: Element | undefined, part: string) {
 }
 
 describe("cron view run history", () => {
+  it("shows each recorded task outcome without borrowing the job's retained blocker", async () => {
+    const cases: Array<[NonNullable<CronRunLogEntry["result"]>, string, string]> = [
+      [{ outcome: "blocked", summary: "Source access required" }, "Blocked", "muted"],
+      [{ outcome: "needs_attention", summary: "Choose the source" }, "Needs attention", "muted"],
+      [{ outcome: "no_change" }, "No change", "muted"],
+      [{ outcome: "progress", summary: "Processed one source" }, "Progress", "ok"],
+      [{ outcome: "done", summary: "All sources processed" }, "Completed", "ok"],
+    ];
+    const container = await renderView(
+      {
+        editingJob: createCronViewJob("job-1", {
+          state: {
+            lastMeaningfulResult: { outcome: "blocked", summary: "Old blocker", atMs: 1 },
+          },
+        }),
+        runs: cases.map(([result], ts) => createRun({ ts, result })),
+      },
+      "job",
+    );
+    const entries = [...container.querySelectorAll(".cron-run-entry")].toReversed();
+    cases.forEach(([result, label, tone], index) => {
+      const entry = entries[index]!;
+      expect(entryText(entry, "status")).toBe(label);
+      expect(entry.getAttribute("data-tone")).toBe(tone);
+      expect(entry.textContent).not.toContain("Old blocker");
+      if (result.summary) {
+        expect(entryText(entry, "summary")).toContain(result.summary);
+      }
+    });
+  });
+
+  it("keeps execution errors ahead of a recorded result and delivery failures distinct", async () => {
+    const container = await renderView(
+      {
+        runs: [
+          createRun({
+            ts: 2,
+            status: "error",
+            error: "Execution interrupted",
+            result: { outcome: "done", summary: "Premature completion" },
+          }),
+          createRun({
+            ts: 1,
+            completionStatus: "failed",
+            deliveryStatus: "not-delivered",
+            deliveryError: "Destination unavailable",
+            result: { outcome: "blocked", summary: "Source access required" },
+          }),
+        ],
+      },
+      "job",
+    );
+    const [failed, blocked] = [...container.querySelectorAll(".cron-run-entry")];
+    expect(entryText(failed, "status")).toBe("Error");
+    expect(failed?.getAttribute("data-tone")).toBe("danger");
+    expect(failed?.textContent).toContain("Execution interrupted");
+    expect(failed?.textContent).not.toContain("Premature completion");
+    expect(entryText(blocked, "status")).toBe("Blocked · Error");
+    expect(entryText(blocked, "delivery-error")).toContain("Destination unavailable");
+  });
+
   it("renders execution errors and delivery labels without overriding execution status", async () => {
     const cases: Array<[Partial<CronRunLogEntry>, string, string, string?]> = [
       [{ completionStatus: "succeeded", deliveryStatus: "delivered" }, "Completed", "Delivered"],

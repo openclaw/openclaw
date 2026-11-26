@@ -114,8 +114,8 @@ export function captureAudio() {
   });
 }
 
-export function click(target: HTMLElement) {
-  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+export function click(target: HTMLElement, detail = 1) {
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail }));
 }
 
 export function pointer(type: string): Event {

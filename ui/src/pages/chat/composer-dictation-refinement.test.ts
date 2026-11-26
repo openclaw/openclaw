@@ -161,6 +161,43 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     expect(h.commit).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { limit: 8, committed: false },
+    { limit: 13, committed: true },
+    { limit: undefined, committed: true },
+  ])("keeps a reviewed insertion complete at limit $limit", async ({ limit, committed }) => {
+    const h = refinementHarness();
+    h.target.value = "ask me";
+    h.target.setSelectionRange(6, 6);
+    if (limit !== undefined) {
+      h.target.maxLength = limit;
+    }
+    await h.start();
+    await h.finish("Basil.");
+    expect(h.controller.review?.result.text).toBe("Basil.");
+    const input = vi.fn();
+    h.target.addEventListener("input", input);
+
+    expect(h.controller.insertReviewed()).toBe(committed);
+    const expected = committed ? "ask me Basil." : "ask me";
+    expect(h.target.value).toBe(expected);
+    expect(h.controller.review).toMatchObject({
+      rawText: "Basil.",
+      result: { text: "Basil." },
+      delivery: committed ? "committed" : "not-committed",
+      canInsert: false,
+      canUndo: committed,
+    });
+    expect(h.controller.pendingReview).toBe(false);
+    expect(h.controller.insertReviewed()).toBe(false);
+    expect(h.target.value).toBe(expected);
+    expect(input).toHaveBeenCalledTimes(committed ? 1 : 0);
+    expect(h.commit).toHaveBeenCalledOnce();
+    if (!committed) {
+      expect(h.commit.mock.results[0]?.value).toBe(false);
+    }
+  });
+
   it("reprocesses unsent text at a newer revision and retires refined output on raw selection", async () => {
     const h = refinementHarness();
     await h.start();

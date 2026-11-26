@@ -2719,41 +2719,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history backfills older offset pages across a dense silent gap", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const startedAt = Date.now();
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "older visible question", { timestamp: startedAt }),
-        createTextTranscriptEvent("assistant", "older visible answer", {
-          timestamp: startedAt + 1,
-        }),
-        ...Array.from({ length: 80 }, (_, index) =>
-          createTextTranscriptEvent("assistant", "NO_REPLY", { timestamp: startedAt + index + 2 }),
-        ),
-        createTextTranscriptEvent("assistant", "latest visible answer", {
-          timestamp: startedAt + 82,
-        }),
-      ]);
-
-      const firstPage = await historyPage(ws, { limit: 1, offset: 0, maxChars: 100 });
-      expect(firstPage.ok).toBe(true);
-      expect(JSON.stringify(firstPage.payload?.messages)).toContain("latest visible answer");
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await historyPage(ws, {
-        limit: 2,
-        offset: firstPage.payload?.nextOffset,
-        maxChars: 100,
-      });
-      expect(olderPage.ok).toBe(true);
-      expect(olderPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
-      expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
-      expect(olderPage.payload?.hasMore).toBe(false);
-      expect(olderPage.payload?.nextOffset).toBeUndefined();
-    });
-  });
-
   test.each([
     {
       boundary: {

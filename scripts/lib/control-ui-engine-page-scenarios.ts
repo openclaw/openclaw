@@ -986,6 +986,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       },
     },
   },
+  roles: {
+    ready: ".settings-workspace .settings-section",
+    actionUnavailable:
+      "Role changes rewrite Gateway config and reconnect people; listing is measured.",
+  },
   about: {
     ready: "openclaw-about-page",
     actionUnavailable: "Informational page has no primary state-changing interaction.",

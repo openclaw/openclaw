@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import type {
   WebSearchStatusResult,
   WebSearchTestResult,
@@ -536,6 +537,28 @@ describe("Search settings", () => {
       expect(page.element.querySelector('a[href="https://a.test/previous"]')).toBeNull();
     },
   );
+
+  it("keeps an over-limit query editable and submits the corrected 500 code points", async () => {
+    const page = await mount();
+    const query = page.input("Search query");
+    const atLimit = "🪁".repeat(499) + "駅";
+    await userEvent.fill(query, atLimit + "!");
+    expect(query.value).toBe(atLimit + "!");
+    expect(query.ariaInvalid).toBe("true");
+    page.expectText("Shorten the search query to 500 characters or fewer.");
+    expect(page.button("Test search").disabled).toBe(true);
+    await userEvent.keyboard("{Enter}");
+    expect(page.calls("webSearch.test")).toHaveLength(0);
+
+    await userEvent.keyboard("{End}{Backspace}");
+    expect(query.value).toBe(atLimit);
+    expect(query.ariaInvalid).toBeNull();
+    page.expectNoText("Shorten the search query to 500 characters or fewer.");
+    page.click("Test search");
+    await page.settle();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+    expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: atLimit });
+  });
 
   it("submits Enter but ignores IME confirmation", async () => {
     const page = await mount();

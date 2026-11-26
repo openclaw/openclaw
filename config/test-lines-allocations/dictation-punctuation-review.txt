@@ -6,4 +6,6 @@
 # queued/history keyboard paths, and rich/native mention identity plus Undo.
 # Pending-review coverage holds repeated and delayed sends at all three owners,
 # retires empty captures, preserves Escape ownership, and requires a separate Send.
-1591
+# Main integration retains both regression sets and adds whole-candidate
+# capacity rejection, exact-fit, and unbounded insertion cases.
+1630

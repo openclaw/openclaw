@@ -391,7 +391,9 @@ async function runProviderAuthMethod(
     persistedProfiles.length > 0
       ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
       : undefined;
-  return { result: connectionResult, profiles: persistedProfiles, authRefresh, modelAccess };
+  // The provider's own result: a credential-only sign-in applies none of its recommendations,
+  // but `models.authLogin` still selects its recommended model for an agent without one.
+  return { result, profiles: persistedProfiles, authRefresh, modelAccess };
 }
 
 export async function modelsAuthSetupTokenCommand(

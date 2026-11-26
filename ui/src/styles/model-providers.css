@@ -147,6 +147,20 @@
   height: 15px;
 }
 
+/* Provider-declared account actions: a full-width line under the account identity. */
+.model-providers__profile-account-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block-end: var(--space-2);
+}
+
+.model-providers__profile-manage {
+  font-size: var(--control-ui-text-xs);
+}
+
 .model-providers__profile-grip {
   cursor: grab;
   touch-action: none;

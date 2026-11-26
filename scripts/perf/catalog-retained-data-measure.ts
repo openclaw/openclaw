@@ -16,6 +16,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import type { PreparedModelRuntimePluginGeneration } from "../../src/agents/prepared-model-runtime.types.js";
 import type { ActiveRemoteModelCatalog } from "../../src/model-catalog/remote-overlay.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
@@ -88,12 +89,7 @@ let census = expected;
 const inspector = values.allocation ? new Session() : undefined;
 try {
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const hostLoadBefore = loadavg();
   const started = performance.now();

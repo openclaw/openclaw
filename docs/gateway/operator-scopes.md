@@ -269,7 +269,15 @@ secret prompts, and other privileged question workflows retain their existing
 ## Named operator roles
 
 Team Gateways enable named-role enforcement by setting `gateway.roles.default`.
-This binds authenticated durable profiles to named operator roles.
+This binds authenticated durable profiles to named operator roles, including the
+administrator who sets it: a profile without an assignment gets the default too.
+Before turning on a default, assign yourself a role that includes `operator.admin`.
+The Gateway refuses a role change (a config write to `gateway.roles` or `users.setRole`)
+that would leave the profile making it without `operator.admin`, and the Control UI
+Roles page asks who stays an administrator before it sets a default. The gateway owner
+and shared-token connections are never under roles, so `openclaw config unset
+gateway.roles.default` on the Gateway host always turns enforcement back off.
+When a role change widens someone's access, their open connections reconnect to pick it up.
 Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
 scopes, and whether newly created sessions require sandboxing. It can also require
@@ -300,6 +308,11 @@ an access policy supplied by a plugin.
   },
 }
 ```
+
+Administrators can also manage roles in the Control UI under **Settings → Team →
+Roles**: create, duplicate, edit and delete definitions, choose the default
+role, and assign people. Edits use `config.patch` against the loaded
+configuration, so a concurrent change is reported instead of overwritten.
 
 Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role while named-role enforcement is
@@ -341,8 +354,8 @@ the catalog governs only current OpenClaw ID members through their canonical lin
 profile, including that same person's ordinary trusted-proxy, HTTP, channel, and
 background access. A stored identity link alone is not membership. Other people keep
 the same authentication, scopes, attribution, and session access as a Gateway without
-`roles`; named `users.setRole` assignments for them require a default, while clearing
-an assignment remains allowed.
+`roles`. `users.setRole` can still save a named assignment for them; it takes effect
+only once a default turns enforcement on, which lets administrators be chosen first.
 An enforced person with no resolvable role, or a role that grants no scopes, cannot
 connect. An otherwise permitted connection with an empty device or header scope
 ceiling may still connect for health and scope-upgrade recovery. The Control UI
@@ -653,9 +666,8 @@ sign-in transport.
 OpenClaw ID identifies the member's linked Gateway profile. That profile's effective
 role is the single authority across OpenClaw ID, trusted proxy, Tailscale, and other
 identified sign-in routes. Invite approval assigns the invite's role to the profile.
-An owner or an `operator.admin` administrator can change it with `users.setRole`.
-**Access → Change role** uses an owner-signed membership change to request the same
-profile assignment. The membership role is a display label: Discovery and Access
+An owner or an `operator.admin` administrator can change it with `users.setRole`,
+including from **Settings → Team → Roles**. The membership role is a display label: Discovery and Access
 publish the current profile role, not a separate permission ceiling.
 
 On upgrade, the Gateway imports each existing member's membership role into an
@@ -670,19 +682,21 @@ An individual request already admitted may finish. Automations and other fresh
 starts recheck their saved source before running. Owner-device authority is unchanged.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
-`operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
+`admin`, `operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
 are preserved. Installing presets rewrites the config file as JSON through the
 standard config writer and removes JSON5 comments. Startup installs them before
 publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
 activation that cannot apply at runtime is reported in OpenClaw ID service status
 with a request to restart the Gateway.
 
-The operator preset grants read, write, approvals, questions, and
+The admin preset grants `operator.admin` with all agents and writable shared sessions;
+it is assigned to nobody until an administrator chooses who gets it. The operator preset grants read, write, approvals, questions, and
 talk scopes with all agents and writable shared sessions. The viewer preset
 allows all agents and viewable shared sessions but grants only
 `operator.sessions.read`: conversation browsing, not logs, `users.list`, or general
-Gateway diagnostics. The guest preset grants `operator.sessions.write`, all agents,
-viewable shared sessions, and `sandbox: "required"`. Operator remains the default
+Gateway diagnostics. The guest preset grants `operator.sessions.read` and `operator.sessions.write`,
+all agents, `sandbox: "required"`, and other people's sessions only when invited,
+up to Send (`maxInvitedAccess: "send"`). Operator remains the default
 invite role. These are editable definitions; custom member roles may
 include `operator.admin` and pairing scopes with no built-in ceiling.
 

@@ -76,6 +76,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: textarea.selectionStart,
             end: textarea.selectionEnd,
             value: textarea.value,
+            maxLength: textarea.maxLength,
           })?.value
         : undefined;
       return previewValue;
@@ -99,6 +100,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: late ? target.selectionStart : target.value.length,
             end: late ? target.selectionEnd : target.value.length,
             value: target.value,
+            maxLength: reviewed ? -1 : target.maxLength,
           },
           late,
           preservePreview,
@@ -110,6 +112,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         reviewed &&
         (target.readOnly ||
           target.disabled ||
+          (target.maxLength >= 0 && insertion.value.length > target.maxLength) ||
           !reviewed.isCurrent() ||
           (capturedSelection &&
             (target !== capturedTarget || draftValue(target) !== capturedSelection.value)))
