@@ -20,7 +20,7 @@ import {
 
 const OPENCLAW_STATE_SCHEMA_VERSION = 40;
 
-export function assertSupportedStateSchemaVersion(
+function assertSupportedStateSchemaVersion(
   db: EngineConnection,
   pathname: string,
   prepared?: StateSchemaVersionFacts,
@@ -57,16 +57,17 @@ export function assertSupportedStateSchemaVersion(
   }
 }
 
-process.once("message", (message: unknown) => {
-  if (typeof message !== "string") {
-    throw new Error("Expected the migrated state database path");
-  }
-  const database = new DatabaseSync(message, { readOnly: true });
-  try {
-    assertSupportedStateSchemaVersion(database, message);
-  } finally {
-    database.close();
-  }
-  process.disconnect?.();
+const command = new Promise<{ databasePath: string; runningRoot: string }>((resolve) => {
+  process.once("message", resolve);
 });
 process.send?.({ ready: true });
+const { databasePath, runningRoot } = await command;
+const { settleGitReleaseTrial } = await import("../infra/git-release.js");
+await settleGitReleaseTrial(runningRoot);
+const database = new DatabaseSync(databasePath, { readOnly: true });
+try {
+  assertSupportedStateSchemaVersion(database, databasePath);
+} finally {
+  database.close();
+}
+process.disconnect?.();

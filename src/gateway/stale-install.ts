@@ -29,6 +29,7 @@ import {
   onGatewaySuspendAdmissionChange,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { LegacyTrial } from "../update/legacy-trial-record.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import type { PreparedReadinessChecker } from "./health/types.js";
 import { isGatewayTransportError } from "./transport-error.js";
@@ -81,6 +82,7 @@ type InstallationObserver = {
   check?: Promise<void>;
   readiness?: PreparedReadinessChecker;
   trialSettled?: boolean;
+  legacyTrial?: LegacyTrial;
   legacyTrialChecked?: boolean;
   legacyTrialCheck?: Promise<void>;
   recoverTrialHistory?: () => Promise<boolean>;
@@ -186,6 +188,21 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
   }
 }
 
+export async function captureGatewayInstallationTrial(): Promise<void> {
+  const observer = installationState.observer;
+  if (!observer) {
+    return;
+  }
+  try {
+    const { captureLegacyTrial } = await import("../update/legacy-trial.js");
+    observer.legacyTrial = await captureLegacyTrial(observer.root, observer.running.buildId);
+  } catch (error) {
+    createSubsystemLogger("gateway/update-run").warn(
+      `Could not capture the update trial before readiness: ${coerceErrorMessage(error)}`,
+    );
+  }
+}
+
 export async function announceGatewayInstallationReady(
   readiness: PreparedReadinessChecker,
 ): Promise<void> {
@@ -235,6 +252,7 @@ function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<
       observer.recoverTrialHistory = await observeLegacyTrialReadiness(
         observer.running.buildId,
         observer.root,
+        observer.legacyTrial,
       );
       observer.legacyTrialChecked = true;
     })

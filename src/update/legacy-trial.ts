@@ -12,6 +12,7 @@ import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
   legacyTrialReceipt,
   legacyTrialSchema,
+  type LegacyTrial,
   type LegacyTrialReceipt,
 } from "./legacy-trial-record.js";
 import { resolvePrefix } from "./store.js";
@@ -23,7 +24,10 @@ async function readLegacyTrial(prefix: string) {
     );
     return legacyTrialSchema.safeParse(raw).data;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT") || error instanceof SyntaxError) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    if (error instanceof SyntaxError) {
       return undefined;
     }
     throw error;
@@ -81,11 +85,10 @@ export async function prepareLegacyTrialRun(
   );
 }
 
-/** Core readiness ends only the legacy trial this Gateway actually runs, without opening history. */
-export async function disarmLegacyTrial(
+export async function captureLegacyTrial(
   root: string | null,
   buildId: string | null,
-): Promise<LegacyTrialReceipt | undefined> {
+): Promise<LegacyTrial | undefined> {
   if (!root || !buildId) {
     return undefined;
   }
@@ -100,12 +103,31 @@ export async function disarmLegacyTrial(
   ) {
     return undefined;
   }
-  const receipt = legacyTrialReceipt(trial);
-  const current = await readLegacyTrial(prefix);
-  if (!current || legacyTrialReceipt(current).step !== receipt.step) {
+  return trial;
+}
+
+/** Core readiness ends only the legacy trial this Gateway actually runs, without opening history. */
+export async function disarmLegacyTrial(
+  root: string | null,
+  buildId: string | null,
+  captured?: LegacyTrial,
+): Promise<LegacyTrialReceipt | undefined> {
+  const trial = captured ?? (await captureLegacyTrial(root, buildId));
+  if (!root || !trial || trial.buildId !== buildId) {
     return undefined;
   }
-  await fs.rm(path.join(prefix, "releases", ".trial"), { force: true });
+  const prefix = resolvePrefix();
+  if (!(await matchesSelectedRelease(root, trial.target, prefix))) {
+    return undefined;
+  }
+  const receipt = legacyTrialReceipt(trial);
+  const current = await readLegacyTrial(prefix);
+  if (current !== null && (!current || legacyTrialReceipt(current).step !== receipt.step)) {
+    return undefined;
+  }
+  if (current) {
+    await fs.rm(path.join(prefix, "releases", ".trial"), { force: true });
+  }
   return receipt;
 }
 

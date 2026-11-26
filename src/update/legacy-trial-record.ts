@@ -18,6 +18,8 @@ export const legacyTrialSchema = z.object({
   restoring: z.undefined().optional(),
 });
 
+export type LegacyTrial = z.infer<typeof legacyTrialSchema>;
+
 export type LegacyTrialReceipt = { step: string; version: string; buildId: string };
 
 export function legacyTrialReceipt({
@@ -26,7 +28,7 @@ export function legacyTrialReceipt({
   version,
   buildId,
   createdAt,
-}: z.infer<typeof legacyTrialSchema>): LegacyTrialReceipt {
+}: LegacyTrial): LegacyTrialReceipt {
   // Finalize step keys survive history compaction. The digest keeps paths out of diagnostic text.
   const publication = createHash("sha256")
     .update(JSON.stringify([target, previous, version, buildId, createdAt]))

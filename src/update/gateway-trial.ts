@@ -13,6 +13,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import type { LegacyTrial } from "./legacy-trial-record.js";
 import {
   readTrial,
   readUpdateLock,
@@ -270,9 +271,10 @@ export async function settleRunFromTrial(
 export async function observeLegacyTrialReadiness(
   buildId: string | null,
   runningRoot: string | null,
+  captured?: LegacyTrial,
 ): Promise<(() => Promise<boolean>) | undefined> {
   const { disarmLegacyTrial, recoverLegacyTrialRun } = await import("./legacy-trial.js");
-  const receipt = await disarmLegacyTrial(runningRoot, buildId);
+  const receipt = await disarmLegacyTrial(runningRoot, buildId, captured);
   return (
     receipt &&
     (() => recoverLegacyTrialRun(receipt, (runId) => schedulePostUpdateMaintenance({ runId })))

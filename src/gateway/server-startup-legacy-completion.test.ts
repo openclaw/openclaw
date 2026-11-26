@@ -64,7 +64,7 @@ vi.mock("../cli/update-cli/update-command-post-activation-inspections.js", async
   >[0]) => result,
 }));
 
-it("automatically completes the original Git update after its schema-40 driver refuses the newer schema and exits", async ({
+it("automatically completes the original Git update when its healthy schema-40 verifier removes the trial before refusing history", async ({
   signal,
 }) => {
   const fixture = await import("./server-startup-state.test-support.js");
@@ -79,7 +79,11 @@ it("automatically completes the original Git update after its schema-40 driver r
   const prefix = state.statePath("git-install");
   installed.root = path.join(prefix, "releases", "candidate", "openclaw");
   await fs.mkdir(path.join(installed.root, "dist"), { recursive: true });
-  await fs.symlink(installed.root, path.join(prefix, "openclaw"), "junction");
+  await fs.symlink(
+    process.platform === "win32" ? installed.root : path.relative(prefix, installed.root),
+    path.join(prefix, "openclaw"),
+    "junction",
+  );
   vi.resetModules();
   const { VERSION } = await import("../version.js");
   await fs.writeFile(
@@ -143,23 +147,6 @@ it("automatically completes the original Git update after its schema-40 driver r
     const { prepareLegacyTrialRun } = await import("../update/legacy-trial.js");
     await prepareLegacyTrialRun(run.runId, installed.root, () => {});
     await closeOpenClawStateDatabaseAsync();
-    driver.send(resolveOpenClawStateSqlitePath());
-    expect((await exited)[0]).toBe(1);
-    expect(stderr).toMatch(/uses newer schema version \d+; this build supports 40/u);
-    expect(inspectUpdateRunDriver(identity!)).toBe("dead");
-    const { reconcileAbandonedUpdateRunsAsync } =
-      await import("../infra/update-run-reconciliation.js");
-    await reconcileAbandonedUpdateRunsAsync({ runIds: [run.runId] });
-    expect(await getUpdateRunAsync(run.runId)).toMatchObject({
-      status: "failed",
-      reason: "abandoned",
-      after: {},
-      verification: {},
-    });
-    expect((await getUpdateRunAsync(run.runId))?.steps).toContainEqual(
-      expect.objectContaining({ step: "reconcile:abandoned", detail: "inactive-driver-dead" }),
-    );
-    expect(await fs.readFile(trialPath, "utf8")).toBe(JSON.stringify({ ...receipt, attempts: 1 }));
     const { createGatewaySchedulerClock } =
       await import("../test-utils/gateway-scheduler-clock.js");
     const clock = createGatewaySchedulerClock();
@@ -201,10 +188,31 @@ it("automatically completes the original Git update after its schema-40 driver r
         signal,
       }),
     ).toMatchObject({ coreReady: true, healthz: 200, readyz: 503 });
+    expect(inspectUpdateRunDriver(identity!)).toBe("alive");
+    expect(await fs.readFile(trialPath, "utf8")).toBe(JSON.stringify({ ...receipt, attempts: 1 }));
+    driver.send({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      runningRoot: path.join(prefix, "openclaw"),
+    });
+    expect((await exited)[0]).toBe(1);
+    expect(stderr).toMatch(/uses newer schema version \d+; this build supports 40/u);
+    expect(inspectUpdateRunDriver(identity!)).toBe("dead");
+    const { reconcileAbandonedUpdateRunsAsync } =
+      await import("../infra/update-run-reconciliation.js");
+    await reconcileAbandonedUpdateRunsAsync({ runIds: [run.runId] });
+    expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+      status: "failed",
+      reason: "abandoned",
+      after: {},
+      verification: {},
+    });
+    expect((await getUpdateRunAsync(run.runId))?.steps).toContainEqual(
+      expect.objectContaining({ step: "reconcile:abandoned", detail: "inactive-driver-dead" }),
+    );
+    await expect(fs.stat(trialPath)).rejects.toMatchObject({ code: "ENOENT" });
     const { TICK_INTERVAL_MS } = await import("./server-constants.js");
     await clock.advanceBy(TICK_INTERVAL_MS);
     await clock.advanceBy(TICK_INTERVAL_MS);
-    await expect(fs.stat(trialPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect
       .poll(() => getUpdateRunAsync(run.runId))
       .toMatchObject({
@@ -218,6 +226,19 @@ it("automatically completes the original Git update after its schema-40 driver r
           runningBuildId: installed.buildId,
         },
       });
+    const { readUpdateRunStatusWithOwedSteps } = await import("../infra/update-run-status.js");
+    const status = await readUpdateRunStatusWithOwedSteps(() => {});
+    expect(status).not.toHaveProperty("runStatusError");
+    if (!("lastRun" in status) || !status.lastRun) {
+      throw new Error("Expected the original update in status");
+    }
+    expect(status.abandonedRun).toBeUndefined();
+    expect(status.staleRun).toBeUndefined();
+    expect(status.lastRun?.origin.nextAction).toBeUndefined();
+    const { renderUpdateRunReport } = await import("../infra/update-run-report.js");
+    expect(JSON.stringify(renderUpdateRunReport(status.lastRun))).not.toContain("update repair");
+    await expect(fs.stat(trialPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(installed.root);
     expect((await listUpdateRunsAsync({ limit: 10 })).map((entry) => entry.runId)).toEqual([
       run.runId,
     ]);

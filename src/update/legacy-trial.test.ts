@@ -22,7 +22,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { VERSION } from "../version.js";
 import { observeLegacyTrialReadiness } from "./gateway-trial.js";
 import { legacyTrialReceipt } from "./legacy-trial-record.js";
-import { prepareLegacyTrialRun } from "./legacy-trial.js";
+import { captureLegacyTrial, prepareLegacyTrialRun } from "./legacy-trial.js";
 import { resolvePrefix } from "./store.js";
 
 vi.mock("../version.js", async (original) => ({
@@ -293,5 +293,32 @@ it.each(["unrelated-failure", "wrong-candidate", "stored-recovery"])(
     expect(result?.accepted).toBe(false);
     expect(await getUpdateRunAsync(unrelated.runId)).toEqual(unrelatedBefore);
     expect(await getUpdateRunAsync(f.runId)).toEqual(before);
+  },
+);
+
+it.each(["replaced-trial", "replaced-build", "invalid-trial"])(
+  "rejects captured evidence after its trial or selected build changes (%s)",
+  async (kind) => {
+    const f = await fixture();
+    await prepareLegacyTrialRun(f.runId, f.root, () => {});
+    const captured = await captureLegacyTrial(f.root, f.trial.buildId);
+    expect(captured).toBeDefined();
+    const before = await getUpdateRunAsync(f.runId);
+    await fs.rm(f.file);
+    if (kind === "replaced-trial") {
+      await fs.writeFile(f.file, JSON.stringify({ ...f.trial, createdAt: f.trial.createdAt + 1 }));
+    } else if (kind === "replaced-build") {
+      const root = path.join(resolvePrefix(), "releases", "other-candidate", "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      await fs.unlink(path.join(resolvePrefix(), "openclaw"));
+      await fs.symlink(root, path.join(resolvePrefix(), "openclaw"), "junction");
+    } else if (kind === "invalid-trial") {
+      await fs.writeFile(f.file, "{unfinished");
+    }
+    const bytes = await fs.readFile(f.file, "utf8").catch(() => null);
+    const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root, captured);
+    expect(recover).toBeUndefined();
+    expect(await getUpdateRunAsync(f.runId)).toEqual(before);
+    expect(await fs.readFile(f.file, "utf8").catch(() => null)).toBe(bytes);
   },
 );

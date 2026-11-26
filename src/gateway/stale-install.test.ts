@@ -151,7 +151,7 @@ describe("running installation replacement", () => {
     expect(trial.ready).not.toHaveBeenCalled();
     pending = false;
     await owner.checkGatewayInstallationReplacement();
-    expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root);
+    expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root, undefined);
   });
 
   it("keeps periodic installation observations free of synchronous filesystem calls", async () => {

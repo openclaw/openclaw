@@ -426,14 +426,16 @@ The normal next release update replaces the legacy launcher with the resident
 launcher.
 
 Git installs that tracked main before the resident launcher can retain a format-1
-trial. When the selected build reaches core readiness, the Gateway removes the
+trial. Before listening, the Gateway captures the matching publication. When the
+selected running build reaches core readiness, it rechecks the selection and removes the
 trial so a later restart can't roll back that healthy release. Channel health and
 update history writes don't gate trial removal.
 
 If the older updater calls the candidate's native install or restart command,
 the candidate tries to link that publication to the original run before carrying
 out the service action. The Gateway separately recovers the matching run after
-the older updater exits. It retries while it serves if the driver is still
+the older updater exits, even if that updater removed the trial after its own
+healthy response but failed to write history. It retries while it serves if the driver is still
 running or the history write fails. A Gateway restart before recovery can leave
 the original history entry unchanged with the healthy release still selected.
 
