@@ -535,9 +535,16 @@ describe("createFollowupRunner", () => {
     },
   );
 
-  it.each(["allow", "deny"] as const)(
-    "tells a channel sender why their queued input was refused before it started (send %s now)",
-    async (sendPolicy) => {
+  it.each([
+    { sendPolicy: "allow", silent: false, send: true },
+    { sendPolicy: "deny", silent: false, send: false },
+    { sendPolicy: "allow", silent: true, send: false },
+  ] as const)(
+    "records a queued refusal and respects channel delivery (policy $sendPolicy, silent $silent)",
+    async ({ sendPolicy, silent, send }) => {
+      if (silent) {
+        turn.queued.run.sessionEventOrigin = { deliver: false };
+      }
       const refusal = new OperatorRefusalError("role-denies", {
         action: "run your queued request",
       });
@@ -556,7 +563,7 @@ describe("createFollowupRunner", () => {
         expect.objectContaining({ notice: refusal.message }),
       );
       expect(state.route.mock.calls).toEqual(
-        sendPolicy === "allow"
+        send
           ? [
               [
                 expect.objectContaining({
