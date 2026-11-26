@@ -12,6 +12,10 @@ import {
 // Recorded outputs from the pre-fix implementation (git HEAD before the boundary-leak fix)
 // over a deterministic corpus. Whole-text matching must keep every text under the old
 // 32,768-character slicing threshold byte-identical through each entry point.
+// Two log-record entries were re-recorded: the baseline had stored `"***":"***"` in place
+// of `"level":"info"` for samples whose masked value reaches the end of the message scalar,
+// because a serialized capture used to spill past that scalar and overwrite the next field.
+// Their masked `message` bytes are unchanged; only the clobbered sibling field is restored.
 type Fixture = {
   samples: string[];
   outputs: [string, string, string][];
