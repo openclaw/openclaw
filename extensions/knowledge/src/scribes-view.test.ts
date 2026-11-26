@@ -911,3 +911,102 @@ it("changes a scribe's schedule on its automation", async () => {
   expect(calls.some(([method]) => method === "chat.send")).toBe(false);
   expect(ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: schedule changed.");
 });
+
+const conversationsSession = {
+  "Scribe · Learn from conversations": {
+    key: "s-conversations",
+    displayName: "Scribe · Learn from conversations",
+  },
+};
+const conversationsRun = (scope: "active" | "all") =>
+  runPrompt(
+    scribeSetup("conversations", "ongoing", { ...defaultOptions("conversations"), scope }, "UTC"),
+  );
+const conversationsJob = (message: string) => ({
+  ...reviewJob,
+  id: "job-conversations",
+  declarationKey: "knowledge:scribe:conversations",
+  sessionTarget: "current",
+  sessionKey: "s-conversations",
+  schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
+  payload: { kind: "agentTurn", message },
+});
+const settingsUpdate = (message: string) => [
+  "cron.update",
+  {
+    id: "job-conversations",
+    patch: {
+      name: "Knowledge scribe · Learn from conversations",
+      sessionKey: "s-conversations",
+      sessionTarget: "current",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
+      payload: { kind: "agentTurn", message },
+    },
+    expectedConfigRevision: "rev-7",
+  },
+];
+
+it("changes a scribe's settings on its automation, read from its run message", async () => {
+  const { render, ui, calls, page } = fixture({
+    sessions: conversationsSession,
+    jobs: [conversationsJob(conversationsRun("active"))],
+  });
+  ui.s.scribe = "conversations";
+  const view = await render();
+  expect(view.textContent).toContain("SettingsActive conversationsChange…");
+  view.querySelector<HTMLButtonElement>('button[aria-label="Change settings"]')!.click();
+  const dialog = page.querySelector("dialog")!;
+  const save = buttonNamed(dialog, "Save settings");
+  // The settings the run message was generated from are picked, so there is nothing to save yet.
+  expect(dialog.querySelector<HTMLInputElement>("input:checked")?.id).toBe("scribe-which-active");
+  expect(save.disabled).toBe(true);
+  dialog.querySelector<HTMLInputElement>("#scribe-which-all")!.click();
+  expect(save.disabled).toBe(false);
+  save.click();
+  await vi.waitFor(() => expect(dialog.open).toBe(false));
+  // The same automation takes the run message generated from the new settings.
+  expect(
+    calls.filter(
+      ([method]) => method.startsWith("cron.") && method !== "cron.list" && method !== "cron.runs",
+    ),
+  ).toEqual([settingsUpdate(conversationsRun("all"))]);
+  expect(ui.announce).toHaveBeenCalledWith("Learn from conversations: settings changed.");
+});
+
+it("offers a reset instead of settings for a run message edited by hand", async () => {
+  const edited = `${conversationsRun("all")}\nSkip work chats.`;
+  const { render, ui, calls, page } = fixture({
+    sessions: conversationsSession,
+    jobs: [conversationsJob(edited)],
+  });
+  ui.s.scribe = "conversations";
+  const view = await render();
+  expect(view.textContent).toContain("Run message edited by hand, so its settings can't be read");
+  expect(view.querySelector('button[aria-label="Change settings"]')).toBeNull();
+  view.querySelector<HTMLButtonElement>('button[aria-label="Reset run message"]')!.click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("− Skip work chats.");
+  buttonNamed(dialog, "Reset").click();
+  await vi.waitFor(() => expect(dialog.open).toBe(false));
+  expect(calls.filter(([method]) => method === "cron.update")).toEqual([
+    settingsUpdate(conversationsRun("active")),
+  ]);
+});
+
+it("asks for the upgrade before changing a turn-created scribe's settings", async () => {
+  const { render, ui, calls } = fixture({
+    sessions: conversationsSession,
+    jobs: [
+      { ...conversationsJob(conversationsRun("active")), scheduledToolPolicy: { mode: "account" } },
+    ],
+  });
+  ui.s.scribe = "conversations";
+  const view = await render();
+  expect(view.textContent).toContain("SettingsUpgrade the automation to change its settings here");
+  expect(view.querySelector('button[aria-label="Change settings"]')).toBeNull();
+  expect(view.querySelector('button[aria-label="Reset run message"]')).toBeNull();
+  expect(calls.some(([method]) => method === "cron.update" || method === "cron.remove")).toBe(
+    false,
+  );
+});

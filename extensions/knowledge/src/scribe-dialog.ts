@@ -139,12 +139,17 @@ export function show(dialog: HTMLDialogElement) {
 
 const SINCE: readonly ConversationSince[] = ["30d", "90d", "all", "today"];
 
-// "How often", "Which conversations" and "Starting from" for the conversations scribe.
-function conversationFields(detection: ScribeDetection, changed: () => void) {
+// "How often", "Which conversations" and "Starting from" for the conversations scribe, from
+// `initial` options when given.
+export function conversationFields(
+  detection: ScribeDetection,
+  changed: () => void,
+  initial = defaultOptions("conversations"),
+) {
   const state: { mode: ScribeMode; scope: ConversationScope; since: ConversationSince } = {
     mode: "ongoing",
-    scope: "active",
-    since: "30d",
+    scope: initial.scope,
+    since: initial.since,
   };
   const often = el("fieldset", undefined, "knowledge-choices");
   often.append(el("legend", "How often"));
@@ -192,7 +197,7 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
         state.scope = "active";
         changed();
       },
-      true,
+      state.scope === "active",
       "scribe-which",
     ),
     choice(
@@ -205,7 +210,7 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
         state.scope = "all";
         changed();
       },
-      false,
+      state.scope === "all",
       "scribe-which",
     ),
   );
@@ -234,19 +239,25 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ scope: state.scope, since: state.since, schedule: CONVERSATIONS_SCHEDULE }),
+    options: () => ({
+      scope: state.scope,
+      since: state.since,
+      schedule: initial.schedule ?? CONVERSATIONS_SCHEDULE,
+    }),
   };
 }
 
 const GRANOLA_SINCE: readonly GranolaSince[] = ["7d", "30d", "today"];
 
-// "How often", "Which meetings" and "Starting from" for the Granola scribe.
-function granolaFields(changed: () => void) {
+// "How often", "Which meetings" and "Starting from" for the Granola scribe, from `initial`
+// options when given.
+export function granolaFields(changed: () => void, initial = defaultOptions("granola")) {
   const state: { mode: ScribeMode; meetings: GranolaMeetings; since: GranolaSince } = {
     mode: "ongoing",
-    meetings: "mine",
-    since: "7d",
+    meetings: initial.meetings,
+    since: initial.since,
   };
   const set = (patch: Partial<typeof state>) => () => {
     Object.assign(state, patch);
@@ -286,7 +297,7 @@ function granolaFields(changed: () => void) {
       "Meetings you recorded or were invited to.",
       false,
       set({ meetings: "mine" }),
-      true,
+      state.meetings === "mine",
       "scribe-granola-which",
     ),
     choice(
@@ -296,7 +307,7 @@ function granolaFields(changed: () => void) {
       "Also notes others shared with you and Team Space meetings.",
       false,
       set({ meetings: "all" }),
-      false,
+      state.meetings === "all",
       "scribe-granola-which",
     ),
   );
@@ -323,8 +334,13 @@ function granolaFields(changed: () => void) {
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ meetings: state.meetings, since: state.since, schedule: GRANOLA_SCHEDULE }),
+    options: () => ({
+      meetings: state.meetings,
+      since: state.since,
+      schedule: initial.schedule ?? GRANOLA_SCHEDULE,
+    }),
   };
 }
 

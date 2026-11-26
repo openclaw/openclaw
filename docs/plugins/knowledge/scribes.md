@@ -197,8 +197,9 @@ Steps:
 ```
 
 To change when it runs, use **Change…** next to **Schedule** in the scribe's
-detail. To change what later runs do, edit the run message on the Automations
-page.
+detail. Learn from conversations, Learn from Granola and Learn from Slack also
+have **Change…** next to **Settings**, which changes what they read. To change
+anything else later runs do, edit the run message on the Automations page.
 
 ## After updating OpenClaw
 
@@ -299,8 +300,8 @@ verification still fails after a fix attempt.
 
 ## Controls
 
-Open a scribe for its schedule, next and last run, model, failure alert, and
-recent runs. Learn from Granola and Learn from Slack also show their plugin's
+Open a scribe for its schedule, settings, next and last run, model, failure
+alert, and recent runs. Learn from Granola and Learn from Slack also show their plugin's
 state as their source; for Slack, it also says whether the account has a bot token and a user token.
 
 | Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -308,6 +309,7 @@ state as their source; for Slack, it also says whether the account has a bot tok
 | Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                                           |
 | Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                                                                                                                              |
 | Change…            | Next to **Schedule**: picks a schedule the start dialog offers, or a custom one (every day, weekdays or once a week, at one time), and a time zone. Saving changes the automation's schedule. It keeps the run message and other saved options, except that an unedited Knowledge Consolidation message takes the run amounts of the new schedule. A scribe still on an automation a chat turn created shows no **Change…** until it is upgraded.                                                                     |
+| Change… (Settings) | Next to **Settings**, for Learn from conversations, Learn from Granola and Learn from Slack: changes which conversations, meetings or Slack channels and direct messages later runs read. Saving generates the run message from the new settings on the same automation. When the run message was edited by hand, its settings can't be read: **Reset…** instead replaces it with the generated one for the default settings, after listing the lines that change.                                                    |
 | Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                                                                                                                             |
