@@ -10,8 +10,7 @@ vi.mock("./monitor/media.js", async (importOriginal) => ({
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
 vi.mock("./client.js", async (importOriginal) => ({
-  createSlackTokenCacheKey: (await importOriginal<typeof import("./client.js")>())
-    .createSlackTokenCacheKey,
+  ...(await importOriginal<typeof import("./client.js")>()),
   createSlackLookupClient: createSlackLookupClientMock,
   getSlackWriteClient: vi.fn(),
 }));
