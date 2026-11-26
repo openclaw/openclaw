@@ -3,9 +3,9 @@
 // This file holds only the shapes OpenClaw reads. It carries no validator and no runtime code.
 // The package can return as a dependency once the RFC ships it as a published contract.
 
-export type AgentProfileThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type AgentProfileThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-export type AgentProfileSystemPrompt =
+type AgentProfileSystemPrompt =
   | Readonly<{ text: string }>
   | Readonly<{ file: Readonly<{ path: string }> }>;
 
@@ -14,7 +14,7 @@ export type AgentProfileCommon = Readonly<{
   thinkingLevel?: AgentProfileThinkingLevel;
 }>;
 
-export type AgentProfileSpec = Readonly<
+type AgentProfileSpec = Readonly<
   {
     common: AgentProfileCommon;
   } & Record<string, unknown>

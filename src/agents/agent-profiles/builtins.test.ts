@@ -20,7 +20,7 @@ describe("built-in Agent Profile resources", () => {
   });
 
   it("keeps every resource structurally valid for agentprofiles.io/v1", () => {
-    const ids = new Set(BUILT_IN_AGENT_PROFILES.map((profile) => profile.id));
+    const ids = new Set<string>(BUILT_IN_AGENT_PROFILES.map((profile) => profile.id));
     for (const profile of BUILT_IN_AGENT_PROFILES) {
       const { resource } = profile;
       expect(resource.apiVersion).toBe("agentprofiles.io/v1");
