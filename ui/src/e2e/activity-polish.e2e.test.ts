@@ -63,7 +63,8 @@ suite.define(() => {
         const request = await gateway.waitForRequest("sessions.list", {
           match: { activeMinutes: 1440 },
         });
-        expect(request.params.activityPulseBoundaries).toEqual(
+        expect(request.params).toHaveProperty(
+          "activityPulseBoundaries",
           Array.from({ length: 26 }, (_, index) => since + index * hour),
         );
         const chart = page.getByRole("img", { name: /Last 24 hours/ });
