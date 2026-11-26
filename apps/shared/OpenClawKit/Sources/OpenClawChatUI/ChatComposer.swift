@@ -176,6 +176,9 @@ struct OpenClawChatComposer: View {
             ChatNewSessionSlashOption(query: self.isFocused ? self.slashQuery ?? "" : "") { self.isFocused = false }
             #endif
             self.lifecycleComposer
+            // Nothing is drawn under the composer card on the phone: model-list trouble and sign-in live in
+            // the model sheet.
+            #if !os(iOS)
             if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
                     if let message = self.viewModel.modelCatalogMessage {
@@ -188,6 +191,7 @@ struct OpenClawChatComposer: View {
                 }
                 .foregroundStyle(.secondary)
             }
+            #endif
         }
         #if os(macOS)
         .sheet(isPresented: Binding(
