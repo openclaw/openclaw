@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -62,8 +63,9 @@ it("records one undoable change when two clients apply the same draft", async ()
   );
   expect((await viewWorkshopSkill({}, "main", "deploy")).content).toContain("make ship");
   expect(await listWorkshopDrafts({}, "main")).toEqual([]);
-  expect(writes[0].versionId).toBeTruthy();
-  await restoreWorkshopSkill(ctx, { name: "deploy", versionId: writes[0].versionId });
+  const versionId = writes[0]?.versionId;
+  assert.ok(versionId, "the recorded change must identify its archived version");
+  await restoreWorkshopSkill(ctx, { name: "deploy", versionId });
   expect((await viewWorkshopSkill({}, "main", "deploy")).content).toBe(
     skillFile("deploy", "Run make deploy."),
   );
@@ -155,7 +157,7 @@ it("keeps the live skill whole when a later draft file cannot be written", async
 
   await fs.unlink(path.join(draftDir, "references", "notes.md", "x.md"));
   const [change] = await applyWorkshopDraft(ctx, "deploy-proposal-3");
-  expect(change.action).toBe("write_file");
+  expect(change?.action).toBe("write_file");
   expect((await viewWorkshopSkill({}, "main", "deploy")).content).toContain("make ship");
 });
 
