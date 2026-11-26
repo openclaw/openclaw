@@ -11,6 +11,7 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
+import { getUpdateRunOmittedStepCount, UPDATE_RUN_TRUNCATED_STEP } from "./update-run-omission.js";
 import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
 import { toUpdateRunDriver, type UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
@@ -57,6 +58,7 @@ const RETAINED_STEP_NAMES = [
   "managed-service-install",
   "managed-service-restart",
   "managed-service update handoff",
+  "warning:managed-service-reconciliation",
   "service-stop",
   "service-start",
   "service-running",
@@ -138,50 +140,130 @@ function mapJsonText(
   return value;
 }
 
-function compactConfigWriteRefusal(value: unknown): unknown {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.keys) ||
-    !value.keys.some((key) => typeof key === "string" && key.length > 0)
-  ) {
+function compactConfigWriteRefusal(
+  value: RunStep["configWriteRefusal"],
+): RunStep["configWriteRefusal"] {
+  if (!value?.keys.some((key) => key.length > 0)) {
     return undefined;
   }
-  return mapJsonText(value, (text, key) =>
-    key === "keys" ? truncateUtf16Safe(text, Math.floor(text.length / 2)) : text,
-  );
+  return {
+    ...value,
+    keys: value.keys.map((key) => truncateUtf16Safe(key, Math.floor(key.length / 2))),
+  };
 }
 
-function isRetainedStep(item: unknown): boolean {
+type RunSteps = UpdateRunRecord["steps"];
+type RunStep = RunSteps[number];
+
+function isRetainedStep(item: RunStep): boolean {
   return (
-    isRecord(item) &&
-    typeof item.step === "string" &&
-    (item.termination === "signal" ||
-      item.step.startsWith("finalize:") ||
-      RETAINED_STEP_NAMES.some((name) => name === item.step) ||
-      (item.step.startsWith("diagnostic:") &&
-        typeof item.detail === "string" &&
-        parseDoctorRetirementWideningLine(item.detail) !== undefined))
+    item.termination === "signal" ||
+    item.step === UPDATE_RUN_TRUNCATED_STEP ||
+    item.step.startsWith("finalize:") ||
+    RETAINED_STEP_NAMES.some((name) => name === item.step) ||
+    (item.step.startsWith("diagnostic:") &&
+      typeof item.detail === "string" &&
+      parseDoctorRetirementWideningLine(item.detail) !== undefined)
   );
 }
 
-/** The summary counts warning rows and reports failed ones, so plain steps yield first. */
-export function findDisposableStep(steps: readonly unknown[]): number {
-  // Repair history shares this bound; its attempts stay chronological.
-  const stepName = (item: unknown) =>
-    isRecord(item) && typeof item.step === "string" ? item.step : undefined;
-  const failed = (item: unknown) =>
-    stepName(item) !== undefined && isRecord(item) && item.status === "failed";
-  const warning = (item: unknown) => stepName(item)?.startsWith("warning:") === true;
-  for (const tier of [(item: unknown) => !warning(item) && !failed(item), warning, () => true]) {
-    const index = steps.findIndex((item) => !isRetainedStep(item) && tier(item));
-    if (index >= 0) {
-      return index;
-    }
-  }
-  return -1;
+function isActionableStep(item: RunStep): boolean {
+  return (
+    item.status === "failed" ||
+    item.step.startsWith("warning:") ||
+    isUpdateOwedStepRow(item.step) ||
+    item.step === "reconcile:settle"
+  );
 }
 
-/** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
+/** Informational rows yield first. Failed steps outlast ordinary warnings. */
+export function findEvictableStep(steps: readonly RunStep[], allowActionable = false): number {
+  const disposable = steps.findIndex((step) => !isRetainedStep(step) && !isActionableStep(step));
+  if (disposable >= 0 || !allowActionable) {
+    return disposable;
+  }
+  const warning = steps.findIndex((step) => !isRetainedStep(step) && step.status !== "failed");
+  return warning >= 0 ? warning : steps.findIndex((step) => !isRetainedStep(step));
+}
+
+export function omitUpdateRunStep(steps: RunSteps, index: number): void {
+  steps.splice(index, 1);
+  const count = getUpdateRunOmittedStepCount(steps);
+  const markerIndex = steps.findIndex(({ step }) => step === UPDATE_RUN_TRUNCATED_STEP);
+  const marker: RunStep = {
+    step: UPDATE_RUN_TRUNCATED_STEP,
+    status: "completed",
+    detail: String(count + 1),
+  };
+  if (markerIndex >= 0) {
+    steps[markerIndex] = marker;
+  } else {
+    steps.push(marker);
+  }
+}
+
+function compactStepDetail(item: RunStep): RunStep {
+  // Recovery details are durable receipts, not expendable diagnostic output.
+  if (
+    item.step === UPDATE_RUN_TRUNCATED_STEP ||
+    isUpdateOwedStepRow(item.step) ||
+    item.termination === "signal" ||
+    item.step === "task-delivery-recovery" ||
+    item.step === "diagnostic:database snapshot" ||
+    item.step === "diagnostic:database migration writes" ||
+    item.step === "diagnostic:database rollback" ||
+    item.step === "finalize:data-at-risk" ||
+    item.step.startsWith("finalize:doctor-lint:") ||
+    (typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail))
+  ) {
+    return item;
+  }
+  return {
+    ...item,
+    ...(isActionableStep(item) ? {} : { detail: undefined, failureFacts: undefined }),
+    // Keep the refusal but bound its key inventory, including on a failed Doctor row.
+    configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
+  };
+}
+
+function boundedStepsJson(input: RunSteps): string {
+  let steps = [...input];
+  let json = JSON.stringify(steps);
+  while (Buffer.byteLength(json) > JSON_BYTES) {
+    const disposable = findEvictableStep(steps);
+    if (disposable >= 0) {
+      omitUpdateRunStep(steps, disposable);
+    } else {
+      // Shed non-actionable detail before evicting advice.
+      const compacted = steps.map(compactStepDetail);
+      const compactedJson = JSON.stringify(compacted);
+      if (compactedJson !== json) {
+        steps = compacted;
+        json = compactedJson;
+        continue;
+      }
+      // Native output is diagnostic. Shorten it before giving up on useful rows.
+      const outputIndex = steps.findLastIndex((entry) => Boolean(entry.stderrTail));
+      if (outputIndex >= 0) {
+        const entry = steps[outputIndex]!;
+        const stderr = entry.stderrTail!;
+        steps[outputIndex] = {
+          ...entry,
+          stderrTail: truncateUtf16Safe(stderr, Math.floor(stderr.length / 2)),
+        };
+      } else {
+        const overflow = findEvictableStep(steps, true);
+        if (overflow < 0) {
+          throw new Error("Update run retained step metadata exceeds its byte limit");
+        }
+        omitUpdateRunStep(steps, overflow);
+      }
+    }
+    json = JSON.stringify(steps);
+  }
+  return json;
+}
+
 function boundedJson(
   input: unknown,
   maxBytes = JSON_BYTES,
@@ -191,55 +273,8 @@ function boundedJson(
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > maxBytes) {
     if (Array.isArray(value)) {
-      const disposable = findDisposableStep(value);
-      if (disposable >= 0) {
-        value = value.toSpliced(disposable, 1);
-      } else {
-        // Recovery details are the durable backup receipt, not optional diagnostics.
-        const compacted = value.map((item) =>
-          isRecord(item) &&
-          item.termination !== "signal" &&
-          item.step !== "task-delivery-recovery" &&
-          item.step !== "diagnostic:database snapshot" &&
-          item.step !== "diagnostic:database migration writes" &&
-          item.step !== "warning:database migration writes" &&
-          item.step !== "warning:post-plugin doctor" &&
-          item.step !== "warning:post-stop-checks" &&
-          item.step !== "warning:reconcile:driver-lost-after-verification" &&
-          item.step !== "diagnostic:database rollback" &&
-          item.step !== "finalize:data-at-risk" &&
-          !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
-          !(
-            typeof item.step === "string" &&
-            (item.step.startsWith("finalize:doctor-lint:") || isUpdateOwedStepRow(item.step))
-          )
-            ? {
-                ...item,
-                detail: undefined,
-                failureFacts: undefined,
-                configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
-              }
-            : item,
-        );
-        if (JSON.stringify(compacted) === json) {
-          // Native output is diagnostic, never a reason to refuse a recovery receipt.
-          const item = value.findLast(
-            (entry): entry is Record<string, unknown> & { stderrTail: string } =>
-              isRecord(entry) &&
-              typeof entry.stderrTail === "string" &&
-              entry.stderrTail.length > 0,
-          );
-          if (!item) {
-            throw new Error("Update run retained step metadata exceeds its byte limit");
-          }
-          value = value.with(value.indexOf(item), {
-            ...item,
-            stderrTail: truncateUtf16Safe(item.stderrTail, Math.floor(item.stderrTail.length / 2)),
-          });
-        } else {
-          value = compacted;
-        }
-      }
+      // Repair attempts stay chronological and do not use the step omission marker.
+      value = value.slice(1);
     } else if (isRecord(value)) {
       const object = value;
       const arrayField = Object.keys(object)
@@ -472,7 +507,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     target_json: boundedJson(record.target),
     before_json: boundedJson(record.before),
     after_json: boundedJson(record.after),
-    steps_json: boundedJson(record.steps),
+    steps_json: boundedStepsJson(record.steps),
     verification_json: boundedJson(record.verification),
     repair_json: boundedJson(record.repair),
     confirmed_at_ms: record.confirmedAtMs,

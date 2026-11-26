@@ -13,6 +13,7 @@ import {
   prepareAgentToolSurfacePresentation,
   resolveAgentToolSurfacePlan,
 } from "./tool-surface-plan.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
 
 // Params type stays module-local in production; derive it so the test cannot
 // keep a public export alive that no production caller needs.
@@ -350,9 +351,11 @@ describe("applyAgentToolSurfaceCatalog", () => {
       codeModeOverride: false,
     });
     const catalogRef = createToolSearchCatalogRef();
+    const progressCard = createProgressCardTool();
     const result = applyAgentToolSurfaceCatalog({
       tools: [
         ...createToolSearchTools({ config, catalogRef, executeTool }),
+        progressCard,
         createStubTool("hidden_target"),
       ],
       config,
@@ -366,8 +369,12 @@ describe("applyAgentToolSurfaceCatalog", () => {
       "tool_search",
       "tool_describe",
       "dispatch_action",
+      "progress_card",
     ]);
-    expect(result.catalogToolCount).toBe(1);
+    expect(result.tools.find((tool) => tool.name === "progress_card")?.parameters).toEqual(
+      progressCard.parameters,
+    );
+    expect(result.catalogToolCount).toBe(2);
     expect(config.tools).toBeUndefined();
   });
 

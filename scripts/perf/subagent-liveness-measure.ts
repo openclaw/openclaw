@@ -21,6 +21,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunContext,
 } from "../../src/infra/agent-run-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 assert(global.gc, "Run with --expose-gc");
 assert(process.env.OPENCLAW_STATE_DIR, "Use an isolated OPENCLAW_STATE_DIR");
@@ -79,12 +80,7 @@ try {
     }
     global.gc();
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const hostLoad = loadavg();
     const before = process.threadCpuUsage();

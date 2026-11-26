@@ -350,6 +350,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sessionReadScopeKey?: string;
+  sessionReadAgentOnly?: boolean;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -397,11 +398,12 @@ export function createSessionsHistoryTool(opts?: {
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
-      const isConfiguredMainAlias = isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
-      const inputStoreOwner =
-        shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
-          ? { kind: "none" as const }
-          : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
+      const isSessionIdInput =
+        shouldResolveSessionIdInput(sessionKeyParam) &&
+        !isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
+      const inputStoreOwner = isSessionIdInput
+        ? { kind: "none" as const }
+        : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
       const resolvedSession = await resolveSessionReference({
         action: "history",
         sessionKey: sessionKeyParam,
@@ -409,7 +411,9 @@ export function createSessionsHistoryTool(opts?: {
           ? { agentId: requesterAgentId }
           : inputStoreOwner.kind === "configured"
             ? { agentId: inputStoreOwner.agentId }
-            : {}),
+            : opts?.sessionReadAgentOnly && isSessionIdInput
+              ? { agentId: requesterAgentId }
+              : {}),
         keyAgentId: requesterAgentId,
         alias,
         mainKey,
@@ -475,6 +479,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+        sessionReadAgentOnly: opts?.sessionReadAgentOnly,
         mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,

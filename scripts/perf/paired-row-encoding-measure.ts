@@ -16,6 +16,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import type { PairedDevice } from "../../src/infra/device-pairing.types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 const { values } = parseArgs({
   options: {
     "baseline-source": { type: "string" },
@@ -148,12 +149,7 @@ try {
       global.gc!();
       const profiler = new Session();
       if (allocation) {
-        profiler.connect();
-        await profiler.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(profiler, 4096);
       }
       const hostLoadBefore = loadavg();
       const cpu = process.threadCpuUsage();

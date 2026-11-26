@@ -11,6 +11,7 @@ import path from "node:path";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { buildSubagentRunReadIndexFromRuns } from "../../src/agents/subagents/registry/subagent-registry-queries.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [fixture, arm, profilePrefix] = process.argv.slice(2);
 assert(fixture && arm && profilePrefix, "Expected fixture directory, arm and profile prefix");
@@ -65,12 +66,7 @@ for (let batch = 0; batch < 50; batch++) {
 }
 const used = process.cpuUsage(cpu);
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", {
-  samplingInterval: 4096,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(inspector, 4096);
 for (let i = 0; i < 10_000; i++) {
   classify();
 }

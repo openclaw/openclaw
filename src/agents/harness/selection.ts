@@ -577,6 +577,7 @@ function withoutPluginHarnessPrivateState(
     completionCheck: _completionCheck,
     preparedSessionTarget: _preparedSessionTarget,
     bindWatchdogAttempt: _bindWatchdogAttempt,
+    onMemoryFlushModelProgress: _onMemoryFlushModelProgress,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,

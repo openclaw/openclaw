@@ -16,7 +16,7 @@ import type { RuntimeContextFragment } from "../../agents/internal-runtime-conte
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import { captureRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

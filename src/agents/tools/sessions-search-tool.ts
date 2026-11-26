@@ -193,6 +193,7 @@ export function createSessionsSearchTool(opts?: {
   agentId?: string;
   agentSessionKey?: string;
   sessionReadScopeKey?: string;
+  sessionReadAgentOnly?: boolean;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -208,6 +209,14 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) =>
       measureSessionsSearch(callGateway, async (gatewayCall) => {
+        // Recall can include cross-agent descendants. Learning uses the bounded
+        // list and history tools instead of the general transcript index.
+        if (opts?.sessionReadAgentOnly) {
+          return jsonResult({
+            status: "forbidden",
+            error: "Use sessions_list and sessions_history for this agent-scoped run.",
+          });
+        }
         const params = args as Record<string, unknown>;
         const query = readToolStringParam(params, "query") ?? "";
         if (!query) {

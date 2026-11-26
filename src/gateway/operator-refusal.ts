@@ -53,6 +53,15 @@ const refusalCauses = {
     nextStep:
       "Link it once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then ask again.",
   },
+  "automation-account-unrecorded": {
+    why: "It has no recorded inference account, so OpenClaw refused the selected credentials.",
+    nextStep:
+      "Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
+  },
+  "workspace-not-owned": {
+    why: "Only the person who started this conversation or an administrator can restore its workspace.",
+    nextStep: "Ask an administrator to restore this workspace, or start a new conversation.",
+  },
 } as const satisfies Record<string, { why: string; nextStep: string }>;
 
 export type OperatorRefusalCause = keyof typeof refusalCauses;

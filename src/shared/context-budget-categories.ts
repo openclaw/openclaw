@@ -1,4 +1,4 @@
-import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
+import type { SessionSystemPromptReport } from "../config/sessions/session-system-prompt-report.js";
 
 export type ContextEntry = {
   key: string;
@@ -78,8 +78,11 @@ function toolGroups(
   return Array.from(groups.values(), (group) => ({ ...group, tokens: sumTokens(group.entries) }));
 }
 
-/** Character estimates, not provider tokenization. Deferred schemas never enter consumed totals. */
-export function buildChatContextCategories(
+/**
+ * Prompt-budget categories shared by the Control UI popover and the chat `/context` card.
+ * Character estimates, not provider tokenization. Deferred schemas never enter consumed totals.
+ */
+export function buildContextBudgetCategories(
   report: SessionSystemPromptReport,
   used: number,
 ): ContextCategory[] {

@@ -25,6 +25,7 @@ export async function createSessionsListVisibleReference(params: {
   requesterAgentId: string;
   requesterSessionKey: string;
   mainSessionKey?: string;
+  sessionReadAgentOnly?: boolean;
   alias: string;
   mainKey: string;
   a2aPolicy: AgentToAgentPolicy;
@@ -42,6 +43,7 @@ export async function createSessionsListVisibleReference(params: {
     defaultAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     mainSessionKey: params.mainSessionKey,
+    sessionReadAgentOnly: params.sessionReadAgentOnly,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
   });

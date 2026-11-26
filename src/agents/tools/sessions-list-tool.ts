@@ -132,6 +132,7 @@ function projectInventoryActor(actor: NonNullable<SessionListRow["createdActor"]
 
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
+  sessionReadAgentOnly?: boolean;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -188,7 +189,9 @@ export function createSessionsListTool(opts?: {
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimit = Math.min(readNonNegativeIntegerParam(params, "messageLimit") ?? 0, 20);
       const label = readToolStringParam(params, "label");
-      const agentId = readToolStringParam(params, "agentId");
+      const agentId = opts?.sessionReadAgentOnly
+        ? requesterAgentId
+        : readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
       const archived = params.archived === "all" ? "all" : params.archived === true;
       const relationship = readToolStringParam(params, "relationship", {
@@ -233,6 +236,7 @@ export function createSessionsListTool(opts?: {
         mainSessionKey,
         alias,
         mainKey,
+        sessionReadAgentOnly: opts?.sessionReadAgentOnly,
         a2aPolicy,
         callGateway: gatewayCall,
       });
@@ -633,8 +637,14 @@ export function createSessionsListTool(opts?: {
         );
       }
 
-      const visibilityMetadata =
-        visibility === "all"
+      const visibilityMetadata = opts?.sessionReadAgentOnly
+        ? {
+            mode: visibility === "all" ? ("agent" as const) : visibility,
+            restricted: true,
+            warning:
+              "This run can list only its own agent's sessions. Other configured limits still apply.",
+          }
+        : visibility === "all"
           ? undefined
           : {
               mode: visibility,

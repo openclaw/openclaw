@@ -35,6 +35,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
+import { withCliFailureContext } from "./failure-context.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
@@ -682,10 +683,11 @@ export async function runCli(
       },
     );
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
-  return !invocation.hasHelpOrVersion &&
-    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
-    ? await withDeferredDebugProxyCapture(invoke)
-    : await invoke();
+  return withCliFailureContext(() =>
+    !invocation.hasHelpOrVersion && ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+      ? withDeferredDebugProxyCapture(invoke)
+      : invoke(),
+  );
 }
 
 async function withSnapshotReuseForMaintenance<T>(
@@ -1204,7 +1206,7 @@ async function runCliWithPreparedOutputMode(
     try {
       const [
         { buildProgram },
-        { handleCliUncaughtException },
+        { installCliUncaughtExceptionHandler },
         { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
@@ -1222,9 +1224,7 @@ async function runCliWithPreparedOutputMode(
         installUnhandledRejectionHandler();
       }
 
-      process.on("uncaughtException", (error) => {
-        handleCliUncaughtException(error, normalizedArgv);
-      });
+      installCliUncaughtExceptionHandler(normalizedArgv);
 
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing

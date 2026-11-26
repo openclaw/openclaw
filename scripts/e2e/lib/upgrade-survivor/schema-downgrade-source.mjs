@@ -48,12 +48,7 @@ function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
     }),
   );
   assert.equal(packedBuild.commit, head, "candidate tarball is not the tested merge source");
-  receipt.candidateBuild = {
-    ...packedBuild,
-    readerFloorSupported: /export function readStateSchemaMinReader\(/u.test(
-      git("show", `${head}:src/state/openclaw-state-db-schema-version.ts`),
-    ),
-  };
+  receipt.candidateBuild = packedBuild;
   const baselineSchema = path.join(directory, "previous-agent-schema.sql");
   fs.writeFileSync(
     baselineSchema,

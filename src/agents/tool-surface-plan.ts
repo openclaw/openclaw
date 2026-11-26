@@ -139,15 +139,18 @@ export function applyAgentToolSurfaceCatalog({
     : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog
       : applyToolSearchCatalog;
+  const directToolNames = ["message", "progress_card"];
+  if (
+    !codeModeControlsEnabled &&
+    catalogParams.config?.tools?.toolSearch === undefined &&
+    model?.api === "ollama" &&
+    model.toolSearchMode === "tools"
+  ) {
+    directToolNames.push("web_search", "web_fetch", "memory_search", "memory_get");
+  }
   return applyCatalog({
     ...catalogParams,
     config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
-    directToolNames:
-      !codeModeControlsEnabled &&
-      catalogParams.config?.tools?.toolSearch === undefined &&
-      model?.api === "ollama" &&
-      model.toolSearchMode === "tools"
-        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
-        : ["message"],
+    directToolNames,
   });
 }

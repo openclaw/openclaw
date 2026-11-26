@@ -6,6 +6,7 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
   SessionPatchArchivePreparation,
@@ -68,6 +69,7 @@ export type ExecuteSessionPatchMutationsParams = {
   context: GatewayRequestContext;
   signal?: AbortSignal;
   archiveUndo?: ArchiveUndoCaller;
+  deferredSelfSnooze?: ChatRef;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];

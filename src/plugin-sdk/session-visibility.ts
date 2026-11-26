@@ -265,6 +265,7 @@ type SessionVisibilityCheckerParams = {
   requesterSessionKey: string;
   requesterChannelScope?: SessionChannelScope;
   requesterChannelRow?: unknown;
+  sessionReadAgentOnly?: boolean;
   /** Host-owned stored scope lookup; missing facts fail closed in channel mode. */
   channelScopeForSession?: (key: string) => SessionChannelScope | undefined;
   channelRowForSession?: (key: string) => unknown;
