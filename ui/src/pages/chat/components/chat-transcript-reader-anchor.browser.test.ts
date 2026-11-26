@@ -133,6 +133,7 @@ const predecessorMeasurementPhases = [
   "settled",
   "scrolling",
   "touch-after-prepend",
+  "touch-at-start",
   "idle-gap",
   "start",
   "start-growth",
@@ -142,8 +143,8 @@ const predecessorMeasurementPhases = [
 it.each(predecessorMeasurementPhases)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
-    const estimate = phase === "start-growth" ? 60 : 120;
-    const offset = phase.startsWith("start") ? 0 : 500;
+    const estimate = phase === "start-growth" || phase === "touch-at-start" ? 60 : 120;
+    const offset = phase.startsWith("start") ? 0 : phase === "touch-at-start" ? 200 : 500;
     const viewport = document.body.appendChild(document.createElement("div"));
     viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
     const content = viewport.appendChild(document.createElement("div"));
@@ -177,6 +178,7 @@ it.each(predecessorMeasurementPhases)(
     virtualizer.elementsCache.set("2", retained);
     const offsetState = new TranscriptOffsetState();
     offsetState.nativeInputActive = phase !== "settled" && phase !== "programmatic";
+    offsetState.touching = phase === "touch-at-start";
     const prependAnchor = new TranscriptPrependAnchor(
       new Map([["2", retained]]),
       () => {},
@@ -247,7 +249,20 @@ it.each(predecessorMeasurementPhases)(
       return;
     }
     expect(measuredTop).toBe(top);
-    if (phase === "scrolling") {
+    if (phase === "touch-at-start") {
+      viewport.scrollTop = 0;
+      const beforeSettle = retained.getBoundingClientRect().top;
+      expect(beforeSettle).toBeLessThan(viewport.getBoundingClientRect().bottom);
+      anchor.settle();
+      expect(retained.getBoundingClientRect().top).toBe(beforeSettle);
+      offsetState.touching = false;
+      offsetState.nativeInputActive = false;
+      virtualizer.isScrolling = false;
+      anchor.settle();
+      expect(retained.getBoundingClientRect().top).toBe(beforeSettle);
+      expect(viewport.scrollTop).toBe(40);
+      expect(column.style.marginTop).toBe("");
+    } else if (phase === "scrolling") {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
       anchor.settle();

@@ -604,11 +604,9 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    // Native zero is the reader's start: rows that grew above it while the offset was held are
-    // revealed, not scrolled past, so a reader who reached the top stays at the top.
-    if (shift < 0 || offset > 0) {
-      this.scrollBy(shift);
-    }
+    // The history owner observes the edge before input idles. Retiring a held correction
+    // must preserve the reader even when that input reached native zero.
+    this.scrollBy(shift);
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */
