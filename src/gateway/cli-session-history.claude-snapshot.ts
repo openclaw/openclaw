@@ -162,9 +162,15 @@ export async function visitClaudeCliSessionMessages(
         continue;
       }
       const content = entry.message?.content;
-      const toolResult =
-        Array.isArray(content) && content.some((b) => asOptionalRecord(b)?.type === "tool_result");
-      if (entry.type === "user" && entry.isSidechain !== true && !toolResult) {
+      // Tool results, skill context, compaction summaries and sidechains continue a turn.
+      const continuesTurn =
+        entry.isSidechain === true ||
+        entry.isCompactSummary === true ||
+        entry.isVisibleInTranscriptOnly === true ||
+        "sourceToolUseID" in entry ||
+        (Array.isArray(content) &&
+          content.some((block) => asOptionalRecord(block)?.type === "tool_result"));
+      if (entry.type === "user" && !continuesTurn) {
         turnExternalId = entry.uuid;
       }
       parsedMessage = parseClaudeCliHistoryEntry(

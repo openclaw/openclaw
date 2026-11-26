@@ -652,6 +652,11 @@ describe("cli session history", () => {
     const { messages } = await readBoundHistory(
       [
         { type: "user", uuid: "prompt", message: { role: "user", content: "Spawn and yield" } },
+        // Skill context arrives as a meta row inside the same turn.
+        claudeUser("Base directory for this skill", {
+          isMeta: true,
+          sourceToolUseID: "toolu_skill",
+        }),
         ...toolTurn("asked"),
         // A synthetic wake opens a turn no local row owns.
         { type: "user", uuid: "wake", isMeta: true, message: { role: "user", content: "Woke" } },
