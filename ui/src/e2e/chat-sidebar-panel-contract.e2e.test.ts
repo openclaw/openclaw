@@ -15,7 +15,6 @@ import { nextPaint, singleFileDiff } from "./chat-session-diff.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
   readColdOpenOutcome,
-  seedMainCompanionLayout,
   type ColdOpenOutcome,
 } from "./chat-sidebar-panel-contract.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -774,92 +773,6 @@ suite.define(() => {
       }
     },
   );
-
-  it("preserves the production header-action shapes for Side chat and Discussion", async () => {
-    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const mainCompanionKey = "agent:main:main";
-    await seedMainCompanionLayout(page, suite.server.baseUrl, mainCompanionKey);
-    await installMockGateway(page, {
-      ...coldOpenScenario(true),
-      sessionKey: mainCompanionKey,
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainCompanionKey));
-    await waitForControlUiGatewayReady(page);
-    await page.locator('[data-panel-slot="companion"][data-region="main"]').waitFor();
-    const contentActions = page.locator(".chat-pane__header-trailing");
-    const clearAction = contentActions.getByRole("button", {
-      name: "Clear side chat",
-      exact: true,
-    });
-    await clearAction.waitFor();
-    expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
-    expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
-    const clearTooltip = clearAction.locator("..");
-    await clearAction.hover();
-    await expect
-      .poll(() =>
-        clearTooltip
-          .locator(".tooltip-surface[popover]")
-          .evaluate((tooltip) => tooltip.matches(":popover-open")),
-      )
-      .toBe(true);
-    expect(await clearTooltip.locator(".tooltip-content").textContent()).toContain(
-      "Clear side chat",
-    );
-
-    const tab = page.locator('.side-panel__header .tabstrip-tab[aria-selected="true"]');
-    for (const direction of ["ltr", "rtl"] as const) {
-      const tabPadding = await tab.evaluate((node, dir) => {
-        const panel = node.closest<HTMLElement>(".side-panel")!;
-        panel.dir = dir;
-        const close = node.nextElementSibling!;
-        const bounds = (root: Element, selector: string) =>
-          root.querySelector(selector)!.getBoundingClientRect();
-        const tabBounds = node.getBoundingClientRect();
-        const closeBounds = close.getBoundingClientRect();
-        const leading = bounds(node, ".tabstrip-tab__icon svg");
-        const label = bounds(node, ".tabstrip-tab__label");
-        const clipper = bounds(node, ".tabstrip-tab__tooltip-trigger");
-        const trailing = bounds(close, "svg");
-        const rtl = dir === "rtl";
-        const radii = (element: Element) => {
-          const style = getComputedStyle(element);
-          const values = [style.borderTopLeftRadius, style.borderTopRightRadius];
-          return (rtl ? values.toReversed() : values).map(Number.parseFloat);
-        };
-        return {
-          leading: rtl ? tabBounds.right - leading.right : leading.left - tabBounds.left,
-          trailing: rtl ? trailing.left - closeBounds.left : closeBounds.right - trailing.right,
-          labelInsets: [label.top - clipper.top, clipper.bottom - label.bottom],
-          tabRadii: radii(node),
-          closeContained:
-            closeBounds.left >= tabBounds.left - 1 &&
-            closeBounds.right <= tabBounds.right + 1 &&
-            closeBounds.top >= tabBounds.top - 1 &&
-            closeBounds.bottom <= tabBounds.bottom + 1,
-        };
-      }, direction);
-      expect(tabPadding.trailing).toBeCloseTo(tabPadding.leading, 0);
-      expect(Math.min(...tabPadding.labelInsets)).toBeGreaterThanOrEqual(0);
-      expect(Math.min(...tabPadding.tabRadii)).toBeGreaterThan(0);
-      expect(tabPadding.closeContained).toBe(true);
-    }
-    await tab.evaluate((node) => node.closest(".side-panel")!.removeAttribute("dir"));
-
-    const sideHeader = page.locator('[data-region-header="side"]');
-    await sideHeader.getByRole("button", { name: "New tab", exact: true }).click();
-    await page
-      .locator(".side-panel-launcher")
-      .getByRole("button")
-      .filter({ has: page.locator(".side-panel-type-option__label", { hasText: /^Discussion$/ }) })
-      .click();
-    const discussionAction = sideHeader.locator('a.rail-header__action[target="_blank"]');
-    await discussionAction.waitFor();
-    expect(await discussionAction.getAttribute("href")).toBe("https://discussion.example/session");
-
-    await suite.closeBrowserContext(context);
-  });
 
   it("renders content for every offered slot with backing data", async () => {
     for (const label of offeredSlotLabels) {

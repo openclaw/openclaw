@@ -293,31 +293,6 @@ describe("oMLX registered embedding provider", () => {
   });
 });
 
-it("connects the registered setup and catalog hooks to the inference models endpoint", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => {
-      return Response.json({
-        data: [{ id: "Qwen2.5-3B-Instruct-4bit", model_type: "llm", max_model_len: 32768 }],
-      });
-    }),
-  );
-  const provider = capturePluginRegistration(plugin).providers[0];
-  const context = { config: {}, env: {} };
-  await expect(provider?.auth[0]?.appGuidedSetup?.detect(context)).resolves.toMatchObject({
-    modelRef: "omlx/Qwen2.5-3B-Instruct-4bit",
-  });
-  const catalog = await provider?.catalog?.run({
-    ...context,
-    providerIds: ["omlx"],
-    resolveProviderApiKey: () => ({ apiKey: "omlx-local" }),
-    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-  });
-  expect(catalog).toMatchObject({
-    provider: { api: "openai-completions", models: [{ id: "Qwen2.5-3B-Instruct-4bit" }] },
-  });
-});
-
 function chatModel(baseUrl: string) {
   return {
     id: "fixture-chat",

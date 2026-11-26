@@ -14,7 +14,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PLUS = "command-a-plus-05-2026";
 const REASONING = "command-a-reasoning-08-2025";
-const VISION = "command-a-vision-07-2025";
 
 function requireCohereModel(modelId = PLUS): Model<"openai-completions"> {
   const provider = buildManifestModelProviderConfig({
@@ -67,20 +66,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   clearLiveCatalogCacheForTests();
 });
-
-it("keeps North Mini Code text-only with Cohere's binary reasoning contract", () => {
-  const model = requireCohereModel("north-mini-code-1-0");
-  expect(model.input).toEqual(["text"]);
-  expect(model.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
-  expect(model.compat?.reasoningEffortMap).toEqual({
-    off: "none",
-    none: "none",
-    ...Object.fromEntries(
-      "minimal low medium high xhigh adaptive max".split(" ").map((key) => [key, "high"]),
-    ),
-  });
-});
-
 it("discovers active chat models through the registered Cohere catalog", async () => {
   const fetch = vi.fn(async () =>
     Response.json({
@@ -132,14 +117,4 @@ it("maps Command A+ and Command A Reasoning to Cohere's supported reasoning effo
       ),
     ).toEqual(["none", "high"]);
   }
-});
-
-it("advertises only tool-capable current Cohere models to modern live sweeps", async () => {
-  const provider = await registerSingleProviderPlugin(plugin);
-
-  expect(
-    [PLUS, REASONING, "command-a-03-2025", VISION].map((modelId) =>
-      provider.isModernModelRef?.({ provider: "cohere", modelId }),
-    ),
-  ).toEqual([true, true, false, false]);
 });

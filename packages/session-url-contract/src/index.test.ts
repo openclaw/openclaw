@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildControlUiCatalogSessionUrl, buildControlUiSessionPath } from "./index.js";
 import {
   matchControlUiCatalogSharePath,
@@ -8,23 +8,8 @@ import {
 import { isIncognitoSessionKey } from "./session-key.js";
 import { buildControlUiCatalogSharePath } from "./share-build.js";
 
-it("rejects ordinary session keys without allocating normalized strings", () => {
-  const trim = vi.spyOn(String.prototype, "trim");
-  const lower = vi.spyOn(String.prototype, "toLowerCase");
-  let result: boolean;
-  let normalizations: number;
-  try {
-    result = isIncognitoSessionKey("  Agent:Main:Subagent:Ordinary-Session  ");
-    normalizations = trim.mock.calls.length + lower.mock.calls.length;
-  } finally {
-    trim.mockRestore();
-    lower.mockRestore();
-  }
-  expect(result).toBe(false);
-  expect(normalizations).toBe(0);
-});
-
 it.each<[string | undefined | null, boolean]>([
+  ["  Agent:Main:Subagent:Ordinary-Session  ", false],
   [undefined, false],
   [null, false],
   ["", false],

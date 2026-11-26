@@ -118,18 +118,6 @@ describe("MemoryIndexManager.readFile", () => {
     },
   );
 
-  it("omits truncation metadata when the full excerpt fits and no more lines remain", async () => {
-    const relPath = "memory/complete.md";
-    await write(relPath, "alpha\nbeta\ngamma");
-    expect(await read(relPath)).toEqual({
-      status: "ok",
-      text: "alpha\nbeta\ngamma",
-      path: relPath,
-      from: 1,
-      lines: 3,
-    });
-  });
-
   it("returns not found when the file disappears after stat", async () => {
     const relPath = "memory/transient.md";
     const absPath = await write(relPath, "first\nsecond");

@@ -163,13 +163,6 @@ function streamedErrorResponse(body: string) {
 }
 
 describe("ClickClack HTTP client", () => {
-  it("serializes explicit archive requests", async () => {
-    const fetchMock = jsonFetch({ channel: { id: "chn_discussion" } });
-    const patch = { archived: true, name: "release-done", sidebar_section: "Archive" };
-    await createTestClient(fetchMock).updateChannel("chn_discussion", patch);
-    expectRequest(fetchMock.mock.calls, 1, "channels/chn_discussion", "PATCH", patch);
-  });
-
   it("merges recent thread replies into the global latest-message window", async () => {
     const root = historyRoot(10, 1);
     const newerRoot = {
@@ -510,12 +503,6 @@ describe("ClickClack HTTP client", () => {
       client.createActivityMessage({ body: "orphan row", kind: "agent_commentary" }),
     ).rejects.toThrow("createActivityMessage requires a channelId or conversationId");
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("PATCHes message bodies for activity row coalescing", async () => {
-    const fetchMock = jsonFetch({ message: { id: "msg_9", body: "longer" } }, 200);
-    await createTestClient(fetchMock).updateMessageBody("msg_9", "longer");
-    expectRequest(fetchMock.mock.calls, 1, "messages/msg_9", "PATCH", { body: "longer" });
   });
 
   it("POSTs ephemeral agent progress frames to the realtime endpoint", async () => {

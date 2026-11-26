@@ -62,6 +62,11 @@ suite.define(() => {
           page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
         )
         .toBeGreaterThan(0);
+      expect(
+        await page
+          .locator('[data-region-header="side"] a.rail-header__action[target="_blank"]')
+          .getAttribute("href"),
+      ).toBe("https://discussion.example/session");
       expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
 
       await closeDiscussion.click();

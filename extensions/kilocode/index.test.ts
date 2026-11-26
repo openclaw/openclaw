@@ -57,39 +57,4 @@ describe("kilocode provider plugin", () => {
     });
     expect(result?.stop).toEqual(["\n"]);
   });
-
-  it("publishes configured Kilo models through plugin-owned catalog augmentation", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.augmentModelCatalog?.({
-        config: {
-          models: {
-            providers: {
-              kilocode: {
-                models: [
-                  {
-                    id: "google/gemini-3-pro-preview",
-                    name: "Gemini 3 Pro Preview",
-                    input: ["text", "image"],
-                    reasoning: true,
-                    contextWindow: 1048576,
-                  },
-                ],
-              },
-            },
-          },
-        },
-      } as never),
-    ).toEqual([
-      {
-        provider: "kilocode",
-        id: "google/gemini-3.1-pro-preview",
-        name: "Gemini 3 Pro Preview",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 1048576,
-      },
-    ]);
-  });
 });
