@@ -387,8 +387,7 @@ describe("update.run handoff refusal diagnostics", () => {
         }),
         expect.any(Object),
       );
-      const notice = (sendNotice.mock.calls as unknown as [{ message: string }][]).at(-1)?.[0]
-        ?.message;
+      const notice = sendNotice.mock.calls.at(-1)?.[0]?.message;
       expect(notice).toContain(`The current version (${run.before.version}) is still running.`);
       expect(notice).toContain(
         "Update failed before the update started (managed-service-handoff-failed).",

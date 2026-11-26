@@ -184,7 +184,18 @@ export function registerUnverifiedDefinitionRecoveryTests({
       }
       const recorded = getUpdateRun(run.runId, { env: run.env });
       expect(recorded?.status).toBe(succeeded ? "succeeded" : "failed");
-      expect(recorded?.origin.nextAction).toContain("openclaw update repair");
+      if (startup === "exception" || startup === "unrelated-failure") {
+        expect(
+          recorded?.steps.some((step) => step.step === "installed gateway recovery admission"),
+        ).toBe(false);
+        expect(recorded?.origin.nextAction).toContain(
+          "Your Gateway is still serving 2.0.0; nothing to restore.",
+        );
+        expect(recorded?.origin.nextAction).toContain("then run `openclaw update` again.");
+        expect(recorded?.origin.nextAction).not.toContain("stop the Gateway");
+      } else {
+        expect(recorded?.origin.nextAction).toContain("openclaw update repair");
+      }
       expect(recorded?.origin.nextAction).not.toMatch(/keep the gateway stopped/i);
       expect([
         recorded?.reason,
