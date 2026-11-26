@@ -7,9 +7,13 @@ import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
-it.skipIf(process.platform === "win32").each([false, true])(
-  "checks every resident profile artifact (write=%s)",
-  (mutate) => {
+it.skipIf(process.platform === "win32").each([
+  { absolute: false, mutate: false },
+  { absolute: true, mutate: false },
+  { absolute: false, mutate: true },
+])(
+  "checks every resident profile artifact (absolute=$absolute, write=$mutate)",
+  ({ absolute, mutate }) => {
     const home = realpathSync(temps.make("resident-entry-probe-"));
     const { file, json, write } = fixtureFiles(home);
     const prefix = ".openclaw/git-install";
@@ -36,7 +40,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
         `console.log(JSON.stringify(${JSON.stringify(verdict)}));`,
       ].join("\n"),
     );
-    symlinkSync(release, file(prefix + "/openclaw"), "dir");
+    symlinkSync(absolute ? file(root) : release, file(prefix + "/openclaw"), "dir");
     const reportPath = file("report.json");
     const result = spawnSync(
       resolveTestNodeExecPath(),

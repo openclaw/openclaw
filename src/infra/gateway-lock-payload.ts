@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
-// Renewal age is diagnostic only: a paused or unreachable owner may still be alive.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
 
@@ -63,6 +63,25 @@ type GatewayLockHolder = Partial<Pick<LockPayload, "pid" | "processNamespace">> 
   heartbeatAt?: number;
 };
 
+function readLockHeartbeat(lockPath: string): number | undefined {
+  try {
+    return fs.statSync(lockPath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+function isForeignLinuxNamespace(
+  owner: ProcessNamespace | undefined | null,
+  current: ProcessNamespace | null,
+) {
+  return (
+    owner?.platform === "linux" &&
+    current?.platform === "linux" &&
+    (owner.host !== current.host || owner.pidNsInode !== current.pidNsInode)
+  );
+}
+
 /** Diagnostic facts never grant ownership; callers still classify the recorded holder. */
 export function describeGatewayLockHolder(
   holder: GatewayLockHolder,
@@ -70,31 +89,33 @@ export function describeGatewayLockHolder(
   localState?: "live" | "unknown",
 ) {
   const namespace = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
-  let heartbeatAt = holder.heartbeatAt;
-  if (lockPath) {
-    try {
-      heartbeatAt = fs.statSync(lockPath).mtimeMs;
-    } catch {
-      // Preserve the refusal when the heartbeat cannot be inspected.
-    }
-  }
+  const heartbeatAt = (lockPath ? readLockHeartbeat(lockPath) : undefined) ?? holder.heartbeatAt;
   const ageMs = heartbeatAt === undefined ? undefined : Date.now() - heartbeatAt;
   const location = `${namespace?.host ?? holder.host ?? "unknown host"}${namespace?.platform === "linux" ? `/pid-ns ${namespace.pidNsInode}` : ""}`;
   const action =
     localState === "live"
       ? `The holder ${holder.pid} is alive on this host, stop it first`
       : localState === "unknown"
-        ? "Stop the holder before retrying; if it has already stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover the unchanged owner"
-        : "Run this command inside the Gateway container or with a shared PID namespace; if the holder has stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover the unchanged owner";
+        ? "Stop the holder before retrying"
+        : "Run this command inside the Gateway container or with a shared PID namespace";
   return `holder ${holder.pid ?? "unknown"} at ${location}, last renewed ${ageMs === undefined ? "at an unknown time" : `${Math.max(0, Math.floor(ageMs / 1000))} s ago`}. ${action}.`;
 }
 
 export class GatewayLockNamespaceError extends Error {
+  readonly heartbeatAgeMs?: number;
+
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
+    const owner = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
+    if (isForeignLinuxNamespace(owner, readGatewayLockProcessNamespace())) {
+      const heartbeatAt = lockPath ? readLockHeartbeat(lockPath) : holder.heartbeatAt;
+      if (heartbeatAt !== undefined) {
+        this.heartbeatAgeMs = Math.max(0, Date.now() - heartbeatAt);
+      }
+    }
   }
 }
 
@@ -131,13 +152,18 @@ export function classifyGatewayLockProcessNamespace(
   }
   return classifyGatewayOwnerProcessNamespace(holder?.processNamespace, {
     machineIdentity: holder?.machineIdentity,
+    readGatewayHeartbeat: lockPath ? () => readLockHeartbeat(lockPath) : undefined,
   });
 }
 
 /** File locks and SQLite leases require comparable evidence of process death. */
 export function classifyGatewayOwnerProcessNamespace(
   value: unknown,
-  options: { ownerHost?: string; machineIdentity?: unknown } = {},
+  options: {
+    ownerHost?: string;
+    machineIdentity?: unknown;
+    readGatewayHeartbeat?: () => number | undefined;
+  } = {},
 ): "same" | "dead" | "unknown" {
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
   if (!owner || (options.ownerHost !== undefined && options.ownerHost !== owner.host)) {
@@ -149,6 +175,22 @@ export function classifyGatewayOwnerProcessNamespace(
   }
   if (owner.platform !== current.platform) {
     return "unknown";
+  }
+  if (options.readGatewayHeartbeat && isForeignLinuxNamespace(owner, current)) {
+    // Docker and Podman default to a container ID hostname, already stored in the record.
+    if (
+      owner.host === current.host &&
+      /^[a-f0-9]{12}$/u.test(current.host) &&
+      isContainerEnvironment()
+    ) {
+      return "dead";
+    }
+    // A container paused for over 90s can resume alongside its replacement until its
+    // next restart. We don't add fencing; native SQLite locking still protects the file.
+    const heartbeatAt = options.readGatewayHeartbeat();
+    if (heartbeatAt !== undefined && Date.now() - heartbeatAt > GATEWAY_OWNER_HEARTBEAT_STALE_MS) {
+      return "dead";
+    }
   }
   if (owner.platform === "darwin" && options.machineIdentity !== undefined) {
     const machine = MachineIdentitySchema.safeParse(options.machineIdentity).data;

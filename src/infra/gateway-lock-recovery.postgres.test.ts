@@ -131,7 +131,7 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
       }
       const host = row.sameHost ? current.host : "host-before-reboot";
       await h.change(
-        "UPDATE $namespace.state_leases SET payload_json=$1 WHERE scope='gateway-owner'",
+        "UPDATE $namespace.state_leases SET payload_json=$1, heartbeat_at=$2 WHERE scope='gateway-owner'",
         [
           JSON.stringify({
             owner: {
@@ -150,6 +150,8 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
             mode: "foreground",
             supervisor: null,
           }),
+          // A fresh heartbeat isolates process-identity classification from timed takeover.
+          Date.now(),
         ],
       );
       await h.run(async () => {
@@ -176,7 +178,7 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
         expect(decodeGatewayOwnerLease(inspected.lease ?? undefined)?.state).toBe(row.state);
         expect(await h.rows()).toEqual(before);
         expect(inspected.holders.join("\n")).toContain("PostgreSQL Gateway owner lease");
-        // Explicit confirmation may recover an unknown owner; it never grants automatic admission.
+        // A fresh unverified owner still needs independent confirmation.
         await expect(recoverGatewayLock({ confirmation: inspected.confirmation })).resolves.toEqual(
           {
             recovered: true,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
   type WorkerGatewayToolInvokeResult,
@@ -134,7 +135,8 @@ export function createWorkerGatewayToolRuntime(params: {
                 definition: {
                   ...projectAgentToolDefinition(tool),
                   outputSchema: tool.outputSchema,
-                  catalogMode: tool.catalogMode,
+                  // Workers have no on-demand promotion; on-demand tools keep the direct contract.
+                  catalogMode: tool.catalogMode ? "direct-only" : undefined,
                 },
               };
             }),
@@ -148,6 +150,12 @@ export function createWorkerGatewayToolRuntime(params: {
           return catalog;
         }));
       assertCurrent();
+      if (
+        surface.policy.execDefaults &&
+        !identity.protocolFeatures.includes(WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE)
+      ) {
+        throw new Error("Configured exec defaults require an updated worker");
+      }
       return surface;
     },
     async getPromptProjection(identity) {

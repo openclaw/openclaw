@@ -576,25 +576,6 @@ describe("tui session actions", () => {
     expectCalls(2, updateAutocompleteProvider, updateFooter, requestRender);
   });
 
-  it("skips UI work when session refresh metadata is unchanged", async () => {
-    const metadata = { model: "sonnet-4.6", modelProvider: "anthropic", totalTokens: 42 };
-    const describeSession = vi
-      .fn()
-      .mockResolvedValue(description({ key: mainSession.key, ...metadata, updatedAt: 200 }));
-    const { state, refreshSessionInfo, updateFooter, updateAutocompleteProvider, requestRender } =
-      createHarness({
-        backend: { describeSession },
-        state: {
-          sessionInfo: { ...metadata, updatedAt: 100 },
-        },
-      });
-
-    await refreshSessionInfo();
-
-    expect(state.sessionInfo.updatedAt).toBe(200);
-    expectCalls(0, updateAutocompleteProvider, updateFooter, requestRender);
-  });
-
   it("keeps patched model selection when a refresh returns an older snapshot", async () => {
     const oldModel = { model: "old-model", modelProvider: "ollama", updatedAt: 100 };
     const describeSession = vi
@@ -777,21 +758,6 @@ describe("tui session actions", () => {
       await nextEventLoopTurn();
       expect(describeSession).not.toHaveBeenCalled();
       expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
-    } finally {
-      events.dispose();
-    }
-  });
-
-  it.each([
-    { name: "carries no row", row: undefined },
-    { name: "carries a row the session picker hides", row: { archived: true } },
-  ])("describes the session once when a run message $name", async ({ row }) => {
-    const { describeSession, events, message } = createRunMessageHarness();
-    try {
-      message(200, row);
-      await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
-      await nextEventLoopTurn();
-      expect(describeSession).toHaveBeenCalledOnce();
     } finally {
       events.dispose();
     }

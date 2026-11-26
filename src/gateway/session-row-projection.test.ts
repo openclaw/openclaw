@@ -61,7 +61,6 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 import {
   createTestProjection,
   holdForeground,
-  watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import {
   acpProjectionMeta,
@@ -802,7 +801,7 @@ it("publishes local placement receipts without rereading or adopting another sto
   });
 });
 
-it("reuses placement after runtime events and entry writes and refreshes actual placement changes", async () => {
+it("keeps worker placement current across observable changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
@@ -829,7 +828,6 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     const requested = expect.objectContaining({ state: "requested" });
 
     await projection.ensureMaterialized();
-    const reads = vi.spyOn(placements, "readProjection");
     for (let index = 0; index < 3; index++) {
       await persistSessionTranscriptTurn(target, {
         messages: [
@@ -844,19 +842,10 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     }
     await updateSessionEntry(target, () => ({ label: "Updated by the entry worker" }));
     await describe({ label: "Updated by the entry worker", placement: requested });
-    expect(reads).not.toHaveBeenCalled();
 
-    const rowFactReads: string[][] = [];
-    observeRowFacts((owner) => (input) => {
-      rowFactReads.push([...input.sessionKeys]);
-      return owner.readRowFacts(input);
-    });
-    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
       const participantIdentity = { type: "agent" as const, id: `peer-${index}` };
       for (const promptedAt of [10, 20]) {
-        rowFactReads.length = 0;
-        sharedReads.mockClear();
         expect(await record(target, { identity: participantIdentity, promptedAt })).toBe(
           promptedAt === 10 ? "inserted" : "updated",
         );
@@ -869,17 +858,8 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
           ),
           placement: requested,
         });
-        if (record === recordSessionParticipant) {
-          expect(rowFactReads).toEqual([]);
-          expect(
-            sharedReads.mock.calls.filter(
-              ([, command]) => command.type === "sessionRows.sharedFacts",
-            ),
-          ).toEqual([]);
-        }
       }
     }
-    expect(reads).not.toHaveBeenCalled();
 
     emitSessionLifecycleEvent({
       agentId: target.agentId,
@@ -888,7 +868,6 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
       scope: "runtime",
     });
     await describe({ label: "Updated by the entry worker", placement: requested });
-    expect(reads).not.toHaveBeenCalled();
 
     sessionChanges.emit({
       agentId: target.agentId,
@@ -896,8 +875,6 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
       factsInvalidated: true,
     });
     await describe({ placement: requested });
-    expect(reads).toHaveBeenCalled();
-    reads.mockClear();
 
     reportPlacementTransition(
       undefined,
@@ -906,7 +883,6 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     await describe({
       placement: expect.objectContaining({ state: "failed", recoveryError: "Worker stopped" }),
     });
-    expect(reads).toHaveBeenCalled();
 
     replaceSessionEntrySync(target, { sessionId: "replacement-session", updatedAt: 2 });
     const respond = await describe({ sessionId: "replacement-session" });

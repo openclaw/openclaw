@@ -58,7 +58,6 @@ export function createMeetingRuntimeFacade<
     MeetingRuntimeSpeechBlockedReason<Health>
   > {
     readonly #defaultAgentId: string;
-    readonly #requesterSessionKeys = new Map<string, string>();
 
     constructor(private readonly params: MeetingRuntimeParams<Config>) {
       super({
@@ -76,18 +75,14 @@ export function createMeetingRuntimeFacade<
         ] as MeetingRuntimeSpeechBlockedReason<Health>[]),
         messages: options.messages.sessionRuntime,
         resolveJoin: (request) => this.#resolveJoin(request),
-        createSession: ({ request, resolved, createdAt }) => {
-          const session = createMeetingSession({
+        getRequesterSessionKey: (request) => request.requesterSessionKey,
+        createSession: ({ resolved, createdAt }) =>
+          createMeetingSession({
             platform: options.platform,
             config: params.config,
             resolved,
             createdAt,
-          }) as Session;
-          if (request.requesterSessionKey) {
-            this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
-          }
-          return session;
-        },
+          }) as Session,
         resolveSpeechInstructions: (request) =>
           request.message ?? params.config.realtime.introMessage,
         isBrowserTransport: () => true,
@@ -125,7 +120,8 @@ export function createMeetingRuntimeFacade<
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
-        ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
+        ensureRealtimeBridge: (session, requesterSessionKey) =>
+          this.#ensureRealtimeBridge(session, requesterSessionKey),
         captureTranscript: async (session, captureOptions) =>
           await this.#captureTranscript(session, captureOptions),
         speakViaTransport: async () => undefined,
@@ -145,27 +141,13 @@ export function createMeetingRuntimeFacade<
     }
 
     override async join(request: Request) {
-      try {
-        return await super.join(
-          options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
-        );
-      } catch (error) {
-        const activeIds = new Set(this.list().map((session) => session.id));
-        for (const sessionId of this.#requesterSessionKeys.keys()) {
-          if (!activeIds.has(sessionId)) {
-            this.#requesterSessionKeys.delete(sessionId);
-          }
-        }
-        throw error;
-      }
+      return await super.join(
+        options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
+      );
     }
 
     override async leave(sessionId: string) {
-      try {
-        return await super.leave(sessionId);
-      } finally {
-        this.#requesterSessionKeys.delete(sessionId);
-      }
+      return await super.leave(sessionId);
     }
 
     async statusForAgent(agentId: string, sessionId?: string) {
@@ -204,10 +186,9 @@ export function createMeetingRuntimeFacade<
 
     #hookContext(): MeetingRuntimeHookContext<Session, Request, Transport, Mode, Health> {
       return {
-        deleteRequesterSessionKey: (sessionId) => this.#requesterSessionKeys.delete(sessionId),
+        deleteRequesterSessionKey: (sessionId) => this.forgetMeetingRequesterSessionKey(sessionId),
         endSession: async (sessionId, leaveOptions) => {
           await super.leave(sessionId, leaveOptions);
-          this.#requesterSessionKeys.delete(sessionId);
         },
         noteSession: (session, note) => this.#noteSession(session, note),
         refreshBrowserHealth: async (session, refreshOptions) =>
@@ -301,6 +282,7 @@ export function createMeetingRuntimeFacade<
 
     async #ensureRealtimeBridge(
       session: Session,
+      requesterSessionKey?: string,
     ): Promise<MeetingSessionRuntimeHandles<Health> | undefined> {
       const audioBridgeActive =
         options.hooks?.isAudioBridgeActive?.(session) ?? Boolean(session.chrome?.audioBridge);
@@ -327,7 +309,7 @@ export function createMeetingRuntimeFacade<
         config: recoveryConfig,
         fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
-        requesterSessionKey: this.#requesterSessionKeys.get(session.id),
+        requesterSessionKey,
         mode: session.mode,
         trackedTargetId: session.chrome.browserTab?.targetId,
         url: session.url,

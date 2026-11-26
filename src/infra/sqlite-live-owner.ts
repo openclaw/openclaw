@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
-import { GatewayLockNamespaceError, parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import {
+  classifyGatewayLockProcessNamespace,
+  GatewayLockNamespaceError,
+  parseGatewayLockPayload,
+} from "./gateway-lock-payload.js";
 import { readOwnerPaths } from "./gateway-state-owner-lifecycle.js";
 import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
@@ -23,6 +27,9 @@ export function hasVerifiedLiveSqliteOwner(
     return false;
   }
   if (!owner || (owner.role && owner.role !== "gateway" && owner.role !== "agent-embedded")) {
+    return false;
+  }
+  if (classifyGatewayLockProcessNamespace(owner, ownerPath) === "dead") {
     return false;
   }
   const ownerStatus = readStateLeaseProcessOwnerStatus({

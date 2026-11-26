@@ -7,6 +7,7 @@ import {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import {
@@ -15,11 +16,13 @@ import {
   normalizeFsSafeNativeEnv,
 } from "../../infra/fs-safe-env.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import {
   withArtifactPreservingStateReads,
   withLiveStateReads,
 } from "../../state/artifact-preserving-state-reads.js";
+import { replayInterruptedStateUpgrade } from "../../state/state-upgrade-replay.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
@@ -520,7 +523,7 @@ async function createTrustedGatewayEnvLoader() {
     { isConfigRuntimeEnvVarAllowed },
     { loadGlobalRuntimeDotEnvFiles },
     { normalizeEnv },
-    { normalizeStateDirEnv, resolveStateDir },
+    { normalizeStateDirEnv },
     { resolveConfigDir },
     { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
@@ -621,24 +624,13 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
   if (!params.opts.reset) {
-    // Outdated state is upgraded by copy and swap before anything reads it. A start
-    // the config guard would refuse stays read-only: the previous package must still
-    // read its state.
-    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
-    await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
-      upgradeStateOnGatewayStart(
-        process.env,
-        (start) =>
-          getGatewayStartGuardErrors({
-            ...start,
-            allowUnconfigured: params.opts.allowUnconfigured === true,
-          }).length === 0,
-      ),
+    // Settle only historical durable intent before the first state reader.
+    // New in-place maintenance follows admitted config and source guards.
+    await replayInterruptedStateUpgrade(
+      process.env,
+      resolveStateDir(process.env),
+      createSubsystemLogger("state/upgrade"),
     );
-  }
-  // State preparation can take minutes. Only its completion shortens the launcher's trial.
-  if (process.env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
-    process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
   }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
@@ -709,12 +701,30 @@ export async function recheckGatewayRunBootstrap(
   }
   // Selection already admitted any current-config backup. Later authored drift
   // must be validated by a new startup attempt.
-  const change = describeGatewayRunConfigChange(prepared.snapshot, current, {
-    allowPathChange: params.snapshot !== undefined,
-    // Startup preflight passes its plugin-validated read; rereads here stay core-only.
-    currentValidatesPlugins: params.snapshot !== undefined,
-  });
+  // A projection changes the normalized view, not its authored, env-resolved inputs.
+  // Compare the same pre-migration view so implicit roster defaults are not authored drift.
+  const change =
+    !prepared.snapshot.valid && current.valid
+      ? describeConfigSnapshotInputChange(
+          {
+            ...prepared.snapshot,
+            sourceConfig:
+              prepared.snapshot.sourceConfigBeforeMigrations ?? prepared.snapshot.sourceConfig,
+          },
+          {
+            ...current,
+            sourceConfig: current.sourceConfigBeforeMigrations ?? current.sourceConfig,
+          },
+          { allowPathChange: params.snapshot !== undefined },
+        )
+      : describeGatewayRunConfigChange(prepared.snapshot, current, {
+          allowPathChange: params.snapshot !== undefined,
+          // Startup preflight passes its plugin-validated read; rereads here stay core-only.
+          currentValidatesPlugins: params.snapshot !== undefined,
+        });
   if (!change) {
+    // A projected repair retains the admitted authored revision until its owner writes it.
+    prepared.snapshot = current;
     return true;
   }
   params.runtime.error(

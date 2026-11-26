@@ -5,7 +5,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
-import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
+import {
+  prepareAgentDatabaseLeaseProvenance,
+  readAgentDatabaseLeaseProvenance,
+} from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -37,6 +40,7 @@ import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
+  GATEWAY_OWNER_HEARTBEAT_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -394,8 +398,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Heartbeat age is diagnostic; process evidence, not age, governs recovery.
-        heartbeatMs: Math.floor(STARTUP_MIGRATION_LEASE_TTL_MS / 3),
+        heartbeatMs: GATEWAY_OWNER_HEARTBEAT_MS,
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),
@@ -410,7 +413,9 @@ export function acquireGatewayOwnerLease(params: {
       constructionFailure = { error };
       throw error;
     }
-    await heartbeat.ready;
+    // On Windows the optional boot-identity probe can time out. Do not run it
+    // synchronously in markListening or while holding the SQLite writer.
+    await Promise.all([heartbeat.ready, prepareAgentDatabaseLeaseProvenance()]);
   })();
   let released = false;
   return {

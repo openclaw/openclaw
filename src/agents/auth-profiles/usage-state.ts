@@ -61,14 +61,20 @@ export function resetAuthProfileFailureState(
   };
 }
 
+/** Reasons a provider that manages its own availability recovers without a local cooldown. */
+export function isProviderManagedCooldownReason(
+  reason: AuthProfileFailureReason | undefined,
+): boolean {
+  return reason === "rate_limit" || reason === "overloaded";
+}
+
 /** Only provider-managed transient capacity failures bypass the local cooldown. */
 export function isAuthCooldownBypassedForProvider(
   provider: string | undefined,
   reason: AuthProfileFailureReason | undefined,
 ): boolean {
   return (
-    (reason === "rate_limit" || reason === "overloaded") &&
-    resolveProviderManagesOwnAvailability(provider ?? "")
+    isProviderManagedCooldownReason(reason) && resolveProviderManagesOwnAvailability(provider ?? "")
   );
 }
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { AuditEvent } from "../../../packages/gateway-protocol/src/schema/audit.ts";
@@ -189,7 +189,12 @@ async function openAutomations(page: Page) {
     await details.locator(".session-automation-mobile__list-row").first().waitFor();
   }
 }
-async function screenshot(page: Page, name: string, required: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  required: string,
+  detail?: { target: Locator; viewport: { width: number; height: number } },
+) {
   const body = page.locator("body");
   const text = (await body.textContent()) ?? "";
   for (const secret of [
@@ -202,13 +207,15 @@ async function screenshot(page: Page, name: string, required: string) {
     expect(text).not.toContain(secret);
   }
   expect(new URL(page.url()).hash).toBe("");
-  const target = page
-    .locator(
-      '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"]',
-    )
-    .filter({ hasText: required, visible: true })
-    .getByText(required, { exact: true })
-    .first();
+  const target =
+    detail?.target ??
+    page
+      .locator(
+        '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"]',
+      )
+      .filter({ hasText: required, visible: true })
+      .getByText(required, { exact: true })
+      .first();
   if (!captureUiProof) {
     await waitForControlUiProofSurface(body, [target]);
     if ((page.viewportSize()?.width ?? 1440) < 560) {
@@ -218,7 +225,8 @@ async function screenshot(page: Page, name: string, required: string) {
   }
   const frame = await takeControlUiScreenshotFrame(page, body, [target], {
     animations: "disabled",
-    ...((page.viewportSize()?.width ?? 1440) < 560 ? { scrollTo: target } : {}),
+    ...(detail ? { viewport: detail.viewport } : {}),
+    ...(detail || (page.viewportSize()?.width ?? 1440) < 560 ? { scrollTo: target } : {}),
   });
   await fs.writeFile(path.join(artifacts, name + ".png"), frame.png);
   (proof.screenshots as string[]).push(name + ".png");
@@ -354,9 +362,66 @@ suite.define(() => {
         const first = await run("blocked");
         expect(first.status).toBe("ok");
         await pane.locator(".chat-bubble").getByText(fixture.blocked, { exact: true }).waitFor();
+        const inspectBlockedHistory = async () => {
+          // A second authenticated page leaves the chat's read/freshness assertions untouched.
+          const detailPage = await context.newPage();
+          try {
+            await pairControlUiPage(detailPage, cli);
+            await detailPage.goto(
+              new URL(`cron?job=${encodeURIComponent(id)}`, suite.server.baseUrl).href,
+            );
+            await waitForControlUiGatewayReady(detailPage);
+            const detail = detailPage.locator('.cron-page[data-view="detail"]');
+            const entries = detail.locator(".cron-run-entry");
+            await expect.poll(() => entries.count()).toBe(3);
+            const statuses = entries.locator(".cron-run-entry__status");
+            await expect
+              .poll(() => statuses.allTextContents())
+              .toEqual(
+                baselineRoot
+                  ? ["Completed", "Completed", "Completed"]
+                  : ["No change", "No change", "Blocked"],
+              );
+            const attention = detail.locator(".cron-failure-details");
+            if (baselineRoot) {
+              expect(await attention.count()).toBe(0);
+            } else {
+              await expect.poll(() => attention.textContent()).toContain(fixture.blocked);
+              expect(await attention.textContent()).toContain("Blocked");
+              expect(await detail.locator('[data-test-id="cron-review-failed-run"]').count()).toBe(
+                0,
+              );
+              expect(await entries.nth(0).textContent()).not.toContain(fixture.blocked);
+              expect(await entries.nth(1).textContent()).not.toContain(fixture.blocked);
+              expect(await entries.nth(2).getAttribute("data-tone")).toBe("muted");
+            }
+            proof.jobDetail = {
+              statuses: await statuses.allTextContents(),
+              attention: (await attention.count()) ? await attention.textContent() : null,
+              retainedBlockerVisible: (await attention.count()) > 0,
+            };
+            if (captureUiProof) {
+              for (const width of [400, 820, 1280]) {
+                const viewport = { width, height: 1000 };
+                await screenshot(detailPage, `job-detail-${width}`, fixture.name, {
+                  target: detail.locator(".cron-detail-header"),
+                  viewport,
+                });
+                await screenshot(detailPage, `job-history-${width}`, fixture.name, {
+                  target: entries.nth(2),
+                  viewport,
+                });
+              }
+            }
+            await save();
+          } finally {
+            await detailPage.close();
+          }
+        };
         if (baselineRoot) {
           await run("no_change");
           await run("no_change");
+          await inspectBlockedHistory();
           await screenshot(page, "desktop-blocked-after-quiet-checks", fixture.name);
           await closeChatDetails(page);
           await page.setViewportSize({ width: 390, height: 844 });
@@ -427,6 +492,7 @@ suite.define(() => {
           expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
           expect(await pane.getByText(fixture.waiting, { exact: true }).count()).toBe(0);
         }
+        await inspectBlockedHistory();
         const beforeTrigger = await rpc<CronJob>("cron.get", { id });
         const providerRequestsBeforeTrigger = provider.requests();
         // Start the first occurrence soon while retaining the trigger's minimum cadence.

@@ -74,7 +74,13 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
+.activity-current-work__title {
+  color: var(--text-strong);
+  font-weight: var(--list-row-title-weight);
+}
+
 .activity-current-work__title,
+.activity-current-work__agent,
 .activity-feed__session-scope,
 .activity-feed__identity-copy h2,
 .activity-feed__identity-copy p {

@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentSessionListReadView } from "../../src/agents/subagents/registry/subagent-registry-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../src/config/sessions/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -148,12 +149,7 @@ try {
   globalThis.gc?.();
   const inspector = new Session();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const hostLoad = loadavg();
   const start = process.threadCpuUsage();

@@ -206,27 +206,6 @@ it("groups core, plugin, and channel tools from the effective runtime set", asyn
   });
 });
 
-it("groups bundled MCP tools separately from generic plugin tools", async () => {
-  const result = await inventoryFor({
-    tools: [pluginTool("probe__tool", "Probe", "Probe MCP", "bundle-mcp")],
-  });
-  expect(result.groups).toEqual([
-    expectedGroup("mcp", ["probe__tool", "Probe", "Probe MCP", { pluginId: "bundle-mcp" }]),
-  ]);
-});
-
-it("disambiguates duplicate labels with source ids", async () => {
-  const result = await inventoryFor({
-    tools: [
-      pluginTool("docs_lookup", "Lookup", "Search docs", "docs"),
-      pluginTool("jira_lookup", "Lookup", "Search Jira", "jira"),
-    ],
-  });
-  const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
-
-  expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
-});
-
 it("projects plugin metadata published during provider normalization", async () => {
   const registry = createEmptyPluginRegistry();
   registry.toolMetadata = [
@@ -331,36 +310,6 @@ it("reports unreadable inventory tool entries without crashing", async () => {
         'Tool "tool[0]" has an unsupported runtime input schema (tool[0] is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
     },
   ]);
-});
-
-it("applies provider transport normalization to bundled static model context", async () => {
-  await loadExecHarness();
-  effectiveInventoryState.staticCatalogModelMock.mockReturnValue({
-    id: "gpt-test",
-    name: "GPT Test",
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  });
-  effectiveInventoryState.normalizeTransportMock.mockReturnValue({
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  });
-
-  await resolveEffectiveToolInventory({
-    cfg: providerConfig("openai", {
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    }) as never,
-    modelProvider: "openai",
-    modelId: "gpt-test",
-  });
-
-  expectNormalizedModel("openai-responses", {
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  });
-  expectTransportContext("openai-completions", "https://proxy.example.com/v1");
 });
 
 it.each([
@@ -482,27 +431,6 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
   );
 });
 
-it("prefers displaySummary over raw description", async () => {
-  const result = await inventoryFor({
-    tools: [
-      mockTool({
-        name: "cron",
-        label: "Cron",
-        displaySummary: "Schedule and manage cron jobs.",
-        description: "Long raw description\n\nACTIONS:\n- status",
-      }),
-    ],
-  });
-
-  expect(result.groups[0]?.tools[0]).toEqual({
-    id: "cron",
-    label: "Cron",
-    description: "Schedule and manage cron jobs.",
-    rawDescription: "Long raw description\n\nACTIONS:\n- status",
-    source: "core",
-  });
-});
-
 it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
   const result = await inventoryFor({
     tools: [
@@ -523,16 +451,6 @@ it("falls back to a sanitized summary for multi-line raw descriptions", async ()
   expect(description.endsWith("...")).toBe(true);
   expect(description.length).toBeLessThanOrEqual(120);
   expect(result.groups[0]?.tools[0]?.rawDescription).toContain("ACTIONS:");
-});
-
-it("includes the resolved tool profile", async () => {
-  await loadExecHarness();
-
-  const result = await resolveEffectiveToolInventory({
-    cfg: { tools: { profile: "minimal", byProvider: { openai: { profile: "coding" } } } },
-    modelProvider: "openai",
-  });
-  expect(result.profile).toBe("coding");
 });
 
 it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {

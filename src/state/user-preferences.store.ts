@@ -88,7 +88,7 @@ export function deleteUserPreference(
       .where("profile_id", "=", profileId)
       .where("pref_key", "=", key),
   );
-  publishUserPreferencesChange(database);
+  publishUserPreferencesChange(database, { profileId, keys: [key] });
 }
 
 export function selectUserPreferenceValues(
@@ -305,7 +305,7 @@ function saveProfileCronFailureDismissals(
       valueJson: JSON.stringify(Object.fromEntries(receipts)),
     },
   ]);
-  publishUserPreferencesChange(db);
+  publishUserPreferencesChange(db, { profileId, keys: [CRON_FAILURE_DISMISSALS_KEY] });
 }
 
 /** Called inside the profile worker transaction. A late browser import never replaces a reviewed run. */
@@ -430,6 +430,9 @@ export function writeUserPreferences(
   if (updatesGitCoauthorPreference(update)) {
     publishUserProfileAuthorityChange(sqlite, profileId);
   }
-  publishUserPreferencesChange(sqlite);
+  publishUserPreferencesChange(sqlite, {
+    profileId,
+    keys: [...deletionKeys, ...serialized.map((row) => row.prefKey)],
+  });
   return ok(undefined);
 }

@@ -116,7 +116,7 @@ Snooze is saved by the Gateway and never stops a run, blocks messages or agent
 tools, disables automations, or changes the thread’s worktree. The thread wakes
 at its deadline, when you send a message, or when an agent run completes.
 System events and runs that preserve visible session state do not wake it.
-Snoozing keeps an existing pin; pinning wakes a snoozed thread, and archiving
+Snoozing keeps an existing pin. Wake a snoozed thread before pinning it; archiving
 clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
@@ -218,13 +218,20 @@ web actions menu, including plugin actions and **Stop cloud device…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
-Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
-the notice pauses that countdown. Undo restores the captured thread and its
-previous pin state, including successful threads from a partial batch archive.
-Restored threads return to the Active list when the Gateway confirms the restore.
-It remains available while you change conversations, filters, or agents, and
-leaves the current conversation selected. Reconnecting retires the action; if a
-thread was replaced before Undo, the failure stays visible.
+When the Gateway supports it on your connection, archiving from the sidebar
+offers **Undo** for six seconds. Hovering or focusing the notice pauses the
+countdown. Undo can restore threads that were successfully archived, without
+changing your personal pin order. If Archive cleared a shared pin, Undo creates
+a fresh shared pin unless a later edit superseded it. If the Gateway has already
+removed the working copy, choose **Restore** beside the failure to recreate it
+from the retained snapshot. Restore does not re-pin the thread. On a
+personal-pin connection without Undo, use **Threads… → Archived** to restore it.
+With an older Gateway that does not support personal pins, the existing Undo
+still appears and can restore the shared pin that the same Archive cleared.
+
+A confirmed restore returns the thread to Active without changing the current
+conversation. Changing filters or agents does not cancel Undo; reconnecting does.
+If the archived thread was replaced, the Gateway refuses the action.
 
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions

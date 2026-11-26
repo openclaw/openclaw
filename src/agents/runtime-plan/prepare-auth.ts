@@ -457,17 +457,18 @@ export function prepareAgentRuntimeAuth(
     availability?: boolean,
     authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
   ) => buildProviderModelAuthDirectSource({ mode, evidence, availability, authorization });
-  const directPlanningCandidate = harnessAllowsAuthProfileForwarding
-    ? resolveProviderDirectAuthPlanningEvidence(
-        authProfileSelectionProvider,
-        params.env ?? process.env,
-        {
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: params.metadataSnapshot,
-        },
-      )
-    : null;
+  const directPlanningCandidate =
+    harnessAllowsAuthProfileForwarding && !providerBindingSuppressesProfiles
+      ? resolveProviderDirectAuthPlanningEvidence(
+          authProfileSelectionProvider,
+          params.env ?? process.env,
+          {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            metadataSnapshot: params.metadataSnapshot,
+          },
+        )
+      : null;
   // A setup hint does not supply a credential for a harness-owned login.
   const directPlanningEvidence =
     directPlanningCandidate?.kind === "setup-provider" &&

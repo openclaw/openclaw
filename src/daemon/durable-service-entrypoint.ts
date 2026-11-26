@@ -60,7 +60,7 @@ export class DurableServiceCliError extends Error {
 function resolveDurableLayout(env: NodeJS.ProcessEnv) {
   const layout = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(resolveStateDir(env), "npm"));
   const packageRoot = path.join(layout.globalRoot, "openclaw");
-  return { layout, packageRoot, entrypoint: path.join(packageRoot, "openclaw.mjs") };
+  return { layout, packageRoot };
 }
 
 /**
@@ -131,13 +131,12 @@ export async function resolveDurableServiceCli(
   options: { install: boolean; service: "gateway" | "node" },
   entrypoint = process.argv[1],
 ): Promise<
-  | { entrypoint: string | PlannedCliEntrypoint; replacement?: DurableServiceCliReplacement }
-  | undefined
+  { entrypoint: PlannedCliEntrypoint; replacement?: DurableServiceCliReplacement } | undefined
 > {
   if (!entrypoint || !(await isDisposableEntrypoint(entrypoint))) {
     return undefined;
   }
-  const { layout, packageRoot, entrypoint: durableEntrypoint } = resolveDurableLayout(env);
+  const { layout, packageRoot } = resolveDurableLayout(env);
   // Package-inspection machinery loads only for a disposable CLI.
   const [{ resolveOpenClawPackageRoot }, { readPackageVersion }] = await Promise.all([
     import("../infra/openclaw-root.js"),
@@ -152,16 +151,14 @@ export async function resolveDurableServiceCli(
   }
   if (!options.install) {
     const errors = await collectDurableCopyErrors(packageRoot, version);
-    if (errors.length === 0) {
-      return { entrypoint: durableEntrypoint };
+    if (errors.length > 0) {
+      throw new DurableServiceCliError(
+        `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatNpxCliCommand(version, "gateway install --force", env)}`,
+      );
     }
-    throw new DurableServiceCliError(
-      `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatNpxCliCommand(version, "gateway install --force", env)}`,
-    );
   }
-  // Whether the copy is reused is decided under the package lock, and a replacement is
-  // published only inside the service install, so plan the entry from this CLI's own
-  // files: the same version has the same layout.
+  // Both modes select this CLI's same-version, service-specific entry. An install
+  // decides whether to reuse the copy under the package lock.
   const { planCliEntrypoint } = await import("./program-args.js");
   const planned = await planCliEntrypoint({
     sourceEntrypoint: entrypoint,
@@ -171,12 +168,16 @@ export async function resolveDurableServiceCli(
   });
   return {
     entrypoint: planned,
-    replacement: {
-      version,
-      globalRoot: layout.globalRoot,
-      packageRoot,
-      entrypoint: planned.planned,
-    },
+    ...(options.install
+      ? {
+          replacement: {
+            version,
+            globalRoot: layout.globalRoot,
+            packageRoot,
+            entrypoint: planned.planned,
+          },
+        }
+      : {}),
   };
 }
 

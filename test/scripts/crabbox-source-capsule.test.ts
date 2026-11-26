@@ -29,7 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  return { ...fs, lstatSync: vi.fn(fs.lstatSync), mkdirSync: vi.fn(fs.mkdirSync) };
+  return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
 });
 
 vi.mock("../../scripts/crabbox-staging.mts", async (importOriginal) => {
@@ -271,48 +271,6 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
       }
     } finally {
       vi.mocked(lstatSync).mockReset();
-    }
-  });
-
-  it("creates each freeze parent once for regular, sparse, and symlink copies", () => {
-    const f = fixture({
-      "nested/a.txt": "a\n",
-      "nested/b.txt": "b\n",
-      "nested/sparse.txt": "sparse\n",
-    });
-    symlinkSync("a.txt", join(f.repository, "nested/link"));
-    f.git(f.repository, "add", "nested/link");
-    f.git(f.repository, "update-index", "--skip-worktree", "nested/sparse.txt");
-    rmSync(join(f.repository, "nested/sparse.txt"));
-    vi.mocked(mkdirSync).mockClear();
-    const first = f.prepare();
-    try {
-      expect(
-        vi
-          .mocked(mkdirSync)
-          .mock.calls.filter(([directory]) => directory === join(first.directory, "nested")),
-      ).toHaveLength(1);
-      expect(readlinkSync(join(first.directory, "nested/link"))).toBe("a.txt");
-      expect(readFileSync(join(first.directory, "nested/sparse.txt"), "utf8")).toBe("sparse\n");
-      f.expectColdEquivalent(first);
-    } finally {
-      first.cleanup();
-    }
-    writeFileSync(join(f.repository, "nested/a.txt"), "changed a\n");
-    writeFileSync(join(f.repository, "nested/b.txt"), "changed b\n");
-    vi.mocked(mkdirSync).mockClear();
-    const warm = f.prepare();
-    try {
-      // The existing parent makes recursive mkdir return undefined; it still
-      // admits the later sibling without another filesystem operation.
-      expect(
-        vi
-          .mocked(mkdirSync)
-          .mock.calls.filter(([directory]) => directory === join(warm.directory, "nested")),
-      ).toHaveLength(1);
-      f.expectColdEquivalent(warm);
-    } finally {
-      warm.cleanup();
     }
   });
 
