@@ -126,13 +126,13 @@ export function replaceComposerDraft(
     value: text,
     committed,
     canUndo,
-    undo(isCurrent = () => true) {
-      if (!canUndo() || !isCurrent()) {
+    undo(isUndoCurrent = () => true) {
+      if (!canUndo() || !isUndoCurrent()) {
         return false;
       }
       used = true;
       focusComposerInput(target, { preventScroll: true });
-      if (!targetMatches() || !isCurrent()) {
+      if (!targetMatches() || !isUndoCurrent()) {
         return false;
       }
       if (editor) {

@@ -240,13 +240,15 @@ function protectedRanges(
   }
   const text = request.rawTranscript;
   const protect = (start: number, end: number) => {
-    while (!boundaries.has(start)) {
-      start -= 1;
+    let protectedStart = start;
+    let protectedEnd = end;
+    while (!boundaries.has(protectedStart)) {
+      protectedStart -= 1;
     }
-    while (!boundaries.has(end)) {
-      end += 1;
+    while (!boundaries.has(protectedEnd)) {
+      protectedEnd += 1;
     }
-    spans.push({ start, end });
+    spans.push({ start: protectedStart, end: protectedEnd });
   };
   let openLiteral = false;
   // Protect the entire envelope of each delimiter family, including ambiguous

@@ -35,7 +35,6 @@ function refinementHarness(overrides: Omit<Partial<ControllerOptions>, "client">
   let currentTarget = target;
   const textarea = createDirectDictationTextarea(() => currentTarget);
   refinementTextareas.push(textarea);
-  let controller: ComposerDictationOwner;
   const write: ControllerOptions["onCommit"] = (text, late, preservePreview, reviewed) => {
     const result = textarea.insertTranscript(
       (...args) => controller.placeTranscript(...args),
@@ -49,11 +48,11 @@ function refinementHarness(overrides: Omit<Partial<ControllerOptions>, "client">
   const commit = vi.fn(write);
   const harness = controllerFixture({
     refinement: { policy: { mode: "automatic", locale: "en-US", explicitEnabled: false } },
-    readRefinementTarget: textarea.readTarget,
+    readRefinementTarget: () => textarea.readTarget(),
     onCommit: commit,
     ...overrides,
   });
-  controller = harness.controller;
+  const controller: ComposerDictationOwner = harness.controller;
   return {
     ...harness,
     target,
