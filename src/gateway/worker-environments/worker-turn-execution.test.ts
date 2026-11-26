@@ -34,10 +34,13 @@ import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-invent
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { listRuntimePluginIdsFromRegistry } from "../../plugins/active-runtime-registry.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -921,8 +924,14 @@ describe("worker turn execution", () => {
 
   it("honors nonreasoning worker Ultra effort in merge mode with scheduled tools", async () => {
     await seedActivePlacement();
+    const input = turn("run-scheduled");
     let descriptor: WorkerLaunchPlan | undefined;
+    let runtimePluginIds: string[] | undefined;
     const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+      const scope = pluginInvocationContext.getStore();
+      if (scope instanceof PluginInvocationScope) {
+        runtimePluginIds = listRuntimePluginIdsFromRegistry(scope.registry);
+      }
       descriptor = roundTripWorkerLaunchDescriptor({
         ...plan,
         connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker-approval.sock" },
@@ -937,11 +946,12 @@ describe("worker turn execution", () => {
       execute(
         provider,
         {
-          ...turn("run-scheduled"),
+          ...input,
           thinkLevel: "ultra",
           provider: "custom",
           model: "plain",
           config: {
+            plugins: input.config.plugins,
             models: {
               mode: "merge",
               providers: {
@@ -969,6 +979,7 @@ describe("worker turn execution", () => {
     ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
     expect(descriptor?.assignment.inferenceOptions.reasoning).toBe("off");
     expect(descriptor?.assignment.systemPrompt).toContain("Ultra active for this turn");
+    expect(runtimePluginIds).toEqual(["openai"]);
     expect(descriptor?.assignment.systemPrompt).not.toContain("Use `sessions_spawn`");
     expect(runLocal).not.toHaveBeenCalled();
     expect(descriptor?.assignment.toolAuthority).toMatchObject({
