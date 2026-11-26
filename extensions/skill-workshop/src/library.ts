@@ -548,7 +548,7 @@ async function archivedRestoreUndoVersion(
   changeId: string,
 ) {
   // Other skills can fill the visible page between a restore and its undo.
-  const changes = await listWorkshopChanges(ctx.agentId, { limit: 500, fresh: true });
+  const changes = await listWorkshopChanges(ctx.agentId, { limit: 500 });
   const latest = changes.find((change) => change.skillName === name);
   if (latest?.id !== changeId || latest.action !== "restore" || latest.versionId) {
     throw new WorkshopWriteError(
