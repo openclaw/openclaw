@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const processes = new Map<ChildProcessWithoutNullStreams, Promise<unknown>>();
+const processes = new Map<ChildProcess, Promise<unknown>>();
 let bootstrapSource: string;
 let launcherClientSource: string;
 
@@ -80,7 +80,10 @@ async function writePackage(root: string, version: string, body: string, schema 
       name: "openclaw",
       type: "module",
       version,
-      openclaw: { schemaVersions: { state: schema, agent: schema } },
+      openclaw: {
+        nodeLauncherTransport: "byte-pipe-v1",
+        schemaVersions: { state: schema, agent: schema },
+      },
     }),
   );
   await fs.writeFile(
@@ -208,7 +211,116 @@ syncBuiltinESMExports();
   };
 }
 
+const supportsPipe = process.platform !== "win32" && !process.versions.bun;
+
+async function useLegacyManifest(packageRoot: string) {
+  const manifestPath = path.join(packageRoot, "package.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  delete manifest.openclaw.nodeLauncherTransport;
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+}
+
 describe("managed node launcher", () => {
+  it("acknowledges large bootstrap data over the negotiated transport", async () => {
+    const payloadSize = process.platform === "win32" ? 8000 : 80000;
+    const f = await fixture(`
+if (!process.env.TEST_BOOTSTRAPPED) {
+  await requestNodeHostLauncherBootstrap({execArgv: [], env: {...process.env, TEST_BOOTSTRAPPED:'1', TEST_LARGE:'x'.repeat(${payloadSize})}});
+  process.exit(0);
+}
+await ready();
+report({nativeIPC: typeof process.send === 'function', length: process.env.TEST_LARGE.length});
+`);
+    const result = await run(f.base, f.stateDir).done;
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      nativeIPC: !supportsPipe,
+      length: payloadSize,
+    });
+  });
+
+  it.skipIf(!supportsPipe)("fails closed when a launcher frame exceeds its bound", async () => {
+    const f = await fixture(`
+const channel = process[Symbol.for('openclaw.node-host.launcher-channel')];
+const header = Buffer.alloc(4); header.writeUInt32BE(1024 * 1024 + 1);
+channel.stream.write(header);
+channel.ref();
+`);
+    const result = await run(f.base, f.stateDir).done;
+    expect(result.signal).toBe("SIGTERM");
+    expect(result.stdout).toBe("");
+  });
+
+  it.skipIf(!supportsPipe)("stops a running pipe child when the launcher dies", async () => {
+    const f = await fixture(`
+process.once('SIGTERM', () => {
+  report('child-terminated');
+  process.exit(0);
+});
+setTimeout(() => process.exit(99), 2000);
+await ready();
+report('child-ready');
+`);
+    const launch = run(f.base, f.stateDir);
+    await Promise.race([once(launch.child.stdout, "data"), launch.done]);
+    expect(launch.output().trim()).toBe('"child-ready"');
+    launch.child.kill("SIGKILL");
+    const result = await launch.done;
+    expect(result.signal).toBe("SIGKILL");
+    expect(result.stdout.trim().split("\n")).toEqual(['"child-ready"', '"child-terminated"']);
+  });
+
+  it("accepts the legacy managed-child invocation and native IPC bootstrap", async () => {
+    const f = await fixture(`
+await requestNodeHostLauncherBootstrap({ execArgv: [], env: {} });
+await ready();
+report(getManagedNodeHostStatePath());
+`);
+    const statePath = path.join(f.stateDir, "state", "openclaw.sqlite");
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(f.base, "openclaw.mjs"),
+        "--openclaw-node-host-managed-child",
+        statePath,
+        "node",
+        "run",
+      ],
+      { cwd: f.base, stdio: ["pipe", "pipe", "pipe", "ipc"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    const messages: unknown[] = [];
+    if (!child.stdout || !child.stderr) {
+      throw new Error("The legacy child fixture requires piped output.");
+    }
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("message", (message) => {
+      messages.push(message);
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "openclaw.node.bootstrap"
+      ) {
+        child.send({ type: "openclaw.node.bootstrap-result", ok: true });
+      }
+    });
+    const done = once(child, "close");
+    processes.set(child, done);
+    expect((await done)[0], stderr).toBe(0);
+    expect(messages).toEqual([
+      { type: "openclaw.node.bootstrap", execArgv: [], env: {} },
+      { type: "openclaw.node.ready", version: "2026.9.1" },
+    ]);
+    expect(JSON.parse(stdout.trim())).toBe(statePath);
+  });
+
   it("rejects private managed-child arguments without supervisor IPC", async () => {
     const f = await fixture("throw new Error('private arguments must not reach the entry point');");
     const result = await run(f.base, f.stateDir, [
@@ -221,7 +333,7 @@ describe("managed node launcher", () => {
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("revokes the managed state path when supervisor IPC disconnects", async () => {
+  it("uses native IPC for an unadvertised runtime and revokes its state path on disconnect", async () => {
     const f = await fixture("throw new Error('the managed runtime must own the run');");
     const managed = await f.release(
       "2026.9.2",
@@ -233,6 +345,7 @@ report({before, after: getManagedNodeHostStatePath() ?? null});
 process.exit(0);
 `,
     );
+    await useLegacyManifest(managed.packageRoot);
     await f.select(managed.prefix);
     const result = await run(f.base, f.stateDir).done;
     expect(result.code, result.stderr).toBe(0);

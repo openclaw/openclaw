@@ -2,6 +2,7 @@
   "name": "openclaw",
   "version": "2026.10.34",
   "openclaw": {
+    "nodeLauncherTransport": "byte-pipe-v1",
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
       "sqlite",
