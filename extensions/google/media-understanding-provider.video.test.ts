@@ -121,3 +121,16 @@ it("redacts the actual request credential from Google media errors", async () =>
   await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
   await expect(failure).rejects.not.toThrow(credential);
 });
+
+it.each([
+  { query: undefined, expected: undefined },
+  { query: { unrelated: "x" }, expected: undefined },
+  { query: { thinkingLevel: " low " }, expected: { thinkingConfig: { thinkingLevel: "low" } } },
+  { query: { thinkingBudget: 0 }, expected: { thinkingConfig: { thinkingBudget: 0 } } },
+])("maps audio providerOptions $query to generationConfig", async ({ query, expected }) => {
+  const { fetchFn, getRequest } = createRequestCaptureJsonFetch(mediaResponse("ok"));
+  await transcribeGeminiAudio({ ...mediaRequest, fileName: "clip.wav", fetchFn, query });
+  const { init } = getRequest();
+  assert(typeof init?.body === "string", "Expected a JSON string request body");
+  expect(JSON.parse(init.body).generationConfig).toEqual(expected);
+});
