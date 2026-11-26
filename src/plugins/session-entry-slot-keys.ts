@@ -88,6 +88,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastRunId",
   "activeWriterRunId",
   "resumeAfterRestart",
+  "pendingShellCalls",
   "operatorSources",
   "mainRestartRecovery",
   "pluginOwnerId",

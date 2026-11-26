@@ -280,6 +280,7 @@ export async function patchSessionEntryInWorker(params: {
         });
         if (
           !writeIntent.invalidateArchiveUndo &&
+          !writeIntent.shellCallMutation &&
           (!next || sqliteSessionEntriesEqual(next, retainedEntry))
         ) {
           params.assertCurrent();

@@ -787,10 +787,21 @@ defineDiscordVoiceTests((harness) => {
         f.streams.get("guest")!.end(Buffer.alloc(pcmBytes, 2));
         await receiving;
         await f.entry.processingQueue;
-        expect(f.sink.mock.calls.map(([u]) => [Date.parse(u.startedAt), u.text])).toEqual([
-          [1_000_000, `audio-1-${pcmBytes}`],
-          [1_010_000, `audio-2-${pcmBytes}`],
-        ]);
+        expect(f.sink.mock.calls.map(([utterance]) => utterance)).toEqual(
+          [1_000_000, 1_010_000].map((startedAt, index) => ({
+            sessionId: "notes-1",
+            startedAt: new Date(startedAt).toISOString(),
+            final: true,
+            speaker: { id: "guest", label: "Guest" },
+            text: `audio-${index + 1}-${pcmBytes}`,
+            metadata: {
+              channel: "discord",
+              guildId: "g1",
+              channelId: "1001",
+              voiceSessionKey: f.entry.voiceSessionKey,
+            },
+          })),
+        );
       } finally {
         clock.mockRestore();
       }

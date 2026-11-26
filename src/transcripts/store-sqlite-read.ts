@@ -10,8 +10,8 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
-import { iterateTranscriptSpeakerObservations } from "./store-read.js";
+import { createTranscriptSpeakerLabels, presentTranscriptTurn } from "./speaker-labels.js";
+import { iterateTranscriptSpeakerObservations } from "./store-speakers.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -135,36 +135,42 @@ export function readTranscriptSummarySnapshot(
     return undefined;
   }
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
-  let utterances = readTranscriptUtterances(database, session, maxUtterances);
+  const query = meetingTranscriptUtteranceQuery(database, session).select([
+    "sequence",
+    "speaker_id",
+    "speaker_label",
+    "text",
+  ]);
+  const limit = resolveOptionalIntegerOption(maxUtterances, { min: 1 });
+  const rows =
+    limit === undefined
+      ? executeSqliteQuerySync(database, query.orderBy("sequence", "asc")).rows
+      : executeSqliteQuerySync(
+          database,
+          query.orderBy("sequence", "desc").limit(limit),
+        ).rows.toReversed();
   let hasSpeakerAliases = false;
-  if (row.next_utterance_seq > utterances.length) {
-    // A capped tail can omit the first owner of a name. Seed from the session's
-    // compact roster so later summaries cannot swap speaker suffixes.
-    const speakerLabel = createTranscriptSpeakerLabels(() => {
-      hasSpeakerAliases = true;
-    });
-    for (const speaker of iterateTranscriptSpeakerObservations(database, session)) {
-      speakerLabel(speaker.speaker_id, speaker.speaker_label);
+  const label = createTranscriptSpeakerLabels(() => {
+    hasSpeakerAliases = true;
+  });
+  const first = rows[0];
+  // Seed only earlier names. A later name cannot identify an earlier anonymous turn.
+  if (first && row.next_utterance_seq > rows.length) {
+    for (const speaker of iterateTranscriptSpeakerObservations(database, session, first.sequence)) {
+      label(speaker.speaker_id, speaker.speaker_label);
     }
-    utterances = utterances.map((utterance) =>
-      utterance.speaker
-        ? {
-            ...utterance,
-            speaker: {
-              ...utterance.speaker,
-              label: speakerLabel(utterance.speaker.id, utterance.speaker.label),
-            },
-          }
-        : utterance,
-    );
   }
+  const turns = rows.flatMap(
+    (turn) => presentTranscriptTurn(turn.text, label(turn.speaker_id, turn.speaker_label)) ?? [],
+  );
   return {
     ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
     inputRevision: transcriptSummaryInputRevisionFromRow(row),
     nextSequence: row.next_utterance_seq,
     stoppedAt: row.stopped_at ?? undefined,
     summaryRevision: summaryRevision ?? "",
-    utterances,
+    turns,
+    utteranceCount: rows.length,
   };
 }
 
@@ -315,18 +321,11 @@ export function readTranscriptSessionByIdentity(
 export function readTranscriptUtterances(
   database: EngineConnection,
   session: TranscriptSessionIdentity,
-  maxUtterances?: number,
 ): TranscriptUtterance[] {
-  const limit = resolveOptionalIntegerOption(maxUtterances, { min: 1 });
-  const query = meetingTranscriptUtteranceQuery(database, session).selectAll();
-  if (limit === undefined) {
-    return executeSqliteQuerySync(database, query.orderBy("sequence", "asc")).rows.map(
-      utteranceFromRow,
-    );
-  }
-  return executeSqliteQuerySync(database, query.orderBy("sequence", "desc").limit(limit))
-    .rows.toReversed()
-    .map(utteranceFromRow);
+  return executeSqliteQuerySync(
+    database,
+    meetingTranscriptUtteranceQuery(database, session).selectAll().orderBy("sequence", "asc"),
+  ).rows.map(utteranceFromRow);
 }
 
 export function readStoredTranscriptSummary(

@@ -40,6 +40,7 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const RESUME =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const UNKNOWN_SHELL = "Its effect is unknown. I paused this turn without retrying the command.";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
 const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
@@ -226,7 +227,7 @@ async function providerFixture(signal: AbortSignal) {
                 }
               } else {
                 gate(`resume:${cycle}:${name}`).resolve();
-                if (name === "compact" || name === "tool") {
+                if (name === "compact") {
                   issued.add(`gateway:${cycle}:${name}`);
                   tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
                   return;
@@ -1101,10 +1102,10 @@ it.skipIf(process.platform === "win32").for([
   },
 );
 
-// A turn that started before SIGTERM has its user entry in the transcript. Restart resume
-// continues that turn; the accepted input is not replayed and its tool does not run again.
+// A shell interrupted before its result is saved must not replay its input or tool.
+// A separate queued message keeps its own admission after the Gateway restarts.
 it.skipIf(process.platform === "win32")(
-  "continues a turn stopped mid-tool-call without replaying its input",
+  "pauses a turn stopped mid-shell and drains its queued input without replay",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
@@ -1120,13 +1121,15 @@ it.skipIf(process.platform === "win32")(
       process.stderr.write(`${instance.logs()}\n`);
     });
     const sessionKey = key(3, "tool");
+    const independent = queued(3, 1);
     const inputKey = randomUUID();
     let client: GatewayClient | undefined;
     const history = () =>
-      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
-        "chat.history",
-        { sessionKey, limit: 100 },
-      );
+      client!.request<{
+        messages: unknown[];
+        pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionInfo: { hasActiveRun: boolean };
+      }>("chat.history", { sessionKey, limit: 100 });
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
@@ -1137,6 +1140,21 @@ it.skipIf(process.platform === "win32")(
           { expectFinal: false },
         );
         await provider.wait("/tool/3/tool");
+        await client.request(
+          "chat.send",
+          { sessionKey, message: independent, queueMode: "followup", idempotencyKey: randomUUID() },
+          { expectFinal: false },
+        );
+        await vi.waitFor(
+          async () =>
+            expect(
+              (await history()).pendingInputs?.items.some(
+                (input) =>
+                  input.state === "queued" && JSON.stringify(input.message).includes(independent),
+              ),
+            ).toBe(true),
+          { timeout: 5_000 },
+        );
         const child = instance.child;
         assert(child?.pid, "Owned Gateway process unavailable");
         const closed = once(child, "close");
@@ -1148,11 +1166,11 @@ it.skipIf(process.platform === "win32")(
         await instance.stopGateway();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await provider.wait("resume:3:tool");
         await vi.waitFor(
           async () => {
             const { messages, sessionInfo } = await history();
-            expect(JSON.stringify(messages)).toContain("RESUMED_3_tool");
+            expect(JSON.stringify(messages)).toContain(UNKNOWN_SHELL);
+            expect(JSON.stringify(messages)).toContain(`HANDLED_${independent}`);
             expect(sessionInfo.hasActiveRun).toBe(false);
           },
           { timeout: 30_000 },
@@ -1165,8 +1183,18 @@ it.skipIf(process.platform === "win32")(
             JSON.stringify(message).includes(marker(3, "tool")),
         );
         expect(userEntries).toHaveLength(1);
-        // A replayed input would reach the model as a new turn and be answered with HANDLED_*.
-        expect(JSON.stringify(messages)).not.toContain("HANDLED_");
+        expect(
+          messages.filter(
+            (message) =>
+              isRecord(message) &&
+              message.role === "assistant" &&
+              JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+          ),
+        ).toHaveLength(1);
+        const toolCalls = provider.calls.filter((call) => call.cycle === 3 && call.name === "tool");
+        expect(toolCalls.filter((call) => call.resumeInput)).toHaveLength(0);
+        expect(toolCalls.filter((call) => call.current.includes(independent))).toHaveLength(1);
+        expect(JSON.stringify(messages)).not.toContain("HANDLED_NEW_INPUT");
         expect(provider.callbacks("/tool/3/tool")).toBe(1);
         await client.stopAndWait();
         client = undefined;
@@ -1622,7 +1650,10 @@ it.skipIf(process.platform === "win32").for([true, false])(
                   name !== "background" &&
                   name !== "parent",
               )
-              .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+              .map((name) => ({
+                name,
+                text: name === "tool" ? UNKNOWN_SHELL : `RESUMED_${cycle}_${name}`,
+              })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
               ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
@@ -1684,9 +1715,24 @@ it.skipIf(process.platform === "win32").for([true, false])(
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
+            ).toHaveLength(
+              name === "idle" || name === "background" || name === "parent" || name === "tool"
+                ? 0
+                : 1,
+            );
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
+            if (name === "tool") {
+              expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(1);
+              expect(
+                result.messages.filter(
+                  (message) =>
+                    isRecord(message) &&
+                    message.role === "assistant" &&
+                    JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+                ),
+              ).toHaveLength(1);
+            }
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),
             ).not.toBe(true);

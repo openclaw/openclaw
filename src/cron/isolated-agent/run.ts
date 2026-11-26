@@ -4,7 +4,10 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { findErrorProperty, isFailoverError } from "../../agents/failover/error.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  createPreparedModelRuntimeSnapshotBorrow,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
@@ -201,7 +204,7 @@ async function runCronIsolatedAgentTurnInTrace(
         await prepared.context.workspaceLease?.release();
       },
     };
-    let leaseActive = true;
+    const snapshotBorrow = createPreparedModelRuntimeSnapshotBorrow(preparedRuntimeLease.snapshot);
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
     try {
@@ -716,10 +719,10 @@ async function runCronIsolatedAgentTurnInTrace(
               }
             }
           }),
-        () => (leaseActive ? preparedRuntimeLease.snapshot : undefined),
+        snapshotBorrow.read,
       );
     } finally {
-      leaseActive = false;
+      snapshotBorrow.close();
     }
   }
 }

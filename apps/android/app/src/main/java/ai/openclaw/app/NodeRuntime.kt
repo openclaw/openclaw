@@ -88,8 +88,6 @@ import ai.openclaw.app.node.SmsHandler
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.node.SystemHandler
 import ai.openclaw.app.node.TalkHandler
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
@@ -1121,8 +1119,6 @@ class NodeRuntime internal constructor(
     val realtime: VoiceE2eSliceResult?,
   )
 
-  private val _isConnected = MutableStateFlow(false)
-  val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
   private val _desktopObserveAvailable = MutableStateFlow(false)
@@ -2412,7 +2408,6 @@ class NodeRuntime internal constructor(
           nodeProblem = nodeConnectionProblem,
         )
       _gatewayConnectionDisplay.value = display
-      _isConnected.value = display.isConnected
     }
   }
 
