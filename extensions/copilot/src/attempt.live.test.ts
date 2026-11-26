@@ -435,7 +435,8 @@ describeLive("copilot agent runtime live smoke", () => {
     const copilotHome = await createTempDir("openclaw-copilot-live-");
     const facts = liveAttemptFacts;
     const modelId = facts.model.id;
-    const harness = createCopilotAgentHarness({ pool: createLivePool() });
+    const pool = createLivePool();
+    const harness = createCopilotAgentHarness({ pool });
 
     try {
       expect(
@@ -538,8 +539,12 @@ describeLive("copilot agent runtime live smoke", () => {
       expect(liveToolState.permissionRequests).toBe(0);
       expect(liveToolState.userInputRequests).toBe(0);
     } finally {
-      await harness.dispose?.();
-      await rm(copilotHome, { recursive: true, force: true });
+      try {
+        await harness.dispose?.();
+      } finally {
+        await pool.dispose();
+        await rm(copilotHome, { recursive: true, force: true });
+      }
     }
   }, 180_000);
 
@@ -549,7 +554,8 @@ describeLive("copilot agent runtime live smoke", () => {
     const copilotHome = await createTempDir("openclaw-copilot-live-delegation-");
     const facts = liveAttemptFacts;
     const modelId = facts.model.id;
-    const harness = createCopilotAgentHarness({ pool: createLivePool() });
+    const pool = createLivePool();
+    const harness = createCopilotAgentHarness({ pool });
 
     try {
       const prompt =
@@ -587,8 +593,12 @@ describeLive("copilot agent runtime live smoke", () => {
       expect(liveToolState.spawnCalls[0]?.task).not.toBe("");
       expect(assistantText).toContain("https://example.test/session/live-proof");
     } finally {
-      await harness.dispose?.();
-      await rm(copilotHome, { recursive: true, force: true });
+      try {
+        await harness.dispose?.();
+      } finally {
+        await pool.dispose();
+        await rm(copilotHome, { recursive: true, force: true });
+      }
     }
   }, 180_000);
 });
