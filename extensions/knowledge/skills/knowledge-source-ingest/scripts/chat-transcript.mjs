@@ -103,12 +103,14 @@ async function run(argv) {
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
     }
-    // Discord and Slack user mentions (<@id>, <@!id>) read as @name when the author appears in the export.
+    // Discord and Slack user mentions (<@id>, <@!id>, <@id|label>) read as @name when the author
+    // appears in the export or the row names the mentioned user.
     let text = payload.deleted_at
       ? "[deleted]"
-      : (payload.content || "[no text]").replace(/<@!?([0-9A-Z]+)>/g, (mention, id) =>
-          labels.has(id) ? "@" + labels.get(id) : mention,
-        );
+      : (payload.content || "[no text]").replace(/<@!?([0-9A-Z]+)(?:\|[^>]*)?>/g, (mention, id) => {
+          const name = labels.get(id) ?? payload.mention_names?.[id];
+          return name ? "@" + name : mention;
+        });
     if (payload.has_attachments) {
       text += " [attachment]";
     }
