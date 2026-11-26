@@ -267,12 +267,14 @@ export function buildCodexParentLocalInstructions(
     personaInstructions?: string;
     skillsInstructions?: string;
     memoryInstructions?: string;
+    sessionProjectGuidance?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.personaInstructions,
     options.skillsInstructions,
     options.memoryInstructions,
+    options.sessionProjectGuidance,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, contextInstructions);

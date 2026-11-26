@@ -166,9 +166,8 @@ suite.define(() => {
           await expect.poll(() => modal.count()).toBe(0);
         };
         const begin = async () => {
-          await page.locator("[data-models-connect]").click();
-          await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
-          await modalButton(loginLabel).click();
+          await page.locator("[data-models-catalog-search]").fill(loginProvider);
+          await page.locator(`[data-models-catalog-provider="${loginProvider}"] button`).click();
           const link = page.locator(".wizard-step__external-link");
           await link.waitFor();
           const popup = context.waitForEvent("page");

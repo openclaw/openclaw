@@ -32,7 +32,7 @@ const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
  * tag wins, and a quoted value may contain `>`. Each `<tag` start is resolved from
  * precomputed next-`>` and next-quote positions in one forward pass.
  */
-export function htmlTagAttributeValues(
+function htmlTagAttributeValues(
   html: string,
   tag: "img" | "attachment",
   attr: "src" | "id",
@@ -162,7 +162,7 @@ export function resolveMSTeamsMediaKind(params: {
   return looksLikeImage ? "image" : "document";
 }
 
-export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
+function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
   const contentType = normalizeContentType(att.contentType) ?? "";
   const name = typeof att.name === "string" ? att.name : "";
   if (contentType.startsWith("image/")) {
@@ -290,7 +290,7 @@ export function extractInlineImageReferences(
   return out;
 }
 
-export function safeHostForUrl(url: string): string {
+function safeHostForUrl(url: string): string {
   const parsed = URL.parse(url);
   return parsed ? normalizeLowercaseStringOrEmpty(parsed.hostname) : "invalid-url";
 }

@@ -449,18 +449,17 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   accessProgramForSubmission(): CyberAccessProgram | undefined {
-    return (
-      this.cyberAccessProgram ??
-      (this.ownsMetadata() && this.metadataState.status === "ready"
-        ? resolveDraftAccessProgram({
-            model: this.effectiveModel,
-            agentRuntime: this.agentRuntime,
-            agent: this.pendingAgent,
-            defaults: this.pendingContext?.sessions.state.result?.defaults,
-            ...this.metadataState,
-          })
-        : undefined)
-    );
+    if (!this.ownsMetadata() || this.metadataState.status !== "ready") {
+      return this.cyberAccessProgram;
+    }
+    return resolveDraftAccessProgram({
+      model: this.effectiveModel,
+      agentRuntime: this.agentRuntime,
+      agent: this.pendingAgent,
+      defaults: this.pendingContext?.sessions.state.result?.defaults,
+      requested: this.cyberAccessProgram,
+      ...this.metadataState,
+    });
   }
 
   modelForSubmission(): string {
@@ -586,6 +585,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
       },
       this.effectiveModel,
+      this.ownsMetadata() && this.metadataState.status === "ready",
     );
     if (change === false) {
       return;
@@ -695,12 +695,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       sending: options.sending,
       sessionKey,
       selectedSession: undefined,
-      requestedAccessProgram:
-        this.cyberAccessProgram ??
-        (this.ownsMetadata() && this.metadataState.status === "ready"
-          ? modelControls.accessProgramDefault
-          : undefined),
-      daybreakAccessProgram: this.daybreakAccessProgram,
+      // Drafts display the normalized program they will submit; there is no saved row to repair.
+      requestedAccessProgram: this.accessProgramForSubmission(),
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
@@ -726,7 +722,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.contextWindow = value;
         this.notify();
       },
-      onModelSetup: () => options.context?.navigate("model-setup"),
+      onModelSetup: (provider) =>
+        navigateToModelProvider(options.context, options.agentId, provider, { connect: true }),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => {

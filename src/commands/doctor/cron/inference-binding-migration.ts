@@ -49,6 +49,7 @@ import { isInvalidCronSessionTargetIdError } from "../../../cron/session-target.
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
 import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
@@ -61,7 +62,6 @@ import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
-  publishedStateDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
@@ -89,6 +89,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       throw new Error("Inference account migration requires offline Doctor maintenance.");
     }
     const inventory = await inspectCronJobsForDoctor({ env });
+    await prepareProviderModelPolicySurfaces();
     let shadowRoots: string[] | undefined;
     for (const stored of inventory.jobs) {
       const definition = stored.definition;
@@ -171,16 +172,13 @@ export async function maybeRepairCronInferenceBindings(params: {
         modelRef = `${selected.provider}/${selected.model}`;
         const cfg = captureConfig(selected.owner.config);
         if (previous) {
-          shadowRoots ??= readAppliedUpgradeShadowRoots(
-            params.publishedStateDir ?? resolveStateDir(env),
-          );
+          shadowRoots ??= readAppliedUpgradeShadowRoots(resolveStateDir(env));
           // With no receipt, the owner can confirm the current binding but cannot repair a mismatch.
           verifyingSavedAccount = true;
           const authority = await captureAuthProfileAuthorization({
             cfg,
             agentDir: selected.owner.agentDir,
             profileId: previous.profileId,
-            publishedStateDir: params.publishedStateDir,
             upgradeRecovery: { recordedId: previous.authorizationId, shadowRoots },
             assertCurrent() {},
           });
@@ -443,7 +441,6 @@ export async function maybeRepairCronInferenceBindings(params: {
           profileId: candidate.profileId,
           agentDir: selected.owner.agentDir,
           cfg,
-          publishedStateDir: params.publishedStateDir,
           // The credential owner captures and revalidates the Doctor maintenance scope.
           assertCurrent() {},
         });
@@ -498,7 +495,10 @@ export async function maybeRepairCronInferenceBindings(params: {
       changes,
     );
     return {
-      changes: [...descriptions, `Saved pre-repair cron backup: ${result.backupPath}`],
+      changes: [
+        ...descriptions,
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
+      ],
       warnings: [...warnings, ...(result.warnings ?? [])],
     };
   } catch (error) {

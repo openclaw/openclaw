@@ -7,9 +7,11 @@ import {
   runCliProcessChild,
   waitForCliProcessStderrMarker,
 } from "../cli/cli-process-child.test-helpers.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { restartLaunchAgent } from "./launchd-lifecycle.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { readScheduledTaskCommand, resolveStartupEntryPaths } from "./schtasks-layout.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-xml-enabled.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
 import {
@@ -548,6 +550,33 @@ describe("service definition backup receipts", () => {
       }
     },
   );
+
+  it("restores after Task Scheduler exports the update's own disable in schema order", async () => {
+    let enabled = true;
+    // Exports omit Enabled=true and serialize false after StopIfGoingOnBatteries.
+    const exported = (xml: string) =>
+      xml.replace(/<Settings>[\s\S]*?<\/Settings>/u, (settings) =>
+        settings
+          .replace(/\s*<Enabled>(?:true|false)<\/Enabled>/u, "")
+          .replace(
+            "</StopIfGoingOnBatteries>",
+            enabled
+              ? "</StopIfGoingOnBatteries>"
+              : "</StopIfGoingOnBatteries>\n    <Enabled>false</Enabled>",
+          ),
+      );
+    const f = await fixture("win32", false, undefined, undefined, exported);
+    await f.install();
+    const receipt = await f.capture.finish();
+    // Older updaters verify this receipt during rollback; its hash format must not change.
+    expect(receipt.task?.afterPolicySha256).toBe(
+      sha256Hex(setScheduledTaskXmlEnabled(exported(f.task()), false)),
+    );
+    enabled = false;
+    await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toContain("<Count>0</Count>");
+  });
 
   it.each([
     { platform: "linux", dropIn: false },

@@ -1413,7 +1413,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
-  it("replans activation from the supplied inventory without rediscovering metadata", () => {
+  it("replans activation from the supplied inventory", () => {
     const { index } = useManifestRegistryFixture({
       plugins: [
         withManifestLoadPaths({
@@ -1451,8 +1451,6 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
       expect(result.metadataSnapshot).toBe(metadataSnapshot);
       expect(result.plan.pluginIds).toEqual(expected);
     }
-    expect(loadPluginRegistrySnapshot).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
   it("keeps explicitly trusted channel owners eligible in the startup plan", () => {

@@ -204,24 +204,34 @@ it.each(["config", "library"])("retries %s only on request", async (source) => {
 });
 
 it.each([
+  { reason: "retained version", versionId: VERSION, scopes: ["operator.admin"], action: "patch" },
   { reason: "pruned version", versionId: "pruned", scopes: ["operator.admin"], action: "patch" },
   { reason: "no admin scope", versionId: VERSION, scopes: ["operator.read"], action: "patch" },
   { reason: "undo restore", versionId: undefined, scopes: ["operator.admin"], action: "restore" },
 ] as const)("gates undo: $reason", async ({ versionId, scopes, action }) => {
-  const request = gateway({}, [{ ...change, versionId, action }]);
+  const request = gateway({ read: skillRead }, [{ ...change, versionId, action }]);
   const page = await mount(request, { ...mutationAccess, scopes: [...scopes] });
-  // History opens first; each row is a change and carries its Undo when it can run.
+  // Workshop History is read-only; the row opens the skill's own History.
   await waitText(page, change.summary);
   expect(button(page, "History", true)).not.toBeNull();
+  expect(button(page, "Undo")).toBeNull();
+  await click(page, new RegExp(SKILL));
+  const timeline = await waitForSolid(() => {
+    const result = page.querySelector<HTMLElement>(".sw-timeline");
+    expect(result).not.toBeNull();
+    return result!;
+  });
   if (action === "restore") {
-    await click(page, "Undo");
+    await click(timeline, "Undo");
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("skills.workshop.archive", skillTarget),
     );
+  } else if (versionId === VERSION && scopes.some((scope) => scope === "operator.admin")) {
+    expect(button(timeline, "Undo")?.disabled).toBe(false);
   } else {
-    expect(button(page, "Undo")).toBeNull();
+    expect(button(timeline, "Undo")).toBeNull();
   }
-  // Learned skills rows never offer Undo; it is managed on History and the skill's page.
+  getByRole<HTMLAnchorElement>(page, "link", { name: "Skill workshop" }).click();
   await click(page, /^Learned skills/);
   await waitForSolid(() => expect(page.querySelector(".sw-grid .sw-row")).not.toBeNull());
   expect(button(page, "Undo")).toBeNull();

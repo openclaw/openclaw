@@ -104,6 +104,27 @@ export async function readAgentToolUsage(input: AgentToolUsageOptions): Promise<
   return (await readAgentToolUsageStatus(input)).rows;
 }
 
+/**
+ * Ranking boundaries read scores and record this session's sighting time for
+ * each offered tool the agent has not recorded yet.
+ */
+export async function readAgentToolUsageForRanking(
+  input: AgentToolUsageOptions & { sightings: Readonly<Record<string, number>> },
+): Promise<Pick<AgentToolUsageStatus, "rows" | "firstSeen">> {
+  const now = input.now ?? Date.now();
+  const status = await readAgentToolUsageStatus({ ...input, now });
+  const sightings = Object.fromEntries(
+    Object.entries(input.sightings).filter(([id]) => status.firstSeen[id] === undefined),
+  );
+  if (Object.keys(sightings).length === 0) {
+    return status;
+  }
+  const firstSeen = await withDatabase(input, (options, current) =>
+    write(options, current, "toolUsage.firstSeen", { sightings, now }),
+  );
+  return { rows: status.rows, firstSeen };
+}
+
 export function flushAgentToolUsage(
   input: AgentToolUsageOptions & {
     rows: readonly ToolUsageRow[];

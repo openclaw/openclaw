@@ -52,7 +52,7 @@ import {
   resumeMarkedSessions,
   persistRunningSessionsForRestart,
 } from "./session-restart-resume.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 it.for(["current-writer", undefined] as const)(
   "logs the interrupted writer (%s), not a historical run, with the refusal notice",
@@ -391,7 +391,6 @@ it.each([
         .spyOn(sessionEvents, "enqueueSessionEventForHost")
         .mockImplementation((text, options) => {
           const input = prepareSessionEventInput(text, options);
-          input.operatorAuthority?.assertCurrent();
           resumed.push({
             profileId: input.operatorAuthority?.profileId,
             scopes: input.operatorAuthority?.scopes,
@@ -435,69 +434,79 @@ it.each([
     }),
 );
 
-it("resumes the original access grant without requesting a new grant", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-    const original = { pluginId: "restart-access", grantId: "accepted-original" };
-    let acceptNew = true;
-    const grant = {
-      grantId: original.grantId,
-      signal: new AbortController().signal,
-      assertCurrent() {},
-    };
-    const authorize = vi.fn(() => (acceptNew ? grant : undefined));
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createPluginRecord({ id: original.pluginId }));
-    registry.gatewayAccessPolicies.push({
-      pluginId: original.pluginId,
-      source: "fixture",
-      policy: { authorize, resume: () => grant },
-    });
-    const previous = captureActivePluginRegistrySnapshot();
-    stageActivePluginRegistry(registry, null, "default");
-    try {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "writer",
-            definitions: {
-              writer: {
-                scopes: ["operator.read", "operator.write"],
-                agents: "*",
-                sessions: { others: "write" },
-                accessPolicyPlugin: original.pluginId,
+it.each([true, false])(
+  "readmits the interrupted writer through current access policy (%s)",
+  (allowed) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const original = { pluginId: "restart-access", grantId: "accepted-original" };
+      let acceptNew = true;
+      const grant = {
+        grantId: "newly-admitted",
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      };
+      const authorize = vi.fn(() => (acceptNew ? grant : undefined));
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(createPluginRecord({ id: original.pluginId }));
+      registry.gatewayAccessPolicies.push({
+        pluginId: original.pluginId,
+        source: "fixture",
+        policy: { authorize },
+      });
+      const previous = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(registry, null, "default");
+      try {
+        const cfg: OpenClawConfig = {
+          gateway: {
+            roles: {
+              default: "writer",
+              definitions: {
+                writer: {
+                  scopes: ["operator.read", "operator.write"],
+                  agents: "*",
+                  sessions: { others: "write" },
+                  accessPolicyPlugin: original.pluginId,
+                },
               },
             },
           },
-        },
-      };
-      setRuntimeConfigSnapshot(cfg);
-      const person = ensureProfileForEmail("restart-grant@example.test");
-      const fixture = await recoveryFixture(stateDir, person.id, {
-        config: cfg,
-        gatewayAccessGrant: original,
-        scopes: ["operator.read", "operator.write"],
-      });
-      acceptNew = false;
-      authorize.mockClear();
-      const restored = expectDefined(
-        await prepareSessionSystemTurnAuthority({
-          context: fixture.context,
-          ...fixture.target,
-          operatorSource: { kind: "gateway", snapshot: fixture.snapshot },
-        }),
-        "restored original requester",
-      );
-      try {
-        restored.authority.assertCurrent();
-        expect(restored.authority.gatewayAccessGrant).toEqual(original);
-        expect(authorize).not.toHaveBeenCalled();
+        };
+        setRuntimeConfigSnapshot(cfg);
+        const person = ensureProfileForEmail("restart-grant@example.test");
+        const fixture = await recoveryFixture(stateDir, person.id, {
+          config: cfg,
+          gatewayAccessGrant: original,
+          scopes: ["operator.write"],
+        });
+        acceptNew = allowed;
+        const effect = vi.fn();
+        const restart = async () => {
+          const restored = expectDefined(
+            await prepareSessionSystemTurnAuthority({
+              context: fixture.context,
+              ...fixture.target,
+              operatorSource: { kind: "gateway", snapshot: fixture.snapshot },
+            }),
+            "restored original requester",
+          );
+          try {
+            expect(restored.authority.scopes).toEqual(["operator.write"]);
+            effect();
+          } finally {
+            restored.release();
+          }
+        };
+        if (allowed) {
+          await restart();
+        } else {
+          await expect(restart()).rejects.toThrow();
+        }
+        expect(effect).toHaveBeenCalledTimes(allowed ? 1 : 0);
       } finally {
-        restored.release();
+        restoreActivePluginRegistrySnapshot(previous);
       }
-    } finally {
-      restoreActivePluginRegistrySnapshot(previous);
-    }
-  }));
+    }),
+);
 
 it("recovers a current owner certificate independently of the linked profile's reader role", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
@@ -539,10 +548,7 @@ it("recovers a current owner certificate independently of the linked profile's r
         expect(restored.authority.profileId).toBe(person.id);
         expect(restored.authority.rolePolicy).toBeUndefined();
         setUserProfileRole(person.id, null);
-        restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(restored.authority.assertCurrent).not.toThrow();
-        expect(restored.authority.reauthorize).toThrow();
         await expect(
           prepareSessionSystemTurnAuthority({
             context: fixture.context,

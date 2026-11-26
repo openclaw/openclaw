@@ -21,7 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -41,7 +41,10 @@ import {
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
+import {
+  canRunSessionWorktreeSetup,
+  prepareSessionWorktreeCreation,
+} from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
@@ -206,7 +209,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       deviceFolderAuthority.assertCurrent?.();
     };
     await using operatorCapture = {
-      preparation: captureGatewayOperatorRunAuthority({
+      preparation: prepareGatewayOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority,
@@ -402,7 +405,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (repository) {
       prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
         branchPrefix: cfg.repositoryBranchPrefix,
-        runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
+        runSetupScript: canRunSessionWorktreeSetup(requiredProfile, clientScopes),
         assertCurrent: commitGuard,
       });
     }
@@ -454,7 +457,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
-          projectRequester: projectRequesterForClient(client),
+          projectRequester: projectRequesterForClient(client, cfg),
           repositoryMutations: context.workerRepositoryWorkspaceMutationService,
           projectGitUrl: requestedProjectGitUrl,
           name: normalizeOptionalString(p.worktreeName),
@@ -465,7 +468,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
           useRequestedTitleSelection: Boolean(requestedModel && !personalModelSelection),
-          runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
+          runSetupScript: canRunSessionWorktreeSetup(requiredProfile, clientScopes),
           signal,
           commitGuard,
           onTitleError: (error) =>

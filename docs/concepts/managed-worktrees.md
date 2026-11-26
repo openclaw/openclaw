@@ -55,8 +55,10 @@ OpenClaw does not sweep arbitrary host temp entries based on their names.
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
-from a remote or scans checkout contents. Ref changes invalidate the suggestions,
-and session creation validates the selected base before changing a checkout.
+from a remote or scans checkout contents. Ref changes and Git initialization in
+the selected folder or an intermediate parent invalidate the suggestions, so a
+new nested repository supplies its own branches. Session creation validates the
+selected base before changing a checkout.
 Failed or non-Git discovery becomes eligible for another user-requested read after
 five seconds of elapsed time, even if the system wall clock moves backward.
 
@@ -140,7 +142,10 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation joins that build. Linux Git and native clone
+requests for the same new commit join that build. A startup send whose accepted
+base already has a ready generation uses that generation, even while a different
+commit is building. This applies to both managed and sandbox templates and keeps
+the session’s HEAD, index, and dependencies on its accepted base. Linux Git and native clone
 children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.
@@ -480,6 +485,16 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
+When a managed or sandbox refresh selects a cold rebuild, `refreshRejectReason`
+distinguishes a missing template directory, failed old-generation validation,
+changed `.gitattributes`, incompatible checkout policy, or a failed Git diff probe.
+`validationFailure` identifies checkout policy, status-probe failure, malformed
+status output, dirty files, or a mismatched HEAD. Failed probes include the bounded
+`refreshErrorClass`: `exit-nonzero`, `timeout`, `no-output-timeout`, `signal`, or
+`output-truncated`. These facts survive through the final preparation outcome;
+they contain no command output or paths. `missReason=commit-changed` still describes
+why selection missed, separately from why incremental refresh was rejected.
+
 Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
 `setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
 `templateApply` measures each private clone separately. A warm caller waiting
@@ -801,7 +816,8 @@ the writer queue and rechecks the current session and permissions before committ
 Explicit unarchiving restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. An incoming message can reopen an archived session only while its workspace is available; a removed workspace requires explicit restoration first. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for saved work during unarchiving.
 
 If a conversation's worktree was removed by cleanup or deletion, the Control UI
-shows a warning above the composer's pickers and disables Send. Choose **Restore**
+shows a restore prompt in place of the message composer. Your chat history stays
+visible, and your draft returns with the composer. Choose **Restore workspace**
 to recover its snapshot, including saved uncommitted work. If the registry record
 has no snapshot, **Restore fresh checkout** recreates its recorded branch, or its
 recorded base if that branch is gone. Invalid saved snapshots report an error;

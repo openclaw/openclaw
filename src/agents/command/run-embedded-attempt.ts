@@ -433,7 +433,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 cfg,
                 catalog: runtimeCatalog,
                 defaultProvider,
-                defaultModel: { provider: defaultProvider, model: defaultModel },
+                ...(defaultModel
+                  ? { defaultModel: { provider: defaultProvider, model: defaultModel } }
+                  : {}),
                 agentId: sessionAgentId,
                 allowManifestNormalization: true,
                 allowPluginNormalization: true,

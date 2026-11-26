@@ -38,6 +38,8 @@ it
     "preparing-announcing",
     "announcing-crash",
     "private-announcing",
+    "private-queued-announcing",
+    "spawned-private-announcing",
     "private-announcing-crash",
     "busy-requester",
     "retrying-requester",
@@ -49,13 +51,20 @@ it
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
     const preparingAnnounce = kind === "preparing-announcing";
-    const privateContinuation = kind.startsWith("private-announcing");
+    const rewriteRequesterMarkers =
+      kind === "unmarked-requester" || kind === "stale-settle-requester";
+    const holdCompletionPreparation = preparingAnnounce || rewriteRequesterMarkers;
+    const queuedPrivateAnnounce = kind === "private-queued-announcing";
+    const unconsumedAnnounce = preparingAnnounce || queuedPrivateAnnounce;
+    const privateContinuation = kind.includes("private-");
+    const spawnedRequester = kind === "spawned-private-announcing";
     const busyRequester = kind === "busy-requester";
     const retryingRequester = kind === "retrying-requester";
-    const rootKey = "agent:main:dashboard:restart-hub";
+    let rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
     let leaf: { runId: string; childSessionKey: string } | undefined;
+    let spawnedRoot: { runId: string; childSessionKey: string } | undefined;
     let initialized: { runId: string; childSessionKey: string }[] = [];
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -69,7 +78,6 @@ it
     let finishChild: (() => void) | undefined;
     let announcing = false;
     let releasePreparation: (() => void) | undefined;
-    let completedReplies = 0;
     let rootReceivedRecovery = false;
     let rootReceivedChildError = false;
     let resumedChildRequests = 0;
@@ -91,6 +99,13 @@ it
             }
             const input = Array.isArray(body.input) ? body.input : [];
             const text = JSON.stringify(input);
+            const capturedCompletionInputs = input.filter((item) => {
+              const content = JSON.stringify(item);
+              return (
+                content.includes("[Internal task completion event]") &&
+                content.includes("CAPTURED_CUSTODY_RESULT")
+              );
+            });
             const tools = restartToolNames(body);
             const ordinal = ++sequence;
             const reply = (value: string) =>
@@ -126,7 +141,8 @@ it
                   !JSON.stringify(item).includes("OpenClaw runtime context:"),
               );
               if (
-                preparingAnnounce &&
+                unconsumedAnnounce &&
+                capturedCompletionInputs.length === 0 &&
                 JSON.stringify(latestUserInput).includes(
                   "The Gateway restarted while you were working.",
                 )
@@ -154,6 +170,10 @@ it
               if (typeof siblingReceipt?.runId === "string") {
                 capturedRunId ??= siblingReceipt.runId;
               }
+              if (queuedPrivateAnnounce && !restarted && text.includes("NESTED_CHILD_RECONCILED")) {
+                announcing = true;
+                return;
+              }
               if (
                 text.includes("CAPTURED_CUSTODY_RESULT") &&
                 (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
@@ -169,7 +189,9 @@ it
                   announcing = true;
                   return;
                 }
-                completedReplies++;
+                if (spawnedRequester) {
+                  expect(capturedCompletionInputs).toHaveLength(1);
+                }
                 reply("HUB_RECEIVED_RESTART_COMPLETION");
               } else if (!childRunId) {
                 call("sessions_send", {
@@ -195,6 +217,26 @@ it
                 reply("HUB_WAITING_FOR_OWNED_RESULTS");
               } else {
                 call("sessions_yield", {});
+              }
+              return;
+            }
+            if (text.includes("CUSTODY_CREATE_REQUESTER")) {
+              spawnedRoot ??= input.flatMap((item) => {
+                const receipt =
+                  isRecord(item) && item.type === "function_call_output"
+                    ? findSubagentSpawnReceipt(item.output)
+                    : undefined;
+                return receipt ? [receipt] : [];
+              })[0];
+              if (spawnedRoot) {
+                reply("REQUESTER_READY");
+              } else {
+                call("sessions_spawn", {
+                  task: "INITIALIZE_CUSTODY_SESSION",
+                  context: "isolated",
+                  visible: true,
+                  expectsCompletionMessage: false,
+                });
               }
               return;
             }
@@ -275,7 +317,7 @@ it
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_RESTART_TRACE: "1" },
     });
-    if (preparingAnnounce) {
+    if (holdCompletionPreparation) {
       const pluginDir = instance.state.path("held-completion-preparation");
       await writeRestartPlugin(
         pluginDir,
@@ -327,7 +369,7 @@ it
         db.close();
       }
     };
-    const readCapturedInputs = () => {
+    const readRequesterEvents = () => {
       const agentDir = instance.state.agentDir("main");
       const session = readRestartSession(agentDir, rootKey);
       assert(typeof session?.sessionId === "string");
@@ -336,7 +378,10 @@ it
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter((event) => {
+      })?.events;
+    };
+    const readCapturedInputs = () =>
+      readRequesterEvents()?.filter((event) => {
         if (!isRecord(event)) {
           return false;
         }
@@ -372,7 +417,6 @@ it
             : undefined;
         return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
       });
-    };
     let client: GatewayClient | undefined;
     let phase = "startup";
     onTestFailed(() => {
@@ -383,6 +427,25 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         await client.request("sessions.create", { key: rootKey, agentId: "main" });
+        if (spawnedRequester) {
+          const create = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "CUSTODY_CREATE_REQUESTER",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: create.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          assert(spawnedRoot);
+          expect(
+            await client.request("agent.wait", { runId: spawnedRoot.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          rootKey = spawnedRoot.childSessionKey;
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)).toMatchObject({
+            createdVia: "spawn",
+          });
+        }
         const setup = await client.request<{ runId: string }>("chat.send", {
           sessionKey: rootKey,
           message: "CUSTODY_SETUP_TASK",
@@ -441,7 +504,12 @@ it
           assert(finishChild);
           finishChild();
           await vi.waitFor(
-            () => expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } }),
+            () =>
+              expect(readRun(childRunId!)).toMatchObject({
+                delivery: queuedPrivateAnnounce
+                  ? { status: "pending", requesterDelivery: { state: "consumed" } }
+                  : { status: "delivered" },
+              }),
             { timeout: 15_000 },
           );
         }
@@ -485,11 +553,13 @@ it
           );
         }
         if (interruptAnnounce) {
-          phase = "requester announce in flight";
           assert(finishChild);
           if (!privateContinuation) {
             finishChild();
           }
+        }
+        if (interruptAnnounce || holdCompletionPreparation) {
+          phase = "requester announce in flight";
           await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
           await vi.waitFor(
             () =>
@@ -497,8 +567,8 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: preparingAnnounce ? "waiting" : "consumed",
-                    runId: expect.any(String),
+                    state: unconsumedAnnounce || rewriteRequesterMarkers ? "waiting" : "consumed",
+                    ...(queuedPrivateAnnounce ? {} : { runId: expect.any(String) }),
                   },
                 },
               }),
@@ -519,7 +589,7 @@ it
           await instance.crashGateway();
         } else {
           const stopping = instance.stopGateway();
-          if (preparingAnnounce) {
+          if (holdCompletionPreparation) {
             await vi.waitFor(
               () => expect(instance.logs()).toContain("restart.close.session-abort "),
               {
@@ -535,32 +605,41 @@ it
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          // Ready child partitions can settle during graceful shutdown. A committed
+          // result must already have its one captured input; pending custody stays owed.
           delivery: {
-            status: interruptAnnounce
-              ? expect.stringMatching(/^(pending|delivered)$/)
-              : retryingRequester
-                ? "delivered"
-                : "pending",
+            status: retryingRequester
+              ? "delivered"
+              : expect.stringMatching(/^(pending|delivered)$/),
           },
         });
-        if (preparingAnnounce) {
+        if (asRecord(readRun(capturedRunId).delivery).status === "delivered") {
+          expect(readCapturedInputs()).toHaveLength(1);
+        }
+        if (unconsumedAnnounce) {
           expect(readCapturedInputs()).toHaveLength(0);
           expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
         }
-        if (interruptAnnounce && !preparingAnnounce) {
+        if (interruptAnnounce && !unconsumedAnnounce) {
           expect(readRun(capturedRunId)).toMatchObject({
             delivery: { requesterDelivery: { state: "consumed" } },
           });
+        }
+        if (spawnedRequester) {
+          expect(readCapturedInputs()).toHaveLength(1);
+          expect(
+            readRestartSession(instance.state.agentDir("main"), rootKey)?.resumeAfterRestart,
+          ).toBeUndefined();
         }
         if (kind === "captured") {
           expect(readRun(childRunId)).toMatchObject({
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
         }
-        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
+        if (rewriteRequesterMarkers) {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
-          // this real child result. Change only the stopped fixture's requester markers.
+          // this real child result. The preparation barrier prevents graceful shutdown
+          // from delivering it before we change the stopped fixture's requester markers.
           const db = openNodeSqliteDatabase(
             path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           );
@@ -593,12 +672,27 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         phase = "completion delivery after restart";
+        if (spawnedRequester) {
+          // Spawned sessions resume through their root. A later turn must see the
+          // consumed private input from its transcript, without another delivery.
+          const followup = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "Continue from the child result you already received.",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: followup.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
         await vi.waitFor(
           async () => {
+            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            expect(readCapturedInputs()).toHaveLength(1);
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });
-            if (!retryingRequester) {
+            if (!retryingRequester && !queuedPrivateAnnounce) {
               expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
@@ -606,17 +700,39 @@ it
                 ]),
               );
             }
-            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             if (busyRequester || retryingRequester) {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
-            expect(readCapturedInputs()).toHaveLength(1);
-            if (interruptAnnounce) {
-              expect(completedReplies).toBe(1);
-              if (!preparingAnnounce) {
-                expect(rootReceivedRecovery).toBe(true);
-              }
+            if (kind === "captured" || kind === "stale-settle-requester") {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+              // A stopped-child outcome may be a notice instead of another model request.
+              // Batch metadata names one member; match this child's rendered status.
+              expect(
+                rootReceivedChildError ||
+                  readRequesterEvents()?.some(
+                    (event) =>
+                      isRecord(event) &&
+                      event.type === "custom_message" &&
+                      event.display === true &&
+                      typeof event.content === "string" &&
+                      (event.content.includes(
+                        `(run ${childRunId})\nInterrupted by Gateway restart; not resumed.`,
+                      ) ||
+                        event.content.includes(
+                          `(run ${childRunId})\n\nInterrupted by Gateway restart; not resumed.`,
+                        )),
+                  ),
+              ).toBe(true);
             }
+            if (interruptAnnounce && !unconsumedAnnounce) {
+              expect(rootReceivedRecovery).toBe(!spawnedRequester);
+            }
+            // Later child partitions legitimately run with earlier results in history.
+            // Join those turns before the second restart tests settled-receipt idempotence.
+            const requester = readRestartSession(instance.state.agentDir("main"), rootKey);
+            expect(requester).toBeDefined();
+            expect(requester?.lifecycleRunId).toBeUndefined();
+            expect(requester?.resumeAfterRestart).toBeUndefined();
           },
           { timeout: 30_000 },
         );
@@ -629,7 +745,7 @@ it
         const after = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        if (!retryingRequester) {
+        if (!retryingRequester && !queuedPrivateAnnounce) {
           expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
         }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });
@@ -642,10 +758,7 @@ it
           expect(rootReceivedRecovery).toBe(false);
         }
         expect(readCapturedInputs()).toHaveLength(1);
-        if (interruptAnnounce) {
-          expect(completedReplies).toBe(1);
-        } else if (kind === "captured") {
-          expect(rootReceivedChildError).toBe(true);
+        if (kind === "captured") {
           expect(resumedChildRequests).toBe(0);
         }
       },

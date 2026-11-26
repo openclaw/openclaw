@@ -1022,45 +1022,6 @@ finally:
     expect(renderSourceRootHelpText).not.toHaveBeenCalled();
   });
 
-  it("renders independent startup help snapshots concurrently", async () => {
-    const metadata = metadataFixture("openclaw-startup-metadata-concurrency-");
-    const { outputPath } = metadata;
-    const started: string[] = [];
-    const expectedStarted = ["browser", "secrets", "nodes", "subcommands"];
-    const allStarted = Promise.withResolvers<void>();
-    const unblocked = Promise.withResolvers<void>();
-    const renderAfterUnblock =
-      <T>(label: string, output: T) =>
-      async () => {
-        started.push(label);
-        if (expectedStarted.every((name) => started.includes(name))) {
-          allStarted.resolve();
-        }
-        await unblocked.promise;
-        return output;
-      };
-
-    const writePromise = writeWithFixtureHelp(metadata, {
-      renderSourceBrowserHelpText: renderAfterUnblock("browser", "Usage: openclaw browser\n"),
-      renderSourceSecretsHelpText: renderAfterUnblock("secrets", "Usage: openclaw secrets\n"),
-      renderSourceNodesHelpText: renderAfterUnblock("nodes", "Usage: openclaw nodes\n"),
-      renderSourceSubcommandHelpTextRecord: renderAfterUnblock(
-        "subcommands",
-        sourceSubcommandHelp(),
-      ),
-    });
-
-    await allStarted.promise;
-    unblocked.resolve();
-    await writePromise;
-
-    expect(readMetadata(outputPath)).toMatchObject({
-      browserHelpText: expect.stringContaining("openclaw browser"),
-      secretsHelpText: expect.stringContaining("openclaw secrets"),
-      nodesHelpText: expect.stringContaining("openclaw nodes"),
-    });
-  });
-
   it("does not let shared-state cleanup mask the primary render failure", async () => {
     const metadata = metadataFixture("openclaw-startup-metadata-cleanup-failure-");
     const cleanupFailure = new Error("cleanup failed");

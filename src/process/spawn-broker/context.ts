@@ -1,5 +1,6 @@
 import os from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { ResourceProfile } from "../../infra/gateway-resource-profile.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { gatewaySpawnBrokerState } from "./context-state.js";
 import type { SpawnBrokerHost } from "./host.js";
@@ -10,8 +11,10 @@ export { getSpawnBroker, runWithSpawnBroker } from "./context-state.js";
 export async function startGatewaySpawnBroker(options: {
   onReady: (pid: number, restarted: boolean) => void;
   onStartupFailure: (message: string) => void | Promise<void>;
+  /** The profile this start will resolve; lean keeps the broker's memory for requests. */
+  profile?: ResourceProfile;
 }): Promise<SpawnBrokerHost | undefined> {
-  if (gatewaySpawnBrokerState.startupDisabled) {
+  if (gatewaySpawnBrokerState.startupDisabled || options.profile === "lean") {
     return undefined;
   }
   const constrained = process.constrainedMemory();

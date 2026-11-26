@@ -19,6 +19,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
@@ -114,8 +115,10 @@ describe("pending input additive schema", () => {
     const filename = openOpenClawAgentDatabase(options).path;
     const database = await previousDatabase(filename);
     database.exec(`
+      ALTER TABLE session_members DROP COLUMN access;
       ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
       ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+      ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
       PRAGMA user_version = 42;
       UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
     `);
@@ -157,9 +160,11 @@ describe("pending input additive schema", () => {
     database.close();
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(
       admitted
@@ -199,16 +204,20 @@ describe("pending input additive schema", () => {
     {
       using old = await previousDatabase(filename);
       old.exec(`
+        ALTER TABLE session_members DROP COLUMN access;
         DROP TABLE session_pending_inputs;
+        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);
     }
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(tableExists(admitted, "session_pending_inputs")).toBe(false);
   });
@@ -414,8 +423,10 @@ describe("pending input additive schema", () => {
     {
       using old = await previousDatabase(filename);
       old.exec(`
+        ALTER TABLE session_members DROP COLUMN access;
         ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
         ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);

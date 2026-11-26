@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
@@ -29,6 +30,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -252,6 +254,7 @@ data class GatewayHelloSummary(
   val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
+  val profileActivityViewerId: String? = null,
 )
 
 internal data class GatewaySessionRouting(
@@ -379,6 +382,7 @@ class GatewaySession(
     val message: String,
     val details: GatewayErrorDetails? = null,
     val retryable: Boolean = false,
+    val retryAfterMs: Int? = details?.retryAfterMs,
   ) {
     /** Only the method-bound startup refusal proves this chat send did no handler work. */
     fun startupRetryDelayMs(method: String): Long? {
@@ -433,6 +437,8 @@ class GatewaySession(
     fun isCurrent(): Boolean = isCurrentImpl()
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
+
+    fun supportsCapability(capability: String): Boolean = capability in advertisedCapabilities
 
     suspend fun closeTalkSession(
       sessionId: String,
@@ -1348,32 +1354,41 @@ class GatewaySession(
           val call = downloadClient.newCall(request.build())
           call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
-          call.execute().use { response ->
-            if (response.code == 202 && playbackRendition) {
-              retryDelayMs = retry.nextDelayMs()
-            } else {
-              if (!response.isSuccessful) return@withContext null
-              val body = response.body
-              val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
-              if (!kind.acceptsMimeType(mimeType)) return@withContext null
-              val maximumBytes = kind.maximumBufferedBytes
-              val declaredLength = body.contentLength()
-              if (declaredLength > maximumBytes) return@withContext null
-              val buffer = Buffer()
-              val source = body.source()
-              var total = 0L
-              while (true) {
-                val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
-                if (read == -1L) break
-                total += read
-                if (total > maximumBytes) return@withContext null
+          val media =
+            call.useCancellableResponse { response ->
+              if (response.code == 202 && playbackRendition) {
+                retryDelayMs = retry.nextDelayMs()
+                null
+              } else {
+                if (!response.isSuccessful) return@useCancellableResponse null
+                val body = response.body
+                val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@useCancellableResponse null
+                if (!kind.acceptsMimeType(mimeType)) return@useCancellableResponse null
+                val maximumBytes = kind.maximumBufferedBytes
+                val declaredLength = body.contentLength()
+                if (declaredLength > maximumBytes) return@useCancellableResponse null
+                val buffer = Buffer()
+                val source = body.source()
+                var total = 0L
+                while (true) {
+                  val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+                  if (read == -1L) break
+                  total += read
+                  if (total > maximumBytes) return@useCancellableResponse null
+                }
+                bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
               }
-              return@withContext bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
             }
-          }
-          delay(retryDelayMs ?: return@withContext null)
+          delay(retryDelayMs ?: return@withContext media)
         }
         null
+      }
+
+    private suspend fun <T> Call.useCancellableResponse(block: (Response) -> T): T =
+      suspendCancellableCoroutine { continuation ->
+        // Keep cancellation attached through body reads, not just until response headers arrive.
+        continuation.invokeOnCancellation { cancel() }
+        continuation.resumeWith(runCatching { execute().use(block) })
       }
 
     private fun resolveTicketedMediaRequest(
@@ -1979,6 +1994,7 @@ class GatewaySession(
             authSessionCap = authSessionCap,
             methods = featureSet("methods"),
             capabilities = featureSet("capabilities"),
+            profileActivityViewerId = authObj?.get("profileActivityViewerId").asJsonStringOrNull(),
           ),
       )
     }
@@ -2090,6 +2106,8 @@ class GatewaySession(
       val payloadJson = frame["payload"]?.toString()
       val error =
         response.error?.let { wireError ->
+          // retryAfterMs belongs to the error frame, independently of optional method details.
+          val retryAfterMs = wireError.retryAfterMs?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt()
           val detailObj = wireError.details.asObjectOrNull()
           val details =
             detailObj?.let {
@@ -2102,7 +2120,7 @@ class GatewaySession(
                 method = it["method"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
-                retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
+                retryAfterMs = retryAfterMs,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
@@ -2112,7 +2130,7 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true)
+          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true, retryAfterMs = retryAfterMs)
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }

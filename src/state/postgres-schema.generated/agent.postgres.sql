@@ -369,7 +369,9 @@ CREATE TABLE "session_members" (
   "identity_id" text COLLATE "C" NOT NULL,
   "added_by" text COLLATE "C" NOT NULL,
   "added_at" bigint NOT NULL,
-  PRIMARY KEY ("session_key", "identity_id")
+  "access" text COLLATE "C",
+  PRIMARY KEY ("session_key", "identity_id"),
+  CHECK ("access" IS NULL OR ("access" IN ('read', 'suggest', 'send')))
 );
 
 CREATE TABLE "session_nodes" (
@@ -407,6 +409,7 @@ CREATE TABLE "session_nodes" (
   "last_read_at" bigint,
   "last_interaction_at" bigint,
   "last_activity_at" bigint,
+  "archive_undo_marker" text COLLATE "C",
   PRIMARY KEY ("session_key"),
   CHECK (("entry_valid" IN (-1, 0, 1))),
   CHECK ("status" IS NULL OR ("status" IN ('running', 'done', 'failed', 'killed', 'timeout'))),

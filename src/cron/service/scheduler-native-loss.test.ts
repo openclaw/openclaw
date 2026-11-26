@@ -18,6 +18,8 @@ for (const loseReplacement of [false, true]) {
     const { storePath } = fixtures.makeStorePath();
     const scheduler = createTestGatewayScheduler("fake-timers");
     const delivered = createDeferred();
+    const expectedStarts = loseReplacement ? 3 : 2;
+    const requiredStarts = createDeferred();
     const runSessionEvent = vi.fn(async () => {
       delivered.resolve();
       return { status: "ok" as const };
@@ -98,6 +100,9 @@ for (const loseReplacement of [false, true]) {
       }
       if (starts && !workers.includes(this)) {
         workers.push(this);
+        if (workers.length === expectedStarts) {
+          requiredStarts.resolve();
+        }
         if (workers.length === 2 && loseReplacement) {
           void this.terminate();
         }
@@ -120,16 +125,16 @@ for (const loseReplacement of [false, true]) {
       expect(original!.threadId).toBe(-1);
       record("recovery.wait");
       try {
-        await vi.waitFor(() => expect(workers).toHaveLength(loseReplacement ? 3 : 2), {
-          timeout: 3_000,
-        });
+        // Native startup shares the test deadline; a separate probe timeout rejects healthy recovery.
+        await withinTest(requiredStarts.promise, signal);
+        expect(workers).toHaveLength(expectedStarts);
       } catch (error) {
         // Transport replies do not prove lease admission; native exits do not prove callback delivery.
         console.error(
           "[cron-native-loss]",
           JSON.stringify({
             elapsedMs: performance.now() - startedAt,
-            expectedStarts: loseReplacement ? 3 : 2,
+            expectedStarts,
             observedStarts: workers.length,
             droppedEvents,
             events,

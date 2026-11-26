@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/client-types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -13,7 +16,7 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
@@ -69,13 +72,12 @@ export async function runAgentStep(params: {
       throw new Error("Returned peer result requires its original source and target sessions.");
     }
     const config = getRuntimeConfig();
-    // Detached results retain the original operator's live continuation custody,
-    // not the completed tool's lifetime or authority reconstructed from metadata.
+    // Detached results keep the original operator request's Stop signal, not the
+    // completed tool's lifetime.
     const operatorSource =
       getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
     const assertSourceCurrent = composeSessionSourceAssertion([
-      captureGatewayToolCallerAssertion(),
-      operatorSource?.assertCurrent,
+      composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
     ]);
     const load = async (
       endpointAgentId: string,

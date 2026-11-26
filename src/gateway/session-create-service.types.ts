@@ -93,7 +93,7 @@ export type GatewaySessionCommitResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape; initializationNotCommitted?: true };

@@ -165,6 +165,7 @@ openclaw-modal-dialog {
   align-items: center;
   gap: var(--space-2);
   margin: 0;
+  overflow-wrap: anywhere;
   color: var(--text-strong);
   font-size: var(--overlay-modal-title-size);
   font-weight: 600;

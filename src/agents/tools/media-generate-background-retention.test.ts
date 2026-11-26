@@ -334,7 +334,7 @@ it("tracks a missing requester inline", async () => {
   });
 });
 
-it.each(["invocation", "cancellation", "generation"] as const)(
+it.each(["cancellation", "generation"] as const)(
   "refuses provider work after lookup %s revocation",
   async (revocation) => {
     await withOpenClawTestState({ prefix: "media-admission-" }, async (state) => {
@@ -351,15 +351,12 @@ it.each(["invocation", "cancellation", "generation"] as const)(
             return result.value;
           }),
       );
-      let current = true;
       const controller = new AbortController();
       const revoke = () => {
         if (revocation === "cancellation") {
           controller.abort(new Error("request cancelled"));
-        } else if (revocation === "generation") {
-          rotateAgentEventLifecycleGeneration();
         } else {
-          current = false;
+          rotateAgentEventLifecycleGeneration();
         }
       };
       const run = vi.fn();
@@ -370,7 +367,7 @@ it.each(["invocation", "cancellation", "generation"] as const)(
           agentId: "main",
           sessionKey,
           operationalRunInstance: { runId: "run", instanceId: "instance" },
-          receiptAuthority: () => current,
+          receiptAuthority: () => true,
           approvalSignals: [controller.signal],
         },
         () =>

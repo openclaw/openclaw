@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu-state.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -31,6 +32,8 @@ export function resolveNewSessionMentionDirectory(options: {
   }
   return {
     client,
+    inviteAccessAvailable:
+      isGatewayMethodAdvertised(gateway.snapshot, "session.members.setAccess") === true,
     ownerKey: JSON.stringify([
       gateway.connectionRevision,
       client.recoveryScope,

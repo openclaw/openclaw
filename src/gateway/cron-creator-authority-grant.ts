@@ -71,7 +71,7 @@ const channelRequestersByScope = new WeakMap<
 function expiredAuthorityError(): Error & { status: number } {
   return Object.assign(
     new TypeError(
-      "Configured MCP cron authority is no longer active for this run. Retry the automation mutation from a fresh authenticated creator turn.",
+      "This run's MCP cron access has ended. Retry the automation mutation from a fresh authenticated creator turn.",
     ),
     { name: "CronCreatorAuthorityExpiredError", status: 403 },
   );
@@ -83,7 +83,6 @@ export function createCronCreatorAuthorityRunScope(
   managementEntitlement?: CronManagementEntitlement,
   isCurrent?: () => boolean,
   channelRequester?: CronAuthenticatedChannelRequester,
-  requesterOwner?: CronCreatorAuthorityRunScope["requesterOwner"],
   callerScopedCreation?: true,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
@@ -94,11 +93,7 @@ export function createCronCreatorAuthorityRunScope(
     signal: abortController.signal,
     grantTokens: new Set(),
     ...(managementEntitlement ? { managementEntitlement } : {}),
-    ...(requesterOwner ? { requesterOwner } : {}),
     ...(callerScopedCreation ? { callerScopedCreation } : {}),
-    get controlUiAdmin(): true | undefined {
-      return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
-    },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
     abort: () => {
@@ -142,9 +137,7 @@ export function mintCronCreatorAuthorityGrant(
     scope.signal.aborted ||
     operationSignal?.aborted ||
     scope.isCurrent?.() === false ||
-    isCurrent?.() === false ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent())
+    isCurrent?.() === false
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
@@ -226,8 +219,6 @@ export function resolveCronCreatorAuthorityGrantProvenance(
     entry.operationSignal?.aborted ||
     entry.isCurrent?.() === false ||
     scope.isCurrent?.() === false ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== grant.runId ||
     scope.runId !== runId
   ) {
@@ -303,8 +294,6 @@ function assertCronGrantCurrent(entry: CronCreatorAuthorityGrantEntry, runId: st
     entry.isCurrent?.() === false ||
     scope.isCurrent?.() === false ||
     scope.runId !== runId ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     (management &&
       (Date.now() >= management.expiresAtMs ||
         !validateAgentRunDelegatedAuthority(management.authority)))

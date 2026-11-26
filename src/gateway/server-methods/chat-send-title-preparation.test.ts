@@ -186,7 +186,16 @@ it.each([
 
 it("compacts after the reply releases its admission while its title is still generating", async () => {
   await withTitle(
-    { cfg: { agents: { entries: { main: {} } } }, writeConfig: true, legacyPath: true },
+    {
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+          entries: { main: {} },
+        },
+      },
+      writeConfig: true,
+      legacyPath: true,
+    },
     async ({ scope, context, append, start, finish }) => {
       await append("First question", "Follow-up question", "Final answer");
       const admission = await beginSessionEffect({

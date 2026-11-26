@@ -17,6 +17,41 @@ import {
 } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
 
+/**
+ * A data-at-risk mark is recorded when a step fails, usually before anything checked the
+ * state. Say what was observed and name repair, which verifies the mark before it acts.
+ */
+function describeUnverifiedDataAtRisk(params: {
+  result: UpdateRunResult;
+  dataAtRisk: string;
+  serviceRunning?: boolean;
+  runningVersion: string;
+  repair: string;
+  update: string;
+}): string {
+  const { result } = params;
+  const rolledBack =
+    result.rollbackOutcome?.status === "succeeded" ||
+    (result.recovery?.serviceRestartSafe === false && result.recovery.packageRollbackVerified);
+  const installed = rolledBack ? result.before?.version : result.after?.version;
+  const gateway =
+    params.serviceRunning === true
+      ? `The Gateway is running${params.runningVersion ? ` OpenClaw ${params.runningVersion}` : ""}.`
+      : params.serviceRunning === false
+        ? "The Gateway is stopped."
+        : "The Gateway was not observed after the failure.";
+  const code = rolledBack
+    ? `The update was rolled back${installed ? `; OpenClaw ${installed} is installed` : ""}.`
+    : `${installed ? `OpenClaw ${installed} is installed; keep it` : "Keep the installed version"} and do not roll back code by hand.`;
+  const repair =
+    params.dataAtRisk === "active-mutation"
+      ? `Once the recorded processes have stopped, run \`${params.repair}\`.`
+      : params.serviceRunning === true
+        ? `Nothing is needed now: the next \`${params.update}\`, including an automatic one, checks the state on disk against the installed version before it changes anything and resolves the mark if the state is consistent. To check now, run \`${params.repair}\`.`
+        : `Run \`${params.repair}\` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next \`${params.update}\` runs the same check.`;
+  return `This update recorded possible data at risk (${params.dataAtRisk}); nothing has verified it yet. ${gateway} ${code} Keep the recovery snapshots. ${repair}`;
+}
+
 export function resolveUpdateResultNextAction(params: {
   result: UpdateRunResult;
   restart?: boolean;
@@ -107,7 +142,16 @@ export function resolveUpdateResultNextAction(params: {
     const servingVersion = truncateUtf16Safe(params.verifiedServingVersion ?? "", 120);
     const dataAtRisk = result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
     const state = dataAtRisk
-      ? `${doctorSettlement?.stderrTail ? `${doctorSettlement.stderrTail} ` : ""}Keep the Gateway stopped: data at risk (${dataAtRisk}). Keep the update installed and preserve recovery snapshots; do not roll back code alone. Run \`${formatCliCommand("openclaw update repair", env)}\` after ${dataAtRisk === "active-mutation" ? "the recorded processes have stopped" : "resolving this risk"}.`
+      ? `${doctorSettlement?.stderrTail ? `${doctorSettlement.stderrTail} ` : ""}${describeUnverifiedDataAtRisk(
+          {
+            result,
+            dataAtRisk,
+            serviceRunning: params.serviceRunning,
+            runningVersion,
+            repair: formatCliCommand("openclaw update repair", env),
+            update: formatCliCommand("openclaw update", env),
+          },
+        )}`
       : servingVersion
         ? `Your Gateway is still serving ${servingVersion}; nothing to restore.${reason ? ` Restart remains unsafe (${reason}).` : ""}`
         : reason
@@ -151,7 +195,8 @@ export function resolveUpdateResultNextAction(params: {
       servingVersion && !hostLinkFailure
         ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
         : undefined,
-      !servingVersion && (reason || !detail) ? triageGuidance : undefined,
+      // Repair owns a recorded risk: it verifies the mark before it changes anything.
+      !servingVersion && !dataAtRisk && (reason || !detail) ? triageGuidance : undefined,
     ]
       .filter(Boolean)
       .join(" ");
@@ -167,7 +212,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Before applying cleanup, stop the Gateway first (\`${command("openclaw gateway stop")}\`). Use the same profile, state, and config settings.`;
+    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Before applying cleanup, stop the Gateway first (\`${command("openclaw gateway stop --force")}\`). Use the same profile, state, and config settings.`;
   }
   return undefined;
 }

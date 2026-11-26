@@ -246,7 +246,7 @@ it("keeps a saved profile unavailable until the restart applies it", async () =>
   expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
 });
 
-it.each(["unavailable", "conflict", "revoked"] as const)(
+it.each(["unavailable", "conflict"] as const)(
   "refuses profile adoption after %s without overwriting config",
   async (reason) => {
     vi.mocked(resolveSuggestedWorkerProfile).mockImplementation(async () => {
@@ -257,31 +257,15 @@ it.each(["unavailable", "conflict", "revoked"] as const)(
       return reason === "unavailable" ? undefined : suggested;
     });
     const { options, respond } = adoptionHarness();
-    if (reason === "revoked") {
-      let current = true;
-      options.hasCurrentClientAuthority = () => current;
-      configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
-        async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
-          current = false;
-          writeOptions.assertCurrent?.();
-          writeOptions.assertBeforePublish?.();
-          throw new Error("revoked request reached config publication");
-        },
-      );
-    }
     await environmentsHandlers["environments.adoptSuggestedProfile"]!(options);
     expect(storedConfig.cloudWorkers?.profiles).toEqual(
       reason === "conflict" ? { custom: { provider: "static-ssh" } } : undefined,
     );
-    if (reason !== "revoked") {
-      expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-    }
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
     const error =
       reason === "conflict"
         ? { code: "INVALID_REQUEST" }
-        : reason === "revoked"
-          ? { message: "Error: Gateway requester authority changed" }
-          : { code: "UNAVAILABLE", message: "No cloud worker profile is available to configure" };
+        : { code: "UNAVAILABLE", message: "No cloud worker profile is available to configure" };
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

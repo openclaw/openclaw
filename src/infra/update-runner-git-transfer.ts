@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { bindCommandStdinFile } from "../process/command-stdin-file.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
@@ -265,7 +266,7 @@ export async function prepareGitCandidateTransfer(params: {
         // pack until activation/rollback finishes, including source publication.
         argv: ["git", "-C", target.cwd, "index-pack", "--stdin", `--keep=${keepMessage}`],
         runCommand: (argv, options) =>
-          target.runCommand(argv, { ...options, stdinFileDescriptor: pack.handle.fd }),
+          target.runCommand(argv, { ...options, stdinFile: bindCommandStdinFile(pack) }),
       });
       if (isFailedUpdateStep(imported)) {
         return false;

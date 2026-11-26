@@ -608,7 +608,7 @@ export function resolveConfiguredRouteModelLabel(params: {
 
 /** Prepare implicit provider selection without promoting the agent's utility route. */
 export function resolveConfiguredPrimaryProviderFallback(
-  params: ConfiguredModelSelectionParams & { defaultModel: string | undefined },
+  params: ConfiguredModelSelectionParams,
 ): ModelRef | null {
   const utility = readUtilityModelSetting(params.cfg, params.agentId);
   const excludedModel =
@@ -619,14 +619,17 @@ export function resolveConfiguredPrimaryProviderFallback(
           aliasIndex: buildModelAliasIndex(params),
         })?.ref
       : undefined;
-  return resolveConfiguredProviderFallback({ ...params, excludedModel });
+  return resolveConfiguredProviderFallback({ cfg: params.cfg, excludedModel });
 }
 
-/** Resolve the default configured model ref, including aliases and fallback provider rows. */
+/**
+ * Resolve the configured primary model ref, including aliases and fallback provider rows.
+ * Undefined means no model is configured; nothing invents one.
+ */
 export function resolveConfiguredModelRef(
-  params: ConfiguredModelSelectionParams & { defaultModel: string },
+  params: ConfiguredModelSelectionParams,
   modelRuntime: "native" | "acp" = "native",
-): ModelRef {
+): ModelRef | undefined {
   const agentEntry = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const agentModel = resolveAgentModelConfigForRuntime(agentEntry, modelRuntime);
   const rawModel =
@@ -786,15 +789,10 @@ export function resolveConfiguredModelRef(
     }
 
     if (modelRuntime !== "acp") {
-      warnUnresolvedConfiguredModel(trimmed, params.defaultProvider, params.defaultModel);
+      warnUnresolvedConfiguredModel(trimmed);
     }
   }
-  return (
-    resolveConfiguredPrimaryProviderFallback(params) ?? {
-      provider: params.defaultProvider,
-      model: params.defaultModel,
-    }
-  );
+  return resolveConfiguredPrimaryProviderFallback(params) ?? undefined;
 }
 
 type ModelPolicyPreparationParams = ConfiguredModelSelectionParams & {

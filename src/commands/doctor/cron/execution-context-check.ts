@@ -5,6 +5,7 @@ import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveCliRuntimeExecutionProvider } from "../../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
@@ -33,6 +34,7 @@ import type { CronStoredJob } from "../../../cron/types.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../../../gateway/operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../../gateway/operator-role-policy.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { operatorScopeSatisfied } from "../../../shared/operator-scope-compat.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import {
   classifyScheduledJob,
@@ -101,9 +103,9 @@ function creatorRoleSandbox(
 
 /**
  * The requester's current owner status, read without the Gateway. Profile and
- * configured channel owners can be read from state and config; linked channel
- * operators and operator snapshots need the running Gateway, so they are
- * reported as unverified and treated as non-owners.
+ * configured channel owners can be read from state and config; admin-role profiles,
+ * linked channel operators and operator snapshots need the running Gateway's
+ * admission, so they are reported as unverified and treated as non-owners.
  */
 function checkRequesterOwnerReadOnly(
   cfg: OpenClawConfig,
@@ -113,18 +115,26 @@ function checkRequesterOwnerReadOnly(
   switch (requester.kind) {
     case "unknown":
       return { owner: false, check: "checked" };
-    case "profile":
-      if (profile === "unreadable") {
-        return { owner: false, check: "unverified" };
+    case "profile": {
+      if (typeof profile !== "object") {
+        return { owner: false, check: profile === "unreadable" ? "unverified" : "checked" };
       }
-      // Admission's rule: a current profile on an untiered install, or the Gateway owner profile.
-      return {
-        owner:
-          typeof profile === "object" &&
-          (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
-            requester.profileId === GATEWAY_OWNER_PROFILE_ID),
-        check: "checked",
-      };
+      if (
+        !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+        requester.profileId === GATEWAY_OWNER_PROFILE_ID
+      ) {
+        return { owner: true, check: "checked" };
+      }
+      const role = resolveOperatorRolePolicyForAssignment(
+        requester.profileId,
+        profile.assignedRole,
+        cfg,
+        profile.githubLogin,
+      );
+      // Only a role that grants operator.admin can be an owner; admission decides the rest.
+      const admin = operatorScopeSatisfied("operator.admin", role?.scopes ?? []);
+      return { owner: false, check: admin ? "unverified" : "checked" };
+    }
     case "channel": {
       const { channel, accountId, senderId } = requester.requester;
       if (isConfiguredCommandOwner(cfg, { channel, accountId, senderId })) {
@@ -158,7 +168,7 @@ function resolveCliBackend(cfg: OpenClawConfig, agentId: string, job: CronStored
     ? resolveModelRefFromString({
         ...selection,
         raw: job.payload.model,
-        defaultProvider: fallback.provider,
+        defaultProvider: fallback?.provider ?? DEFAULT_PROVIDER,
       })?.ref
     : fallback;
   if (!ref) {
@@ -204,7 +214,7 @@ async function reviewJob(
   if (!agentId) {
     return;
   }
-  // The creator's profile decides both the role sandbox and a profile requester's owner check.
+  // The creator's profile decides the role sandbox; a profile requester's owner check reads its own.
   const actor = job.createdActor;
   const profile =
     actor?.type === "human" && actor.id ? await readCreatorProfile(env, actor.id) : undefined;
@@ -217,7 +227,13 @@ async function reviewJob(
     entry = await readParentEntry(cfg, agentId, parentKey);
     const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
     parentRow = parentRowFactsFromEntry(entry, worktreePath ? await exists(worktreePath) : false);
-    owner = checkRequesterOwnerReadOnly(cfg, resolveScheduledRequester(job), profile);
+    const requester = resolveScheduledRequester(job);
+    const requesterProfile =
+      requester.kind === "profile" &&
+      requester.profileId !== (actor?.type === "human" ? actor.id : undefined)
+        ? await readCreatorProfile(env, requester.profileId)
+        : profile;
+    owner = checkRequesterOwnerReadOnly(cfg, requester, requesterProfile);
   }
   const runSessionKey =
     job.sessionTarget === "main"

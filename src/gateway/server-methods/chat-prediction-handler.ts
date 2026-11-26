@@ -12,7 +12,7 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -89,7 +89,7 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
     }
     const connId = client.connId;
     let selection: Awaited<ReturnType<typeof prepareChatHistorySessionRead>>;
-    let operator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let operator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     try {
       const target = sessionAccessAuthority.target;
       const projectedTarget = getSessionRowProjection(context)?.sharingTarget({
@@ -213,7 +213,7 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
         respond(true, { text: null });
         return;
       }
-      operator = await captureGatewayOperatorRunAuthority({
+      operator = await prepareGatewayOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority,

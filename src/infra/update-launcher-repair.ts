@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathEntryExists } from "./path-existence.js";
 import {
   relocateRuntimeLauncher,
+  resolveLauncherShellFile,
   resolveRuntimeLauncherTargets,
 } from "./update-runtime-relocation.js";
 
@@ -72,6 +73,14 @@ async function repairStagedRuntimeLauncher(
   if (path.dirname(projectRoot) !== (await fs.realpath(path.dirname(stage)))) {
     return { outcome: "not-ours" };
   }
+  // Only the launcher's owner may replace it: the rename would hand another account's file
+  // to this one. Leave it as it is and report why.
+  const uid = process.getuid?.();
+  if (uid !== undefined && stat.uid !== uid) {
+    throw new Error(
+      `The launcher belongs to uid ${stat.uid}, not this account (uid ${uid}); it was left unchanged`,
+    );
+  }
   // Relocate the analyzed content in a private directory beside the launcher, verify it,
   // then replace the launcher in one rename. The exclusive directory keeps another account
   // from planting a link where the repair writes.
@@ -79,9 +88,9 @@ async function repairStagedRuntimeLauncher(
   const temporary = path.join(staging, path.basename(file));
   try {
     await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
-    // pnpm 12 resolves the shim's directory physically; relocate from that same base.
-    const physical = path.join(await fs.realpath(path.dirname(file)), path.basename(file));
-    await relocateRuntimeLauncher(temporary, physical, physical, [
+    // Relocate from the base the shim's shell resolves, as detection did above.
+    const shellFile = await resolveLauncherShellFile(file, content);
+    await relocateRuntimeLauncher(temporary, shellFile, shellFile, [
       { sourceRoot: stage, destinationRoot: projectRoot },
     ]);
     const relocated = await fs.readFile(temporary, "utf8");
@@ -97,7 +106,8 @@ async function repairStagedRuntimeLauncher(
     if (repaired.length === 0) {
       throw new Error("The repaired launcher names no executable target");
     }
-    await fs.chmod(temporary, stat.mode & 0o7777);
+    // Permission bits only: set-ID and sticky bits never carry into a rewritten launcher.
+    await fs.chmod(temporary, stat.mode & 0o777);
     // A package manager may have replaced the shim since it was inspected; leave its write.
     if ((await fs.readFile(file, "utf8").catch(() => undefined)) !== content) {
       throw new Error("The launcher changed while it was being repaired; it was left as is");

@@ -12,6 +12,7 @@ import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js"
 import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
+import { borrowOpenClawStateDatabaseForAsyncRead } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -893,7 +894,7 @@ describe("Gateway owner lease", () => {
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
-  it.each([false, true])(
+  it.each([false, true, "borrowed"] as const)(
     "publishes and releases its owner with cached state=%s",
     async (cached) => {
       await using owner = fixture();
@@ -933,15 +934,19 @@ describe("Gateway owner lease", () => {
         [],
       );
       const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
+      // A restart whose startup outlived its stop budget still serves reads into final release.
+      const read =
+        cached === "borrowed" && held ? borrowOpenClawStateDatabaseForAsyncRead(held.path) : null;
       if (!cached) {
         await closeOpenClawStateDatabaseAsync();
       }
       expect(readGatewayOwnerLease({ env })?.owner).toBe("gateway-generation");
 
       await lease.release();
-      expect(held?.db.isOpen ?? false).toBe(false);
+      expect(held?.db.isOpen ?? false).toBe(cached === "borrowed");
       expect(readGatewayOwnerLease({ env })).toBeUndefined();
-      expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(env))).toBe(true);
+      expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(env))).toBe(!read);
+      read?.release();
       await closeOpenClawStateDatabaseAsync();
     },
   );

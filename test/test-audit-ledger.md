@@ -11,6 +11,12 @@ Completed work and retained checkouts are separate.
 
 Recent completed work and pending candidates. d / c = declarations / expanded cases.
 
+Tailscale sudo fixture / `c6f4684384b5`: D2 unused support lines; no test cases or production changes. Its `route-error` mode lost its only caller in [166484](https://github.com/openclaw/openclaw/pull/166484). Password/conflict diagnostics, authenticated recovery and worker cleanup remain. Boat baseline/candidate: 38/38 across three suites; making the retired branch throw leaves all 33 direct-consumer cases passing. Independent preservation review passed; broad scan results belong to the PR. The remaining 22 top-level fixtures and first 24 nested files were inspected or reconciled against unchanged prior proof, non-additively; all files remain, with the historical SOUL preimage retained pending provenance. No runtime savings claimed.
+
+RPC replay fixture / `a81218e17a0b`: D32 unused support lines; no test cases or production changes. The first 36 regular top-level fixtures received a source-only value review: all remain, with this one partial deletion; counts are non-additive. The proxy's Hello-hold controls lost their only callers in [160115](https://github.com/openclaw/openclaw/pull/160115). Keep real forwarding, committed-response loss, exact request/write counts, independent session reads and child cleanup. Boat baseline/candidate: Gateway 1/1 and RPC client 10/10. Replaying a failed dispatched request made the keeper fail with two requests and two committed sessions; production bytes were restored. Independent preservation review and targeted syntax, format and lint passed; broad scan results belong to the PR.
+
+Twitch lifecycle / `ead1aff00c17`: D1 redundant post-await assertion, −1 test line; the conditional live case remains. Its promise already sets `settled` before `await task` returns. Connection, pre-abort pending, successful completion and stop checks remain. Boat baseline/candidate: plugin 8/8 and lifecycle owner 10/10; the keeper caught both early-settlement and missing-stop faults. Production bytes restored; format, lint and type checks passed. Live IRC was not run; broad scan results belong to the PR.
+
 Queued hook accounts / `423ae0907203`: F1 from the existing Gateway-server audit repaired; all 14 cases remain. The case now holds a real same-session queue, removes the account from a replacement config, and checks that the second runner never starts. Reusing dispatch-time config passed the original row but failed the corrected runner-count assertion. Boat baseline and candidate 14/14; account-selection sibling 4/4; targeted format, lint and type checks passed. Production bytes restored.
 
 Host CPU invalid ticks / `6577f41b9aba`: F1 from the existing Gateway-server audit repaired without adding or removing cases. The fixture keeps both CPUs and advances valid counters so NaN handling, not topology change, determines the result. Boat baseline and candidate 24/24; health siblings 20/20. A finite-delta substitution passed the original row but made the corrected row fail with fabricated utilization 0.5. Production bytes restored; targeted format, lint and type checks passed.
@@ -125,7 +131,6 @@ Standalone, non-additive counts; source-only unless local qualification is separ
 ## Unresolved obligations and limits
 
 - Qualify C / D at actual owners; preserve independent wire / identity / authority / lifecycle / platform / work-count keepers.
-- Twitch: retain passive-account pre-abort pending check; post-await settled check remains a live-test cleanup candidate.
 - Transfer Android loading / blank-auth, persisted outbox keys / epochs, terminal projection and native PCM / decoder / reader rows before consolidation; retain typed host-error precedence / active-run settlement.
 - Keep CodeMode warmed worker-leg deadline / interruption separate from cancellation-table host-error precedence and settlement.
 - Android runtime / model closers, coroutine / authority / streaming oracles and dropdown / IPv6 / empty-SMS / component mapping qualification remain; no measured leak.

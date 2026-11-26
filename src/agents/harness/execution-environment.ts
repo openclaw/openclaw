@@ -131,8 +131,9 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
     | "nativeRuntimeConsent"
   > & { sessionId?: string };
   preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
-  provider: string;
-  modelId: string;
+  /** Absent when the session has no model; sandbox and remote-execution rules still apply. */
+  provider?: string;
+  modelId?: string;
   /** An owner caller, whose unset chat modes remembered agent consent covers. */
   callerCanConsent?: boolean;
 }): ExecutionRestriction | undefined {
@@ -355,8 +356,6 @@ type PluginHarnessToolPolicyContext = Pick<
   | "sandboxAgentId"
   | "sandbox"
   | "agentId"
-  | "provider"
-  | "modelId"
   | "messageProvider"
   | "messageChannel"
   | "conversationToolPolicy"
@@ -384,6 +383,9 @@ type PluginHarnessToolPolicyContext = Pick<
   | "disableTools"
   | "swarmCollector"
 > & {
+  /** Absent before a session has a model; model-scoped policy then does not apply. */
+  provider?: string;
+  modelId?: string;
   sessionId?: string;
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
   preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;

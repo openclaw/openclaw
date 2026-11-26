@@ -77,7 +77,7 @@ export function resolveReloginProfileIdentity(params: {
           !canReplaceGeneratedProfile(profile.credential, current)
         ) {
           throw new Error(
-            "The automatic auth profile ID is already in use. Use a different profile ID with --profile-id when signing in from the CLI.",
+            "A different account is already saved under this sign-in's profile. Remove that account, then sign in again.",
           );
         }
       },

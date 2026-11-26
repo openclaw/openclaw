@@ -10,6 +10,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { SidebarPluginSection } from "./app-sidebar-pages.tsx";
 import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
@@ -19,7 +20,6 @@ import {
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/sidebar-reorder.css";
@@ -72,9 +72,6 @@ const SidebarCustomize = lazy(() => import("./app-sidebar-customize.tsx"), {
   export: "SidebarCustomize",
 });
 
-const SidebarPluginSection = lazy(() => import("./app-sidebar-pages.tsx"), {
-  export: "SidebarPluginSection",
-});
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
@@ -441,10 +438,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.invalidate();
   }
 
-  hideSessionCatalog(catalogId: string): void {
-    hidePersonalSidebarCatalog(this, catalogId);
-  }
-
   renderSessionsBody() {
     const host = () => this;
     const navigationState = createMemo(() => host().getSessionNavigationState());
@@ -659,7 +652,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <Show
               when={
                 this.context.theme.branding.communityLinks &&
-                this.context.config.current.communityInvite
+                this.context.config.current.communityInvite &&
+                this.communityInviteAllowed
               }
             >
               <SidebarCommunityInvite

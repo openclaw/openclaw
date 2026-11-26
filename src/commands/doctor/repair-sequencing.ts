@@ -46,6 +46,7 @@ import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engi
 import { maybeRepairContextEnginePluginIdSelector } from "./shared/context-engine-plugin-id-selector.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
+import { preserveImplicitOpenAIPrimary } from "./shared/implicit-openai-primary.js";
 import {
   assertInstalledPluginIdRecoveryCurrent,
   recoverInstalledPluginConfigIds,
@@ -420,6 +421,8 @@ export async function runDoctorRepairSequence(params: {
         Boolean(params.modelReplacements?.length) && "model-retirement.model-replacements",
       ].filter((blocker): blocker is string => Boolean(blocker)),
     );
+    // Before stale-ref repair, so the preserved primary is checked like any configured model.
+    applyMutation(await preserveImplicitOpenAIPrimary(state.candidate, { env }));
     const modelRepair = repairStaleAgentModelRefs(state.candidate, {
       modelReplacements: params.modelReplacements,
       env,

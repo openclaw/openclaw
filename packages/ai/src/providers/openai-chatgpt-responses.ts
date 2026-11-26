@@ -12,7 +12,7 @@ import {
   resolveAiTransportHeaderSentinels,
   type AiTransportHost,
 } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE, registerSessionResourceCleanup } from "../session-resources.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import {
   claimResponsesCompactRequest,
@@ -257,6 +257,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const observePromptEgress = createResponsesPromptEgressObserver(options, context);
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
+      const stateSessionId = options?.[PROVIDER_STATE_SCOPE]?.sessionId;
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
       requestTimeoutSignal = options?.signal;
       if (requestTimeoutMs !== undefined) {
@@ -360,11 +361,10 @@ export const streamOpenAICodexResponses: StreamFunction<
           );
         }
       }
+      // Only the writer's scope latches a fallback; without an authority no socket opens anyway.
       const websocketDisabledForSession =
         transport === "auto" &&
-        websocketAuthority !== undefined &&
-        options?.sessionId !== undefined &&
-        websocketState.sseFallbacks.get(options.sessionId) === websocketAuthority.url;
+        websocketState.sseFallbacks.get(stateSessionId ?? "") === websocketAuthority?.url;
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
@@ -451,8 +451,8 @@ export const streamOpenAICodexResponses: StreamFunction<
                   .byteLength,
               }),
             );
-            if (transport === "auto" && options?.sessionId) {
-              websocketState.sseFallbacks.set(options.sessionId, websocketAuthority.url);
+            if (transport === "auto" && stateSessionId) {
+              websocketState.sseFallbacks.set(stateSessionId, websocketAuthority.url);
             }
             if (websocketStarted || transport !== "auto") {
               throw transportError;
@@ -1149,7 +1149,7 @@ async function processWebSocketStream(
   const { socket, entry, release } = await acquireWebSocket(
     state,
     authority,
-    options?.sessionId,
+    options?.[PROVIDER_STATE_SCOPE]?.sessionId,
     options?.signal,
   );
   let keepConnection = true;

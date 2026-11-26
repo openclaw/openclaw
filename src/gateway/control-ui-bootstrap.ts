@@ -49,7 +49,6 @@ export async function prepareControlUiBootstrapConfig(
   if (!requestAuth) {
     return null;
   }
-  requestAuth.assertCurrent();
   if (req.method === "HEAD") {
     return { config: undefined, requestAuth };
   }
@@ -100,7 +99,6 @@ export async function prepareControlUiBootstrapConfig(
   ]);
   const { identity, agentId: assistantAgentId, avatarProjection } = assistant;
   const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
-  requestAuth.assertCurrent();
   const bootstrapConfig = {
     preferences,
     basePath,

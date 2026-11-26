@@ -36,7 +36,8 @@ type FastModeState = {
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
-  model: string;
+  /** Undefined before a model is chosen; session, agent and global settings still apply. */
+  model: string | undefined;
   agentId?: string;
   sessionEntry?: Pick<SessionEntry, "fastMode"> | undefined;
 }): FastModeState {

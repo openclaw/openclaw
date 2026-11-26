@@ -341,7 +341,7 @@ describe("users model-account control plane", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("openclaw models auth login"),
+        message: expect.stringContaining("sign the account in first"),
       }),
     );
     expect(

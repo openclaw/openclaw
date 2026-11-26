@@ -34,6 +34,8 @@ it.each(["runtime", "missing updater"] as const)(
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(prompts, "select").mockResolvedValue("report");
     const confirm = vi.spyOn(prompts, "confirm").mockResolvedValue(false);
+    // A handoff refused for a missing updater changed nothing, so it copies nothing.
+    const captureOriginal = vi.fn(async () => {});
     const message =
       failure === "runtime"
         ? "Target package: openclaw@2026.9.4; Minimum Node engine: 24.22.1; Running Node: 22.23.2"
@@ -64,7 +66,7 @@ it.each(["runtime", "missing updater"] as const)(
                 },
                 root,
                 mode: "npm",
-                opts: {},
+                opts: { run: { runId: "handoff-refused", env: process.env, captureOriginal } },
                 timeoutMs: 1000,
                 stopProgress: () => {},
               });
@@ -124,6 +126,7 @@ it.each(["runtime", "missing updater"] as const)(
     } else {
       expect(previews[0]).toContain("Reason code: managed-service-handoff-failed");
       expect(previews[0]).not.toContain("[redacted-diagnostic]");
+      expect(captureOriginal).not.toHaveBeenCalled();
     }
     expect(previews[0]).not.toContain("customer-runtime");
     expect(confirm).toHaveBeenCalledOnce();

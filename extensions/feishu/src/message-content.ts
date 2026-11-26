@@ -143,10 +143,7 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
   return body.startsWith("/") && /[\r\n]/.test(body) ? body : body.replace(/\s+/g, " ");
 }
 
-export function formatFeishuMediaContent(
-  parsed: Record<string, unknown>,
-  messageType: string,
-): string {
+function formatFeishuMediaContent(parsed: Record<string, unknown>, messageType: string): string {
   if (messageType === "sticker") {
     const fileKey = normalizeFeishuExternalKey(parsed?.file_key);
     return fileKey ? `<sticker key="${escapeHtml(fileKey)}"/>` : "[Sticker]";
