@@ -22,7 +22,7 @@ Every server start uses the same admission, including the temporary Gateway star
 2. **Compatibility projection** publishes the owner's PID, process start identity, role, and runtime port in the historical state-local lock. Supported older Gateways use it to detect the current process. It is metadata under the process owner, not an independent lifecycle owner.
 3. **Socket bind** binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) as an exclusive TCP listener.
 
-During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. A Gateway in another Linux PID namespace uses the same five-minute limit while the previous Gateway renews its heartbeat; offline maintenance such as Doctor waits up to 95 seconds. Startup logs report the heartbeat age while waiting and the elapsed time when ownership is acquired.
+During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. An owner in another Linux PID namespace is waited on for up to 95 seconds, which covers its 90-second heartbeat expiry after a crash. If it is still renewing its heartbeat after that, startup or Doctor fails as before and can be retried, for example by the container restart policy. Startup logs report the heartbeat age while waiting and the elapsed time when ownership is acquired.
 
 Startup's earlier shared-state discovery also waits up to five minutes for live offline maintenance to finish, including after an update or service restart. It reports the current maintenance PID and role every 30 seconds, then reports admission or failure. Cancellation still ends the wait. The wait never kills the maintenance process, reclaims its live lock, or repeats admitted discovery work; if it expires, let the recorded process finish before retrying startup.
 
@@ -83,8 +83,10 @@ same container can reclaim a lock from its previous PID namespace immediately.
 A replacement container, or one with a custom hostname that cannot be identified
 as the same container, waits while the previous owner is renewing its heartbeat.
 The previous owner normally renews it every 15 seconds. After more than 90
-seconds without renewal, the replacement takes over automatically. A graceful
-shutdown releases the lock without waiting for expiry.
+seconds without renewal, the replacement takes over automatically. If the
+previous owner is still renewing after about 95 seconds, the replacement exits
+as before and its restart policy can retry. A graceful shutdown releases the
+lock without waiting for expiry.
 
 Do not pause a Gateway for longer than 90 seconds while starting a replacement
 on the same state directory. If the old container resumes after takeover, it can

@@ -604,7 +604,7 @@ describe("gateway lock namespaces", () => {
   });
 
   it.each(["crashed", "renewing"] as const)(
-    "waits for a %s foreign-namespace owner until its heartbeat goes stale",
+    "bounds startup waiting for a %s foreign-namespace owner by its heartbeat expiry",
     async (kind) => {
       const env = await makeEnv();
       const namespace = mockLinuxNamespace(env.OPENCLAW_STATE_DIR);
@@ -668,16 +668,14 @@ describe("gateway lock namespaces", () => {
         await vi.advanceTimersByTimeAsync(85_000);
         expect(completed).toBe(false);
         expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(payload);
-        if (kind === "renewing") {
-          // Past the 95 s base limit, within the ordinary five-minute startup wait.
-          await vi.advanceTimersByTimeAsync(95_000);
-          expect(completed).toBe(false);
-          clearInterval(renew);
-          await vi.advanceTimersByTimeAsync(100_000);
-        } else {
-          await vi.advanceTimersByTimeAsync(10_000);
-        }
+        await vi.advanceTimersByTimeAsync(10_000);
         const outcome = await startup;
+        if (kind === "renewing") {
+          // A live foreign owner keeps the bounded refusal it had before this change.
+          expect(outcome).toEqual({ error: expect.any(GatewayLockError) });
+          expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(payload);
+          return;
+        }
         if (!("lock" in outcome)) {
           throw outcome.error;
         }

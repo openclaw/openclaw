@@ -556,10 +556,9 @@ export async function acquireGatewayLock(
             error instanceof GatewayLockNamespaceError &&
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
-            // A readable foreign heartbeat goes stale within the role's ordinary deadline.
+            // A crashed foreign owner's heartbeat goes stale within this wait.
+            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
             const age = error.heartbeatAgeMs;
-            const remaining =
-              (age === undefined ? Math.min(deadlineMs, heartbeatDeadlineMs) : deadlineMs) - now();
             if (remaining <= 0) {
               return false;
             }
