@@ -14,6 +14,7 @@ import {
   GitHubPublicationEvidenceSchema,
   type GitHubPublicationEvidence,
   GitHubPublicationTitleSchema,
+  SessionGitHubPullRequestInspectResultSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
   type SessionGitHubReadinessResult,
@@ -55,6 +56,7 @@ const publicationWorkspaceActions = [
   "readiness",
   "inspect_pr",
   "create_issue",
+  "create_comment",
   "prepare_pr",
   "refresh_base",
   "edit",
@@ -62,6 +64,10 @@ const publicationWorkspaceActions = [
   "request_review",
   "upload_evidence",
 ];
+
+const commentIssueNumber = Type.Optional(
+  SessionGitHubPullRequestInspectResultSchema.properties.number,
+);
 
 export const githubPublishToolDefinition = {
   name: "github_publish",
@@ -74,6 +80,7 @@ export const githubPublishToolDefinition = {
       action: Type.Optional(stringEnum(publicationWorkspaceActions)),
       title: Type.Optional(GitHubPublicationTitleSchema),
       body: GitHubPublicationEditSchema.properties.body,
+      issueNumber: commentIssueNumber,
       draft: Type.Optional(Type.Boolean()),
       workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath,
     },
@@ -138,6 +145,7 @@ function resolveGitHubPublishParameters(params: {
             ),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
+            issueNumber: commentIssueNumber,
             draft: Type.Optional(Type.Boolean()),
             ...(params.workspacePreparationAvailable
               ? { workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath }
@@ -153,10 +161,12 @@ function resolveGitHubPublishParameters(params: {
               "readiness",
               "inspect_pr",
               "create_issue",
+              "create_comment",
               ...publicationOperatorActions,
             ]),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: SessionGitHubPublishParamsSchema.properties.body,
+            issueNumber: commentIssueNumber,
           },
           { additionalProperties: false },
         );
@@ -245,6 +255,7 @@ export function createGitHubPublishTool(
           action?:
             | "readiness"
             | "create_issue"
+            | "create_comment"
             | "inspect_pr"
             | "prepare_pr"
             | "publish"
@@ -254,6 +265,7 @@ export function createGitHubPublishTool(
             | "upload_evidence"
             | GitHubPublicationAction["action"];
           pullRequestUrl?: string;
+          issueNumber?: number;
           evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
@@ -454,6 +466,31 @@ export function createGitHubPublishTool(
             title: input.title,
             ...(input.body !== undefined ? { body: input.body } : {}),
           }),
+        );
+      }
+      if (input.action === "create_comment") {
+        if (
+          input.issueNumber === undefined ||
+          !input.body ||
+          Object.keys(input).some((key) => !["action", "issueNumber", "body"].includes(key))
+        ) {
+          throw new Error(
+            "create_comment accepts only an issueNumber and body for the current project.",
+          );
+        }
+        return guidedResult(
+          githubActionGuidance.create_comment,
+          await callGateway(
+            "sessions.github.action",
+            {
+              action: "create_comment",
+              sessionKey: caller.sessionKey,
+              agentId: caller.agentId,
+              issueNumber: input.issueNumber,
+              body: input.body,
+            },
+            { signal },
+          ),
         );
       }
       if (input.action === "inspect_pr") {

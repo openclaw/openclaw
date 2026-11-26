@@ -5,7 +5,10 @@ import type { AsyncPluginHook } from "./hook-handler.types.js";
  * Final model request. On `runtime: "embedded"`, `payload` is the provider-specific body
  * the transport encodes next. On `runtime: "cli"`, the CLI backend owns its wire request,
  * so `payload` is the text OpenClaw hands it: `{ prompt, prependContext?, appendContext? }`
- * for a turn or a steered input. `messages` is a detached copy of the model-facing
+ * for a turn or a steered input. Native harnesses that accept inline images also
+ * include `images` (image content blocks with optional display names); hooks may
+ * rewrite or remove those images. Other CLI requests remain text-only.
+ * `messages` is a detached copy of the model-facing
  * history, including host-owned metadata such as `__openclaw.senderIsOwner` and input
  * `provenance`; edits to it do not change the request. A compaction summary request
  * serializes older history into one user message, so its `messages` is only that request,

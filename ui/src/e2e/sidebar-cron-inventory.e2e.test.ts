@@ -88,11 +88,26 @@ suite.define(() => {
       const clock = page.locator('.sidebar-rail [data-sidebar-entry="route:cron"] a');
       await expect
         .poll(() => clock.getAttribute("aria-description"))
-        .toBe("An automation has failed");
+        .toBe("An automation needs attention");
+      const finish = async (offset: number, lastRunStatus: "ok" | "error") => {
+        const job = pageResponse(offset).jobs[0]!;
+        await gateway.emitGatewayEvent("cron", {
+          action: "finished",
+          jobId: job.id,
+          job: { ...job, state: { ...job.state, lastRunStatus } },
+        });
+      };
+      await finish(0, "error");
+      await finish(1, "ok");
+      await expect
+        .poll(() => clock.getAttribute("aria-description"))
+        .toBe("An automation needs attention");
       await page.locator(".sidebar-issues-button").click();
       const inbox = page.locator("#sidebar-issues-panel");
       await inbox.locator(".sidebar-issues-panel__empty").waitFor();
       expect(await inbox.getByText(/Report [01]/).count()).toBe(0);
+      await finish(0, "ok");
+      await expect.poll(() => clock.getAttribute("aria-description")).toBeNull();
       expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toEqual([
         expect.objectContaining({ compact: true }),
         expect.objectContaining({ compact: true, offset: 1 }),

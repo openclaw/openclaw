@@ -56,7 +56,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
-} from "../command-auth.js";
+} from "../command-owner-facts.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
@@ -228,9 +228,7 @@ export async function captureSessionEventTargetForHost(
       options.retainRequesterOwner && callerAgentMatches ? caller?.requesterOrigin : undefined;
     const commandOwner =
       requester?.messageProvider && requester.senderId
-        ? await (
-            await import("../command-auth.js")
-          ).prepareCommandOwnerAuthority(
+        ? await prepareCommandOwnerAuthority(
             cfg,
             {
               channel: requester.messageProvider,

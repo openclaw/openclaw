@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { callMeetingToolGateway } from "openclaw/plugin-sdk/meeting-plugin-entry";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
@@ -10,12 +11,8 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetConfig,
-  type GoogleMeetMode,
-  type GoogleMeetTransport,
-} from "./config.js";
+import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
+import { normalizeMode, normalizeTransport } from "./join-options.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
@@ -37,17 +34,6 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
 type GoogleMeetGatewayErrorCode = NonNullable<
   Parameters<GatewayRequestHandlerOptions["respond"]>[2]
 >["code"];
-
-export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
-  return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
-}
-
-export function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  if (value === "realtime") {
-    return "agent";
-  }
-  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
-}
 
 export function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
   const meeting = normalizeOptionalString(value) ?? config.defaults.meeting;
@@ -152,33 +138,14 @@ export async function callGoogleMeetGatewayFromTool(params: {
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
-  const method = googleMeetGatewayMethods[params.action];
-  try {
-    if (params.runtime) {
-      return await params.runtime.gateway.request(method, params.raw, {
-        timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
-        scopes: ["operator.admin"],
-      });
-    }
-    // Standalone agent workers connect as this bundled plugin, not as the
-    // model session; its Gateway methods remain the only exposed actions.
-    const { callGatewayFromCli } = await loadGoogleMeetGatewayRuntimeModule();
-    return await callGatewayFromCli(
-      method,
-      {
-        json: true,
-        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
-      },
-      params.raw,
-      { progress: false, scopes: ["operator.admin"] },
-    );
-  } catch (err) {
-    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
-    if (details && typeof details === "object") {
-      return details;
-    }
-    throw err;
-  }
+  return await callMeetingToolGateway({
+    method: googleMeetGatewayMethods[params.action],
+    params: params.raw,
+    gateway: params.runtime?.gateway,
+    timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+    scopes: ["operator.admin"],
+    loadGatewayCli: loadGoogleMeetGatewayRuntimeModule,
+  });
 }
 
 export function keepTrustedToolAgentId(

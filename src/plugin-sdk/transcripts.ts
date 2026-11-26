@@ -12,3 +12,4 @@ export type {
 } from "../transcripts/types.js";
 export { normalizeTranscriptSourceProviderId } from "../transcripts/provider-registry.js";
 export { resolveTranscriptsConfig } from "../transcripts/config.js";
+export { createTranscriptSpeakerLabels } from "../transcripts/speaker-labels.js";

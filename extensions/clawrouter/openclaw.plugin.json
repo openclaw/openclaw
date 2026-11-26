@@ -11,6 +11,7 @@
     ]
   },
   "enabledByDefault": true,
+  "managesOwnAvailability": true,
   "providers": [
     "clawrouter"
   ],

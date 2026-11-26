@@ -259,9 +259,9 @@ A guest's CLI stays within a session-only device grant. `openclaw gateway call` 
 For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
 [OpenClaw ID members](/concepts/experimental-features#member-roles) use that same
-profile role on every sign-in route. Invite approval and **Access → Change role**
-assign the role to their linked profile; owners and administrators can also use
-`users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
+profile role on every sign-in route. Invite approval assigns the role to their
+linked profile; afterwards owners and administrators change it in
+**Settings → Team → Roles** or with `users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
 `guest` definitions without setting a default. Members with no resolvable role or
 no granted scopes cannot connect. Clearing an assignment exposes any configured
 mapping or default rather than disabling that fallback. Role changes disconnect

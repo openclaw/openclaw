@@ -12,6 +12,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureActiveCronManagementAuthority } from "../cron-creator-authority-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
+import { isSubagentDeliveryWithheld } from "./registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   sameRequesterSettleBatch,
@@ -128,9 +129,7 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
       entry &&
       isSameSubagentRunOwner(entry, binding.entry) &&
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
-      !entry.suppressCompletionDelivery &&
-      !entry.killIntent?.suppressTaskDelivery &&
-      !entry.killReconciliation?.suppressTaskDelivery,
+      !isSubagentDeliveryWithheld(entry),
     );
   }
   let session: PreparedSessionMutationFacts["target"];

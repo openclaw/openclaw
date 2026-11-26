@@ -277,7 +277,7 @@ it("classifies custom conjunctions, alternatives, and unknown PR state", async (
     ],
   );
   expect(read.columns.map((column) => column.id)).toEqual(["review", "active", "no-pr", "other"]);
-  expect(read.warning).toContain("Pull-request facts for 1 session are not loaded yet.");
+  expect(read.warning).toBeUndefined();
   expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
     "facts-unavailable",
   );
@@ -438,9 +438,8 @@ it.each([false, true])(
       { columnId: "stuck" },
       { columnId: "stuck" },
     ]);
-    const suffix = rateLimited ? " (GitHub rate limited)" : "";
     expect(read.warning).toBe(
-      `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+      rateLimited ? "GitHub is rate limiting pull request updates for 4 sessions." : undefined,
     );
     board.state.sessions = [
       { ...rows[0]!, run: "active" },
@@ -741,4 +740,46 @@ it("forwards people views without changing the board or pins", async () => {
   }
   expect(await board.stored()).toEqual(initialBoard);
   expect(await board.pins()).toEqual([]);
+});
+
+it("applies view.agentId before paging without widening board scope", async () => {
+  const mainRow = facts("main-work", { key: "agent:main:work", agentId: "main" });
+  const writerRow = facts("writer-work", { key: "agent:writer:work", agentId: "writer" });
+  const board = await createFixture([mainRow, writerRow], {
+    spec: { scope: { agentIds: ["main"] } },
+  });
+  board.selectFacts.mockClear();
+  const matching = await board.read({ agentId: "main" });
+  expect(board.selectFacts).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ agentId: "main" }),
+  );
+  expect(matching.sessions.map(({ key }) => key)).toEqual([mainRow.key]);
+
+  // Requesting an agent outside the board's saved scope cannot widen board scope.
+  board.selectFacts.mockClear();
+  const outside = await board.read({ agentId: "writer" });
+  expect(outside.sessions).toEqual([]);
+});
+
+it("expires cached projections and wakes the board when PR retryAt becomes due", async () => {
+  const board = await createFixture([facts("one", { pullRequestsUnavailable: true })]);
+  const changed = vi.spyOn(board.store, "announceChangeEpoch");
+  const retryAt = NOW + 10_000;
+  board.state.retryAt = retryAt;
+  const first = await board.read();
+  expect(first.warning).toBeUndefined();
+  expect(changed).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(changed).not.toHaveBeenCalled();
+  expect(await board.read()).toBe(first);
+
+  board.state.sessions = [facts("one", { pullRequests: pr(7) })];
+  board.state.retryAt = undefined;
+  board.state.revision = "pr-ready";
+  await vi.advanceTimersByTimeAsync(1);
+  expect(changed).toHaveBeenCalledOnce();
+  const refreshed = await board.read();
+  expect(refreshed).not.toBe(first);
+  expect(refreshed.sessions[0]?.pullRequests).toEqual(pr(7));
 });
