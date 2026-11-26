@@ -42,22 +42,24 @@ describe("update conversation notices", () => {
     ]);
   });
 
-  it.each(["succeeded", "skipped"] as const)(
-    "names failed maintenance without changing the %s core outcome",
-    (status) => {
+  it.each([
+    ["succeeded", null, "⚠️ OpenClaw updated to 2026.9.2."],
+    ["skipped", "already-current", "✅ OpenClaw is already up to date."],
+    ["skipped", "still-starting", "⏳ OpenClaw is installed and still starting."],
+  ] as const)(
+    "names failed maintenance without changing the %s core outcome (%s)",
+    (status, reason, expectedHeadline) => {
       const action = "Run `openclaw plugins reload brave codex`.";
       const record = {
         status,
         phase: "finished" as const,
-        reason: null,
+        reason,
         after: { version: "2026.9.2" },
         steps: [{ step: "plugins", status: "failed" as const }],
         origin: { nextAction: action },
       };
       const text = renderUpdateRunSummary(record);
-      expect(text).toBe(
-        `⚠️ OpenClaw updated; 2026.9.2 is serving.\nFailed step: plugins.\nNext: ${action}`,
-      );
+      expect(text).toBe(`${expectedHeadline}\nFailed step: plugins.\nNext: ${action}`);
       expect(renderUpdateRunNotice(record, "finished")).toBe(text);
       expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
       expect(record.status).toBe(status);

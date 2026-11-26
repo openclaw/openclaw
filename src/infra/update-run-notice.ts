@@ -70,10 +70,12 @@ export function renderUpdateRunSummary(
       ? `Next: ${run.origin.nextAction}`
       : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
   const failedStep = run.steps?.findLast((step) => step.status === "failed");
-  const finalVersion = run.verification?.runningVersion ?? run.after?.version;
+  const finalVersion = run.after?.version;
   if (failedStep && (run.status === "succeeded" || run.status === "skipped")) {
     return [
-      `⚠️ OpenClaw updated${finalVersion ? `; ${finalVersion} is serving` : ""}.`,
+      run.status === "succeeded"
+        ? `⚠️ OpenClaw updated${finalVersion ? ` to ${finalVersion}` : ""}.`
+        : headline,
       `Failed step: ${failedStep.step}.`,
       run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
     ].join("\n");
@@ -133,14 +135,22 @@ export function renderUpdateRunSummary(
 export function isUpdateRunTerminalNoticeText(text: string): boolean {
   const lines = text.split("\n");
   if (
-    /^⚠️ OpenClaw updated(?:; .+ is serving)?\.$/u.test(lines[0] ?? "") &&
     /^Failed step: .+\.$/u.test(lines[1] ?? "") &&
     (lines.slice(2).join("\n").startsWith("Next: ") ||
       (lines.length === 3 &&
         lines[2] ===
           "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."))
   ) {
-    return true;
+    const headline = lines[0] ?? "";
+    if (/^⚠️ OpenClaw updated(?: to .+)?\.$/u.test(headline)) {
+      return true;
+    }
+    for (const skippedHeadline of SKIPPED_UPDATE_RUN_HEADLINES.values()) {
+      if (headline === skippedHeadline) {
+        return true;
+      }
+    }
+    return headline === "ℹ️ OpenClaw wasn't updated.";
   }
   if (/^✅ OpenClaw updated to .+\.$/u.test(lines[0] ?? "")) {
     return (
