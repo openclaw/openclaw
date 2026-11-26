@@ -82,9 +82,11 @@ async function promoteDailySnippet(workspaceDir: string) {
   return await applyShortTermPromotions({ workspaceDir, candidates, ...thresholds });
 }
 
-it.each([
+it.each<[target: string, via: string]>([
   ["MEMORY.md", "MEMORY.md"],
-  ...(process.platform === "win32" ? [] : [["USER.md", "MEMORY.md -> USER.md"] as const]),
+  ...(process.platform === "win32"
+    ? []
+    : [["USER.md", "MEMORY.md -> USER.md"] as [string, string]]),
 ])("keeps an untrusted %s untrusted across a promotion through %s", async (target) => {
   const workspaceDir = await createWorkspace(`curated-${target}`);
   await fs.writeFile(path.join(workspaceDir, dailyPath), `${snippet}\n`);
