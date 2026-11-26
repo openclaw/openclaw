@@ -1534,26 +1534,6 @@ extension OpenClawChatViewModel {
         self.inFlightSettingsPatchCountsByTarget[target] = remaining
     }
 
-    func sessionSettingsPatchTarget(
-        in sessionKey: String,
-        canonicalSessionKey: String?,
-        agentID: String?,
-        sessionRoutingContract: String?) -> ModelPatchTarget
-    {
-        if canonicalSessionKey == nil,
-           agentID == nil,
-           sessionRoutingContract == nil,
-           sessionKey == self.sessionKey
-        {
-            return self.currentModelPatchTarget()
-        }
-        return modelPatchTarget(
-            sessionKey: sessionKey,
-            canonicalSessionKey: canonicalSessionKey,
-            agentID: agentID,
-            sessionRoutingContract: sessionRoutingContract)
-    }
-
     func waitForPendingSessionSettings(for target: ModelPatchTarget) async {
         guard (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0 else { return }
         await withCheckedContinuation { continuation in

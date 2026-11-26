@@ -297,6 +297,26 @@ extension OpenClawChatViewModel {
             sessionRoutingContract: routeContract)
     }
 
+    func sessionSettingsPatchTarget(
+        in sessionKey: String,
+        canonicalSessionKey: String?,
+        agentID: String?,
+        sessionRoutingContract: String?) -> ModelPatchTarget
+    {
+        if canonicalSessionKey == nil,
+           agentID == nil,
+           sessionRoutingContract == nil,
+           sessionKey == self.sessionKey
+        {
+            return self.currentModelPatchTarget()
+        }
+        return self.modelPatchTarget(
+            sessionKey: sessionKey,
+            canonicalSessionKey: canonicalSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: sessionRoutingContract)
+    }
+
     func sessionEntryForThinking(
         sessionKey: String,
         canonicalSessionKey: String?,
