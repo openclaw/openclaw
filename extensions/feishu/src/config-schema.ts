@@ -6,7 +6,6 @@ import {
   GroupPolicySchema,
   ReplyToModeSchema,
   TtsConfigSchema,
-  buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -389,8 +388,4 @@ export const FeishuConfigSchema = buildMultiAccountChannelSchema(FeishuConfigSch
       });
     }
   }
-});
-
-export const FeishuChannelConfigSchema = buildChannelConfigSchema(FeishuConfigSchema, {
-  jsonSchemaMode: "input",
 });
