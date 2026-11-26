@@ -102,8 +102,10 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     // A settled reply only re-parses when a delta can still change directive syntax.
     let settledMarker = true;
     let visibleMarker = false;
+    let visibleHasMarker = false;
     let audioDirective = false;
     let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+    let visibleOwnership: ReturnType<typeof findCodeOwnership> | undefined;
     const projector: TextProjector = (input) => {
       const appended = input.delta;
       if (appended === null) {
@@ -113,9 +115,11 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         hasMarker = source.includes("[[");
         settledMarker = !hasUnsettledDirectiveMarker(source);
         visibleMarker = hasUnsettledDirectiveMarker(visible);
+        visibleHasMarker = visible.includes("[[");
         audioDirective = AUDIO_DIRECTIVE.test(source);
         identity = visible === source;
         ownership = undefined;
+        visibleOwnership = undefined;
         previousChar = source.slice(-1);
         return { text: visible, delta: null };
       }
@@ -124,17 +128,28 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       }
       // The projection owner extends its settled result instead of re-parsing the whole
       // reply per delta once no `[`, code marker, or open directive can still change it.
-      if (
-        (prefix !== undefined || (settledMarker && !visibleMarker)) &&
-        source.length + appended.length === input.text.length &&
-        APPEND_SAFE_DELTA.test(appended) &&
+      const audioAppendSafe =
+        audioDirective &&
+        !(visible.slice(-1) + appended).includes("[[") &&
+        (!visibleHasMarker ||
+          canReuseMarkdownOwnershipForAppend(
+            visible,
+            appended,
+            (visibleOwnership ??= findCodeOwnership(visible)),
+          ));
+      const proseAppendSafe =
         !audioDirective &&
+        APPEND_SAFE_DELTA.test(appended) &&
         (!hasMarker ||
           canReuseMarkdownOwnershipForAppend(
             source,
             appended,
             (ownership ??= findCodeOwnership(source)),
-          ))
+          ));
+      if (
+        (prefix !== undefined || (settledMarker && !visibleMarker)) &&
+        source.length + appended.length === input.text.length &&
+        (audioAppendSafe || proseAppendSafe)
       ) {
         source = input.text;
         previousChar = appended.slice(-1);
@@ -160,9 +175,11 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       }
       settledMarker = !hasUnsettledDirectiveMarker(source);
       visibleMarker = hasUnsettledDirectiveMarker(visible);
+      visibleHasMarker = visible.includes("[[");
       audioDirective = AUDIO_DIRECTIVE.test(source);
       identity = visible === source;
       ownership = undefined;
+      visibleOwnership = undefined;
       if (identity) {
         return input;
       }

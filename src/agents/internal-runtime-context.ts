@@ -29,7 +29,7 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGI
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
 /** Notice inserted into runtime-generated context blocks. */
-const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -94,7 +94,12 @@ export type CurrentInboundPromptContext = {
 const INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
-const INTERNAL_EVENT_MARKER = "[Internal task completion event]";
+/** Opening line for the legacy undelimited internal-event context format. */
+export const INTERNAL_RUNTIME_CONTEXT_EVENT_MARKER = "[Internal task completion event]";
+
+/** Complete generated prefix for the legacy undelimited internal-event context format. */
+export const INTERNAL_RUNTIME_CONTEXT_EVENT_PREFIX =
+  INTERNAL_CONTEXT_HEADER + INTERNAL_RUNTIME_CONTEXT_EVENT_MARKER;
 
 /** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
@@ -217,12 +222,15 @@ function stripUndelimitedInternalRuntimeContext(text: string): string {
     }
 
     const eventStart = headerStart + INTERNAL_CONTEXT_HEADER.length;
-    if (!next.startsWith(INTERNAL_EVENT_MARKER, eventStart)) {
+    if (!next.startsWith(INTERNAL_RUNTIME_CONTEXT_EVENT_PREFIX, headerStart)) {
       searchFrom = eventStart;
       continue;
     }
 
-    const nextParagraph = next.indexOf("\n\n", eventStart + INTERNAL_EVENT_MARKER.length);
+    const nextParagraph = next.indexOf(
+      "\n\n",
+      eventStart + INTERNAL_RUNTIME_CONTEXT_EVENT_MARKER.length,
+    );
     const blockEnd = nextParagraph === -1 ? next.length : nextParagraph;
 
     const before = next.slice(0, headerStart).trimEnd();
@@ -233,7 +241,7 @@ function stripUndelimitedInternalRuntimeContext(text: string): string {
 }
 
 // Prefaces of carriers persisted before the system prompt explained the markers; kept for stripping.
-const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
+export const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
   "OpenClaw runtime event.",
