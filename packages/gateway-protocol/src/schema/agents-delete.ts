@@ -24,6 +24,8 @@ export const AgentsDeleteResultSchema = closedObject({
           Type.Literal("deleted"),
           Type.Literal("missing"),
         ]),
+        /** Where the copy now lives, for `method: "trash"`, so callers can find or erase it. */
+        trashPath: Type.Optional(NonEmptyString),
       }),
     ),
   ),

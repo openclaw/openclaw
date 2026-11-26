@@ -97,7 +97,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
     },
   );
 
-  it("erases each Trash copy when permanent deletion is requested", async () => {
+  it.each([false, true])("reports or erases each Trash copy (permanent=%s)", async (permanent) => {
     const workspaceDir = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-permanent-"));
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
       agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
@@ -108,14 +108,23 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
     );
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "test-agent",
-      permanent: true,
+      ...(permanent ? { permanent: true } : {}),
     });
     await promise;
 
     const { removed } = expectRespondOk(respond, { ok: true });
-    expect(removed).toContainEqual({ path: workspaceDir, method: "deleted" });
-    expect(removed).not.toContainEqual(expect.objectContaining({ method: "trash" }));
-    expect(mocks.fsRm).toHaveBeenCalledWith(container, { recursive: true, force: true });
+    if (permanent) {
+      expect(removed).toContainEqual({ path: workspaceDir, method: "deleted" });
+      expect(removed).not.toContainEqual(expect.objectContaining({ method: "trash" }));
+      expect(mocks.fsRm).toHaveBeenCalledWith(container, { recursive: true, force: true });
+    } else {
+      expect(removed).toContainEqual({
+        path: workspaceDir,
+        method: "trash",
+        trashPath: `${container}/${path.basename(workspaceDir)}`,
+      });
+      expect(mocks.fsRm).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects permanent deletion that keeps files", async () => {

@@ -118,13 +118,11 @@ export async function removeAgentPath(
         os.tmpdir(),
       ],
     });
-    // A copy that cannot be erased stays in Trash and is reported as such.
-    return {
-      removed: {
-        path: pathname,
-        method: permanent && (await discardTrashedCopy(trashedPath)) ? "deleted" : "trash",
-      },
-    };
+    // A copy that cannot be erased stays in Trash and is reported with its Trash location.
+    if (permanent && (await discardTrashedCopy(trashedPath))) {
+      return { removed: { path: pathname, method: "deleted" } };
+    }
+    return { removed: { path: pathname, method: "trash", trashPath: trashedPath } };
   } catch (error) {
     if (!isMissingPathError(error)) {
       return cleanupFailure(pathname, error);

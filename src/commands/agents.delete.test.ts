@@ -332,7 +332,7 @@ describe("agents delete command", () => {
     const workspace = path.join(state.stateDir, "workspace-ops");
     gatewayMocks.callGateway.mockResolvedValue({
       removedBindings: 0,
-      removed: [{ path: workspace, method: "trash" }],
+      removed: [{ path: workspace, method: "trash", trashPath: "/trash/.fs-safe-trash-1/ws" }],
       failed: [],
     });
     await removeAgent({ permanent: true });
@@ -343,7 +343,21 @@ describe("agents delete command", () => {
       }),
     );
     expect(runtime.error).toHaveBeenCalledWith(
-      `Warning: ${workspace} was moved to Trash but could not be erased; empty Trash to finish.`,
+      `Warning: ${workspace} was moved to Trash (/trash/.fs-safe-trash-1/ws) but could not be erased; empty Trash to finish.`,
+    );
+  });
+
+  it("names the Trash location of each path the Gateway moved", async ({ state }) => {
+    await state.setup();
+    const workspace = path.join(state.stateDir, "workspace-ops");
+    gatewayMocks.callGateway.mockResolvedValue({
+      removedBindings: 0,
+      removed: [{ path: workspace, method: "trash", trashPath: "/trash/.fs-safe-trash-1/ws" }],
+      failed: [],
+    });
+    await removeAgent();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/^Moved to Trash: .*workspace-ops \(\/trash\/\.fs-safe-trash-1\/ws\)$/),
     );
   });
 
@@ -498,7 +512,7 @@ describe("agents delete command", () => {
     expect((await fs.stat(sharedDatabasePath)).isFile()).toBe(true);
     expect(readJson()).toMatchObject({
       removed: expect.arrayContaining(
-        externalFiles.map((file) => ({ path: file, method: "trash" })),
+        externalFiles.map((file) => expect.objectContaining({ path: file, method: "trash" })),
       ),
     });
     expect(readJson()).not.toHaveProperty("purgeFailed");

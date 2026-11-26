@@ -110,9 +110,9 @@ export function registerAgentDeletionAuthorityTests({
     expect(result).not.toHaveProperty("purgeFailed");
     expect(result.removed).toEqual(
       expect.arrayContaining([
-        { path: "/workspace/test-agent", method: "trash" },
-        { path: "/agents/test-agent", method: "trash" },
-        { path: "/transcripts/test-agent", method: "trash" },
+        expect.objectContaining({ path: "/workspace/test-agent", method: "trash" }),
+        expect.objectContaining({ path: "/agents/test-agent", method: "trash" }),
+        expect.objectContaining({ path: "/transcripts/test-agent", method: "trash" }),
       ]),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {

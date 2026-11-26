@@ -111,7 +111,9 @@ function expectDeletionResult(result: unknown, workspace: string) {
   expect(result).toMatchObject({
     ok: true,
     failed: [],
-    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
+    removed: expect.arrayContaining([
+      expect.objectContaining({ path: workspace, method: "trash" }),
+    ]),
   });
   expect(result).not.toHaveProperty("purgeFailed");
 }

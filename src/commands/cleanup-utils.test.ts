@@ -201,13 +201,23 @@ describe("moveToTrash", () => {
       fsSafeMocks.movePathToTrash.mockImplementationOnce(movePathToTrash);
       vi.stubEnv("HOME", home);
       try {
-        await expect(
-          moveToTrashResult(target, createTestRuntime(), undefined, undefined, { permanent }),
-        ).resolves.toEqual({
-          removed: { path: target, method: permanent ? "deleted" : "trash" },
+        const result = await moveToTrashResult(target, createTestRuntime(), undefined, undefined, {
+          permanent,
         });
         await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await fs.readdir(path.join(home, ".Trash"))).toHaveLength(permanent ? 0 : 1);
+        if (permanent) {
+          expect(result).toEqual({ removed: { path: target, method: "deleted" } });
+        } else {
+          expect(result).toEqual({
+            removed: { path: target, method: "trash", trashPath: expect.any(String) },
+          });
+          const trashPath = "removed" in result ? String(result.removed.trashPath) : "";
+          // The reported location is the real Trash copy, so callers can find or erase it.
+          await expect(fs.readFile(path.join(trashPath, "transcript.jsonl"), "utf8")).resolves.toBe(
+            "private",
+          );
+        }
       } finally {
         vi.unstubAllEnvs();
       }

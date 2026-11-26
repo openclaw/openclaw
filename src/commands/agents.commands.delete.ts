@@ -61,6 +61,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
+import { shortenHomePath } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
@@ -224,13 +225,17 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
           `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
         );
       }
-      const keptInTrash = opts.permanent
-        ? (cleanup.removed ?? []).filter((entry) => entry.method === "trash")
-        : [];
-      for (const entry of keptInTrash) {
-        runtime.error(
-          `Warning: ${entry.path} was moved to Trash but could not be erased; empty Trash to finish.`,
-        );
+      const trashed = (cleanup.removed ?? []).filter((entry) => entry.method === "trash");
+      for (const entry of trashed) {
+        const location = entry.trashPath ? ` (${shortenHomePath(entry.trashPath)})` : "";
+        if (opts.permanent) {
+          runtime.error(
+            `Warning: ${entry.path} was moved to Trash${location} but could not be erased; empty Trash to finish.`,
+          );
+        } else if (extra?.transport === "gateway") {
+          // Offline deletion already logged each move as it happened.
+          runtime.log(`Moved to Trash: ${shortenHomePath(entry.path)}${location}`);
+        }
       }
       for (const failure of cleanup.failed ?? []) {
         runtime.error(

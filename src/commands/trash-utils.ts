@@ -74,9 +74,9 @@ export async function moveToTrashResult(
         `Moved to Trash; permanent deletion failed (empty it manually): ${shortenHomePath(trashedPath)}`,
       );
     } else {
-      runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+      runtime.log(`Moved to Trash: ${shortenHomePath(pathname)} (${shortenHomePath(trashedPath)})`);
     }
-    return { removed: { path: pathname, method: "trash" } };
+    return { removed: { path: pathname, method: "trash", trashPath: trashedPath } };
   } catch (error) {
     return trashFailure(pathname, error, runtime);
   }
