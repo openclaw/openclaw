@@ -591,6 +591,32 @@ it("constructs raised manual summary budgets after native sent-tool checkpoint s
   expect(observed).toBe(true);
 });
 
+it("gives every compaction preparation read the configured compaction timeout", async () => {
+  summaryMode = "ok";
+  const fixture = await createFixture();
+  fixture.config.agents!.defaults!.compaction!.timeoutSeconds = 600;
+  await fixture.state.writeConfig(fixture.config);
+  const reader = await import("../../config/sessions/session-compaction-prepared.js");
+  const read = reader.readPreparedSessionCompactionInWorker;
+  const deadlines: [string, number | undefined][] = [];
+  const spy = vi
+    .spyOn(reader, "readPreparedSessionCompactionInWorker")
+    .mockImplementation(async (target, operation, signal, timeoutMs) => {
+      deadlines.push([operation.kind, timeoutMs]);
+      return read(target, operation, signal, timeoutMs);
+    });
+  onTestFinished(() => spy.mockRestore());
+  expect(await compactSession(fixture, undefined, "manual", true)).toMatchObject({
+    ok: true,
+    compacted: true,
+  });
+  // Preflight runs in the Gateway runner; plan and finalize run in the embedded owner.
+  expect(deadlines.map(([kind]) => kind)).toEqual(
+    expect.arrayContaining(["preflight", "plan", "finalize"]),
+  );
+  expect(deadlines.filter(([, timeoutMs]) => timeoutMs !== 600_000)).toEqual([]);
+});
+
 it("keeps required cancellation-settlement floors outside the hook anti-loop boundary", async () => {
   const fixture = await createFixture({ safeguard: true });
   summaryMode = "server-error";

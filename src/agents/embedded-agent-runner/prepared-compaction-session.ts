@@ -55,6 +55,7 @@ import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import type { SettingsManager } from "../sessions/settings-manager.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
+import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { resolveEmbeddedCompactionSafeguard } from "./extensions.js";
 import { getHistoryLimitFromSessionKey } from "./history.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
@@ -109,6 +110,8 @@ export async function prepareEmbeddedCompactionSession(
     model,
   });
   const settings = settingsManager.getCompactionSettings();
+  // Preparation reads the whole active window in one worker task; it gets the compaction budget.
+  const readTimeoutMs = resolveCompactionTimeoutMs(params.config);
   const work = {
     itemId: runtime.diagId,
     settings,
@@ -196,6 +199,7 @@ export async function prepareEmbeddedCompactionSession(
         replay,
       },
       signal,
+      readTimeoutMs,
     );
     assertActive();
     if (value.status !== "prepared" && value.status !== "skipped") {
@@ -301,6 +305,7 @@ export async function prepareEmbeddedCompactionSession(
           target,
           { kind: "render", entries: plan.selections[source], version, maxChars },
           options.signal,
+          readTimeoutMs,
         );
         assertCurrent();
         if (rendered.status !== "rendered") {
@@ -441,6 +446,7 @@ export async function prepareEmbeddedCompactionSession(
           },
         },
         options.signal,
+        readTimeoutMs,
       );
       assertCurrent();
       if (finalized.status !== "finalized") {
