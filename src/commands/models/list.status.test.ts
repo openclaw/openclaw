@@ -53,7 +53,7 @@ const mocks = vi.hoisted(() => {
     }),
     listProviderEnvAuthLookupKeys: vi.fn(() => ["anthropic", "google", "openai", "openai"]),
     listKnownProviderEnvApiKeyNames: vi.fn(() => Object.values(envCandidateMap).flat().toSorted()),
-    getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
+    getShellEnvAppliedKeys: vi.fn(() => ["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
     createConfigIO: vi.fn(() => ({ configPath: "/tmp/openclaw-dev/openclaw.json" })),
     loadConfig: vi.fn(),
@@ -130,6 +130,7 @@ vi.mock("../../agents/model-selection-cli.js", () => ({
 }));
 vi.mock("../../infra/shell-env.js", () => ({
   getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
+  isShellEnvAppliedKey: (key: string) => mocks.getShellEnvAppliedKeys().includes(key),
   shouldEnableShellEnvFallback: mocks.shouldEnableShellEnvFallback,
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
