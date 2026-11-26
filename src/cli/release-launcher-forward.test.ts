@@ -51,6 +51,7 @@ it.skipIf(process.platform === "win32").each([
   metadata.writable = scenario.writable;
   vi.spyOn(process, "geteuid").mockReturnValue(0);
   vi.stubEnv("OPENCLAW_RELEASE_LAUNCHER_FORWARDED", undefined);
+  const warning = vi.spyOn(console, "error").mockImplementation(() => {});
   const argv = [...process.argv];
   try {
     expect(await forwardToReleaseLauncher(pathToFileURL(packageRoot + path.sep))).toBe(
@@ -58,8 +59,16 @@ it.skipIf(process.platform === "win32").each([
     );
     if (scenario.forwards) {
       expect(await fs.readFile(witness, "utf8")).toBe("executed");
+      expect(warning).not.toHaveBeenCalled();
     } else {
       await expect(fs.stat(witness)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`Not forwarding to release launcher ${launcher}`),
+      );
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("Continuing with this installed package"),
+      );
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("Run as the service account"));
     }
   } finally {
     process.argv.splice(0, process.argv.length, ...argv);

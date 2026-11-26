@@ -37,12 +37,14 @@ function readLauncher(root) {
       const launcher = readFileSync(marker, "utf8").trim();
       if (launcher && existsSync(launcher)) {
         if (process.geteuid?.() === 0) {
-          // Root only loads launchers whose paths are controlled by root.
-          if (!rootControlsLauncherPath(launcher)) {
-            return null;
-          }
           const canonical = realpathSync(launcher);
-          if (canonical !== launcher && !rootControlsLauncherPath(canonical)) {
+          if (
+            !rootControlsLauncherPath(launcher) ||
+            (canonical !== launcher && !rootControlsLauncherPath(canonical))
+          ) {
+            console.error(
+              `OpenClaw: Not forwarding to release launcher ${launcher}: root requires root-owned files and parent directories that are not group/other writable. Continuing with this installed package. Run as the service account with its existing state selectors, or have the deployment owner fix launcher ownership and permissions.`,
+            );
             return null;
           }
           return canonical;
