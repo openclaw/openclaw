@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import path from "node:path";
+import path from "node:path/posix";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 
 // <mach/host_info.h>: HOST_VM_INFO returns vm_statistics_data_t, 14 natural_t counters.
@@ -139,8 +139,9 @@ function listCgroupV2Directories({ ancestorsOnly = false } = {}): CgroupV2Direct
       }
       directory = path.dirname(directory);
     }
-    for (const [, , , , point] of views) {
-      if (point === mount) {
+    for (const [, , parent, , point] of views) {
+      // A mount attached to a hidden lower view cannot cover the selected controller.
+      if (parent !== controller[1] || point === mount) {
         continue;
       }
       const child = decodeMountInfoPath(point!);

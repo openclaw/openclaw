@@ -260,6 +260,16 @@ it("maps only the service's visible cgroup controllers in a delegated mount", ()
   expect(isMemoryPressureHigh()).toBe(true);
   files.set(
     "/proc/self/mountinfo",
+    [
+      `1 0 0:27 / ${mount} rw - cgroup2 cgroup rw`,
+      `2 1 0:27 /other ${parent} rw - cgroup2 cgroup rw`,
+      view,
+    ].join("\n"),
+  );
+  expect(isMemoryPressureHigh()).toBe(true);
+  expect(readEffectiveMemoryLimit().memoryLimitBytes).toBe(1000);
+  files.set(
+    "/proc/self/mountinfo",
     `${view}\n31 30 0:27 /other ${mount}/sibling rw - cgroup2 cgroup rw`,
   );
   expect(isMemoryPressureHigh()).toBe(true);
