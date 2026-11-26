@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { DictationTranscriptSegments } from "../../../../src/shared/dictation-transcript.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -76,7 +77,7 @@ export class ComposerDictationCommits {
   /** Delivers once earlier recordings settle; a retired recording resolves false. */
   add(
     session: ComposerDictationSession,
-    deliver: (transcript: string) => boolean,
+    deliver: (transcript: string) => boolean | Promise<boolean>,
   ): Promise<boolean> {
     const previous = this.tail;
     this.sessions.add(session);
@@ -85,7 +86,14 @@ export class ComposerDictationCommits {
       .catch(() => "")
       .then(async (transcript) => {
         await previous;
-        return this.sessions.delete(session) && deliver(transcript);
+        if (!this.sessions.has(session)) {
+          return false;
+        }
+        try {
+          return await deliver(transcript);
+        } finally {
+          this.sessions.delete(session);
+        }
       })
       .catch(() => false);
     this.tail = settled;
@@ -111,8 +119,9 @@ function insertComposerDictation(
   transcript: string,
   selectionStart: number,
   selectionEnd: number,
+  exact = false,
 ): { value: string; caret: number } {
-  const spoken = transcript.trim();
+  const spoken = exact ? transcript : transcript.trim();
   if (!spoken) {
     return { value, caret: selectionEnd };
   }
@@ -143,6 +152,7 @@ export function placeComposerDictation(
   live: DictationSelection,
   late?: true,
   preservePreview?: true,
+  exact?: true,
 ): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
   const selection =
     captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
@@ -151,6 +161,7 @@ export function placeComposerDictation(
     transcript,
     selection.start,
     selection.end,
+    exact,
   );
   return {
     ...insertion,
@@ -198,6 +209,7 @@ export class ComposerDictationSession {
   private resumeFinalDrain: (() => void) | null = null;
   private heardSpeech = false;
   private silentSamples = 0;
+  private readonly refinementSegments: DictationTranscriptSegments | undefined;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -206,8 +218,40 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      refinement?: boolean;
     },
-  ) {}
+  ) {
+    this.refinementSegments = options?.refinement ? new DictationTranscriptSegments() : undefined;
+  }
+
+  refinementTranscript() {
+    return this.refinementSegments?.snapshot();
+  }
+
+  private recordRefinementTranscript(payload: Record<string, unknown>): void {
+    if (!this.refinementSegments || typeof payload.text !== "string" || !payload.text) {
+      return;
+    }
+    const event = asOptionalObjectRecord(payload.talkEvent);
+    if (
+      !event ||
+      typeof event.turnId !== "string" ||
+      typeof event.seq !== "number" ||
+      event.mode !== "transcription" ||
+      event.brain !== "none" ||
+      (event.type !== "transcript.done" && event.type !== "transcript.delta")
+    ) {
+      this.refinementSegments.unqualified();
+      return;
+    }
+    this.refinementSegments.record({
+      id: event.turnId,
+      position: event.seq,
+      revision: event.seq,
+      text: payload.text.trim(),
+      final: event.type === "transcript.done",
+    });
+  }
 
   start(): Promise<void> {
     this.startPromise ??= this.startInternal();
@@ -262,6 +306,7 @@ export class ComposerDictationSession {
         (payload.type === "transcript" || payload.type === "partial") &&
         typeof payload.text === "string"
       ) {
+        this.recordRefinementTranscript(payload);
         const text = payload.text.trim();
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
@@ -477,6 +522,7 @@ export class ComposerDictationSession {
           typeof payload.text === "string" &&
           payload.text.trim()
         ) {
+          this.recordRefinementTranscript(payload);
           transcripts.push(payload.text.trim());
           partial = "";
         } else if (payload.type === "error" || payload.type === "close") {

@@ -3,11 +3,13 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { showVoiceSnippetCatalog } from "./components/voice-snippets.tsx";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
+import type { ComposerSnippetCapture, ComposerSnippetTarget } from "./composer-snippets.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -33,6 +35,7 @@ type ComposerDictationOwnerOptions = {
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
+  captureSnippetTarget?: () => ComposerSnippetTarget | undefined;
 };
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
@@ -53,6 +56,9 @@ export class ComposerDictationOwner extends EventTarget {
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
+  private snippetCapture: ComposerSnippetCapture | undefined;
+  private snippetDialog: AbortController | undefined;
+  private generation = 0;
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
@@ -84,7 +90,20 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get locksComposer(): boolean {
-    return this.phase !== "idle";
+    return this.phase !== "idle" || this.snippetCapture?.reviewing === true;
+  }
+
+  async openSnippetCatalog(): Promise<void> {
+    const client = this.options.client;
+    if (!client || !this.options.connected || this.locksComposer) {
+      return;
+    }
+    this.snippetDialog?.abort();
+    const dialog = new AbortController();
+    this.snippetDialog = dialog;
+    if (!dialog.signal.aborted && this.options.client === client) {
+      await showVoiceSnippetCatalog({ client, signal: dialog.signal });
+    }
   }
 
   /** Places a transcript in a draft; there is nothing to place before capture loads. */
@@ -108,6 +127,24 @@ export class ComposerDictationOwner extends EventTarget {
     return this.stop({ commit: true });
   }
 
+  /** An enabled snippet capture always ends in an editable draft, including Send/Enter. */
+  async finishForSend(): Promise<boolean> {
+    const capture = this.snippetCapture;
+    const generation = this.generation;
+    const { client, draftKey, sessionKey } = this.options;
+    const requiresReview = capture?.requiresReview;
+    const committed = await this.finishActive();
+    return (
+      committed &&
+      !requiresReview &&
+      !capture?.requiresReview &&
+      this.generation === generation &&
+      this.options.client === client &&
+      this.options.draftKey === draftKey &&
+      this.options.sessionKey === sessionKey
+    );
+  }
+
   startDirect(): boolean {
     if (this.phase !== "idle" || !this.canHold()) {
       return false;
@@ -128,6 +165,10 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     this.options = options;
+    if (!options.connected || !options.enabled || options.realtimeTalkActive) {
+      this.snippetCapture?.cancel();
+      this.snippetDialog?.abort();
+    }
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -213,6 +254,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
+    this.snippetCapture?.cancel();
+    this.snippetDialog?.abort();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -317,6 +360,9 @@ export class ComposerDictationOwner extends EventTarget {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     const captureStart = {};
+    this.snippetCapture?.cancel();
+    const generation = ++this.generation;
+    const snippetTarget = this.options.captureSnippetTarget?.();
     this.captureStart = captureStart;
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
@@ -344,6 +390,26 @@ export class ComposerDictationOwner extends EventTarget {
       }
       describeStartError = describeDictationStartError;
       const commits = (this.commits ??= new ComposerDictationCommits());
+      if (this.options.captureSnippetTarget) {
+        const { ComposerSnippetCapture } = await import("./composer-snippets.ts");
+        if (this.captureStart !== captureStart || this.disposed || !this.canHold()) {
+          return;
+        }
+        const capture = new ComposerSnippetCapture({
+          client,
+          captureId: crypto.randomUUID(),
+          generation,
+          target: snippetTarget,
+          isCurrent: () => this.snippetCapture === capture && !this.disposed,
+          changed: () => this.dispatchEvent(new Event("change")),
+          unavailable: () =>
+            this.options.onError(t("chat.dictation.snippets.error.unavailable"), {
+              kind: "interrupted",
+              preservesText: true,
+            }),
+        });
+        this.snippetCapture = capture;
+      }
       const session = new ComposerDictationSession(
         client,
         {
@@ -368,7 +434,7 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey },
+        { sessionKey, refinement: Boolean(this.options.captureSnippetTarget) },
       );
       this.session = session;
       await session.start();
@@ -390,6 +456,21 @@ export class ComposerDictationOwner extends EventTarget {
     const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
+    const snippetCapture = this.snippetCapture;
+    const client = this.options.client;
+    const connection = client?.connectSent;
+    const draftKey = this.options.draftKey;
+    const sessionKey = this.options.sessionKey;
+    const commits = this.commits;
+    const admitsDelivery = () =>
+      !this.disposed &&
+      this.options.client === client &&
+      this.options.draftKey === draftKey &&
+      this.options.sessionKey === sessionKey &&
+      (!client?.connected || client.connectSent === connection) &&
+      this.options.enabled &&
+      !this.options.realtimeTalkActive &&
+      Boolean(session && commits?.has(session));
     if (!session) {
       this.setPhase("idle");
       this.releasePlayback();
@@ -399,22 +480,28 @@ export class ComposerDictationOwner extends EventTarget {
     this.session = null;
     this.setPhase("idle");
     if (!options.commit) {
+      snippetCapture?.cancel();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    const committed = this.commits!.add(session, (lateTranscript) => {
+    const committed = this.commits!.add(session, async (lateTranscript) => {
       this.releasePlayback();
       this.pendingCommitsChanged();
-      if (
-        !lateTranscript ||
-        !wasActive ||
-        this.disposed ||
-        !this.options.enabled ||
-        this.options.realtimeTalkActive
-      ) {
+      if (!lateTranscript || !wasActive || !admitsDelivery()) {
+        return false;
+      }
+      if (snippetCapture) {
+        const outcome = await snippetCapture.finish(lateTranscript, session.refinementTranscript());
+        if (outcome !== undefined) {
+          return outcome;
+        }
+      }
+      // Catalog discovery can await even with snippets off; it cannot move a
+      // delayed raw result into a replacement account, draft, or agent route.
+      if (!admitsDelivery()) {
         return false;
       }
       if (this.active) {
@@ -426,7 +513,10 @@ export class ComposerDictationOwner extends EventTarget {
       return true;
     });
     this.pendingCommitsChanged();
-    return committed;
+    return committed.finally(() => {
+      this.releasePlayback();
+      this.pendingCommitsChanged();
+    });
   }
 
   private releasePlayback(): void {

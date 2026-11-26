@@ -2,7 +2,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { TalkEvent } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -108,6 +110,167 @@ const expectDraft = async (textarea: Locator, value: string) => {
 };
 
 suite.define(() => {
+  it("reviews a literal voice snippet and adds it to an editable draft without sending", () =>
+    suite.withPage(
+      {
+        permissions: ["microphone"],
+        viewport: { width: 1280, height: 900 },
+        colorScheme: "dark",
+        reducedMotion: "reduce",
+      },
+      async ({ page }) => {
+        const invocation = "insert snippet support";
+        const body =
+          "  007 {customer}\nCafe\u0301 · 東京 👩🏽‍💻\n\n$(echo literal) insert snippet support  \n";
+        const prefsKey = "dictation.snippets";
+        const { gateway, textarea, admit, close } = await openDictation(page, {
+          presenceUsers: [{ id: "synthetic-snippet-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          methodResponses: {
+            "users.prefs.get": {
+              cases: [
+                {
+                  match: { keys: [prefsKey] },
+                  response: {
+                    status: "ok",
+                    entries: {
+                      [prefsKey]: {
+                        schemaVersion: 1,
+                        revision: 1,
+                        enabled: true,
+                        snippets: [
+                          {
+                            schemaVersion: 1,
+                            id: "support-static",
+                            revision: 1,
+                            name: "Support reply",
+                            locale: "en-US",
+                            triggers: ["support"],
+                            body,
+                            enabled: true,
+                            sensitivity: "sensitive",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+                { response: { status: "ok", entries: {} } },
+              ],
+            },
+          },
+        });
+        await textarea.waitFor();
+        await button(page, "Start voice input", true).hover();
+        await page.mouse.down();
+        await admit();
+        await page.mouse.up();
+        await page.locator(".agent-chat__dictation-phase--listening").waitFor();
+        await gateway.waitForRequest("users.prefs.get", {
+          match: { keys: [prefsKey] },
+          exactParams: true,
+        });
+        expect(
+          (await gateway.getRequests("talk.session.create")).map(({ params }) => params),
+        ).toEqual([
+          {
+            sessionKey: "agent:main:main",
+            mode: "transcription",
+            transport: "gateway-relay",
+            brain: "none",
+          },
+        ]);
+        // Synthetic media and canonical relay receipts exercise the real capture owner.
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: sessionId,
+          type: "transcript",
+          text: invocation,
+          final: true,
+          talkEvent: {
+            id: "snippet-transcript-final",
+            type: "transcript.done",
+            sessionId,
+            turnId: "snippet-turn",
+            seq: 1,
+            timestamp: "2026-01-01T00:00:00.000Z",
+            mode: "transcription",
+            transport: "gateway-relay",
+            brain: "none",
+            final: true,
+            payload: { text: invocation },
+          } satisfies TalkEvent,
+        });
+        await expectDraft(textarea, invocation);
+        await button(page, "Stop and keep text", true).click();
+        await gateway.waitForRequest("talk.session.close");
+        await close();
+        expect(
+          (await gateway.getRequests("talk.session.close")).map(({ params }) => params),
+        ).toEqual([{ sessionId }]);
+
+        const dialog = page.getByRole("dialog", { name: "Review dictation snippets", exact: true });
+        const preview = dialog.getByRole("textbox", {
+          name: "Complete dictation preview",
+          exact: true,
+        });
+        await expectDraft(preview, body);
+        await expect.poll(() => isFocused(preview)).toBe(true);
+        await expectDraft(textarea, "");
+        const reviewFrame = await takeControlUiScreenshotFrame(page, dialog, [preview], {
+          animations: "disabled",
+          elements: [preview],
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "voice-snippets-review-after-clean.png"),
+          reviewFrame.png,
+        );
+        await preview.press("Tab");
+        await expect
+          .poll(() => isFocused(dialog.getByRole("button", { name: "Cancel", exact: true })))
+          .toBe(true);
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => isFocused(dialog.getByRole("button", { name: "Add to draft", exact: true })))
+          .toBe(true);
+        await page.keyboard.press("Enter");
+        await dialog.waitFor({ state: "detached" });
+        await expectDraft(textarea, body);
+        await expect.poll(() => textarea.isEditable()).toBe(true);
+        await expect.poll(() => isFocused(textarea)).toBe(true);
+        const draftFrame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".agent-chat__composer-shell"),
+          [textarea],
+          { animations: "disabled", elements: [textarea] },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, "voice-snippets-draft-after-clean.png"),
+          draftFrame.png,
+        );
+        expect(
+          (
+            await gateway.getRequests(
+              "users.prefs.get",
+              { keys: [prefsKey] },
+              { exactParams: true },
+            )
+          ).length,
+        ).toBeGreaterThanOrEqual(3);
+        expect(
+          (await gateway.getRequests()).filter(({ method }) =>
+            [
+              "chat.send",
+              "sessions.dispatch",
+              "agent",
+              "talk.client.toolCall",
+              "talk.session.submitToolResult",
+            ].includes(method),
+          ),
+        ).toEqual([]);
+      },
+    ));
+
   it("dictates for a session-only guest without reading operator configuration", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {

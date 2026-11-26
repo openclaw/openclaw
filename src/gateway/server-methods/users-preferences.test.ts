@@ -10,6 +10,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  createVoiceSnippetCatalog,
+  editVoiceSnippetCatalog,
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+} from "../../shared/voice-snippets.js";
 import { holdNextReply } from "../../state/github-publication.worker.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -759,5 +764,74 @@ test("merges concurrent failure receipts for the operator and never advances one
     expect((await preferences.getCanonicalUserPreferences(other, [receiptKey]))?.entries).toEqual({
       [receiptKey]: { a: 20, b: 30 },
     });
+  });
+});
+
+test("snippet preferences require a direct personal source and never appear in broad reads or events", async () => {
+  return withPreferenceState(async (prepareProfiles) => {
+    const profile = ensureProfileForEmail("snippet-owner@example.test");
+    await prepareProfiles();
+    const client = createOperatorWsClient({ connId: profile.id });
+    attachProfile(client, profile);
+    const notifications = vi.fn();
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => ({}),
+      getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
+      broadcastToConnIds: notifications,
+    });
+    const key = VOICE_SNIPPETS_PREFERENCE_KEY;
+    const catalog = editVoiceSnippetCatalog(createVoiceSnippetCatalog(), {
+      type: "save",
+      expectedRevision: null,
+      snippet: {
+        id: "private",
+        name: "Private",
+        locale: "en-US",
+        triggers: ["confidential trigger"],
+        body: "confidential body {{name}}",
+        enabled: true,
+        sensitivity: "sensitive",
+      },
+    });
+    const request = async (method: string, params: Record<string, unknown>) => {
+      const { respond, request: pending } = dispatch(client, method, params, context);
+      await pending;
+      return respond.mock.calls[0];
+    };
+    expect(
+      await request("users.prefs.set", {
+        entries: { [key]: catalog },
+        expectedEntries: { [key]: null },
+      }),
+    ).toEqual([true, { status: "ok" }, undefined]);
+    expect(await request("users.prefs.get", {})).toEqual(preferenceReply({}));
+    expect(await request("users.prefs.get", { keys: [key] })).toEqual(
+      preferenceReply({ [key]: catalog }),
+    );
+    expect(notifications).toHaveBeenCalledWith(
+      "users.prefs.changed",
+      { profileId: profile.id, keys: [key] },
+      new Set([client.connId]),
+    );
+    expect(JSON.stringify(notifications.mock.calls)).not.toContain("confidential");
+    client.internal = { syntheticClient: true };
+    expect(await request("users.prefs.get", { keys: [key] })).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("personal connection") },
+    ]);
+    expect(
+      await request("users.prefs.set", {
+        entries: { [key]: { ...catalog, revision: 2 } },
+        expectedEntries: { [key]: catalog },
+      }),
+    ).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("personal connection") },
+    ]);
+    expect(
+      (await preferences.getCanonicalUserPreferences(profile.id, [key]))?.entries[key],
+    ).toEqual(catalog);
   });
 });

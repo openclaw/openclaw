@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createMemo, createRoot, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
@@ -13,6 +13,7 @@ import {
   createSessionCompanionAsk,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { DirectDictationControl } from "./composer-direct-dictation.ts";
 import "./components/chat-session-rail.tsx";
 
@@ -300,6 +301,22 @@ describe("ChatSessionRailElement", () => {
     return element;
   }
 
+  function activeDictation(finish: () => Promise<boolean>) {
+    const owner = new ComposerDictationOwner({
+      client: null,
+      connected: false,
+      enabled: false,
+      realtimeTalkActive: false,
+      onCommit: () => {},
+      onError: () => {},
+    });
+    vi.spyOn(owner, "active", "get").mockReturnValue(true);
+    const finishForSend = vi.spyOn(owner, "finishForSend").mockImplementation(finish);
+    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue(owner);
+    onTestFinished(() => owner.dispose());
+    return finishForSend;
+  }
+
   it("consumes only the latest visible focus intent and retires it on disconnect", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const initial = vi.fn(() => true);
@@ -522,16 +539,11 @@ describe("ChatSessionRailElement", () => {
       onSubmit,
       companion: { turns: [], loading: false, draft: "Summarize" },
     });
-    const finishActive = vi.fn(async () => {
+    const finishForSend = activeDictation(async () => {
       element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
       await element.updateComplete;
       return true;
     });
-    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
-      active: true,
-      finalizing: false,
-      finishActive,
-    } as never);
 
     element
       .querySelector("textarea")!
@@ -541,7 +553,32 @@ describe("ChatSessionRailElement", () => {
     await vi.waitFor(() =>
       expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
     );
-    expect(finishActive).toHaveBeenCalledOnce();
+    expect(finishForSend).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { reason: "requires snippet review", maySend: false, move: false },
+    { reason: "changes session while finishing", maySend: true, move: true },
+  ])("does not send a keyboard submit when dictation $reason", async ({ maySend, move }) => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: { turns: [], loading: false, draft: "Keep this draft" },
+    });
+    const finished = Promise.withResolvers<boolean>();
+    const finishForSend = activeDictation(() => finished.promise);
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(finishForSend).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+    if (move) {
+      element.sessionKey = "agent:main:other";
+      await element.updateComplete;
+    }
+    finished.resolve(maySend);
+    await finished.promise;
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

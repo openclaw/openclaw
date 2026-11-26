@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { createComponent } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createVoiceSnippetCatalog,
+  VOICE_SNIPPETS_PREFERENCE_KEY,
+} from "../../../../src/shared/voice-snippets.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
-import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
+import { mountComposerDictationButton } from "./composer-dictation-button.test-support.ts";
+import { ComposerDictationSession } from "./composer-dictation-session.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
 
@@ -54,6 +56,8 @@ class MockAudioContext extends MockDictationAudioContext {
 
 function createClient(): GatewayBrowserClient {
   return {
+    connected: true,
+    connectSent: Promise.resolve(true),
     addEventListener: vi.fn((listener: GatewayListener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -163,28 +167,12 @@ function createHarness(overrides: Omit<Partial<ControllerOptions>, "client"> = {
   return { ...harness, target };
 }
 
-// Drives the shipped microphone button, whose click routing differs from the
-// controller-only harness above once dictation is active.
 function createButtonHarness() {
-  const container = document.createElement("div");
-  document.body.append(container);
   const harness = controllerFixture();
-  const { controller } = harness;
-  mountSolid(
-    () => {
-      const owner = projectOwner(controller, (value) => value);
-      return createComponent(renderComposerVoiceButtonSolid, {
-        connected: true,
-        readDictation: owner.read,
-        onDictationPointerDown: (event) => controller.handlePointerDown(event),
-        onToggleVoice: vi.fn(),
-      });
-    },
-    { container },
-  );
-  const target = container.querySelector("button");
-  assert.isNotNull(target);
-  return { ...harness, target: pointerTarget(target) };
+  return {
+    ...harness,
+    target: pointerTarget(mountComposerDictationButton(harness.controller)),
+  };
 }
 
 async function startDirect(controller: ComposerDictationOwner) {
@@ -272,6 +260,75 @@ afterEach(() => {
 });
 
 describe("ComposerDictationOwner", () => {
+  it.each(["cancel", "draft switch"])(
+    "retires raw delivery during an unresolved snippet lookup after %s",
+    async (transition) => {
+      const read = createDeferred<unknown>();
+      const implementation = request.getMockImplementation();
+      request.mockImplementation((method, params) =>
+        method === "users.prefs.get" ? read.promise : implementation!(method, params),
+      );
+      const { controller, options, onCommit, onError } = createHarness({
+        draftKey: "first",
+        captureSnippetTarget: () => undefined,
+      });
+      await startDirect(controller);
+      transcript("insert snippet reply");
+      const finished = controller.finishActive();
+      emit({ type: "close", reason: "completed" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.transcribing).toBe(true);
+      if (transition === "cancel") {
+        controller.cancel();
+      } else {
+        controller.update({ ...options, draftKey: "second" });
+      }
+      read.resolve({
+        status: "ok",
+        entries: { [VOICE_SNIPPETS_PREFERENCE_KEY]: createVoiceSnippetCatalog() },
+      });
+      await expect(finished).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["ok", "no_durable_identity"])(
+    "keeps feature-off final text on the original draft with preference status %s",
+    async (status) => {
+      const implementation = request.getMockImplementation();
+      request.mockImplementation((method, params) =>
+        method === "users.prefs.get"
+          ? Promise.resolve({ status, entries: {} })
+          : implementation!(method, params),
+      );
+      const commitSnippet = vi.fn(() => true);
+      const { controller, onCommit, onError } = createHarness({
+        captureSnippetTarget: () => ({ isCurrent: () => true, commit: commitSnippet }),
+      });
+      await startDirect(controller);
+      transcript("insert snippet reply");
+      const finished = controller.finishForSend();
+      emit({ type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(true);
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("insert snippet reply", true);
+      expect(commitSnippet).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("talk.session.create", {
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      expect(
+        request.mock.calls
+          .map(([method]) => method)
+          .filter(
+            (method) =>
+              !["talk.session.create", "talk.session.close", "users.prefs.get"].includes(method),
+          ),
+      ).toEqual([]);
+    },
+  );
   it.each(["cancel", "restart", "draft switch"])(
     "does not revive a retired lazy capture after %s",
     async (transition) => {
@@ -538,6 +595,29 @@ describe("ComposerDictationOwner", () => {
       );
     },
   );
+
+  it("retires an older Send action when a new capture starts while keeping queued plain text", async () => {
+    const read = createDeferred<unknown>();
+    let created = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "users.prefs.get") {
+        return read.promise;
+      }
+      return method === "talk.session.create"
+        ? sessionResult(`dictation-${++created}`)
+        : { ok: true };
+    });
+    const { controller, onCommit } = createHarness({ captureSnippetTarget: () => undefined });
+    await startDirect(controller);
+    transcript("First words");
+    const maySend = controller.finishForSend();
+    emit({ type: "close", reason: "completed" });
+    await startDirect(controller);
+    read.resolve({ status: "ok", entries: {} });
+    await expect(maySend).resolves.toBe(false);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("First words", true, true);
+    expect(controller.active).toBe(true);
+  });
 
   it("keeps stopped text when the next recording cannot open its microphone", async () => {
     const { controller, onCommit } = createHarness();
@@ -953,13 +1033,6 @@ describe("composer microphone button", () => {
     expect(request).not.toHaveBeenCalled();
     expect(controller.locksComposer).toBe(false);
   });
-});
-
-it("placeComposerDictation spaces inserted and replaced selections", () => {
-  const place = (start: number, end: number, spoken: string) =>
-    placeComposerDictation(spoken, null, { start, end, value: "hello world" });
-  expect(place(6, 6, "brave new")).toMatchObject({ value: "hello brave new world", caret: 16 });
-  expect(place(6, 11, "there")).toMatchObject({ value: "hello there", caret: 11 });
 });
 
 it.each([false, true])(

@@ -248,6 +248,16 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         </button>
       </openclaw-tooltip>
       <ComposerContent>{props.microphonePicker}</ComposerContent>
+      <Show when={props.readDictation}>
+        <button
+          type="button"
+          class="btn btn--sm"
+          disabled={!props.connected || props.disabled || holding()}
+          onClick={() => void props.readDictation?.()?.openSnippetCatalog()}
+        >
+          {t("chat.composer.voiceSnippets")}
+        </button>
+      </Show>
     </span>
   );
 }
@@ -268,7 +278,9 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
-    await dictation.finishActive();
+    if (!(await dictation.finishForSend())) {
+      return;
+    }
     // Keep the initiating input action when asynchronous dictation finishes.
     send(event);
   };

@@ -173,6 +173,7 @@ const catalog = {
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
       voiceGestureHint: "Tap for voice chat · Hold to dictate",
+      voiceSnippets: "Voice snippets",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
