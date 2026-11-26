@@ -124,6 +124,9 @@ export async function findReusableDoctorCapture(
           }
         }
       }
+      if (await hasChangedSqlitePages(directory, preview, check)) {
+        return undefined;
+      }
       const ref = {
         directory,
         manifestPath: path.join(directory, "manifest.json"),
@@ -197,6 +200,75 @@ async function hasVisibleSourceChange(manifest: UpdateRecoveryBackupManifest): P
         if (sidecar && (!sidecar.isFile() || sidecar.size !== 0)) {
           return true;
         }
+      }
+    }
+  }
+  return false;
+}
+
+const SQLITE_MAGIC = Buffer.from("SQLite format 3\0", "latin1");
+const PAGE_COMPARISON_CHUNK = 1024 * 1024;
+
+function sqlitePageSize(header: Buffer): number | undefined {
+  if (header.length < 100 || !header.subarray(0, 16).equals(SQLITE_MAGIC)) {
+    return undefined;
+  }
+  const size = header.readUInt16BE(16);
+  return size === 1 ? 65536 : size;
+}
+
+function hasFullAutoVacuum(header: Buffer): boolean {
+  return header.readUInt32BE(52) !== 0 && header.readUInt32BE(64) === 0;
+}
+
+/**
+ * Capture images copy every page after the first verbatim and change only the
+ * journal mode on page 1; FULL auto-vacuum is excluded because that change may
+ * rewrite pages. A differing later page therefore proves the fresh image would
+ * differ too. Smallest databases first, so a changed state database is cheap.
+ */
+async function hasChangedSqlitePages(
+  directory: string,
+  manifest: UpdateRecoveryBackupManifest,
+  check: () => void,
+): Promise<boolean> {
+  const databases = manifest.entries
+    .flatMap((entry) => (entry.kind === "file" && entry.sqlite ? [entry] : []))
+    .toSorted((left, right) => left.size - right.size);
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+  for (const entry of databases) {
+    check();
+    await using source = await fs.open(entry.sourcePath, flags);
+    await using payload = await fs.open(path.join(directory, entry.archivePath), flags);
+    const sourceHeader = Buffer.alloc(100);
+    const payloadHeader = Buffer.alloc(100);
+    const [{ bytesRead: sourceHeaderBytes }, { bytesRead: payloadHeaderBytes }] = await Promise.all(
+      [source.read(sourceHeader, 0, 100, 0), payload.read(payloadHeader, 0, 100, 0)],
+    );
+    const pageSize = sqlitePageSize(sourceHeader.subarray(0, sourceHeaderBytes));
+    if (
+      pageSize === undefined ||
+      pageSize !== sqlitePageSize(payloadHeader.subarray(0, payloadHeaderBytes)) ||
+      hasFullAutoVacuum(sourceHeader) ||
+      hasFullAutoVacuum(payloadHeader)
+    ) {
+      continue;
+    }
+    const left = Buffer.alloc(PAGE_COMPARISON_CHUNK);
+    const right = Buffer.alloc(PAGE_COMPARISON_CHUNK);
+    for (let offset = pageSize; offset < entry.size; offset += PAGE_COMPARISON_CHUNK) {
+      check();
+      const length = Math.min(PAGE_COMPARISON_CHUNK, entry.size - offset);
+      const [a, b] = await Promise.all([
+        source.read(left, 0, length, offset),
+        payload.read(right, 0, length, offset),
+      ]);
+      if (
+        a.bytesRead !== length ||
+        b.bytesRead !== length ||
+        !left.subarray(0, length).equals(right.subarray(0, length))
+      ) {
+        return true;
       }
     }
   }

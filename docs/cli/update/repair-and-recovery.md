@@ -198,9 +198,10 @@ standalone copy, Doctor can reuse its newest sealed standalone capture after
 verifying every retained file and comparing the complete current config/includes,
 database ownership and discovery, declared plugin resources, directory contents,
 links, missing paths, permissions, and file digests. It first compares the recorded
-kinds, permissions and sizes with the current files; a visible difference, such as a
-database the Gateway grew since the capture, skips that verification and takes a fresh
-capture directly. Timestamps alone never prove
+kinds, permissions and sizes with the current files, then every SQLite page after the
+first with the retained image (except FULL auto-vacuum databases, whose image may differ
+there). A difference, such as rows the Gateway wrote since the capture, skips that
+verification and takes a fresh capture directly. Timestamps alone never prove
 that the source is unchanged. SQLite reuse requires exact consolidated bytes and
 no nonempty WAL or rollback journal. Doctor uses the same private snapshot producer
 as fresh capture and compares each image's complete digest, including normalized
