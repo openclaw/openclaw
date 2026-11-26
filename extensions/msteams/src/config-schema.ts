@@ -107,7 +107,7 @@ const msTeamsChannelConfigUiHints = {
   },
   graphMediaFallback: {
     label: "MS Teams Graph Media Fallback",
-    help: "Query Microsoft Graph for unresolved channel or group-chat HTML media. Adds one lookup per matching message when enabled (default: false).",
+    help: "Query Microsoft Graph for unresolved channel or group-chat HTML media, and for personal-chat messages that arrive without a file. Adds one lookup per matching message when enabled; personal chats need Chat.Read.All (default: false).",
   },
   requireMentionInBotThreads: {
     label: "Require Mentions in Bot Threads",

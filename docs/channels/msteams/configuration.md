@@ -106,7 +106,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
-- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](/channels/msteams/manifest-and-permissions#channel%2Fgroup-file-recovery-graphmediafallback)).
+- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers, and for personal-chat messages that arrive without a file (personal chats need `Chat.Read.All`; default `false`; see [Channel/group file recovery](/channels/msteams/manifest-and-permissions#channel%2Fgroup-file-recovery-graphmediafallback)).
 - `channels.msteams.mediaMaxMb`: per-channel media size limit override in MB. Falls back to `agents.defaults.mediaMaxMb` when unset.
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.requireMentionInBotThreads`: override mention gating in channel threads rooted at this bot's tracked messages. Omitted preserves current behavior; see [Bot-created threads](/channels/msteams/access-control#mentions-in-bot-created-threads).
