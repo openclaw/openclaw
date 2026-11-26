@@ -11,71 +11,86 @@ import {
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
 import { createChatFixture } from "./gateway-chat-fixture.test-support.js";
+
+type ChatFixtureConfigure = NonNullable<Parameters<typeof createChatFixture>[1]>["configure"] & {};
 import { buildOpenAiResponsesTestModel } from "./test-openai-responses-model.js";
+
+const sessionKey = "agent:main:main";
+const summaryModel = "preflight-summary";
 
 function writeEvent(response: ServerResponse, event: object) {
   response.write("data: " + JSON.stringify(event) + "\n\n");
 }
 
+function openMessageStream(response: ServerResponse, id: string) {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  writeEvent(response, {
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id, type: "message", role: "assistant", status: "in_progress", content: [] },
+  });
+}
+
+function writeDelta(response: ServerResponse, id: string, delta: string) {
+  writeEvent(response, {
+    type: "response.output_text.delta",
+    item_id: id,
+    output_index: 0,
+    content_index: 0,
+    delta,
+  });
+}
+
+const configurePreflight =
+  (compaction: Record<string, unknown>): ChatFixtureConfigure =>
+  (config, model) => ({
+    ...config,
+    agents: {
+      defaults: {
+        ...config.agents?.defaults,
+        timeoutSeconds: 900,
+        compaction: {
+          model: model.providerId + "/" + summaryModel,
+          keepRecentTokens: 1,
+          recentTurnsPreserve: 1,
+          qualityGuard: { enabled: false },
+          ...compaction,
+        },
+      },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        [model.providerId]: {
+          ...model.config,
+          models: [...model.config.models, buildOpenAiResponsesTestModel(summaryModel)],
+        },
+      },
+    },
+    plugins: {
+      allow: ["memory-core"],
+      // The chat fixture intentionally starts with an empty bundled plugin directory.
+      load: { paths: [path.resolve("extensions/memory-core")] },
+      slots: { memory: "memory-core" },
+      entries: { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } },
+    },
+  });
+
 it(
   "delivers a Control UI turn after a private memory flush streams past six minutes",
   { timeout: 180_000 },
   async () => {
-    const sessionKey = "agent:main:main";
-    const summaryModel = "preflight-summary";
     // NO_REPLY also appears in the foreground runtime instructions.
     const flushDeltas = ["Private", " watchdog", " canary", " 48c7ef."];
     const flushText = flushDeltas.join("");
     const requests: string[] = [];
     let flush: ServerResponse | undefined;
     const fixture = createChatFixture("preflight-watchdog", {
-      configure: (config, model) => ({
-        ...config,
-        agents: {
-          defaults: {
-            ...config.agents?.defaults,
-            timeoutSeconds: 900,
-            compaction: {
-              model: model.providerId + "/" + summaryModel,
-              keepRecentTokens: 1,
-              recentTurnsPreserve: 1,
-              qualityGuard: { enabled: false },
-              memoryFlush: { enabled: true },
-            },
-          },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            [model.providerId]: {
-              ...model.config,
-              models: [...model.config.models, buildOpenAiResponsesTestModel(summaryModel)],
-            },
-          },
-        },
-        plugins: {
-          allow: ["memory-core"],
-          // The chat fixture intentionally starts with an empty bundled plugin directory.
-          load: { paths: [path.resolve("extensions/memory-core")] },
-          slots: { memory: "memory-core" },
-          entries: { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } },
-        },
-      }),
+      configure: configurePreflight({ memoryFlush: { enabled: true } }),
       respond: async (body, _sessionId, response) => {
         if (body.includes("Pre-compaction memory flush")) {
           requests.push("flush");
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          writeEvent(response, {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              id: "msg_flush",
-              type: "message",
-              role: "assistant",
-              status: "in_progress",
-              content: [],
-            },
-          });
+          openMessageStream(response, "msg_flush");
           flush = response;
           return undefined;
         }
@@ -91,14 +106,7 @@ it(
     let offset = 0;
     try {
       await fixture.start();
-      const sessionId = randomUUID();
-      const scope = {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await seedLongSession(scope, 120_000);
+      const scope = await seedLongSession(120_000);
       vi.spyOn(Date, "now").mockImplementation(() => wallNow() + offset);
       const { runId } = await fixture.client.request<{ runId: string }>("chat.send", {
         sessionKey,
@@ -113,13 +121,7 @@ it(
       for (const delta of flushDeltas) {
         offset += 100_000;
         expect((await operation.watchdog.tick()).action).toBe("observe");
-        writeEvent(response, {
-          type: "response.output_text.delta",
-          item_id: "msg_flush",
-          output_index: 0,
-          content_index: 0,
-          delta,
-        });
+        writeDelta(response, "msg_flush", delta);
         await vi.waitFor(() => {
           const { lastProgressReason, semanticProgressAtMs } = operation.watchdog.snapshot();
           expect(lastProgressReason).toBe("memory_flush:model_output");
@@ -169,8 +171,6 @@ it.each([
   "ends a Control UI turn promptly when its $stage stalls without output",
   { timeout: 180_000 },
   async ({ stage, modelRef }) => {
-    const sessionKey = "agent:main:main";
-    const summaryModel = "preflight-summary";
     const silenceSeconds = 5;
     const requests: string[] = [];
     const held: ServerResponse[] = [];
@@ -182,37 +182,9 @@ it.each([
           chatEvents.push(payload as Record<string, unknown>);
         }
       },
-      configure: (config, model) => ({
-        ...config,
-        agents: {
-          defaults: {
-            ...config.agents?.defaults,
-            timeoutSeconds: 900,
-            compaction: {
-              model: model.providerId + "/" + summaryModel,
-              keepRecentTokens: 1,
-              recentTurnsPreserve: 1,
-              qualityGuard: { enabled: false },
-              timeoutSeconds: silenceSeconds,
-              memoryFlush: { enabled: stage === "memory flush" },
-            },
-          },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            [model.providerId]: {
-              ...model.config,
-              models: [...model.config.models, buildOpenAiResponsesTestModel(summaryModel)],
-            },
-          },
-        },
-        plugins: {
-          allow: ["memory-core"],
-          load: { paths: [path.resolve("extensions/memory-core")] },
-          slots: { memory: "memory-core" },
-          entries: { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } },
-        },
+      configure: configurePreflight({
+        timeoutSeconds: silenceSeconds,
+        memoryFlush: { enabled: stage === "memory flush" },
       }),
       respond: async (body, _sessionId, response) => {
         const { model } = JSON.parse(body) as { model: string };
@@ -227,25 +199,8 @@ it.each([
           (stage === "compaction" && kind === "summary")
         ) {
           // Accept the request, emit one delta, then go silent while keeping the socket open.
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          writeEvent(response, {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              id: "msg_stall",
-              type: "message",
-              role: "assistant",
-              status: "in_progress",
-              content: [],
-            },
-          });
-          writeEvent(response, {
-            type: "response.output_text.delta",
-            item_id: "msg_stall",
-            output_index: 0,
-            content_index: 0,
-            delta: "Partial",
-          });
+          openMessageStream(response, "msg_stall");
+          writeDelta(response, "msg_stall", "Partial");
           lastOutputAt = performance.now();
           held.push(response);
           return undefined;
@@ -257,14 +212,7 @@ it.each([
     });
     try {
       await fixture.start();
-      const sessionId = randomUUID();
-      const scope = {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await seedLongSession(scope, 140_000);
+      const scope = await seedLongSession(140_000);
       const { runId } = await fixture.client.request<{ runId: string }>("chat.send", {
         sessionKey,
         message: "Answer after maintenance.",
@@ -276,18 +224,7 @@ it.each([
         { timeoutMs: 65_000 },
       );
       const failedAfterMs = performance.now() - lastOutputAt;
-      const finals = chatEvents.filter((event) => event.runId === runId && event.state !== "delta");
-      const delivered = JSON.stringify(finals);
-      console.log(
-        "[preflight-stall] " +
-          JSON.stringify({
-            stage,
-            wait,
-            requests,
-            failedAfterMs: Math.round(failedAfterMs),
-            finals,
-          }),
-      );
+      const delivered = JSON.stringify(chatEvents.filter((event) => event.runId === runId));
       // Bounded by the configured silence window, far below the 360s reply watchdog.
       expect(failedAfterMs).toBeGreaterThanOrEqual(silenceSeconds * 1000 - 250);
       expect(failedAfterMs).toBeLessThan(silenceSeconds * 1000 + 15_000);
@@ -316,11 +253,14 @@ it.each([
   },
 );
 
-async function seedLongSession(
-  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
-  totalTokens: number,
-) {
+async function seedLongSession(totalTokens: number) {
   const now = Date.now();
+  const scope = {
+    agentId: "main",
+    sessionId: randomUUID(),
+    sessionKey,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
   await upsertSessionEntryCore(scope, {
     sessionId: scope.sessionId,
     updatedAt: now,
@@ -352,4 +292,5 @@ async function seedLongSession(
       },
     });
   }
+  return scope;
 }

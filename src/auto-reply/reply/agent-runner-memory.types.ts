@@ -4,7 +4,6 @@ import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
-import type { PreflightStallError } from "./preflight-stall.js";
 import type { FollowupRun } from "./queue/types.js";
 
 export type MemoryFlushOutcome = "skipped" | "completed" | "failed" | "exhausted";
@@ -13,7 +12,7 @@ export type MemoryFlushResult = {
   sessionEntry?: SessionEntry;
   outcome: MemoryFlushOutcome;
   /** The flush went quiet for the compaction progress window; a waiting preflight fails on it. */
-  stall?: PreflightStallError;
+  stall?: Error;
 };
 
 export type MemoryFlushRunParams = {
