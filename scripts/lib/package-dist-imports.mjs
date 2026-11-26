@@ -320,6 +320,10 @@ export function collectPackageDistImports(params) {
       continue;
     }
     const source = preparePackageDistJavaScript(importerPath, params.readText(importerPath));
+    const probeStartedAt = performance.now();
+    console.error(
+      `package-probe: parse start ${JSON.stringify(importerPath)} bytes=${Buffer.byteLength(source)}`,
+    );
     appendImportEdges(
       source,
       importerPath,
@@ -330,6 +334,9 @@ export function collectPackageDistImports(params) {
       params.onLiteralCall,
       params.onImportOccurrence,
       controlUiImports,
+    );
+    console.error(
+      `package-probe: parse end ${JSON.stringify(importerPath)} ms=${Math.round(performance.now() - probeStartedAt)}`,
     );
   }
 
