@@ -247,6 +247,16 @@ reject the batch before mutation. To archive an eligible current session, use a 
 its archive is deferred until the run finishes, while a batch reports that
 current-session target as failed and continues with the others.
 
+To snooze an eligible session, pass `snoozedUntil` as a future Unix timestamp in
+milliseconds, or `null` to wake it early. When an agent snoozes its own session,
+its final reply stays in the transcript. A newer user message accepted after the
+request cancels the pending snooze, even if it steers the same run or is queued.
+If the write returns an error, OpenClaw checks the snooze time once without
+retrying. A matching time or newer user choice needs no notice. Otherwise,
+the original chat says whether the time isn’t set or couldn’t be confirmed.
+When the deadline passes, the session returns to the Active sidebar; the deadline
+does not start an agent run.
+
 Use `sessions_create` for independent sessions. For deliberately supervised child work, use `sessions_spawn` with `visible: true`. Pass `group` to place that child in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. The spawn path enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.

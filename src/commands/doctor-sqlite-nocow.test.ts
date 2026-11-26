@@ -27,7 +27,11 @@ import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifa
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
-import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
+import {
+  checkDoctorSqliteNoCowPending,
+  inspectDoctorSqliteNoCow,
+  repairDoctorSqliteNoCow,
+} from "./doctor-sqlite-nocow.js";
 import {
   baseAcl,
   inheritedDefaultAcl,
@@ -262,6 +266,26 @@ it("reports existing CoW stores, skips other filesystems and explains missing to
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes).toEqual([]);
   vi.mocked(isSqlitePathOnBtrfs).mockReturnValue(true);
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes.join(",")).toContain("lsattr is unavailable");
+});
+
+it("decides pending NOCOW work without changing the store", () => {
+  seedDatabase();
+  const family = [directory, sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`];
+  const snapshot = () =>
+    family.map((pathname) => {
+      const stat = fs.statSync(pathname, { bigint: true });
+      return [pathname, stat.isFile() ? fs.readFileSync(pathname) : null, stat.mtimeNs, stat.ino];
+    });
+  const before = snapshot();
+  const decide = () => checkDoctorSqliteNoCowPending(inspectDoctorSqliteNoCow([sqlitePath]));
+
+  expect(decide()).toBe("work");
+  fixture.attributes = true;
+  expect(decide()).toBe("none");
+  fixture.tools = "unavailable";
+  expect(decide()).toBe("undecidable");
+
+  expect(snapshot()).toEqual(before);
 });
 
 it.each(["exchange-timeout", "different-owner"] as const)(

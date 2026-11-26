@@ -56,6 +56,7 @@ import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
 import { patchPersonalSessionPins } from "./sessions-patch-personal-pins.js";
 import { projectSessionPatchManyResult } from "./sessions-patch-response.js";
+import { getDeferredSelfSnoozeChat } from "./sessions-patch-self-snooze.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -163,6 +164,7 @@ function createSessionPatchHandler(
         diagnostics,
         archiveUndo: archive.caller,
         participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
+        deferredSelfSnooze: request.many ? undefined : getDeferredSelfSnoozeChat(request.params),
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
@@ -497,6 +499,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
               {
                 owner,
                 assignedBy,
+                // Re-assigning the current owner keeps when they became owner; spawned
+                // children compare it with their creation to detect a re-owned parent.
+                ...(target.entry.owner?.actor.type === owner.type &&
+                target.entry.owner.actor.id === owner.id
+                  ? { assignedAt: target.entry.owner.assignedAt }
+                  : {}),
                 expectedSessionId,
                 expectedEntry: {
                   ...sharingExpectedEntry(target),

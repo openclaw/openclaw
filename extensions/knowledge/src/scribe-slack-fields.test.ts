@@ -2,7 +2,8 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
-import { defaultOptions, scribeById, scribeSetup, setupPrompt } from "./scribes-catalog.js";
+import { openSettingsDialog } from "./scribe-settings-dialog.js";
+import { defaultOptions, runPrompt, scribeById, scribeSetup } from "./scribes-catalog.js";
 import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
 
 const slack = scribeById("slack")!;
@@ -31,6 +32,7 @@ const open = (
     agentName: "Main",
     detection: { plugins: { slack: readiness }, ...(tokens && { tokens: { slack: tokens } }) },
     canWrite: true,
+    canAdmin: true,
     basePath: "/ui",
     start: async () => {},
   });
@@ -45,7 +47,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   expect(box(without, "scribe-slack-user-token").disabled).toBe(true);
   expect(without.textContent).toContain("No Slack user token is configured");
   expect(without.querySelector("textarea")!.value).toBe(
-    setupPrompt(scribeSetup("slack", "ongoing", defaultOptions("slack"), timezone)),
+    runPrompt(scribeSetup("slack", "ongoing", defaultOptions("slack"), timezone)),
   );
   document.body.replaceChildren();
 
@@ -54,7 +56,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   box(withToken, "scribe-slack-user-token").click();
   box(withToken, "scribe-slack-dms").click();
   expect(withToken.querySelector("textarea")!.value).toBe(
-    setupPrompt(
+    runPrompt(
       scribeSetup(
         "slack",
         "ongoing",
@@ -90,4 +92,20 @@ it("blocks starting until the Slack account runs, and connects it on the Channel
   pluginButton("/ui", slack.plugin!, "needs-sign-in").click();
   pluginButton("/ui", slack.plugin!, "missing").click();
   expect(assign.mock.calls).toEqual([["/ui/settings/channels"], ["/ui/plugins/openclaw/slack"]]);
+});
+
+it("lets a saved user-token opt-in be turned off after the user token is gone", () => {
+  const dialog = openSettingsDialog({
+    scribe: slack,
+    detection: { plugins: { slack: "ready" }, tokens: { slack: { bot: true, user: false } } },
+    options: { since: "7d", userToken: true, dms: false },
+    save: async () => {},
+  })!;
+  const userToken = box(dialog, "scribe-slack-user-token");
+  const save = [...dialog.querySelectorAll("button")].find(
+    (b) => b.textContent === "Save settings",
+  )!;
+  expect([userToken.checked, userToken.disabled, save.disabled]).toEqual([true, false, true]);
+  userToken.click();
+  expect(save.disabled).toBe(false);
 });

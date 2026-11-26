@@ -36,6 +36,7 @@ import {
   maybeRunCliInContainerMock,
   makeProgram,
 } from "./run-main.test-support.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
@@ -102,6 +103,58 @@ describe("runCli exit behavior", () => {
     await runCli(cliArgs("plugins", "late"));
     expect(phases.at(-1)).not.toBe(owner);
     expect(getPluginCache()).toBe(outside);
+  });
+
+  it("shares process failure listeners across completed CLI calls", async () => {
+    const args = cliArgs("plugins", "list");
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    buildProgramMock.mockReturnValue(makeProgram("plugins", async () => {}));
+
+    await runCli(args);
+    const exceptions = process.listeners("uncaughtException");
+    const rejections = process.listeners("unhandledRejection");
+    await runCli(args);
+
+    expect(process.listeners("uncaughtException")).toEqual(exceptions);
+    expect(process.listeners("unhandledRejection")).toEqual(rejections);
+  });
+
+  it("restores the outer command's diagnostics and releases argv in late callbacks", async () => {
+    const { handleCliUncaughtException } = await import("./failure-output.js");
+    const { registerSignalExitOwner } = await import("./signal-exit-barrier.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const previousArgv = process.argv;
+    process.argv = cliArgs("plugins", "list");
+    onTestFinished(() => {
+      process.argv = previousArgv;
+    });
+    onTestFinished(registerSignalExitOwner(() => {}));
+    using json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const report = (expectJson: boolean) => {
+      json.mockClear();
+      consoleError.mockClear();
+      handleCliUncaughtException(new Error("fixture failure"));
+      expect(consoleError).toHaveBeenCalled();
+      expect(json).toHaveBeenCalledTimes(expectJson ? 1 : 0);
+    };
+    let late: (() => void) | undefined;
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    buildProgramMock
+      .mockReturnValueOnce(
+        makeProgram("plugins", async () => {
+          report(true);
+          const resume = AsyncLocalStorage.snapshot();
+          late = () => resume(() => report(false));
+          await runCli(cliArgs("plugins", "list"));
+          report(true);
+        }),
+      )
+      .mockReturnValueOnce(makeProgram("plugins", async () => report(false)));
+
+    await runCli(cliArgs("plugins", "list", "--json"));
+    expect(late).toBeDefined();
+    late?.();
   });
 
   it("renders nodes help from startup metadata without building the full program", async () => {

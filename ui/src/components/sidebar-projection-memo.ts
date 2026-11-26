@@ -24,6 +24,8 @@ import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visib
 import {
   type SidebarSavedPinTime,
   isListedInPinnedSection,
+  sidebarPinnedSessionRows,
+  type SidebarPinZone,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
@@ -77,6 +79,7 @@ export type SidebarProjectionHost = {
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
+  reconciledSidebarZone(rows: SidebarRecentSession[]): SidebarPinZone;
   catalogSessionRows(): ReadonlyMap<string, SidebarRecentSession>;
 };
 
@@ -179,7 +182,17 @@ export function memoizedSidebarSections(
       return host.sessionProjection.project({
         rows,
         selectedSessionKey: isSessionRouteId(host.activeRouteId) ? host.getRouteSessionKey() : null,
-        referencedRows: [...catalogRows.values()],
+        // An eligible personal pin can own an open branch outside every filtered section.
+        referencedRows: [
+          ...catalogRows.values(),
+          ...(pinnedKeys.size
+            ? sidebarPinnedSessionRows(
+                host.reconciledSidebarZone(rows),
+                context?.sessions.archiveVisibility,
+                pinTime,
+              )
+            : []),
+        ],
         sections,
         pinnedKeys,
         pinTime,

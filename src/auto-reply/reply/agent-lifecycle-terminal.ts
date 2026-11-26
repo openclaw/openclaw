@@ -105,8 +105,10 @@ export function createAgentLifecycleTerminalBackstop(params: {
   // Preparation can fail before a lifecycle start. Capture its real boundary
   // without signaling readiness; an observed model start replaces it below.
   let startedAt = params.startedAt ?? Date.now();
+  let observedBackendStart = false;
   const beginAttempt = () => {
     if (state.kind !== "emitted") {
+      observedBackendStart = false;
       state = { kind: "pending", metadata: {} };
     }
   };
@@ -118,6 +120,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     const phase = readStringValue(evt.data.phase);
     if (phase === "start") {
       beginAttempt();
+      observedBackendStart = true;
       if (typeof evt.data.startedAt === "number") {
         startedAt = evt.data.startedAt;
       }
@@ -204,7 +207,13 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    Object.assign(data, workspaceFailure ? undefined : extraData);
+    if (!workspaceFailure) {
+      Object.assign(data, extraData);
+      // Admission also has a run ID. Only the backend start identifies an executing attempt at shutdown.
+      if (observedBackendStart && data.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
+        data.executionStarted ??= true;
+      }
+    }
     return {
       runId: params.runId,
       lifecycleGeneration: params.getLifecycleGeneration(),

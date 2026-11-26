@@ -21,7 +21,11 @@ import {
 } from "./sender-identity.js";
 
 export function resolveOwnerAllowFromList(
-  params: AllowFromParams & { providerId?: ChannelId; allowFrom?: Array<string | number> },
+  params: AllowFromParams & {
+    providerId?: ChannelId;
+    allowFrom?: Array<string | number>;
+    migrationDeferredChannels?: readonly string[];
+  },
 ): string[] {
   const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -40,18 +44,24 @@ export function resolveOwnerAllowFromList(
       filtered.push(trimmed);
       continue;
     }
-    // Typed direct targets are canonical for plugins that require the user kind.
-    // Their allowlist formatter owns the conversion to a native sender identity.
-    if (
-      !params.providerId ||
-      channel !== params.providerId ||
-      (normalizeChatChannelId(prefix) &&
-        /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
-        params.plugin?.messaging?.directTargetStyle !== "user-prefixed")
-    ) {
+    if (channel !== params.providerId) {
       continue;
     }
     const remainder = trimmed.slice(separatorIndex + 1).trim();
+    // Normally the channel formats its typed direct target. A delegated update may lack the
+    // formatter while Doctor owns the channel plugin's migration; the exact user ID still names
+    // the owner. Without the plugin, its target style is unknown, so this accepts the typed
+    // form for any deferred channel; the ID must still match the sender exactly.
+    if (
+      normalizeChatChannelId(prefix) &&
+      /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
+      params.plugin?.messaging?.directTargetStyle !== "user-prefixed"
+    ) {
+      if (!params.plugin && params.migrationDeferredChannels?.includes(channel)) {
+        filtered.push(remainder.slice("user:".length));
+      }
+      continue;
+    }
     if (remainder) {
       filtered.push(remainder);
     }
@@ -73,12 +83,22 @@ export function resolveConfiguredCommandOwners(
 export function isConfiguredCommandOwner(
   cfg: OpenClawConfig,
   requester: { channel?: string; accountId?: string; senderId?: string; senderE164?: string },
+  options: { migrationDeferredChannels?: readonly string[] } = {},
 ): boolean {
   const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
-  const owners = resolveConfiguredCommandOwners(cfg, requester);
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  const owners = stripWildcardAllowFrom(
+    resolveOwnerAllowFromList({
+      cfg,
+      plugin,
+      providerId,
+      accountId: requester.accountId,
+      ...options,
+    }),
+  );
   return resolveSenderCandidates({
     cfg,
-    plugin: providerId ? getLoadedChannelPluginForRead(providerId) : undefined,
+    plugin,
     accountId: requester.accountId,
     senderId: requester.senderId,
     senderE164: requester.senderE164,

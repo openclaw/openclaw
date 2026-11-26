@@ -1,45 +1,45 @@
-// Genuine fork-point T -> tested merge T+1 -> projected rollback state -> genuine T.
+// Genuine fork-point T -> tested merge T+1 -> resident rollback -> genuine T.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createReaderFixture, smokeReaderFixture } from "./reader-fixture.mjs";
-import { startNodeFixture } from "./release-process.mjs";
 import {
-  inspectFixtureStores,
-  restoreRaisedFloorStores,
-  snapshotFixtureStores,
-} from "./schema-store-facts.mjs";
+  createReaderFixture,
+  runReaderCommand,
+  smokeRunningReaderFixture,
+} from "./reader-fixture.mjs";
+import { killFixtureProcessGroup, startNodeFixture } from "./release-process.mjs";
+import { inspectFixtureStores } from "./schema-store-facts.mjs";
 
 const barrierPath = fileURLToPath(new URL("./schema-downgrade-barrier.mjs", import.meta.url));
 const positiveVersion = (value) => Number.isSafeInteger(value) && value > 0;
 const errorText = (error) => String(error?.message ?? error).slice(-4096);
 const fileSha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-// The controller and its receipt consumer use the same classification of observed facts.
-// ReaderFloor capability comes from candidate source provenance, not column presence:
-// strict writers legitimately omit a floor, meaning their current version is required.
+// The controller and its receipt consumer classify the same observed store facts.
 /**
  * @param {{
- *   before: ReturnType<typeof snapshotFixtureStores>,
+ *   before: ReturnType<typeof inspectFixtureStores>,
  *   after: ReturnType<typeof inspectFixtureStores>,
+ *   rolledBack?: ReturnType<typeof inspectFixtureStores>,
  *   schemaVersions: { state: number, agent: number },
- *   readerFloorSupported?: boolean,
- *   smoke?: Partial<Awaited<ReturnType<typeof smokeReaderFixture>>> | null,
- *   projection?: ReturnType<typeof restoreRaisedFloorStores> | null,
+ *   smoke?: {
+ *     status: string,
+ *     failureKind?: "setup" | "compatibility",
+ *     failure?: { message: string, command?: unknown },
+ *     gateway?: { error?: string },
+ *   } | null,
  * }} params
  */
 export function classifySchemaDowngrade({
   before,
   after,
+  rolledBack,
   schemaVersions,
-  readerFloorSupported = false,
   smoke = null,
-  projection = null,
 }) {
-  const mode = readerFloorSupported ? "enforced" : "report-only";
   const structuralFailures = [];
   const compatibilityFailures = [];
   const fail = (relativePath, message) => structuralFailures.push({ relativePath, message });
@@ -77,9 +77,7 @@ export function classifySchemaDowngrade({
       prior.role !== store.role ||
       prior.minReader !== store.minReader ||
       prior.hasMinReader !== store.hasMinReader;
-    if (!prior) {
-      fail(store.relativePath, "Candidate created a store without a T preimage");
-    }
+    // A newly created store has a null preimage; the resident owns its removal.
     if (prior && prior.role !== store.role) {
       fail(store.relativePath, "Candidate changed the store owner");
     }
@@ -112,39 +110,56 @@ export function classifySchemaDowngrade({
       fail(store.relativePath, "Candidate removed a seeded store");
     }
   }
-  if (projection && projection.unrestoredRaised.length) {
-    fail(null, "Default rollback projection left raised-floor stores unrestored");
+  if (rolledBack) {
+    const final = new Map(rolledBack.map((store) => [store.relativePath, store]));
+    if (final.size !== rolledBack.length) {
+      fail(null, "Duplicate physical store paths after resident rollback");
+    }
+    for (const store of stores) {
+      const prior = previous.get(store.relativePath);
+      if (!prior) {
+        continue;
+      }
+      const restored = final.get(store.relativePath);
+      const expected = store.raised ? prior : current.get(store.relativePath);
+      if (
+        !restored ||
+        restored.role !== expected.role ||
+        restored.version !== expected.version ||
+        restored.minReader !== expected.minReader ||
+        restored.integrity !== "ok"
+      ) {
+        fail(
+          store.relativePath,
+          store.raised
+            ? "Resident did not restore the raised-floor store to T's committed schema/floor"
+            : "Resident did not retain T+1's unraised store schema/floor",
+        );
+      }
+    }
   }
   if (smoke?.failureKind === "setup" || smoke?.gateway?.error) {
     fail(null, smoke.failure?.message ?? smoke.gateway?.error ?? "T reader setup failed");
   } else if (smoke && smoke.status !== "passed") {
-    // All raised stores are restored by the default projection. Even an authentic
-    // T schema refusal is a failure here: it cannot excuse an unraised store.
+    // The real resident has already rolled back. No T refusal can excuse a
+    // store that should have been restored or an incompatible additive step.
     compatibilityFailures.push({
       message: smoke.failure?.message ?? "T reader smoke did not pass",
     });
   }
-  const failed =
-    structuralFailures.length > 0 || (readerFloorSupported && compatibilityFailures.length > 0);
-  const result = failed
-    ? "failed"
-    : !smoke
-      ? "pending"
-      : readerFloorSupported
-        ? "passed"
-        : "report-only";
+  const failed = structuralFailures.length > 0 || compatibilityFailures.length > 0;
+  const result = failed ? "failed" : !smoke || !rolledBack ? "pending" : "passed";
   return {
-    mode,
+    mode: "enforced",
     result,
-    readerFloorSupported,
     stores,
     structuralFailures,
     compatibilityFailures,
     gate: {
-      enforced: readerFloorSupported,
-      passed: result === "passed" || result === "report-only",
+      enforced: true,
+      passed: result === "passed",
       result,
-      failures: [...structuralFailures, ...(readerFloorSupported ? compatibilityFailures : [])],
+      failures: [...structuralFailures, ...compatibilityFailures],
     },
   };
 }
@@ -163,78 +178,74 @@ function readBuild(codeRoot, expected) {
   return actual;
 }
 
-async function waitForBarrier(candidate, sentinel, port) {
-  const deadline = Date.now() + 120_000;
+async function waitForBarrier(resident, sentinel, port, readTrial, deadline) {
   while (Date.now() < deadline) {
     try {
       const mark = JSON.parse(fs.readFileSync(sentinel, "utf8"));
       assert.equal(mark.port, port, "Candidate barrier intercepted the wrong port");
-      assert(
-        Number.isSafeInteger(mark.pid) && mark.pid > 0,
-        "Candidate barrier did not identify its process",
-      );
+      assert(Number.isSafeInteger(mark.pid) && mark.pid > 0, "Invalid candidate barrier PID");
       return mark;
     } catch (error) {
-      // writeFileSync creates the sentinel before writing its small JSON payload.
+      // The small sentinel can be observed between creation and write completion.
       if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
     }
-    if (candidate.error()) {
-      throw candidate.error();
+    if (readTrial().phase === "rolled-back") {
+      return null;
     }
-    if (candidate.child.exitCode !== null || candidate.child.signalCode !== null) {
-      const exit = await candidate.done;
+    if (resident.error()) {
+      throw resident.error();
+    }
+    if (resident.child.exitCode !== null || resident.child.signalCode !== null) {
       throw new Error(
-        `Candidate exited before the Gateway listen barrier: ${JSON.stringify(exit)}`,
+        `Resident exited before rollback/listen barrier: ${JSON.stringify(await resident.exited)}`,
       );
     }
-    await delay(Math.min(50, Math.max(0, deadline - Date.now())));
+    await delay(50);
   }
-  throw new Error("Candidate did not reach the exact Gateway listen barrier within 120 seconds");
+  throw new Error("Resident did not reach candidate listen or rollback within 300 seconds");
 }
 
 export async function runSchemaDowngrade({
   previousRoot,
-  candidateRoot,
+  previousPrefix,
+  candidateTarball,
   previousBuild,
   candidateBuild,
+  npmCache,
   root,
   artifacts,
   env,
 }) {
   fs.mkdirSync(artifacts, { recursive: true });
   const receipt = {
-    scope: "genuine-previous-reader-projected-rollback",
+    scope: "genuine-previous-reader-resident-rollback",
     result: "setup-failed",
-    mode: candidateBuild?.readerFloorSupported === true ? "enforced" : "report-only",
-    readerFloorSupported: candidateBuild?.readerFloorSupported === true,
-    floorCapabilitySource: "candidate-source-contract-with-matching-build-provenance",
+    mode: "enforced",
     expectedBuilds: {
       previous: { ...previousBuild, root: previousRoot },
-      candidate: { ...candidateBuild, root: candidateRoot },
+      candidate: { ...candidateBuild, tarball: candidateTarball },
     },
     fixture: null,
     config: null,
     before: [],
     after: [],
-    candidate: null,
-    projection: null,
+    rolledBack: null,
+    attempts: [],
+    launcher: null,
     smoke: null,
-    gate: {
-      enforced: candidateBuild?.readerFloorSupported === true,
-      passed: false,
-      result: "setup-failed",
-      failures: [],
-    },
+    gate: { enforced: true, passed: false, result: "setup-failed", failures: [] },
   };
-  let candidate;
+  let resident;
+  let candidatePid;
   /** @type {Error | undefined} */
   let failure;
   const save = () => {
     const log = [
       receipt.setupFailure?.gateway?.output,
-      receipt.candidate?.outputTail,
+      ...receipt.attempts.map((attempt) => attempt.outputTail),
+      receipt.resident?.outputTail,
       receipt.smoke?.gateway?.output,
       receipt.error,
     ]
@@ -250,27 +261,12 @@ export async function runSchemaDowngrade({
     );
   };
   try {
-    assert.notEqual(
-      fs.realpathSync(previousRoot),
-      fs.realpathSync(candidateRoot),
-      "T and T+1 must be distinct built roots",
-    );
     receipt.previousBuild = readBuild(previousRoot, previousBuild);
-    receipt.candidateBuild = readBuild(candidateRoot, candidateBuild);
     assert.notEqual(
       previousBuild.commit,
       candidateBuild.commit,
       "T and T+1 must be genuine different commits",
     );
-    const manifest = JSON.parse(fs.readFileSync(path.join(candidateRoot, "package.json"), "utf8"));
-    const schemaVersions = manifest.openclaw?.schemaVersions;
-    assert.equal(
-      manifest.version,
-      candidateBuild.version,
-      "Candidate manifest/build version mismatch",
-    );
-    assert(schemaVersions, "Candidate package is missing schema targets");
-    receipt.schemaVersions = schemaVersions;
     fs.mkdirSync(root, { recursive: true });
     const fixture = await createReaderFixture({
       codeRoot: previousRoot,
@@ -286,126 +282,197 @@ export async function runSchemaDowngrade({
       build: fixture.build,
       schemaVersions: fixture.schemaVersions,
     };
-    const baselineRoot = path.join(artifacts, "schema-downgrade-baseline");
-    // createReaderFixture has stopped and reaped T before returning.
-    receipt.before = snapshotFixtureStores(fixture.stateDir, baselineRoot);
-    const configPreimage = path.join(root, "config.before-candidate");
-    fs.copyFileSync(fixture.configPath, configPreimage, fs.constants.COPYFILE_EXCL);
+    // These are inspection copies, never recovery preimages.
+    receipt.before = inspectFixtureStores(
+      fixture.stateDir,
+      path.join(artifacts, "schema-downgrade-baseline"),
+    );
     receipt.config = {
       path: fixture.configPath,
-      beforeSha256: fileSha256(configPreimage),
+      beforeSha256: fileSha256(fixture.configPath),
       afterCandidateSha256: null,
-      restoredSha256: null,
+      afterRollbackSha256: null,
     };
-    save();
+    fs.writeFileSync(
+      path.join(fixture.home, ".npmrc"),
+      `prefix=${previousPrefix}\ncache=${npmCache ?? path.join(root, "npm-cache")}\n`,
+    );
+    fixture.env.PATH = `${path.join(previousPrefix, "bin")}${path.delimiter}${fixture.env.PATH ?? ""}`;
+    try {
+      receipt.preparation = await runReaderCommand(
+        fixture,
+        previousRoot,
+        [
+          "update",
+          "--tag",
+          `file:${path.resolve(candidateTarball)}`,
+          "--no-restart",
+          "--yes",
+          "--json",
+        ],
+        600_000,
+      );
+    } catch (error) {
+      throw new Error(
+        "T's updater could not prepare the candidate; rebase a stale fork point before retrying.",
+        { cause: error },
+      );
+    }
+    const launcher = fs.readFileSync(path.join(previousRoot, ".openclaw-launcher"), "utf8").trim();
+    const prefix = path.dirname(launcher);
+    const trialFile = path.join(prefix, "releases", ".trial");
+    const readTrial = () => JSON.parse(fs.readFileSync(trialFile, "utf8"));
+    const prepared = readTrial();
+    assert.equal(prepared.phase, "pending", "Public update did not prepare a pending trial");
+    assert.equal(
+      fs.realpathSync(path.resolve(prefix, prepared.previous)),
+      fs.realpathSync(previousRoot),
+      "Prepared trial does not retain genuine T",
+    );
+    const candidateRoot = fs.realpathSync(path.resolve(prefix, prepared.target));
+    assert.notEqual(
+      candidateRoot,
+      fs.realpathSync(previousRoot),
+      "T+1 must be a distinct built root",
+    );
+    receipt.candidateBuild = readBuild(candidateRoot, candidateBuild);
+    const manifest = JSON.parse(fs.readFileSync(path.join(candidateRoot, "package.json"), "utf8"));
+    assert.equal(
+      manifest.version,
+      candidateBuild.version,
+      "Candidate manifest/build version mismatch",
+    );
+    const schemaVersions = manifest.openclaw?.schemaVersions;
+    assert(schemaVersions, "Candidate package is missing schema targets");
+    receipt.schemaVersions = schemaVersions;
+    const restoreManifestPath = path.join(
+      path.dirname(path.resolve(prefix, prepared.target)),
+      ".restore",
+    );
+    receipt.launcher = {
+      path: launcher,
+      format:
+        Number(
+          fs.readFileSync(launcher, "utf8").match(/^\/\/ OpenClaw launcher format: (\d+)$/m)?.[1],
+        ) || null,
+      trialFile,
+      prepared,
+      restoreManifestPath,
+      restoreManifest: null,
+    };
     const sentinel = path.join(root, "candidate-prelisten.json");
-    fs.rmSync(sentinel, { force: true });
-    const args = [
-      path.join(candidateRoot, "openclaw.mjs"),
-      "gateway",
-      "run",
-      "--port",
-      String(fixture.port),
-    ];
-    receipt.candidate = {
-      invocation: {
-        executable: process.execPath,
-        args,
-        port: fixture.port,
-        launcherForwarded: true,
-        barrierPath,
-      },
-      sentinel,
-      barrier: null,
-      exit: null,
-      outputTail: "",
-    };
-    candidate = startNodeFixture(args, {
+    const args = [launcher, "gateway", "run", "--port", String(fixture.port)];
+    const residentEnv = {
       ...fixture.env,
-      OPENCLAW_RELEASE_LAUNCHER_FORWARDED: "1",
       OPENCLAW_SCHEMA_DOWNGRADE_PORT: String(fixture.port),
       OPENCLAW_SCHEMA_DOWNGRADE_SENTINEL: sentinel,
+      OPENCLAW_SCHEMA_DOWNGRADE_TARGET: candidateRoot,
       NODE_OPTIONS: [fixture.env.NODE_OPTIONS, `--import=${JSON.stringify(barrierPath)}`]
         .filter(Boolean)
         .join(" "),
-    });
-    try {
-      receipt.candidate.barrier = await waitForBarrier(candidate, sentinel, fixture.port);
-    } finally {
-      // No SQLite opens, copies, or recovery of originals until the whole group is dead.
-      receipt.candidate.exit = await candidate.stop("SIGKILL");
-      receipt.candidate.outputTail = candidate.output();
+    };
+    receipt.launcher.invocation = { executable: process.execPath, args, barrierPath };
+    save();
+    const deadline = Date.now() + 300_000;
+    while (Date.now() < deadline) {
+      fs.rmSync(sentinel, { force: true });
+      // Invoke the actual resident, not T's shim: RPC clients deliberately pin forwarding.
+      resident = startNodeFixture(args, residentEnv);
+      const mark = await waitForBarrier(resident, sentinel, fixture.port, readTrial, deadline);
+      if (!mark) {
+        break;
+      }
+      candidatePid = mark.pid;
+      const attempt = { barrier: mark, trial: readTrial(), exit: null, outputTail: "" };
+      receipt.attempts.push(attempt);
+      assert.equal(attempt.trial.phase, "trial", "Candidate reached listen outside its real trial");
+      // Resident restart mid-trial: stop the supervisor first so it cannot race the
+      // quiescent store observation by restarting a separately detached candidate.
+      killFixtureProcessGroup(resident.child.pid, "SIGKILL");
+      await resident.exited;
+      killFixtureProcessGroup(candidatePid, "SIGKILL");
+      candidatePid = undefined;
+      attempt.exit = await resident.stop("SIGKILL");
+      attempt.outputTail = resident.output();
+      resident = undefined;
+      receipt.after = inspectFixtureStores(
+        fixture.stateDir,
+        path.join(artifacts, `schema-downgrade-post-candidate-${receipt.attempts.length}`),
+      );
+      receipt.config.afterCandidateSha256 = fileSha256(fixture.configPath);
+      if (fs.existsSync(restoreManifestPath)) {
+        receipt.launcher.restoreManifest = JSON.parse(fs.readFileSync(restoreManifestPath, "utf8"));
+      }
+      Object.assign(
+        receipt,
+        classifySchemaDowngrade({
+          before: receipt.before,
+          after: receipt.after,
+          schemaVersions,
+        }),
+      );
+      save();
+      assert.equal(
+        receipt.structuralFailures.length,
+        0,
+        "Candidate committed schema/target verification failed",
+      );
+      // Leave attempts, timestamps, slot and trial untouched. The real resident's
+      // next start decides whether to retry or roll back.
     }
-    receipt.after = inspectFixtureStores(
-      fixture.stateDir,
-      path.join(artifacts, "schema-downgrade-post-candidate"),
+    assert(
+      resident && receipt.attempts.length > 0,
+      "No genuine candidate pre-ready crash was observed",
     );
-    receipt.config.afterCandidateSha256 = fileSha256(fixture.configPath);
-    Object.assign(
-      receipt,
-      classifySchemaDowngrade({
-        before: receipt.before,
-        after: receipt.after,
-        schemaVersions,
-        readerFloorSupported: receipt.readerFloorSupported,
-      }),
-    );
-    // Persist the exact post-candidate observation before any restoration.
-    save();
+    receipt.launcher.rolledBack = readTrial();
     assert.equal(
-      receipt.structuralFailures.length,
-      0,
-      "Candidate store structure/target verification failed",
+      receipt.launcher.rolledBack.phase,
+      "rolled-back",
+      "Resident did not roll back the trial",
     );
-    receipt.projection = restoreRaisedFloorStores(
-      fixture.stateDir,
-      baselineRoot,
-      receipt.before,
-      receipt.after,
-    );
+    receipt.launcher.selectedRoot = fs.realpathSync(path.join(prefix, "openclaw"));
     assert.equal(
-      receipt.projection.unrestoredRaised.length,
-      0,
-      "Rollback projection must restore every raised-floor store",
+      receipt.launcher.selectedRoot,
+      fs.realpathSync(previousRoot),
+      "Resident did not select T",
     );
-    // The real launcher also restores config; its version stamp is not a SQLite reader floor.
-    const configRestore = path.join(root, "config.restore");
-    fs.copyFileSync(configPreimage, configRestore, fs.constants.COPYFILE_EXCL);
-    fs.renameSync(configRestore, fixture.configPath);
-    receipt.config.restoredSha256 = fileSha256(fixture.configPath);
-    assert.equal(
-      receipt.config.restoredSha256,
-      receipt.config.beforeSha256,
-      "Rollback projection did not restore the previous config",
-    );
-    save();
     try {
-      receipt.smoke = await smokeReaderFixture(fixture, previousRoot);
+      receipt.smoke = await smokeRunningReaderFixture(previousRoot, fixture, resident);
     } catch (error) {
       if (!error.receipt) {
         throw error;
       }
       receipt.smoke = error.receipt;
     }
+    const exit = await resident.stop("SIGTERM", 17_000);
+    receipt.resident = { exit, outputTail: resident.output() };
+    resident = undefined;
+    receipt.rolledBack = inspectFixtureStores(
+      fixture.stateDir,
+      path.join(artifacts, "schema-downgrade-post-rollback"),
+    );
+    receipt.config.afterRollbackSha256 = fileSha256(fixture.configPath);
     Object.assign(
       receipt,
       classifySchemaDowngrade({
         before: receipt.before,
         after: receipt.after,
+        rolledBack: receipt.rolledBack,
         schemaVersions,
-        readerFloorSupported: receipt.readerFloorSupported,
-        projection: receipt.projection,
         smoke: receipt.smoke,
       }),
     );
     if (!receipt.gate.passed) {
-      failure = new Error("Schema downgrade gate failed; see schema-downgrade.json");
+      failure = new Error("Required schema downgrade gate failed; see schema-downgrade.json");
     }
   } catch (error) {
     failure = error instanceof Error ? error : new Error(errorText(error), { cause: error });
     receipt.error = errorText(error);
     if (error?.receipt) {
       receipt.setupFailure = error.receipt;
+    }
+    if (error?.cause?.command) {
+      receipt.preparationFailure = error.cause.command;
     }
     if (receipt.result !== "failed") {
       receipt.result = "setup-failed";
@@ -418,9 +485,12 @@ export async function runSchemaDowngrade({
     };
   } finally {
     try {
-      if (candidate) {
-        await candidate.stop("SIGKILL");
-        receipt.candidate.outputTail = candidate.output();
+      if (candidatePid) {
+        killFixtureProcessGroup(candidatePid, "SIGKILL");
+      }
+      if (resident) {
+        const exit = await resident.stop("SIGTERM", 17_000);
+        receipt.resident = { exit, outputTail: resident.output() };
       }
     } catch (error) {
       failure = error instanceof Error ? error : new Error(errorText(error), { cause: error });

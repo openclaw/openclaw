@@ -157,7 +157,7 @@ processes retain separate live status and approval state.
 For managed local app-servers with an agent home, OpenClaw sets
 `thread_unload_delay_secs=0`, overriding native post-unsubscribe retention.
 OpenClaw keeps warm subscriptions and protects active child work itself. When a
-conversation needs new configuration, it waits up to two seconds for that
+conversation needs new configuration, it waits up to ten seconds for that
 thread's unload notification before resuming its history, so a failed thread can
 recover while a sibling continues. If unloading is not confirmed, the binding is
 preserved; failed-thread recovery can replace the client only when no sibling
@@ -189,6 +189,16 @@ transport is available:
 
 Codex classifies WebSocket transport as experimental and unsupported. Prefer
 managed stdio or the local Unix control socket for production workloads.
+
+During configuration handoff for a saved WebSocket thread in a system-error
+state, OpenClaw releases its subscription and waits for the app-server to unload
+the failed runtime. Retry your message after OpenClaw confirms the unload to
+continue the saved conversation.
+After the last subscriber leaves an idle thread, the server waits for
+`thread_unload_delay_secs`. Codex 0.172.0 defaults to 60 seconds and 0.164.0 to
+30 minutes. The server can outlast OpenClaw’s check even with no other clients.
+If the thread stays loaded, check for other subscribers and confirm the previous
+turn’s outcome before retrying.
 
 `appServer` fields:
 

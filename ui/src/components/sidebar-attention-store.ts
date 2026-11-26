@@ -10,7 +10,7 @@ import type {
 } from "../app/sidebar-attention-store.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
-import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { resolveCronJobAttention } from "../lib/cron-status.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCompactCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -47,7 +47,10 @@ type SidebarAttentionOwner = {
 };
 
 type SidebarCronJob = Pick<CronCompactJob, "id" | "enabled"> & {
-  state: Pick<CronJob["state"], "lastRunStatus" | "lastStatus" | "autoDisabled">;
+  state: Pick<
+    CronJob["state"],
+    "lastRunStatus" | "lastStatus" | "autoDisabled" | "lastMeaningfulResult"
+  >;
 };
 
 function isSidebarCronJob(job: unknown): job is SidebarCronJob {
@@ -60,11 +63,18 @@ function isSidebarCronJob(job: unknown): job is SidebarCronJob {
   ) {
     return false;
   }
-  const { lastRunStatus, lastStatus, autoDisabled } = job.state;
+  const { lastRunStatus, lastStatus, autoDisabled, lastMeaningfulResult } = job.state;
   return (
     [lastRunStatus, lastStatus].every(
       (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
     ) &&
+    (lastMeaningfulResult === undefined ||
+      (isRecord(lastMeaningfulResult) &&
+        typeof lastMeaningfulResult.outcome === "string" &&
+        ["progress", "done", "blocked", "needs_attention"].includes(lastMeaningfulResult.outcome) &&
+        typeof lastMeaningfulResult.summary === "string" &&
+        typeof lastMeaningfulResult.atMs === "number" &&
+        Number.isFinite(lastMeaningfulResult.atMs))) &&
     (autoDisabled === undefined ||
       (isRecord(autoDisabled) &&
         (autoDisabled.reason === "consecutive-failures" ||
@@ -334,7 +344,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       return;
     }
     if (payload.action !== "removed") {
-      (isCronJobActiveFailure(job) ? this.#failedCronJobIds : this.#healthyCronJobIds).add(job.id);
+      (resolveCronJobAttention(job) ? this.#failedCronJobIds : this.#healthyCronJobIds).add(job.id);
     }
     this.onChange();
   }
@@ -395,10 +405,20 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
                 // Publish membership only after the shared inventory has validated every wire page.
                 // Runtime events need job IDs and failure state, never the table's sorted rows.
                 this.#clearCronJobs();
-                for (const { id, enabled, lastRunStatus, autoDisabled } of inventory.jobs) {
-                  const failed = isCronJobActiveFailure({
+                for (const {
+                  id,
+                  enabled,
+                  lastRunStatus,
+                  autoDisabled,
+                  lastMeaningfulResult,
+                } of inventory.jobs) {
+                  const failed = resolveCronJobAttention({
                     enabled,
-                    state: { lastRunStatus: lastRunStatus ?? undefined, autoDisabled },
+                    state: {
+                      lastRunStatus: lastRunStatus ?? undefined,
+                      autoDisabled,
+                      lastMeaningfulResult,
+                    },
                   });
                   (failed ? this.#failedCronJobIds : this.#healthyCronJobIds).add(id);
                 }

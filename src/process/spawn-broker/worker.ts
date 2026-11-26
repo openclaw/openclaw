@@ -1,7 +1,6 @@
 import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { ReadFilePage } from "../../agents/sessions/tools/read-file-page.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
@@ -16,6 +15,7 @@ import {
   terminateLostBrokerChild,
   type BrokerChildGroupIdentity,
 } from "./cleanup.js";
+import { captureBrokerCommandHandlers } from "./command-handlers.js";
 import { createBrokerExecaAdmissionFailure } from "./execa-protocol.js";
 import type { BrokerExecaProcess } from "./execa-worker.js";
 import { prepareProcessOutputFile } from "./file-output.js";
@@ -66,6 +66,7 @@ let stopping = false;
 const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals | number }>();
 const launchGrants = new Map<number, ReturnType<typeof createDeferredCore<boolean>>>();
 let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | undefined;
+let commands: Awaited<ReturnType<typeof captureBrokerCommandHandlers>>;
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 let initialization = Promise.resolve();
 const launches = new Set<Promise<void>>();
@@ -200,16 +201,19 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
   const pending = { canceled: false, controller: new AbortController() };
   try {
     // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
-    if (resources || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
+    if (!commands.readers || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     fileReads.set(message.id, pending);
     let page: ReadFilePage | undefined;
     if (message.page) {
-      const { captureReadFilePage } = await import("../../agents/sessions/tools/read-file-page.js");
-      page = await captureReadFilePage(message.filePath, message.page, pending.controller.signal);
+      page = await commands.readers.captureReadFilePage(
+        message.filePath,
+        message.page,
+        pending.controller.signal,
+      );
     } else {
-      const { buffer } = await readRegularFile({ filePath: message.filePath });
+      const { buffer } = await commands.readers.readRegularFile({ filePath: message.filePath });
       // Bound IPC messages while preserving the existing complete-byte read.
       for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
         if (stopping || pending.canceled) {
@@ -304,9 +308,8 @@ async function launch(
       }
       let execa: BrokerExecaProcess | undefined;
       if (message.type === "spawn-execa") {
-        const { startBrokerExeca } = await import("./execa-worker.js");
         assertActive();
-        execa = await startBrokerExeca(
+        execa = await commands.startBrokerExeca(
           message.argv,
           message.options,
           assertActive,
@@ -573,7 +576,13 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     startup = "initializing";
     // SAFETY: The version-matched spawning host owns this private bootstrap channel.
     initialization = initialize(raw as BrokerBootstrap);
-    void initialization.catch(shutdown);
+    void initialization.catch(async (error: unknown) => {
+      await report({
+        type: "startup-failed",
+        error: serializeBrokerError(toErrorObject(error, "Spawn broker startup failed")),
+      }).catch(() => {});
+      shutdown();
+    });
     return;
   }
   if (startup !== "ready") {
@@ -699,24 +708,20 @@ async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   if (stopping || !process.connected) {
     return;
   }
+  commands = await captureBrokerCommandHandlers(!bootstrap.nativeResource);
+  if (stopping || !process.connected) {
+    return;
+  }
   if (bootstrap.nativeResource) {
     const authority = bootstrap.nativeResource;
-    try {
-      resources = await createBrokerNativeResourceServer({
-        endpoint: authority.endpoint,
-        directory: authority.directory,
-        secret: authority.secret,
-        generation: authority.generation,
-        reportParent: report,
-        canAdmit: () => !stopping && (resources?.size ?? 0) < MAX_NATIVE_RESOURCES,
-      });
-    } catch (error) {
-      await report({
-        type: "startup-failed",
-        error: serializeBrokerError(toErrorObject(error, "Native resource server startup failed")),
-      }).catch(() => {});
-      throw error;
-    }
+    resources = await createBrokerNativeResourceServer({
+      endpoint: authority.endpoint,
+      directory: authority.directory,
+      secret: authority.secret,
+      generation: authority.generation,
+      reportParent: report,
+      canAdmit: () => !stopping && (resources?.size ?? 0) < MAX_NATIVE_RESOURCES,
+    });
     if (stopping) {
       resources.disconnect();
       return;

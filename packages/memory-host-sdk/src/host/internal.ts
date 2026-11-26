@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
@@ -275,7 +276,12 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path).toSorted());
+  // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private path array.
+  const paths = scan.entries.map((entry) => entry.path).sort();
+  // One directory can contain more paths than a single function call accepts.
+  for (const file of paths) {
+    files.push(file);
+  }
 }
 
 export async function listMemoryFiles(
@@ -450,7 +456,8 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: sha256Hex(buffer.toString("utf-8")),
+    // Existing indexes hash replacement characters for malformed UTF-8.
+    hash: sha256Hex(isUtf8(buffer) ? buffer : buffer.toString("utf-8")),
     kind: "markdown",
   };
 }
