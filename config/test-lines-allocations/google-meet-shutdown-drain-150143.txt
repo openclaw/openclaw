@@ -1,0 +1,11 @@
+# PR #150588 (issue #150143): gateway restart dropped active Meet captures because the
+# shutdown drain's cleanup RPCs were rejected at four separate barriers, so each barrier
+# needs its own regression: router admission (src/process/gateway-work-admission.test.ts),
+# the close prelude's request-entry lifetime (src/gateway/server-request-entry.test.ts),
+# the drained connection-work scope (src/gateway/server-request-context.test.ts plus its
+# new test-support fixture), the real draining close lifecycle
+# (src/gateway/server-close.shutdown-admission.test.ts), and the plugin drain itself
+# (extensions/google-meet/service-shutdown.test.ts, split out of the over-cap index.test.ts).
+# All 381 lines are net-new regression coverage for barriers a real restart run reproduced;
+# nothing here duplicates or replaces existing tests, and no shared scalar is touched.
+381
