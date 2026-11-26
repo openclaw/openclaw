@@ -1382,7 +1382,7 @@ src/plugins/host-hook-steering.ts	1
 src/plugins/http-registry.ts	2
 src/plugins/install-runtime-batch.ts	2
 src/plugins/installed-plugin-index-source-snapshots.ts	1
-src/plugins/memory-audience.ts	8
+src/plugins/memory-audience.ts	2
 src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-native-namespace.ts	1
 src/plugins/registry-contributions.ts	1
