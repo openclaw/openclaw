@@ -333,7 +333,7 @@ export function buildExternalRunFailureReply(
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
   const failoverCodeCopy =
-    failoverFacts.rateLimitResetAt === undefined
+    options?.failureSummary?.kind !== "billing" && failoverFacts.rateLimitResetAt === undefined
       ? renderFailoverCodeUserCopy(failoverFacts.code)
       : undefined;
   if (failoverCodeCopy) {
