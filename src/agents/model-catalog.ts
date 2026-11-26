@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { getActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
+import {
+  getActiveRemoteModelCatalog,
+  type ActiveRemoteModelCatalog,
+} from "../model-catalog/remote-overlay.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -46,8 +49,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  /** The hosted catalog these rows were planned with; a newer publication replans them. */
-  remoteCatalog: ReturnType<typeof getActiveRemoteModelCatalog>;
+  // Preserve exact identity without keeping a retired worker snapshot alive.
+  remoteCatalog: WeakRef<ActiveRemoteModelCatalog> | undefined;
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
@@ -230,7 +233,12 @@ function loadManifestModelCatalogRows(
   }
   const remoteCatalog = getActiveRemoteModelCatalog(config);
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot && cached.remoteCatalog === remoteCatalog) {
+  if (
+    cached?.snapshot === snapshot &&
+    (remoteCatalog
+      ? cached.remoteCatalog?.deref() === remoteCatalog
+      : cached.remoteCatalog === undefined)
+  ) {
     return cached.rows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
@@ -261,7 +269,11 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, remoteCatalog, rows });
+  manifestModelCatalogCache.set(config, {
+    snapshot,
+    remoteCatalog: remoteCatalog ? new WeakRef(remoteCatalog) : undefined,
+    rows,
+  });
   return rows;
 }
 
