@@ -870,22 +870,18 @@ final class TalkModeManager {
             while self.isCurrentStartAttempt(attemptID),
                   !self.isMicrophoneMuted,
                   self.recognitionGeneration == generation,
-                  self.audioEngine.isRunning,
-                  !(self.recognitionTask?.state == .running && appendedInput.withLock { $0 }),
+                  !appendedInput.withLock({ $0 }),
                   ContinuousClock.now < deadline
             {
                 try await Task.sleep(for: .milliseconds(10))
             }
         }
         guard self.isCurrentStartAttempt(attemptID), !self.isMicrophoneMuted else { return nil }
-        guard self.recognitionGeneration == generation,
-              Self.isSimulator || (self.audioEngine.isRunning &&
-                  self.recognitionTask?.state == .running && appendedInput.withLock { $0 })
-        else {
-            throw NSError(domain: "TalkMode", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: String(
-                    localized: "No microphone audio. Check that no other app is using the microphone, then tap Talk to try again."),
-            ])
+        guard self.recognitionGeneration == generation else { return nil }
+        if !Self.isSimulator, !appendedInput.withLock({ $0 }) {
+            // Recognition is started; only the first-buffer confirmation is late.
+            // Keep Talk usable and fall back to the earlier cue timing instead of failing start.
+            self.logger.warning("listening cue: no microphone buffer within 2 s; playing cue anyway")
         }
 
         self.chimeLifecycle = lifecycle
