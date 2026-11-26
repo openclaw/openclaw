@@ -19,7 +19,7 @@ function bootFingerprint(identity: string, namespace: string): string {
 /** Resolve the optional Windows proof outside listener publication and SQLite. */
 export function prepareAgentDatabaseLeaseProvenance(): Promise<void> | undefined {
   if (process.platform !== "win32" || boot !== undefined) {
-    return;
+    return undefined;
   }
   windowsBootProbe ??= (async () => {
     try {
