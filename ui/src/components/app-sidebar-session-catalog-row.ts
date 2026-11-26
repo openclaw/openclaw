@@ -121,18 +121,18 @@ export function memoizedSidebarCatalogRows(
       const projected = new Map<string, SidebarRecentSession>();
       for (const row of sidebarCatalogLiveRows(host.sessionData)) {
         if (adopted.has(row.key) && !projected.has(row.key)) {
-          projected.set(
-            row.key,
-            projectSidebarSessionReference({
-              host,
-              row,
-              agentId: host.sessionNavigationAgentId(row),
-              navigationState,
-              resolveAttention: host.resolveSessionAttention,
-              involvingMe: host.sessionInvolvingMeFilterActive,
-              ownerId: host.sessionOwnerFilterId,
-            }).session,
-          );
+          const { session } = projectSidebarSessionReference({
+            host,
+            row,
+            agentId: host.sessionNavigationAgentId(row),
+            navigationState,
+            resolveAttention: host.resolveSessionAttention,
+            involvingMe: host.sessionInvolvingMeFilterActive,
+            ownerId: host.sessionOwnerFilterId,
+          });
+          if (session) {
+            projected.set(row.key, session);
+          }
         }
       }
       return projected;
