@@ -73,8 +73,7 @@ export function buildPersonalVocabularySnapshot(params: {
     return null;
   }
   assertPersonalVocabularyScope(input.scope, params.selectedScope);
-  const locale =
-    params.locale === undefined ? undefined : canonicalVocabularyLocale(params.locale);
+  const locale = params.locale === undefined ? undefined : canonicalVocabularyLocale(params.locale);
   const effective = resolveEffectiveVocabulary({
     personalTerms: input.terms,
     personalRevision: input.revision,
@@ -105,7 +104,10 @@ export function buildPersonalVocabularySnapshot(params: {
   }
   omissions.sort((a, b) => (a.entryId < b.entryId ? -1 : a.entryId > b.entryId ? 1 : 0));
   return Object.freeze({
-    scope: Object.freeze({ profileId: input.scope.profileId, workspaceId: input.scope.workspaceId }),
+    scope: Object.freeze({
+      profileId: input.scope.profileId,
+      workspaceId: input.scope.workspaceId,
+    }),
     revision: input.revision,
     locale: locale ?? null,
     entries,

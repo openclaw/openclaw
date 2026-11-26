@@ -17,14 +17,14 @@ It doesn't add a usable dictionary, persist entries, or send vocabulary to a pro
 The selected lifecycle issue is [#205856](https://github.com/openclaw/openclaw/issues/205856).
 It must remain open while any required criterion is unmet.
 
-| Item | Recorded identity |
-| --- | --- |
-| Base | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0` |
-| Task branch | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary` |
-| Tested candidate commit | Pending. Reconstructed source has no completed qualification run. Bind each executed check to its actual commit before publication. |
-| Transport request | [#191109](https://github.com/openclaw/openclaw/issues/191109) |
+| Item                      | Recorded identity                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Base                      | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0`                                                             |
+| Task branch               | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary`                                                                    |
+| Tested candidate commit   | Pending. Reconstructed source has no completed qualification run. Bind each executed check to its actual commit before publication. |
+| Transport request         | [#191109](https://github.com/openclaw/openclaw/issues/191109)                                                                       |
 | Shared vocabulary context | [M06 #205820](https://github.com/openclaw/openclaw/issues/205820) and [#205633](https://github.com/openclaw/openclaw/issues/205633) |
-| Refinement context | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845) |
+| Refinement context        | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845)                                                                   |
 
 No accepted transport PR is asserted as a parent. The task branch uses the recorded main commit.
 An issue has no Git head to stack on.
@@ -58,14 +58,14 @@ provider dispatch change, or migration while those decisions remain unresolved.
 
 Current source provides useful boundaries, but no accepted dictionary storage contract:
 
-| Existing boundary | Source finding and consequence |
-| --- | --- |
-| Authenticated preferences | `src/gateway/server-methods/users.ts` owns the `users.prefs` entry points. Production dictionary access must use authenticated identity, not a caller-supplied user ID as authority. |
-| Durable preference writes | `src/state/user-preferences.validation.ts`, `user-preferences.store.ts`, and the worker implement validation and expected-value comparisons. A new dictionary must reuse the accepted state and transaction conventions. |
-| Preference capacity | `packages/gateway-protocol/src/schema/user-profile-constants.ts` allows 4 KiB per value, 32 entries per mutation, and 128 generic keys per profile. |
-| Browser preference reads | `ui/src/app/user-prefs-request.ts` and `user-prefs-cache.ts` own profile-aware cached reads and invalidation. A dictionary must not introduce a competing account cache. |
-| Capture lifecycle | `ui/src/pages/chat/composer-dictation-session.ts` owns `ComposerDictationSession`. Production integration must pin the vocabulary before microphone capture and carry that revision through retries. |
-| Existing hint fields | `extensions/openai/realtime-transcription-provider-factory.ts` already constructs an OpenAI transcription `prompt`. `extensions/deepgram/audio.ts` handles batch `keyterm` values. Neither proves this dictionary is connected or that every endpoint accepts the same fields. |
+| Existing boundary         | Source finding and consequence                                                                                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Authenticated preferences | `src/gateway/server-methods/users.ts` owns the `users.prefs` entry points. Production dictionary access must use authenticated identity, not a caller-supplied user ID as authority.                                                                                           |
+| Durable preference writes | `src/state/user-preferences.validation.ts`, `user-preferences.store.ts`, and the worker implement validation and expected-value comparisons. A new dictionary must reuse the accepted state and transaction conventions.                                                       |
+| Preference capacity       | `packages/gateway-protocol/src/schema/user-profile-constants.ts` allows 4 KiB per value, 32 entries per mutation, and 128 generic keys per profile.                                                                                                                            |
+| Browser preference reads  | `ui/src/app/user-prefs-request.ts` and `user-prefs-cache.ts` own profile-aware cached reads and invalidation. A dictionary must not introduce a competing account cache.                                                                                                       |
+| Capture lifecycle         | `ui/src/pages/chat/composer-dictation-session.ts` owns `ComposerDictationSession`. Production integration must pin the vocabulary before microphone capture and carry that revision through retries.                                                                           |
+| Existing hint fields      | `extensions/openai/realtime-transcription-provider-factory.ts` already constructs an OpenAI transcription `prompt`. `extensions/deepgram/audio.ts` handles batch `keyterm` values. Neither proves this dictionary is connected or that every endpoint accepts the same fields. |
 
 A 1,000-entry dictionary doesn't fit in one 4 KiB preference value.
 Using one preference key per term exceeds the profile limit.
@@ -107,20 +107,20 @@ An unsupported provider must continue ordinary dictation.
 Every row is required for P03. Tests are **NOT RUN**, and production completion is **BLOCKED**.
 Passing a future pure test changes only its recorded evidence, not the completion status of the full criterion.
 
-| Criterion | Groundwork and required production evidence | Current status |
-| --- | --- | --- |
-| AC01: atomic lifecycle | Validate exact strings and identity. Still requires durable add/edit/disable/delete, stable IDs through rename, entry revisions, and atomic failure proof. | NOT RUN. Production blocked. |
-| AC02: explicit learning | Still requires confirmation showing recognition, canonical spelling, locale, and scope. Prove ordinary document edits create no entry. | NOT RUN. Production blocked. |
-| AC03: snapshots | Exercise deterministic limits, neutral locale, omission reasons, and scope comparisons. Still requires capture integration and authenticated account/workspace isolation. | NOT RUN. Production blocked. |
-| AC04: supported hints | Exercise pure hint-data preparation. Still requires real adapter payloads, unavailable-capability behavior, and endpoint-specific support evidence. | NOT RUN. Production blocked. |
-| AC05: ambiguity | Preserve candidates without replacements. Still requires no-dictionary, helpful-dictionary, and misleading-alias recognition evaluation. | NOT RUN. Production blocked. |
-| AC06: data isolation | Exercise adversarial strings against pure data boundaries. Still requires proof through real dispatch/refinement that entries have zero route/tool effects. | NOT RUN. Production blocked. |
-| AC07: conflicts/import | Exercise invalid rows, duplicates, conflicts, and bounded previews. Still requires two-window conflict choices and atomic durable import with no partial corruption. | NOT RUN. Production blocked. |
-| AC08: future exclusion | Exercise snapshot exclusion for deleted/disabled input. Still requires durable edits followed by new captures, without implying remote retraction. | NOT RUN. Production blocked. |
-| AC09: retry revision | Exercise immutable revision identity. Still requires capture-edit-retry and explicit reprocess behavior through the real turn lifecycle. | NOT RUN. Production blocked. |
-| AC10: local policy | Exercise data-preparation policy choices. Still requires actual destination observation across transcription, refinement, retries, and diagnostics. | NOT RUN. Production blocked. |
-| AC11: private diagnostics | Exercise content-free boundary errors. Still requires inspection of default logs, crashes, and telemetry for terms, correction pairs, and guessable hashes. | NOT RUN. Production blocked. |
-| AC12: recovery | Exercise versioned scoped export/import handling. Still requires accepted persistence migrations, upgrade/downgrade, unknown-schema recovery, rollback, and retained user data. | NOT RUN. Production blocked. |
+| Criterion                 | Groundwork and required production evidence                                                                                                                                     | Current status               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| AC01: atomic lifecycle    | Validate exact strings and identity. Still requires durable add/edit/disable/delete, stable IDs through rename, entry revisions, and atomic failure proof.                      | NOT RUN. Production blocked. |
+| AC02: explicit learning   | Still requires confirmation showing recognition, canonical spelling, locale, and scope. Prove ordinary document edits create no entry.                                          | NOT RUN. Production blocked. |
+| AC03: snapshots           | Exercise deterministic limits, neutral locale, omission reasons, and scope comparisons. Still requires capture integration and authenticated account/workspace isolation.       | NOT RUN. Production blocked. |
+| AC04: supported hints     | Exercise pure hint-data preparation. Still requires real adapter payloads, unavailable-capability behavior, and endpoint-specific support evidence.                             | NOT RUN. Production blocked. |
+| AC05: ambiguity           | Preserve candidates without replacements. Still requires no-dictionary, helpful-dictionary, and misleading-alias recognition evaluation.                                        | NOT RUN. Production blocked. |
+| AC06: data isolation      | Exercise adversarial strings against pure data boundaries. Still requires proof through real dispatch/refinement that entries have zero route/tool effects.                     | NOT RUN. Production blocked. |
+| AC07: conflicts/import    | Exercise invalid rows, duplicates, conflicts, and bounded previews. Still requires two-window conflict choices and atomic durable import with no partial corruption.            | NOT RUN. Production blocked. |
+| AC08: future exclusion    | Exercise snapshot exclusion for deleted/disabled input. Still requires durable edits followed by new captures, without implying remote retraction.                              | NOT RUN. Production blocked. |
+| AC09: retry revision      | Exercise immutable revision identity. Still requires capture-edit-retry and explicit reprocess behavior through the real turn lifecycle.                                        | NOT RUN. Production blocked. |
+| AC10: local policy        | Exercise data-preparation policy choices. Still requires actual destination observation across transcription, refinement, retries, and diagnostics.                             | NOT RUN. Production blocked. |
+| AC11: private diagnostics | Exercise content-free boundary errors. Still requires inspection of default logs, crashes, and telemetry for terms, correction pairs, and guessable hashes.                     | NOT RUN. Production blocked. |
+| AC12: recovery            | Exercise versioned scoped export/import handling. Still requires accepted persistence migrations, upgrade/downgrade, unknown-schema recovery, rollback, and retained user data. | NOT RUN. Production blocked. |
 
 ## Evidence and recovery record
 
@@ -136,20 +136,20 @@ These observations describe prior attempts. They aren't test, build, or formatti
 Record each new check's command, actual commit, environment, fixtures, result, and limitation.
 No speech-quality or latency claim follows from this source proposal.
 
-| Check | Evidence status |
-| --- | --- |
-| Reused term validation and candidate selection tests | NOT RUN. Previous canonical test startup exited 137 before cases executed. |
-| Personal import/export preview and snapshot tests | NOT RUN. Previous canonical test startup exited 137 before cases executed. |
-| Targeted typecheck, lint, formatting, and docs sanity | NOT RUN on recovered source. Prior formatting success belongs only to the lost tree. |
-| Independent complete-diff and ledger review | NOT RUN on the reconstructed final candidate. |
-| Required build and CI | NOT RUN for this candidate. |
-| Snapshot performance | NOT RUN. Record hardware, runtime, dictionary size, selected limits, measurement method, and observed distribution. |
-| Recognition comparison | NOT RUN. Requires a synthetic or consented audio corpus and provider/model access. Record locales, scoring, corrected errors, and introduced errors. |
-| Keyboard and screen-reader workflows | NOT RUN. No dictionary, correction, import-preview, or conflict UI exists in this candidate. |
-| Real microphone/capture integration | NOT RUN. No capture integration exists in this candidate. |
-| Local-only destination observation | NOT RUN. No dictionary dispatch or refinement integration exists in this candidate. |
-| Upgrade/downgrade and recovery | NOT RUN. No personal persistence schema or migration is activated. |
-| Published head and final integration verification | NOT RUN. Record actual remote identity and checks before reporting a publication outcome. |
+| Check                                                 | Evidence status                                                                                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reused term validation and candidate selection tests  | NOT RUN. Previous canonical test startup exited 137 before cases executed.                                                                           |
+| Personal import/export preview and snapshot tests     | NOT RUN. Previous canonical test startup exited 137 before cases executed.                                                                           |
+| Targeted typecheck, lint, formatting, and docs sanity | NOT RUN on recovered source. Prior formatting success belongs only to the lost tree.                                                                 |
+| Independent complete-diff and ledger review           | NOT RUN on the reconstructed final candidate.                                                                                                        |
+| Required build and CI                                 | NOT RUN for this candidate.                                                                                                                          |
+| Snapshot performance                                  | NOT RUN. Record hardware, runtime, dictionary size, selected limits, measurement method, and observed distribution.                                  |
+| Recognition comparison                                | NOT RUN. Requires a synthetic or consented audio corpus and provider/model access. Record locales, scoring, corrected errors, and introduced errors. |
+| Keyboard and screen-reader workflows                  | NOT RUN. No dictionary, correction, import-preview, or conflict UI exists in this candidate.                                                         |
+| Real microphone/capture integration                   | NOT RUN. No capture integration exists in this candidate.                                                                                            |
+| Local-only destination observation                    | NOT RUN. No dictionary dispatch or refinement integration exists in this candidate.                                                                  |
+| Upgrade/downgrade and recovery                        | NOT RUN. No personal persistence schema or migration is activated.                                                                                   |
+| Published head and final integration verification     | NOT RUN. Record actual remote identity and checks before reporting a publication outcome.                                                            |
 
 The proposed 50 ms snapshot budget and 64 selected hints from 1,000 stored entries remain unmeasured.
 A provider fixture can't establish recognition quality, browser accessibility, or microphone behavior.

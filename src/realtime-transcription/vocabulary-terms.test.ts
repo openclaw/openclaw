@@ -197,9 +197,12 @@ describe("effective vocabulary", () => {
     expect(effective.entries.map((entry) => entry.term.canonical)).toEqual(["Alpha", "beta"]);
     expect(effective.conflicts).toEqual([]);
     expect(effective.entries[0]!.term.aliases).toEqual([]);
-    expect(effective).toEqual(resolveEffectiveVocabulary({
-      ...parameters, collections: [...collections].reverse(),
-    }));
+    expect(effective).toEqual(
+      resolveEffectiveVocabulary({
+        ...parameters,
+        collections: [...collections].reverse(),
+      }),
+    );
   });
 
   it("never reintroduces ambiguous or overridden canonical hints through a duplicate source", () => {

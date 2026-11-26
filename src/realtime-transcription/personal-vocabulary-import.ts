@@ -138,17 +138,24 @@ export function previewPersonalVocabularyImport(
         existing.set(match.id, match);
       }
     }
-    const otherRows = [...new Set([
-      ...(incomingIds.get(term.id) ?? []),
-      ...(incomingCanonicals.get(canonical) ?? []),
-    ])].filter((index) => index !== row.index).toSorted((a, b) => a - b);
-    const matches = [...existing.values(), ...otherRows.map((index) => {
-      const other = admitted[index]!;
-      if (other.status === "invalid") {
-        throw new VocabularyError("invalid-input");
-      }
-      return other.term;
-    })];
+    const otherRows = [
+      ...new Set([
+        ...(incomingIds.get(term.id) ?? []),
+        ...(incomingCanonicals.get(canonical) ?? []),
+      ]),
+    ]
+      .filter((index) => index !== row.index)
+      .toSorted((a, b) => a - b);
+    const matches = [
+      ...existing.values(),
+      ...otherRows.map((index) => {
+        const other = admitted[index]!;
+        if (other.status === "invalid") {
+          throw new VocabularyError("invalid-input");
+        }
+        return other.term;
+      }),
+    ];
     const different = matches.filter((match) => !sameTerm(term, match));
     const conflicts: ("id" | "canonical")[] = [];
     if (different.some((match) => match.id === term.id)) {
@@ -209,8 +216,12 @@ export function resolvePersonalVocabularyImport(
   }
   const decisions = new Map<number, PersonalVocabularyImportChoice>();
   for (const choice of choices) {
-    if (!Number.isSafeInteger(choice.index) || choice.index < 0 ||
-        choice.index >= preview.rows.length || decisions.has(choice.index)) {
+    if (
+      !Number.isSafeInteger(choice.index) ||
+      choice.index < 0 ||
+      choice.index >= preview.rows.length ||
+      decisions.has(choice.index)
+    ) {
       throw new VocabularyError("invalid-input");
     }
     decisions.set(choice.index, choice);
@@ -237,10 +248,10 @@ export function resolvePersonalVocabularyImport(
       throw new VocabularyError("invalid-input");
     }
   }
-  const terms = validateVocabularyTerms([
-    ...preview.existingTerms.map((term) => replacements.get(term.id) ?? term),
-    ...additions,
-  ], VOCABULARY_LIMITS.personalTerms);
+  const terms = validateVocabularyTerms(
+    [...preview.existingTerms.map((term) => replacements.get(term.id) ?? term), ...additions],
+    VOCABULARY_LIMITS.personalTerms,
+  );
   // Successful proposals must also round-trip within the file limit, including the envelope.
   serializePersonalTerms(terms);
   return Object.freeze({ scope: preview.scope, expectedRevision: preview.expectedRevision, terms });
@@ -283,8 +294,11 @@ export function previewDeepgramVocabulary(
       throw new VocabularyError("limit-exceeded");
     }
   }
-  return previewPersonalVocabularyImport(JSON.stringify({
-    schemaVersion: VOCABULARY_LIMITS.schemaVersion,
-    terms: keyterms.map((canonical) => ({ id: randomUUID(), canonical })),
-  }), target);
+  return previewPersonalVocabularyImport(
+    JSON.stringify({
+      schemaVersion: VOCABULARY_LIMITS.schemaVersion,
+      terms: keyterms.map((canonical) => ({ id: randomUUID(), canonical })),
+    }),
+    target,
+  );
 }
