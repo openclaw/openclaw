@@ -30,6 +30,7 @@ import {
 } from "node:perf_hooks";
 import { setImmediate as yieldToLoop, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -153,12 +154,7 @@ if (values["barrier-dir"]) {
 }
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16_384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16_384);
 }
 const collections: { ms: number; kind: number }[] = [];
 const observer = new PerformanceObserver((list) => {

@@ -71,7 +71,6 @@ it.each(["prior turn", "current attempt"])(
     }
     const continuations = refusalOwner === "current attempt" ? 0 : 1;
     expect(input.retryState.compactionContinuationAttempts).toBe(continuations);
-    expect(input.armPostCompactionGuard).toHaveBeenCalledTimes(continuations);
   },
 );
 
@@ -96,5 +95,4 @@ it.each([false, true])("resolves incomplete turns with fallbackSafe=%s", async (
     action: "complete",
     result: { meta: { error: { kind: "incomplete_turn", fallbackSafe } } },
   });
-  expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
 });

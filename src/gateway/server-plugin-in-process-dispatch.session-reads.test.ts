@@ -174,11 +174,10 @@ it.each(methods)("recognizes merged-profile ownership on %s", (method) =>
   }, "draft"),
 );
 
-it.each(methods)("honors role revocation during projection readiness on %s", (method) =>
+it.each(methods)("applies role revocation at request admission on %s", (method) =>
   withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
     const gate = blockCatalog();
-    const pending =
-      method === "sessions.list" ? dispatch(method).catch((error: unknown) => error) : undefined;
+    const pending = method === "sessions.list" ? dispatch(method) : undefined;
     try {
       await gate.entered;
       if (pending) {
@@ -187,9 +186,7 @@ it.each(methods)("honors role revocation during projection readiness on %s", (me
       setUserProfileRole(readerId, "blocked");
       if (pending) {
         gate.release();
-        expect(await pending).toMatchObject({
-          message: "Your operator role changed; reconnect before continuing.",
-        });
+        expectVisible(method, await pending, "viewer");
         expect(await dispatch(method)).toMatchObject({ ok: true, payload: { sessions: [] } });
       } else {
         expect(await dispatch(method)).toMatchObject({

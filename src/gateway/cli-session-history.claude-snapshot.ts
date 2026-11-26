@@ -21,7 +21,7 @@ const OVERSIZED_HISTORY_PLACEHOLDER =
 type Message = Record<string, unknown>;
 export type ClaudeCliHistoryParams = {
   cliSessionId: string;
-  homeDir?: string;
+  projectsDir?: string;
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
 };

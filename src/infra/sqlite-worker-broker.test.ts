@@ -29,6 +29,7 @@ import {
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   reserveSqliteWorkerInputPreparation,
   runSqliteWorkerStoreOperation,
@@ -362,6 +363,63 @@ function openBroker(broker: SqliteWorkerBroker, pathname: string, cancel?: Abort
     { signal: cancel?.signal },
   );
 }
+
+it.each([false, true])(
+  "reports OPEN phase stamps only with detailed timing: %s",
+  async (detailed) => {
+    const completed = detailed
+      ? collectRequests((event) => event.phase === "completed")
+      : undefined;
+    const replies = vi.spyOn(Worker.prototype, "emit");
+    const broker = new SqliteWorkerBroker();
+    const file = databasePath();
+    try {
+      await broker.open<FixtureOperations>(
+        {
+          moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+          databasePath: file,
+          input: undefined,
+        },
+        undefined,
+        undefined,
+        {
+          createAdmission: () => ({
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => grant()),
+            nativeLocations: [file],
+          }),
+        },
+      );
+      const reply = replies.mock.calls.find(
+        ([event, value]) => event === "message" && isRecord(value) && value.ok === true,
+      )?.[1];
+      assert(isRecord(reply));
+      if (!detailed) {
+        expect(reply.timing).toBeUndefined();
+        return;
+      }
+      await waitForDiagnosticEventsDrained();
+      const timing = completed?.[0]?.timing;
+      assert(timing);
+      const stages = [
+        "received",
+        "backendLoadStarted",
+        "backendLoadFinished",
+        "openGrantStarted",
+        "openGrantFinished",
+        "factoryStarted",
+        "factoryFinished",
+        "serialized",
+        "replied",
+        "replyReceived",
+      ] as const;
+      const stamps = stages.map((stage) => timing[stage]);
+      expect(stamps).toEqual(stages.map(() => expect.any(Number)));
+      expect(stamps).toEqual(stamps.toSorted((a, b) => a! - b!));
+    } finally {
+      await broker.close();
+    }
+  },
+);
 
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();

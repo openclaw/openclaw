@@ -1,10 +1,13 @@
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type RuntimeConfigCapture = Readonly<{
   source: OpenClawConfig;
   origin: OpenClawConfig;
+  /** Explicit live readers retain the owner selected before preparation yields. */
+  runtimeOwned: boolean;
 }>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
@@ -39,6 +42,7 @@ export function getPublishedRuntimeConfigSource(
 export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
+  runtimeOwner = runtimeConfigPublication.current?.config,
 ): OpenClawConfig {
   const clone = (value: OpenClawConfig) =>
     freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
@@ -47,11 +51,13 @@ export function captureRuntimeConfigWithSource(
   captures.set(captured, {
     source: capturedSource,
     origin: config,
+    runtimeOwned: config === runtimeOwner,
   });
   if (capturedSource !== captured) {
     captures.set(capturedSource, {
       source: capturedSource,
       origin: source,
+      runtimeOwned: source === runtimeOwner,
     });
   }
   return captured;

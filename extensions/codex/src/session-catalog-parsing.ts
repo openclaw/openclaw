@@ -496,10 +496,13 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
         !isRecord(turn) || !Array.isArray(turn.items) || turn.items.some((item) => !isRecord(item)),
     )
   ) {
-    throw new Error("Codex app-server returned an invalid transcript page");
+    throw new Error("Codex app-server returned an invalid chat history page");
   }
-  const nextCursor = readControlCursor(value.nextCursor, "transcript next response");
-  const backwardsCursor = readControlCursor(value.backwardsCursor, "transcript backwards response");
+  const nextCursor = readControlCursor(value.nextCursor, "chat history next response");
+  const backwardsCursor = readControlCursor(
+    value.backwardsCursor,
+    "chat history backwards response",
+  );
   const page: CodexThreadTurnsListResponse = {
     data: value.data as CodexThreadTurnsListResponse["data"],
     ...(nextCursor ? { nextCursor } : {}),
@@ -508,7 +511,7 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
   // A bounded item count does not bound tool output embedded in one item. Keep
   // the page below node.invoke and Gateway WebSocket payload ceilings.
   if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES) {
-    throw new Error("Codex app-server transcript page exceeds the safe response size");
+    throw new Error("Codex app-server chat history page exceeds the safe response size");
   }
   return page;
 }

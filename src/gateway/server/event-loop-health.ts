@@ -1,4 +1,4 @@
-import { closeSync, openSync, readFileSync, readSync } from "node:fs";
+import { open, readFile } from "node:fs/promises";
 import { cpus, type CpuInfo } from "node:os";
 import { monitorEventLoopDelay, performance, type ELDHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";
@@ -30,12 +30,12 @@ const PERSISTENT_DEGRADATION_WARN_AFTER_MS = 60_000;
 const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 const IDLE_SAMPLE_INTERVAL_MS = 10_000;
-// A native request can wait on a blocked worker. It must not delay the sampler.
-const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
+// Host IO and native worker reads must not delay event-loop sampling.
+const CPU_SAMPLE_BUDGET_MS = 100;
 const CPU_USAGE_ORIGIN = { user: 0, system: 0 };
 const HOST_CPU_TIME_KEYS = ["user", "nice", "sys", "idle", "irq"] as const;
-// Ten uint64 counters and their separators fit in one bounded synchronous read.
-const HOST_CPU_STAT_BUFFER = Buffer.alloc(256);
+// Keep aggregate reads bounded without allocating per-core metadata.
+const HOST_CPU_STAT_BUFFER_BYTES = 256;
 type HostCpuTimes = { count: number; cpus: Pick<CpuInfo, "times">[] };
 const log = createSubsystemLogger("gateway/event-loop");
 
@@ -79,21 +79,21 @@ function isValidCpuUsage(usage: NodeJS.CpuUsage | undefined): usage is NodeJS.Cp
   return cpuUsageDelta(usage, CPU_USAGE_ORIGIN) !== undefined;
 }
 
-function readHostCpuTimes(): HostCpuTimes | undefined {
+async function readHostCpuTimes(buffer: Buffer): Promise<HostCpuTimes | undefined> {
   try {
     if (process.platform === "linux") {
-      const fd = openSync("/proc/stat", "r");
+      const fd = await open("/proc/stat", "r");
       let bytes: number;
       try {
-        bytes = readSync(fd, HOST_CPU_STAT_BUFFER, 0, HOST_CPU_STAT_BUFFER.length, 0);
+        ({ bytesRead: bytes } = await fd.read(buffer, 0, buffer.length, 0));
       } finally {
-        closeSync(fd);
+        await fd.close();
       }
-      const lineEnd = HOST_CPU_STAT_BUFFER.indexOf(10);
+      const lineEnd = buffer.indexOf(10);
       if (lineEnd < 0 || lineEnd >= bytes) {
         return undefined;
       }
-      const fields = HOST_CPU_STAT_BUFFER.toString("ascii", 0, lineEnd).split(/\s+/);
+      const fields = buffer.toString("ascii", 0, lineEnd).split(/\s+/);
       if (fields[0] !== "cpu" || fields.length < 7) {
         return undefined;
       }
@@ -112,7 +112,7 @@ function readHostCpuTimes(): HostCpuTimes | undefined {
       // availableParallelism reports affinity, not host CPUs. Read the online
       // topology each time so hotplug still invalidates the sampling window.
       let count = 0;
-      for (const range of readFileSync("/sys/devices/system/cpu/online", "utf8")
+      for (const range of (await readFile("/sys/devices/system/cpu/online", "utf8"))
         .trim()
         .split(",")) {
         const [first, last = first] = range.split("-").map(Number);
@@ -210,7 +210,10 @@ export function createGatewayEventLoopHealthMonitor(deps: {
   let lastWallAt = nowMs();
   let lastCpuUsage = readCpuUsage();
   let lastMainThreadCpuUsage = readMainThreadCpuUsage();
-  let lastHostCpuTimes = readHostCpuTimes();
+  const hostCpuBuffer = Buffer.alloc(HOST_CPU_STAT_BUFFER_BYTES);
+  let lastHostCpuWindow: { at: number; times: HostCpuTimes } | undefined;
+  let hostCpuSamplePending = false;
+  let cancelHostCpuSample: (() => void) | undefined;
   let lastEventLoopUtilization: EventLoopUtilization = readEventLoopUtilization();
   let lastSnapshot: GatewayEventLoopHealth | undefined;
   let firstDegradedAtMs: number | null = null;
@@ -221,6 +224,43 @@ export function createGatewayEventLoopHealthMonitor(deps: {
   };
   let lastWorkerCpuWindow: WorkerCpuWindow | undefined;
   let cancelWorkerCpuSample: (() => void) | undefined;
+
+  const captureHostCpu = (at: number, health?: GatewayEventLoopHealth) => {
+    cancelHostCpuSample?.();
+    const previous = lastHostCpuWindow;
+    lastHostCpuWindow = undefined;
+    // A stalled read retains its one buffer and native request, even across resets.
+    if (hostCpuSamplePending) {
+      return;
+    }
+    let active = true;
+    cancelHostCpuSample = () => {
+      active = false;
+    };
+    hostCpuSamplePending = true;
+    void readHostCpuTimes(hostCpuBuffer).then((times) => {
+      hostCpuSamplePending = false;
+      if (!active || nowMs() - at > CPU_SAMPLE_BUDGET_MS || !times) {
+        return;
+      }
+      lastHostCpuWindow = { at, times };
+      if (!health || !lastSnapshot || lastWallAt !== at) {
+        return;
+      }
+      const hostUtilization =
+        previous && at - previous.at === health.intervalMs
+          ? hostCpuUtilization(times, previous.times)
+          : undefined;
+      lastSnapshot = {
+        ...lastSnapshot,
+        cpuBreakdown: {
+          ...lastSnapshot.cpuBreakdown,
+          ...(hostUtilization === undefined ? {} : { hostUtilization }),
+          hostCpuCount: times.count,
+        },
+      };
+    });
+  };
 
   const captureWorkerCpu = (at: number, health?: GatewayEventLoopHealth) => {
     cancelWorkerCpuSample?.();
@@ -239,7 +279,8 @@ export function createGatewayEventLoopHealthMonitor(deps: {
       lastWorkerCpuWindow = { at, revision, usage };
       if (
         !health ||
-        lastSnapshot !== health ||
+        !lastSnapshot ||
+        lastWallAt !== at ||
         !previous ||
         previous.revision !== revision ||
         at - previous.at !== health.intervalMs
@@ -257,9 +298,9 @@ export function createGatewayEventLoopHealthMonitor(deps: {
       const workerCoreRatio = roundMetric(total / (health.intervalMs * 1_000));
       const mainThreadCoreRatio = health.cpuBreakdown?.mainThreadCoreRatio;
       lastSnapshot = {
-        ...health,
+        ...lastSnapshot,
         cpuBreakdown: {
-          ...health.cpuBreakdown,
+          ...lastSnapshot.cpuBreakdown,
           workerCoreRatio,
           ...(mainThreadCoreRatio === undefined
             ? {}
@@ -282,7 +323,7 @@ export function createGatewayEventLoopHealthMonitor(deps: {
     };
     const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
-      if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
+      if (!active || nowMs() - at > CPU_SAMPLE_BUDGET_MS) {
         return;
       }
       if (usage.every(isValidCpuUsage)) {
@@ -384,9 +425,6 @@ export function createGatewayEventLoopHealthMonitor(deps: {
     const mainThreadCpuUsage = readMainThreadCpuUsage();
     const mainThreadDelta = cpuUsageDelta(mainThreadCpuUsage, lastMainThreadCpuUsage);
     lastMainThreadCpuUsage = mainThreadCpuUsage;
-    const hostCpuTimes = readHostCpuTimes();
-    const hostUtilization = hostCpuUtilization(hostCpuTimes, lastHostCpuTimes);
-    lastHostCpuTimes = hostCpuTimes;
     const reasons = classifyGatewayEventLoopHealthReasons({
       intervalMs,
       delayP99Ms,
@@ -411,13 +449,10 @@ export function createGatewayEventLoopHealthMonitor(deps: {
       delayMaxMs,
       utilization,
       cpuCoreRatio,
-      cpuBreakdown: {
-        ...(mainThreadDelta === undefined
+      cpuBreakdown:
+        mainThreadDelta === undefined
           ? {}
-          : { mainThreadCoreRatio: roundMetric(mainThreadDelta / (intervalMs * 1_000)) }),
-        ...(hostUtilization === undefined ? {} : { hostUtilization }),
-        ...(hostCpuTimes ? { hostCpuCount: hostCpuTimes.count } : {}),
-      },
+          : { mainThreadCoreRatio: roundMetric(mainThreadDelta / (intervalMs * 1_000)) },
     };
 
     histogram.reset();
@@ -425,6 +460,7 @@ export function createGatewayEventLoopHealthMonitor(deps: {
     lastCpuUsage = readCpuUsage();
     lastEventLoopUtilization = currentEventLoopUtilization;
     lastSnapshot = health;
+    captureHostCpu(now, health);
     captureWorkerCpu(now, health);
 
     // Publish once at the sampling owner; readers never reset or commit observations.
@@ -469,6 +505,7 @@ export function createGatewayEventLoopHealthMonitor(deps: {
   };
   let samplingJob = histogram ? scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) : undefined;
   if (histogram) {
+    captureHostCpu(lastWallAt);
     captureWorkerCpu(lastWallAt);
   }
   const unsubscribeInterest = onInternalDiagnosticEventInterest("gateway.event_loop.sample", () => {
@@ -485,13 +522,15 @@ export function createGatewayEventLoopHealthMonitor(deps: {
     lastWallAt = nowMs();
     lastCpuUsage = readCpuUsage();
     lastMainThreadCpuUsage = readMainThreadCpuUsage();
-    lastHostCpuTimes = readHostCpuTimes();
+    cancelHostCpuSample?.();
+    lastHostCpuWindow = undefined;
     lastEventLoopUtilization = readEventLoopUtilization();
     lastSnapshot = undefined;
     firstDegradedAtMs = null;
     cancelWorkerCpuSample?.();
     lastWorkerCpuWindow = undefined;
     if (histogram) {
+      captureHostCpu(lastWallAt);
       captureWorkerCpu(lastWallAt);
       samplingJob = scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
     }
@@ -515,6 +554,8 @@ export function createGatewayEventLoopHealthMonitor(deps: {
       samplingJob?.cancel();
       histogram?.disable();
       histogram = null;
+      cancelHostCpuSample?.();
+      lastHostCpuWindow = undefined;
       cancelWorkerCpuSample?.();
       lastWorkerCpuWindow = undefined;
       lastSnapshot = undefined;

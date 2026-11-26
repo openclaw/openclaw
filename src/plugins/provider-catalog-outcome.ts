@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 
 export type ProviderCatalogOutcome = {
@@ -41,3 +42,18 @@ export type ProviderCatalogOutcome = {
   /** Advisory only: configured ids absent from this successful server listing; never eligibility. */
   unlistedConfiguredModelIds?: readonly string[];
 };
+
+/** True when the successful listing made with this exact credential returned the model id. */
+export function isModelInCredentialListing(
+  outcomes: readonly ProviderCatalogOutcome[] | undefined,
+  ref: { provider: string; modelId: string; profileId?: string },
+): boolean {
+  const provider = normalizeProviderId(ref.provider);
+  return (outcomes ?? []).some(
+    (outcome) =>
+      outcome.status === "ready" &&
+      outcome.profileId === ref.profileId &&
+      normalizeProviderId(outcome.provider) === provider &&
+      (outcome.listedModelIds ?? outcome.modelIdCatalog?.modelIds)?.includes(ref.modelId),
+  );
+}

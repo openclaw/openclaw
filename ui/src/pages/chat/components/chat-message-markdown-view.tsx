@@ -29,6 +29,7 @@ import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-ma
 import { extractMessageMediaText } from "./chat-message-media-projection.ts";
 import {
   hasActionRowReactionPicker,
+  ownReactionEmoji,
   type MessageReactionOptions,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
@@ -129,11 +130,10 @@ export function resolveMessageActionDetails(
 }
 
 type MessageActionOptions = MessageReactionOptions & {
+  agentId?: string;
+  sessionKey?: string;
   onReply?: (target: MessageReplyTarget) => void;
 };
-
-// The picker never reports an active emoji here: it only renders while the message has no reactions.
-const NO_ACTIVE_REACTIONS: ReadonlySet<string> = new Set();
 
 export function hasMessageActionButtons(
   details: MessageActionDetails | null | undefined,
@@ -176,6 +176,7 @@ export function MessageActions(props: {
       </Show>
       <Show when={props.details?.readAloudText}>
         <ReadAloud
+          sessionKey={props.options.sessionKey}
           text={props.details!.readAloudText!}
           buttonRef={(element) => {
             elements.readAloud = element;
@@ -186,7 +187,10 @@ export function MessageActions(props: {
         <MessageReactionPicker
           class="chat-reaction-action"
           placement={props.options.reactionPlacement ?? "bottom-start"}
-          activeEmoji={NO_ACTIVE_REACTIONS}
+          activeEmoji={ownReactionEmoji(
+            props.options.messageReactions?.get(props.details!.reactionMessageId!),
+            props.options.userId,
+          )}
           onSelect={(emoji: string, remove: boolean) =>
             props.options.onReact?.(props.details!.reactionMessageId!, emoji, remove)
           }

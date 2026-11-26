@@ -40,7 +40,8 @@ concurrency:
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
       && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
       || format('website-installer-sync-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.ref) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # A newer source push must not cancel an in-flight destination publication.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -493,6 +494,10 @@ jobs:
         run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
 
   sync-website:
+    # Manual runs and main pushes share one destination branch.
+    concurrency:
+      group: website-installer-publication
+      cancel-in-progress: false
     needs:
       - static
       - linux-docker
@@ -518,6 +523,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: openclaw
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Checkout openclaw.ai
         if: env.OPENCLAW_GH_TOKEN != ''
@@ -527,6 +534,7 @@ jobs:
           ref: main
           token: ${{ env.OPENCLAW_GH_TOKEN }}
           path: openclaw.ai
+          fetch-depth: 0
 
       - name: Sync installer scripts
         if: env.OPENCLAW_GH_TOKEN != ''
@@ -564,6 +572,8 @@ jobs:
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'
         working-directory: openclaw.ai
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           for installer in public/install.sh public/install-cli.sh; do
             bash -n "$installer"
@@ -572,16 +582,107 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
-      - name: Commit and push website sync
+      - name: Admit current installer source
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          # A delayed run must not overwrite newer installer inputs.
+          git diff --exit-code "$GITHUB_SHA" origin/main -- \
+            scripts/install.sh scripts/install-cli.sh scripts/install.ps1 \
+            scripts/install-policy.sh scripts/build-installers.mjs \
+            scripts/lib/standalone-installers.mjs \
+            .github/workflows/website-installer-sync.yml
+
+      - name: Record validated website tree
+        id: validated
         if: steps.changes.outputs.changed == 'true'
         working-directory: openclaw.ai
         run: |
-          git config user.name "openclaw-installer-sync[bot]"
-          git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
+          set -euo pipefail
           git add public/install.sh public/install-cli.sh public/install.ps1
           if git ls-files --error-unmatch public/install.cmd >/dev/null 2>&1; then
             git add -u -- public/install.cmd
           fi
-          git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          echo "tree=$(git write-tree)" >> "$GITHUB_OUTPUT"
+
+      - name: Create installer sync pull request
+        id: sync-pr
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8
+        with:
+          token: ${{ env.OPENCLAW_GH_TOKEN }}
+          branch-token: ${{ env.OPENCLAW_GH_TOKEN }}
+          path: openclaw.ai
+          base: main
+          branch: automation/installer-sync
+          draft: false
+          author: openclaw-installer-sync[bot] <openclaw-installer-sync[bot]@users.noreply.github.com>
+          committer: openclaw-installer-sync[bot] <openclaw-installer-sync[bot]@users.noreply.github.com>
+          commit-message: "chore: sync installers from openclaw ${{ github.sha }}"
+          title: "chore: sync verified OpenClaw installers"
+          body: |
+            Sync validated installer artifacts from openclaw/openclaw@${{ github.sha }}.
+
+            Installer platform checks and the website build passed before publication.
+            Source run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          add-paths: |
+            public/install.sh
+            public/install-cli.sh
+            public/install.ps1
+            public/install.cmd
+
+      - name: Merge and verify installer sync
+        if: steps.changes.outputs.changed == 'true'
+        timeout-minutes: 10
+        working-directory: openclaw.ai
+        env:
+          GH_TOKEN: ${{ env.OPENCLAW_GH_TOKEN }}
+          PR_NUMBER: ${{ steps.sync-pr.outputs.pull-request-number }}
+          PR_HEAD: ${{ steps.sync-pr.outputs.pull-request-head-sha }}
+          VALIDATED_TREE: ${{ steps.validated.outputs.tree }}
+        run: |
+          set -euo pipefail
+          repo=openclaw/openclaw.ai
+          if [[ -z "$PR_NUMBER" ]]; then
+            git fetch --no-tags origin main
+            git diff --exit-code "$VALIDATED_TREE" origin/main
+            echo "Validated installers are already on main."
+            exit 0
+          fi
+          git fetch --no-tags origin "$PR_HEAD"
+          # The action may rebase onto a newer website base. Only the built tree
+          # is admitted; preserve the PR for a fresh run if that base changed.
+          git diff --exit-code "$VALIDATED_TREE" "$PR_HEAD"
+          for attempt in {1..30}; do
+            record=$(gh pr view "$PR_NUMBER" --repo "$repo" \
+              --json headRefOid,mergeStateStatus,state \
+              --jq '[.headRefOid, .mergeStateStatus, .state] | @tsv')
+            IFS=$'\t' read -r head merge_state state <<< "$record"
+            [[ "$head" == "$PR_HEAD" ]] || { echo "Installer PR head changed." >&2; exit 1; }
+            if [[ "$state" == MERGED ]]; then break; fi
+            [[ "$state" == OPEN && "$merge_state" != DIRTY ]] || { echo "Installer PR cannot merge: $record" >&2; exit 1; }
+            if [[ "$merge_state" == CLEAN ]]; then
+              git fetch --no-tags origin main
+              git merge-base --is-ancestor origin/main "$PR_HEAD"
+              if ! gh pr merge "$PR_NUMBER" --repo "$repo" --squash --match-head-commit "$PR_HEAD"; then
+                echo "Merge request did not confirm success; checking the PR outcome." >&2
+              fi
+              break
+            fi
+            sleep 10
+          done
+          record=$(gh pr view "$PR_NUMBER" --repo "$repo" \
+            --json headRefOid,state,mergeCommit \
+            --jq '[.headRefOid, .state, (.mergeCommit.oid // "")] | @tsv')
+          IFS=$'\t' read -r head state merged_sha <<< "$record"
+          [[ "$head" == "$PR_HEAD" && "$state" == MERGED && -n "$merged_sha" ]] || {
+            echo "Installer sync is not merged; PR https://github.com/$repo/pull/$PR_NUMBER remains available." >&2
+            exit 1
+          }
+          git fetch --no-tags origin main "$merged_sha"
+          git merge-base --is-ancestor "$merged_sha" origin/main
+          git diff --exit-code "$VALIDATED_TREE" "$merged_sha"
+          echo "Verified installer sync: https://github.com/$repo/pull/$PR_NUMBER at $merged_sha"

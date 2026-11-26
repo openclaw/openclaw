@@ -22,7 +22,7 @@ it("shares the prepared attachment only inside its active operation scope", asyn
     });
     await expect(afterScope).rejects.toThrow("requires its retained admission");
   } finally {
-    admission.finish();
+    await admission.finish();
   }
 });
 

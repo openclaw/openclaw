@@ -21,7 +21,11 @@ import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  recordRequesterHandoff,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -40,6 +44,7 @@ import {
 import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
 import {
@@ -561,15 +566,11 @@ function planTerminalCompletion(
     terminalReply?.disposition === "empty" &&
     terminalReply.code !== "message-tool-not-called" &&
     entry.requesterTurnYielded !== true &&
-    entry.requesterSettleWake === undefined &&
-    entry.delivery?.disposition !== "intentional_non_delivery";
+    entry.requesterSettleWake === undefined;
   if (closesAsIntentionalNonDelivery) {
     // Producer-owned empty success is a terminal fact, not a failed send.
     // Close it before terminal persistence so no requester delivery can start.
-    entry.delivery = {
-      status: "not_required",
-      disposition: "intentional_non_delivery",
-    };
+    entry.delivery = { status: "not_required" };
     entry.suppressCompletionDelivery = true;
   }
 
@@ -618,6 +619,14 @@ function planTerminalCompletion(
       outcome: entry.execution.outcome,
       terminalReply: entry.completion?.terminalReply,
     };
+  }
+  if (
+    entry.completionTarget === "parent" &&
+    entry.delivery?.status === "pending" &&
+    !entry.delivery.requesterDelivery &&
+    isClaimedByLiveRequesterTurn(entry)
+  ) {
+    recordRequesterHandoff(entry, entry.requesterTurnRunId);
   }
   const mutated = !isDeepStrictEqual(currentEntry, entry);
   return {

@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -19,6 +20,7 @@ import {
 import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
 // Tests info-style commands that report context, status, skills, and session exports.
 
@@ -823,5 +825,69 @@ describe("handleToolsCommand", () => {
     await handleToolsCommandImpl(params, true);
 
     expect(resolveToolsArg(toolsTestState.resolveToolsMock).accountId).toBe("work");
+  });
+});
+
+describe("denied /status", () => {
+  const controlUiOwner: Partial<MsgContext> = {
+    Provider: "webchat",
+    Surface: "webchat",
+    GatewayClientScopes: ["operator.admin"],
+    TurnGrant: decideTurnGrant(["operator.admin"]),
+  };
+
+  it.each<{
+    name: string;
+    ctx: Partial<MsgContext>;
+    allowFrom: Record<string, string[]>;
+    reply: unknown;
+  }>([
+    {
+      // An admin can edit commands.allowFrom itself; admission decides this once.
+      name: "runs for an admitted operator.admin Control UI turn outside commands.allowFrom",
+      ctx: controlUiOwner,
+      allowFrom: { "*": ["someone-else"] },
+      reply: { text: "status reply" },
+    },
+    {
+      name: "names the policy for a non-admin Control UI turn outside commands.allowFrom",
+      ctx: {
+        ...controlUiOwner,
+        GatewayClientScopes: ["operator.write"],
+        TurnGrant: decideTurnGrant(["operator.write"]),
+      },
+      allowFrom: { "*": ["someone-else"] },
+      reply: {
+        text: expect.stringContaining("`commands.allowFrom` does not include this Gateway client"),
+      },
+    },
+    {
+      name: "runs for a Control UI owner when commands.allowFrom only lists other channels",
+      ctx: controlUiOwner,
+      allowFrom: { whatsapp: ["someone-else"] },
+      reply: { text: "status reply" },
+    },
+    {
+      name: "refuses a native command from a denied channel sender",
+      ctx: { CommandSource: "native" },
+      allowFrom: { "*": ["someone-else"] },
+      reply: { text: "You are not authorized to use this command." },
+    },
+    {
+      name: "stays silent for a denied channel text sender",
+      ctx: {},
+      allowFrom: { "*": ["someone-else"] },
+      reply: undefined,
+    },
+  ])("$name", async ({ ctx, allowFrom, reply }) => {
+    const params = buildCommandTestParams(
+      "/status",
+      { commands: { text: true, allowFrom }, channels: { whatsapp: { allowFrom: ["*"] } } },
+      ctx,
+    );
+
+    const result = await handleStatusCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false, ...(reply ? { reply } : {}) });
   });
 });

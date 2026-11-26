@@ -5,9 +5,9 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {
-  AUTOMATIC_RECOVERY_CLEANUP_STEP,
   automaticRecoveryCleanupWarning,
   canAutomaticallyCleanUpdateRecovery,
+  hasSettledAutomaticRecoveryCleanup,
 } from "../infra/update-automatic-cleanup-result.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRunAsync as getUpdateRun } from "../infra/update-run-reader.js";
@@ -171,9 +171,7 @@ export async function finalizeRestartUpdateRun(
     !pendingExpired &&
     updateRun &&
     canAutomaticallyCleanUpdateRecovery(updateRun) &&
-    !updateRun.steps.some(
-      (step) => step.step === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.status === "completed",
-    )
+    !hasSettledAutomaticRecoveryCleanup(updateRun)
   ) {
     let cleanup: UpdateStepResult | undefined;
     try {

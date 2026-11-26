@@ -205,9 +205,14 @@ describe("applyMediaUnderstanding", () => {
         readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
       };
     });
+    // mock-isolation: Use fixture FFmpeg and HEIC converters instead of external media tools.
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,
+    }));
+    // mock-isolation: Keep fixture images on the existing unknown-format optimizer path.
+    vi.doMock("../media/image-header-metadata.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../media/image-header-metadata.js")>()),
       readImageMetadataFromHeader: () => null,
     }));
     // mock-isolation: All external media commands are supplied by the test fixture.
@@ -272,17 +277,17 @@ describe("applyMediaUnderstanding", () => {
     tempMediaFileCache.clear();
   });
 
-  it("echoes an enabled audio transcript to the originating account", async () => {
-    const ctx = await createAudioCtx();
+  it("echoes current audio to the originating account but not quoted audio", async () => {
+    const quoted = await attachment("quoted.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
+    const now = await attachment("now.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
+    const ctx = mediaCtx([now, { ...quoted, source: "quote" }]);
     Object.assign(ctx, { Provider: "voicechat", From: "+10000000001", AccountId: "acc1" });
-    await applyAudio(ctx, "hello world", { cfg: createGroqAudioConfig({ echoTranscript: true }) });
+    const attachments = { mode: "all", maxAttachments: 2 } as const;
+    const cfg = createGroqAudioConfig({ echoTranscript: true, attachments });
+    await applyAudio(ctx, async (req) => ({ text: `heard ${req.fileName}` }), { cfg });
+    expect(ctx.Transcript).toContain("heard quoted.ogg");
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        channel: "voicechat",
-        to: "+10000000001",
-        accountId: "acc1",
-        payloads: [{ text: '📝 "hello world"' }],
-      }),
+      expect.objectContaining({ accountId: "acc1", payloads: [{ text: '📝 "heard now.ogg"' }] }),
     );
   });
 
@@ -339,17 +344,17 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("handles URL-only attachments for audio transcription", async () => {
+  it("transcribes URL-only audio outside an unrelated raw-prefix denial", async () => {
     const ctx: MsgContext = {
-      Body: "",
+      SessionKey: "agent:main:whatsapp:direct:fixture",
       media: [{ url: "https://example.com/note.ogg", contentType: " Audio/Ogg; codecs=opus " }],
       ChatType: "direct",
       Surface: "whatsapp",
     };
     const cfg = createGroqAudioConfig({
       scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct", channel: "whatsapp" } }],
+        default: "allow",
+        rules: [{ action: "deny", match: { rawKeyPrefix: "agent:other:", keyPrefix: "agent:" } }],
       },
     });
 

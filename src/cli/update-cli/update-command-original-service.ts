@@ -12,13 +12,14 @@ import {
 } from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import {
-  hasGatewayServiceDefinitionOverrides,
+  canPreserveGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
@@ -185,7 +186,7 @@ export async function observeOriginalManagedServiceRuntime(
   assertCurrent();
   try {
     const root = await fs.realpath(verdict.root);
-    if (root === (await fs.realpath(params.root))) {
+    if (updateInstallRootsMatch(root, params.root)) {
       return undefined;
     }
     if (process.platform === "win32") {
@@ -213,7 +214,10 @@ export async function observeOriginalManagedServiceRuntime(
     if (!state.command) {
       throw new Error("Original service definition is unavailable.");
     }
-    if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
+    if (
+      !canPreserveGatewayServiceDefinitionOverrides(state.command) ||
+      state.command.reloadPending
+    ) {
       throw new Error(
         "Original service has overrides that cannot be restored by the service writer.",
       );

@@ -127,7 +127,7 @@ describe("tsdown config", () => {
         cacheKeyGenerator = generator;
       },
     });
-    const result = plugin.load.call(
+    const result = plugin.load.handler.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       modulePath,
     );
@@ -183,6 +183,22 @@ describe("tsdown config", () => {
     expect(await resolvePluginNames(relay.plugins)).not.toContain(
       "openclaw:runtime-dependency-ownership",
     );
+  });
+
+  it("builds the two broker attachments together outside the shared Gateway graph", async () => {
+    const sqlite = "infra/sqlite-readonly-native-resource";
+    const plugin = "plugins/plugin-capture-native-resource";
+    const graph = runtimeGraph(sqlite);
+    expect(graph).toBe(runtimeGraph(plugin));
+    expect(Object.keys(entrySources(graph)).toSorted()).toEqual([sqlite, plugin]);
+    expect(graph.outputOptions).toMatchObject({
+      codeSplitting: true,
+      chunkFileNames: "native-resource-private/[name]-[hash].mjs",
+    });
+    expect(graph.minify).toEqual(runtimeGraph("plugins/runtime/index").minify);
+    const plugins = await resolvePluginNames(graph.plugins);
+    expect(plugins).toContain("openclaw:compact-module-labels");
+    expect(plugins).not.toContain("openclaw:runtime-dependency-ownership");
   });
 
   it.each([

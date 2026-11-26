@@ -6,6 +6,10 @@ import {
   type JsonSchemaValidator,
   type jsonSchemaValidator,
 } from "@modelcontextprotocol/client";
+import {
+  publishRuntimeToolInputSchema,
+  wasToolSchemaTruncated,
+} from "@openclaw/ai/internal/tool-schema";
 
 type McpToolResultValidator = (result: CallToolResult) => void;
 
@@ -14,6 +18,30 @@ type McpToolCatalogDisposition = "include" | "denied" | "exclude";
 export type McpToolCatalogMetadata = {
   validatorForCall(toolName: string): McpToolResultValidator | undefined;
 };
+
+function createResultValidator(
+  toolName: string,
+  validator: JsonSchemaValidator<unknown>,
+): McpToolResultValidator {
+  return (result) => {
+    if (result.isError === true) {
+      return;
+    }
+    if (result.structuredContent === undefined) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidRequest,
+        `Tool ${toolName} has an output schema but did not return structured content`,
+      );
+    }
+    const validation = validator(result.structuredContent);
+    if (!validation.valid) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
+        `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
+      );
+    }
+  };
+}
 
 /** Canonicalizes one server catalog before policy, publication, and call metadata diverge. */
 export function normalizeMcpToolCatalog(
@@ -37,7 +65,20 @@ export function normalizeMcpToolCatalog(
   const included: Tool[] = [];
   const deniedTools: Tool[] = [];
   const excludedTools: Tool[] = [];
+  const outputSchemas = new Map<string, NonNullable<Tool["outputSchema"]>>();
+  // Compiled on first call: most listed tools are never called, and every
+  // session runtime normalizes its own catalog (#199327).
   const resultValidators = new Map<string, McpToolResultValidator>();
+  const validatorForCall = (toolName: string): McpToolResultValidator | undefined => {
+    const cached = resultValidators.get(toolName);
+    const outputSchema = outputSchemas.get(toolName);
+    if (cached || !outputSchema) {
+      return cached;
+    }
+    const validator = createResultValidator(toolName, schemaValidator.getValidator(outputSchema));
+    resultValidators.set(toolName, validator);
+    return validator;
+  };
   for (const [index, sourceTool] of tools.entries()) {
     const toolName = canonicalNames[index] ?? "";
     // One wire name is one operation. Ambiguous aliases are safer omitted than
@@ -55,30 +96,28 @@ export function normalizeMcpToolCatalog(
       excludedTools.push(tool);
       continue;
     }
+    const input = publishRuntimeToolInputSchema(tool.inputSchema, "inputSchema");
+    if (input.violations.length === 0 && !wasToolSchemaTruncated(input.schema)) {
+      // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+      tool.inputSchema = input.schema as Tool["inputSchema"];
+    }
+    if (tool.outputSchema) {
+      const output = publishRuntimeToolInputSchema(tool.outputSchema, "outputSchema");
+      if (output.violations.length === 0 && !wasToolSchemaTruncated(output.schema)) {
+        // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+        tool.outputSchema = output.schema as Tool["outputSchema"];
+      }
+    }
     if (disposition === "include") {
       included.push(tool);
       if (tool.outputSchema) {
-        const validator: JsonSchemaValidator<unknown> = schemaValidator.getValidator(
-          tool.outputSchema,
-        );
-        resultValidators.set(toolName, (result) => {
-          if (result.isError === true) {
-            return;
-          }
-          if (result.structuredContent === undefined) {
-            throw new ProtocolError(
-              ProtocolErrorCode.InvalidRequest,
-              `Tool ${toolName} has an output schema but did not return structured content`,
-            );
-          }
-          const validation = validator(result.structuredContent);
-          if (!validation.valid) {
-            throw new ProtocolError(
-              ProtocolErrorCode.InvalidParams,
-              `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
-            );
-          }
-        });
+        outputSchemas.set(toolName, tool.outputSchema);
+        // Acquiring a schema also registers its `$id` resources for other
+        // tools' `$ref`s, so a schema that declares one still compiles here,
+        // in catalog order. The key scan may over-match; that only costs laziness.
+        if (JSON.stringify(tool.outputSchema).includes('"$id"')) {
+          validatorForCall(toolName);
+        }
       }
     } else {
       deniedTools.push(tool);
@@ -88,11 +127,7 @@ export function normalizeMcpToolCatalog(
   return {
     tools: included,
     excludedTools,
-    metadata: {
-      validatorForCall(toolName) {
-        return resultValidators.get(toolName);
-      },
-    },
+    metadata: { validatorForCall },
     deniedTools,
   };
 }

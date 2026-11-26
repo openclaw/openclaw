@@ -6,6 +6,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionInventory from "../config/sessions/session-transcript-worker-resources.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -29,7 +30,7 @@ import {
   registerSessionAutomationSource,
   sessionHasAutomation,
 } from "./session-automation-index.js";
-import * as sessionSharing from "./session-sharing.js";
+import * as sharingReads from "./session-sharing-target-read.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -52,18 +53,102 @@ function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
   );
 }
 
+it("selects each cold Inbox target once before reading its display", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const inventory = vi.spyOn(sessionInventory, "prepareSessionStoreCandidatesInWorker");
+    const reopened = f.openInbox("cold-selection");
+    const items = await f.items(f.bobClient, reopened);
+    expect(items).toMatchObject([{ sessionKey: SESSION_KEY, sessionTitle: "Design review" }]);
+    expect(inventory).toHaveBeenCalledTimes(1);
+  }));
+
+it("shares maintenance across a reconnect wave without overtaking a queued dismissal", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const [original] = await f.items();
+    const snapshot = vi.spyOn(mentionWorker, "readMentionSnapshot");
+    const wave = () =>
+      Promise.all(
+        Array.from({ length: 30 }, (_, index) =>
+          f.call("mentions.list", {}, { ...f.bobClient, connId: `reconnect-${index}` }),
+        ),
+      );
+    const first = wave();
+    const dismissal = f.call("mentions.dismiss", { ids: [original!.id] });
+    const second = wave();
+    for (const result of await first) {
+      expect(result).toMatchObject({ ok: true, payload: { items: [{ id: original!.id }] } });
+    }
+    expect(await dismissal).toMatchObject({ ok: true, payload: { items: [] } });
+    for (const result of await second) {
+      expect(result).toMatchObject({ ok: true, payload: { items: [] } });
+    }
+    // One synchronization per wave, plus dismissal maintenance and mutation synchronization.
+    expect(snapshot).toHaveBeenCalledTimes(4);
+  }));
+
+it("settles every reader after shared maintenance fails and retries the next wave", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const snapshot = vi
+      .spyOn(mentionWorker, "readMentionSnapshot")
+      .mockRejectedValueOnce(new Error("Synthetic snapshot failure"));
+    const results = await Promise.all(
+      f.clients.map((client) => f.call("mentions.list", {}, client)),
+    );
+    for (const result of results) {
+      expectMentionError(result, "UNAVAILABLE");
+    }
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(await f.items()).toHaveLength(1);
+    expect(snapshot).toHaveBeenCalledTimes(2);
+  }));
+
+it("reads unchanged inboxes without preparing another recipient's unavailable target", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const carolSessionKey = "agent:main:dashboard:carol-mention";
+    await f.setSession({ displayName: "Carol review" }, carolSessionKey);
+    await f.post("carol-source", {
+      sessionKey: carolSessionKey,
+      recipientProfileIds: [f.carol.id],
+    });
+    expect(await f.items(f.carolClient)).toHaveLength(1);
+    sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "session-entry" });
+    const resolve = vi
+      .spyOn(sharingReads, "prepareSessionSharingRead")
+      .mockRejectedValue(new Error("Unrelated session target is unavailable"));
+
+    const [carol, alice, bob] = await Promise.all(
+      [f.carolClient, f.aliceClient, f.bobClient].map((client) =>
+        f.call("mentions.list", {}, client),
+      ),
+    );
+    expect(carol).toMatchObject({
+      ok: true,
+      payload: { items: [{ sessionKey: carolSessionKey, messageId: "message-carol-source" }] },
+    });
+    expect(alice).toMatchObject({
+      ok: true,
+      payload: { items: [] },
+    });
+    expectMentionError(bob, "UNAVAILABLE");
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey: SESSION_KEY }),
+    );
+  }));
+
 it("recovers background views when a session is replaced during cold target preparation", () =>
   withMentionInbox(async (f) => {
     await f.post();
     await f.items();
-    const resolve = sessionSharing.resolveSessionSharingTargetAsync;
-    vi.spyOn(sessionSharing, "resolveSessionSharingTargetAsync").mockImplementationOnce(
-      async (...args) => {
-        const display = await resolve(...args);
-        await f.replaceSessionIdentity();
-        return display;
-      },
-    );
+    const resolve = sharingReads.prepareSessionSharingRead;
+    vi.spyOn(sharingReads, "prepareSessionSharingRead").mockImplementationOnce(async (...args) => {
+      const display = await resolve(...args);
+      await f.replaceSessionIdentity();
+      return display;
+    });
     await f.inbox.invalidateAsync();
     expect(await f.items()).toEqual([]);
     await f.setSession({ sessionId: SESSION_ID });
@@ -129,7 +214,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           expectMentionError(result, "UNAVAILABLE");
           expect(guard.mock.results).toContainEqual({
             type: "throw",
-            value: new Error("Mention authority changed before commit"),
+            value: new Error("Mention session changed before commit. Retry the request."),
           });
           await f.setSession({ visibility: "shared" });
         } else {

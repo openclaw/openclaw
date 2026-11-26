@@ -219,7 +219,6 @@ describe("SessionDiffPanel", () => {
     file.scrollIntoView = scrollIntoView;
     click(".session-diff__jump");
     flush();
-    click(".header-search__toggle");
     flush();
     const search = panel.querySelector<HTMLInputElement>("input.session-diff-menu__search")!;
     search.value = "M\u00fcller";
@@ -625,6 +624,23 @@ describe("SessionDiffPanel", () => {
 
     expect(panel.textContent).toContain("feature/latest");
     expect(panel.textContent).not.toContain("feature/stale");
+  });
+
+  it("reveals unchanged lines before a deletion and between zero-context hunks", async () => {
+    const patch = ["@@ -2 +1,0 @@", "-removed", "@@ -4,0 +4 @@", "+added"].join("\n");
+    const { panel, update } = mountPanel();
+    update({
+      loader: async () => fileResult(patch),
+      loadFileText: async () => "first line\nbetween one\nbetween two\nadded\nlast line\n",
+    });
+
+    const nextGap = () => panel.querySelector<HTMLButtonElement>(".session-diff__gap-count");
+    await waitForSolid(() => expect(nextGap()).not.toBeNull());
+    nextGap()!.click();
+    await waitForSolid(() => expect(panel.textContent).toContain("first line"));
+    nextGap()!.click();
+    await waitForSolid(() => expect(panel.textContent).toContain("between two"));
+    expect(panel.textContent).toContain("between one");
   });
 
   it("refreshes the diff instead of expanding file text from a stale gap snapshot", async () => {

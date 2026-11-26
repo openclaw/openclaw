@@ -49,7 +49,7 @@ it("hides complete HTML error pages after an HTTP reason phrase", () => {
     errorMessage: "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>",
   });
   expect(rendered).toBe(
-    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   );
 });
 

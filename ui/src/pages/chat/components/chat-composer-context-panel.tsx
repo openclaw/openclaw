@@ -1,6 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { Errored, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import {
+  formatPromptCacheHitRate,
+  latestRunCacheHitRate,
+} from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -9,6 +13,7 @@ import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
@@ -18,6 +23,9 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
+});
+const ChatSessionCost = lazy(() => import("./chat-context-breakdown.tsx"), {
+  export: "ChatSessionCost",
 });
 const ModelProviderIcon = lazy(() => import("../../../lib/reactive/provider-presentation.tsx"), {
   export: "ModelProviderIcon",
@@ -148,6 +156,10 @@ export function ChatComposerContextPanel(
     () => (props.open && props.model ? latestProviderCostStats(props.messages) : null),
     { lazy: true },
   );
+  const runCacheHitRate = createMemo(
+    () => (props.open && props.model ? latestRunCacheHitRate(props.messages) : null),
+    { lazy: true },
+  );
   const costTitle = () => {
     const costs = providerCosts();
     return costs
@@ -156,6 +168,102 @@ export function ChatComposerContextPanel(
           .map((key) => `${t(`usage.breakdown.${key}`)} ${formatContextCost(costs[key]!)}`)
           .join(" · ") || undefined
       : undefined;
+  };
+  /** One small table, one row per scope, and every row has the same columns: cache hit
+   *  rate and cost when known, else token counts. Token counts not shown as columns live
+   *  in each row label's tooltip. */
+  const UsageTable = (table: { total: () => SessionCostTotal | null }) => {
+    const context = () => props.model!;
+    const columns = (): ("input" | "output" | "cache" | "cost")[] => {
+      const shown: ("cache" | "cost")[] = [];
+      // Either scope's rate earns the column; the other shows a dash.
+      if (runCacheHitRate() !== null || (table.total()?.cacheHitRate ?? null) !== null) {
+        shown.push("cache");
+      }
+      // A cost column of dashes says nothing; show it once either scope has a figure.
+      if (showCosts() && (context().cost !== null || table.total() !== null)) {
+        shown.push("cost");
+      }
+      return shown.length > 0 ? shown : ["input", "output"];
+    };
+    const tokensTitle = (input: number | null, output: number | null, partial = false) =>
+      columns().includes("input")
+        ? undefined
+        : `${t("chat.composer.contextUsage.inputShort")} ${partial ? "≥ " : ""}${formatStat(input)} · ${t("chat.composer.contextUsage.outputShort")} ${partial ? "≥ " : ""}${formatStat(output)}`;
+    return (
+      <div
+        class="context-usage__usage"
+        role="table"
+        aria-label={t("chat.composer.contextUsage.title")}
+        style={{ "grid-template-columns": `1fr repeat(${columns().length}, auto)` }}
+      >
+        <div class="context-usage__usage-row context-usage__usage-head" role="row">
+          <span role="columnheader" />
+          <For each={columns()}>
+            {(column) => (
+              <span
+                role="columnheader"
+                title={
+                  column === "cache" ? t("chat.composer.contextUsage.cacheHitRate") : undefined
+                }
+              >
+                {t(`chat.composer.contextUsage.${column}Short`)}
+              </span>
+            )}
+          </For>
+        </div>
+        <div class="context-usage__usage-row" role="row" data-chat-usage-row="run">
+          <span role="rowheader" title={tokensTitle(context().input, context().output)}>
+            {t("chat.composer.contextUsage.latestRun")}
+          </span>
+          <For each={columns()}>
+            {(column) => (
+              <b role="cell" title={column === "cost" ? costTitle() : undefined}>
+                {column === "input"
+                  ? formatStat(context().input)
+                  : column === "output"
+                    ? formatStat(context().output)
+                    : column === "cache"
+                      ? formatPromptCacheHitRate(runCacheHitRate())
+                      : context().cost === null
+                        ? "—"
+                        : formatContextCost(context().cost!)}
+              </b>
+            )}
+          </For>
+        </div>
+        <Show when={table.total()}>
+          {(total) => {
+            const bound = (value: string) => (total().partial ? "≥ " : "") + value;
+            return (
+              <div class="context-usage__usage-row" role="row" data-chat-session-cost="true">
+                <span
+                  role="rowheader"
+                  title={tokensTitle(total().input, total().output, total().partial)}
+                >
+                  {t("chat.composer.contextUsage.sessionTotal")}
+                </span>
+                <For each={columns()}>
+                  {(column) => (
+                    <b role="cell">
+                      {column === "input"
+                        ? bound(formatStat(total().input))
+                        : column === "output"
+                          ? bound(formatStat(total().output))
+                          : column === "cache"
+                            ? formatPromptCacheHitRate(total().cacheHitRate)
+                            : total().unpriced
+                              ? t("chat.composer.contextUsage.unpriced")
+                              : bound(formatContextCost(total().usd))}
+                    </b>
+                  )}
+                </For>
+              </div>
+            );
+          }}
+        </Show>
+      </div>
+    );
   };
   return (
     <section class="context-usage__popover" aria-label={t("chat.composer.contextUsage.title")}>
@@ -212,25 +320,22 @@ export function ChatComposerContextPanel(
               />
             </div>
             <div class="context-usage__separator" />
-            <div class="context-usage__latest">
-              <span>{t("chat.composer.contextUsage.latestRun")}</span>
-              <dl class="context-usage__stats">
-                <div>
-                  <dt>{t("chat.composer.contextUsage.inputShort")}</dt>
-                  <dd>{formatStat(context().input)}</dd>
-                </div>
-                <div>
-                  <dt>{t("chat.composer.contextUsage.outputShort")}</dt>
-                  <dd>{formatStat(context().output)}</dd>
-                </div>
-                <Show when={showCosts() && context().cost !== null}>
-                  <div title={costTitle()}>
-                    <dt>{t("chat.composer.contextUsage.costShort")}</dt>
-                    <dd>{formatContextCost(context().cost!)}</dd>
-                  </div>
-                </Show>
-              </dl>
-            </div>
+            <Show
+              when={props.gateway && props.session}
+              fallback={<UsageTable total={() => null} />}
+            >
+              <Loading fallback={<UsageTable total={() => null} />}>
+                <ChatSessionCost
+                  gateway={props.gateway!}
+                  session={props.session!}
+                  agentId={props.agentId}
+                  used={context().used}
+                  presented={props.open}
+                >
+                  {(total) => <UsageTable total={total} />}
+                </ChatSessionCost>
+              </Loading>
+            </Show>
           </>
         )}
       </Show>

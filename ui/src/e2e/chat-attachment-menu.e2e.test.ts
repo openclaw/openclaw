@@ -7,7 +7,10 @@ import {
   attachmentOption,
   installAttachmentBrowserIdentity,
 } from "./chat-attachment-menu.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Platform attachment menu",
@@ -140,6 +143,45 @@ async function expectPickerAtPlusButton(chooser: FileChooser) {
 }
 
 suite.define(() => {
+  it("opens the camera when composer capabilities arrive during the click", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, permissions: ["camera"], serviceWorkers: "block" },
+      async ({ page }) => {
+        const capabilities = await holdModuleResponse(page, /chat-interaction-runtime-[^/]+\.js$/u);
+        await installMockGateway(page);
+        await page.addInitScript(() => {
+          const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+          navigator.mediaDevices.getUserMedia = (constraints) => {
+            document.documentElement.dataset.cameraActivation = String(
+              navigator.userActivation.isActive,
+            );
+            return getUserMedia(constraints);
+          };
+        });
+        await page.goto(suite.server.baseUrl + "chat", { waitUntil: "domcontentloaded" });
+        await page.getByRole("button", { name: "Add attachment", exact: true }).click();
+        const camera = page.getByRole("menuitem", { name: "Camera", exact: true });
+        await camera.click({ trial: true });
+        await capabilities.request;
+        const { x, y, width, height } = (await camera.boundingBox())!;
+        await page.mouse.move(x + width / 2, y + height / 2);
+        await page.mouse.down();
+
+        capabilities.release();
+        const skills = page.getByRole("menuitem", { name: "Skills", exact: true });
+        await skills.waitFor();
+        await skills.evaluate(async (row) => {
+          await new Promise(requestAnimationFrame);
+          const animations = row.closest("[popover]")?.getAnimations() ?? [];
+          await Promise.all(animations.map((animation) => animation.finished));
+        });
+        await page.mouse.up();
+
+        expect(await page.locator("html").getAttribute("data-camera-activation")).toBe("true");
+      },
+    );
+  });
+
   it.each(
     ["chat", "new"].flatMap((route) =>
       ["iPhone Safari", "iOS Chrome"].map((name) => ({ route, name })),
@@ -307,6 +349,9 @@ suite.define(() => {
       const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
       const panel = page.locator(".agent-chat__capability-menu-panel");
       await trigger.click();
+      // Opening can finish before the lazy menu content has loaded and been measured.
+      await page.getByRole("menuitem", { name: "Skills", exact: true }).waitFor();
+      await expect.poll(() => panel.evaluate((surface) => surface.style.height)).not.toBe("");
       await expect.poll(() => panel.getAttribute("data-phase")).toBe("open");
       await page.keyboard.press("Escape");
       await expect.poll(() => panel.getAttribute("data-phase")).toBe("hidden");
@@ -319,7 +364,7 @@ suite.define(() => {
               const surface = document.querySelector<HTMLElement>(
                 ".agent-chat__capability-menu-panel",
               );
-              if (surface && Number(getComputedStyle(surface).opacity) > 0) {
+              if (surface?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
                 seen.push(getComputedStyle(surface).height);
               }
               if (surface?.dataset.phase === "open") {

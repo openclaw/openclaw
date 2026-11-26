@@ -1,2 +1,0 @@
-64
-# Fund image-description cancellation and fallback regressions at CLI/runtime boundaries.

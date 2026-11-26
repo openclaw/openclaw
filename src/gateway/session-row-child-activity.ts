@@ -250,8 +250,8 @@ export function createSessionRowChildActivity(readChildren: (link: Link) => read
           }
         }
       }
-      const subagentRuns = context.subagentRuns.atTime(now);
       if (parent.dirty.size) {
+        const subagentRuns = context.subagentRuns.atTime(now);
         let recomputeExpiry = now < parent.sampledAt || now > parent.nextExpiry;
         for (const key of parent.dirty) {
           for (const child of parent.byKey.get(key) ?? []) {
@@ -413,6 +413,15 @@ export function createSessionRowChildProjection(params: {
     mark(change: SessionRowChange) {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
+        if (change.scope === "runtime") {
+          if (change.runtimeSession) {
+            for (const row of params.matching({ key: change.runtimeSession.sessionId }, "id")) {
+              invalidate(row.key);
+            }
+          }
+          // Both runtime keys and session-ID aliases have invalidated their ancestors.
+          activity.invalidateRuntime([]);
+        }
         return;
       }
       if (change.factsInvalidated) {

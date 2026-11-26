@@ -244,7 +244,7 @@ export function createPositionRailGutter(
     }
     disconnect();
     const column = columnElement();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region || !column) {
+    if (!viewport?.isConnected || !inner || !viewport.contains(inner) || !region || !column) {
       return;
     }
     observedViewport = viewport;
@@ -278,7 +278,7 @@ export function createPositionRailGutter(
   const read = () => {
     const viewport = scrollElement();
     const inner = innerElement();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport) {
+    if (!viewport?.isConnected || !inner || !viewport.contains(inner)) {
       return null;
     }
     const left = viewport.getBoundingClientRect().left + viewport.clientLeft;

@@ -87,7 +87,7 @@ import {
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -215,7 +215,7 @@ async function readHistoricalSessionIds(params: {
         ...input,
         env: params.databaseOptions.env ?? process.env,
       }),
-    maintenanceLane,
+    sessionStoreLane,
   );
 }
 
@@ -241,7 +241,7 @@ async function readDiskEvictableArchivedSessionBatch({
       options,
       (owner) =>
         owner.readArchivedEvictionCandidates({ archived, env: options.env ?? process.env }),
-      maintenanceLane,
+      sessionStoreLane,
     );
     assertCurrent();
     return batch;

@@ -16,7 +16,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { type CronServiceLike, reconcileShortTermDreamingCronJob } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
-import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
+import type { DreamNarrativeRequest } from "./dreaming-narrative.js";
+import type { NarrativePhaseData } from "./dreaming-phase-types.js";
 import {
   formatErrorMessage,
   formatRecallRepairDetails,
@@ -130,7 +131,7 @@ async function runShortTermDreamingPromotion(params: {
   ] = await Promise.all([
     import("./dreaming-markdown.js"),
     import("./dreaming-narrative.js"),
-    import("./dreaming-phases.js"),
+    import("./dreaming-sweep-phases.js"),
     import("./short-term-promotion.js"),
   ]);
   for (const { agentId, agentIds, workspaceDir } of workspaces) {

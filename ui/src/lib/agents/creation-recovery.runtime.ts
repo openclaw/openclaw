@@ -2,7 +2,7 @@ import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, ConfigSnapshot, GatewayAgentRow } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { registerAgentCreationEnglish } from "../../i18n/locales/en-agent-creation.ts";
 import { buildAgentMainSessionKey } from "../sessions/session-key.ts";
 import type {
@@ -44,7 +44,7 @@ export class AgentCreationUncertainError extends Error {
 }
 
 /** Loaded after provisional navigation; the eager owner retains attempted identities. */
-export async function executeAgentCreation(
+async function executeAgentCreation(
   client: GatewayBrowserClient,
   attempt: AgentCreationAttempt,
   previous: boolean,
@@ -64,6 +64,7 @@ export async function executeAgentCreation(
         name: attempt.name,
         ...(attempt.avatar ? { avatar: attempt.avatar } : {}),
         onboarding: true,
+        locale: i18n.getRequestedLocale(),
       });
       attempt.receipt = created;
     } catch (error) {

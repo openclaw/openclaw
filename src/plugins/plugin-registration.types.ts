@@ -72,12 +72,17 @@ export type WidgetPresenterContext = Readonly<{
   nativeChannelId?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  /** Channel-local id of the inbound message this turn answers. */
+  currentMessageId?: string;
   sessionKey?: string;
 }>;
 
 export type WidgetPresenterDocument = Readonly<{
   kind: "html";
+  /** Core-wrapped document for hosts that run widgets inside OpenClaw's iframe bridge. */
   html: string;
+  /** Agent-authored widget code before wrapping, for hosts with their own widget runtime. */
+  source: string;
   hostedUrl?: string;
 }>;
 
@@ -89,7 +94,13 @@ export type WidgetPresentationError =
 
 export type WidgetPresentationSuccess =
   | { kind: "node"; nodeId: string; nodeName?: string }
-  | { kind: "message"; receipt: MessageReceipt };
+  | {
+      kind: "message";
+      receipt: MessageReceipt;
+      updated?: boolean;
+      /** Advisory findings for the model; the widget was still delivered. */
+      notes?: readonly string[];
+    };
 
 export type WidgetPresenter = {
   description: string;
@@ -99,6 +110,10 @@ export type WidgetPresenter = {
   present: (params: {
     document: WidgetPresenterDocument;
     title: string;
+    /** Stable widget name: the explicit `name`, or one derived from the title. */
+    name: string;
+    /** Agent-written widget state, passed only to presenters that declare `capabilities.state`. */
+    state?: string;
     context: WidgetPresenterContext;
   }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
 } & (
@@ -113,6 +128,13 @@ export type WidgetPresenter = {
       capabilities: Readonly<{
         sourceKinds: readonly string[];
         maxSourceBytes?: number;
+        /**
+         * Replaces the browser-host authoring rules in the `show_widget` description while this
+         * presenter owns the current channel. Keep it bounded; it is part of the tool prompt.
+         */
+        authoringGuidance?: string;
+        /** Accepts the `state` argument: a UTF-8 string of at most `maxBytes` the widget reads. */
+        state?: Readonly<{ maxBytes: number; description: string }>;
       }>;
     }
 );
@@ -266,6 +288,16 @@ export type OpenClawPluginNodeInvokePolicyResult =
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
+   * Admit an exact MCP tool to same-node execution without running handle.
+   * Only an explicit true permits local execution; otherwise the Gateway handles it.
+   */
+  allowLocalMcpTool?: (ctx: {
+    nodeId: string;
+    server: string;
+    tool: string;
+    pluginConfig?: Record<string, unknown>;
+  }) => boolean;
+  /**
    * Platforms where these node-handled commands should be allowlisted by default.
    * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
@@ -343,6 +375,8 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
+  /** Available only to a service declaring its own configured catalog allowlist. */
+  catalogExports?: import("./service-catalog-exports.js").PluginServiceCatalogExports;
   /** Gateway-owned timed work; required by the version 2 service contract. */
   scheduler?: PluginServiceSchedulerV1;
   /** Remote device-only Control UI ingress, available only to admitted trusted services. */
@@ -420,6 +454,8 @@ export type OpenClawPluginServiceContext = {
     onWorkerRequestMetrics?: (
       listener: import("../infra/worker-request-diagnostics.js").WorkerRequestMetricsListener,
     ) => () => void;
+    /** Synchronous samples recorded through `api.metrics`; labels are borrowed until return. */
+    onPluginMetrics?: (listener: import("./plugin-metrics.js").PluginMetricsListener) => () => void;
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     /** Current owner-projected work; undefined while the Gateway projection is unavailable. */
@@ -452,6 +488,8 @@ export type OpenClawPluginServiceContext = {
 export type OpenClawPluginService = {
   apiVersion?: 1;
   id: string;
+  /** Path within this plugin's config to its operator-selected catalog IDs. */
+  catalogExports?: { allowlistPath: readonly string[] };
   /** Restart this service with committed config when one of these paths changes. */
   reload?: { configPrefixes: readonly string[] };
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
@@ -492,6 +530,8 @@ export type OpenClawPluginChannelRegistration<
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
+ * - `memory-backend`: passive memory backend for the slot owner; only
+ *   `registerMemoryCapability({ providerRuntime })` is honored.
  */
 export type PluginRegistrationMode =
   | "full"
@@ -499,7 +539,8 @@ export type PluginRegistrationMode =
   | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
-  | "cli-metadata";
+  | "cli-metadata"
+  | "memory-backend";
 
 export type {
   PluginServiceSessionWorkV1,

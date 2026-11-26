@@ -115,6 +115,7 @@ function resolveAgentRuntimePluginRegistryLoad(
               (activePluginIds.length > 0 ? activePluginIds : undefined))));
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
+    activationSourceConfig: loadOptions.activationSourceConfig,
     workspaceDir: workspaceDir ?? process.cwd(),
     basePluginIds: startupPluginIds,
     selections: resolveAgentRuntimePluginSelections(

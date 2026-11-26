@@ -1,3 +1,4 @@
+import fsPromises from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMessageEndContext,
@@ -23,6 +24,7 @@ describe("Incognito raw-stream diagnostic boundary", () => {
   it.each([false, true])(
     "keeps all stream content private without suppressing live delivery (Incognito: %s)",
     async (incognito) => {
+      using mkdir = vi.spyOn(fsPromises, "mkdir").mockResolvedValue(undefined);
       const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}synthetic`;
       for (const phase of ["commentary", "final_answer"] as const) {
         const message = {
@@ -52,6 +54,9 @@ describe("Incognito raw-stream diagnostic boundary", () => {
         assistantMessageEvent: { type: "thinking_delta", delta: "synthetic private reasoning" },
       });
       expect(thinkingContext.emitReasoningStream).toHaveBeenCalled();
+      // Raw diagnostics append after asynchronous directory creation, outside live delivery.
+      await Promise.all(mkdir.mock.results.map((result) => result.value));
+      expect(mkdir).toHaveBeenCalledTimes(incognito ? 0 : 5);
       expect(appendRegularFile).toHaveBeenCalledTimes(incognito ? 0 : 5);
     },
   );

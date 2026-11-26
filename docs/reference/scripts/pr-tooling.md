@@ -49,6 +49,17 @@ See the [merge recovery contract](/reference/scripts/merge-recovery).
 
 ## Wrapper execution and dependencies
 
+Revision exports read only the selected tree paths and their blobs through one
+`git cat-file --batch` process. A disposable index containing only those entries
+lets Git batch any missing blobs through its existing promisor routing before
+export; it never replaces the working index. Exports preserve raw blob bytes, executable modes,
+and symlinks without applying archive attributes or checkout filters. The
+bootstrap exporter itself comes directly from the authenticated main revision;
+the existing verification still checks extracted helpers before execution.
+Frozen dependency installation uses the same exporter for its required full
+source tree. This avoids `git archive` building an index and fetching unrelated
+promisor blobs even when only a few wrapper files were requested.
+
 - Supervised PR operations disable automatic Git maintenance through inherited process configuration, preserving repository settings. Explicit maintenance must still join before completion. PR source fetches also disable automatic maintenance: fetching one PR does not authorize repository-wide pruning of unrelated worktree metadata.
 
 - `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. Its subcommand classification table is the canonical wrapper trust boundary: a mismatched local wrapper may run only a classified `advisory` subcommand with `--dev-wrapper` or `OPENCLAW_PR_DEV_WRAPPER=1`; classified `landing` subcommands always require canonical/origin-main wrapper code. A worktree whose wrapper differs from origin/main (stale base or wrapper-editing branch) loudly substitutes the canonical checkout's wrapper when that checkout is clean and byte-identical to fetched `refs/remotes/origin/main`; it refuses only when no anchor-matching wrapper is available. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Release on clean exit requires the leader's completion marker; an escaped descendant that merely holds the notify pipe then produces a loud warned release instead of retention (#124583). A failed command auto-releases while its explicit pre-side-effect validation marker remains active, or after side effects when it exits on its own (status 1-127, no signal) and the full drain observes its group dead and every notification-pipe holder gone; that leaves only the fd-closing escapee residual a clean exit already accepts. Interruptions, lingering group work, a still-open pipe, and controller loss stay locked because detached children cannot be disproved. After verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
@@ -123,8 +134,8 @@ set: all package manifests, lockfile, workspace/package-manager configuration,
 patches, lifecycle code (including `pnpm:devPreinstall`) and its imports, both
 SQL schemas, and the native protocol generator's declared inputs and TypeScript
 configuration. Git-hook setup reads the presence of its
-directory, not hook contents. Generated outputs start absent in the archive.
-The full archive still undergoes the same Git blob, mode, symlink, and inventory
+directory, not hook contents. Generated outputs start absent in the export.
+The full export still undergoes the same Git blob, mode, symlink, and inventory
 verification before installation; sharing changes only dependency identity.
 
 The audit signature covers executable inputs and dependency/build policy.
@@ -148,7 +159,7 @@ installation, and hold identities before releasing that anchor's holds in SQLite
 The installation becomes settled only when no holds remain. Failed settlement
 retains the recorded holds even if the anchor is already absent.
 
-Each ordinary invocation collects before acquiring dependencies, including when
+By default, each ordinary invocation collects before acquiring dependencies, including when
 an installed checkout can supply them. Discovery and explicit recovery commands
 retain their independent bootstrap behavior. Collection keeps the four most recently used
 settled installations with no holds. Reuse order comes from the ledger's
@@ -172,6 +183,24 @@ The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
 matching installed packages still take the direct path. Keep any externally
 managed installation intact until its consumers finish.
+
+### Defer shared cache collection
+
+For one command, `OPENCLAW_PR_DEFER_CACHE_COLLECTION=1` skips opportunistic shared
+cache discovery, candidate enumeration, process inspection, and collection. It
+also covers retained workflows that call the exported collector directly. Unset
+the variable to keep normal collection; any other value, including an empty
+string, is rejected.
+
+```bash
+OPENCLAW_PR_DEFER_CACHE_COLLECTION=1 scripts/pr review-guard <PR>
+```
+
+Deferral changes no authentication, workflow binding, dependency qualification,
+lock validation, anchor claims, lifetime registration, or task-owned retirement.
+Active FD7 lifetimes still retain their anchors. It grants no installation,
+refresh, recovery, or cleanup authority. Scope the variable to the command;
+later invocations without it collect normally. No persistent setting is written.
 
 ## Qualify the workspace before review
 
@@ -236,6 +265,21 @@ obtain main. For ordinary task isolation outside the managed lifecycle, native
 `git -C <base> worktree add -b <task-branch> <allowed-task-path> <start-commit>`
 also shares objects. A linked worktree still requires access to its canonical
 Git directory and does not fix an inaccessible `scripts/pr workspace` result.
+
+Never clone the base's local path for landing or recovery: Git's default local
+clone hardlinks its packs, so a forgotten clone pins packs retired by base
+maintenance. Do not copy or relink packs into existing task scratch. Use the
+shared worktree owner above; its cleanup owns the checkout when the task ends.
+Disposable legacy clones under `.openclaw/tmp/` expire through scratch maintenance,
+including their dependency symlinks and hardlinked objects. Keep unfinished
+durable work outside scratch.
+
+Start native operations with the current trusted `scripts/pr`, which selects
+canonical-main code, rather than invoking a historical PR branch's `pr-lib`
+helpers directly. Retained workflows keep their pinned code and outcome namespace;
+use `prepare-workflow-successor` below when they need newer tooling, after
+reconciling any pending operation. Repeatedly fetching main from an old clone
+does not upgrade its running wrapper.
 
 PR review and landing need commits and trees for merge-base, ancestry checks,
 and log ranges, plus blobs for the checked-out files, diffs, and merges. They do
@@ -420,6 +464,39 @@ It admits only exact-commit proof publication while NEEDS WORK and unresolved
 findings continue to block ordinary qualification and merge. This command
 does not change the candidate, publish it, waive CI/security/review requirements,
 or authorize a merge.
+
+### Upgrade an ordinary READY preparation
+
+An already-published ordinary READY preparation can use the same command with
+`--ready-review`. Set `--expected-review` to the exact `.local/review.json` blob;
+the local, reviewed, preparation-source and hosted heads must be identical.
+Correction reviews, same-tree commit aliases, incoming-only reviews and
+`--for-proof` cannot be combined with this mode. The destination still must be
+freshly authenticated official main, with qualified source and dependencies.
+
+The owner validates the complete READY review and preparation identity, checks
+that the live PR is open without auto-merge or queue membership, and refuses
+missing authority fields. Existing merge captures, outcomes and pending dispatch
+remain with their reconciliation owners. This does not resolve a main-selection
+race or permit an arbitrary reviewed workflow revision.
+
+Before invalidating gates, the transition archives and verifies the full fixed
+READY inventory: preparation context, PR metadata, review mode, READY review,
+completed preparation and optional publication receipts. The snapshot also
+records required absence of correction, pending-proof and baseline authority.
+The version-3 binding retains that inventory and the exact predecessor,
+workflow, candidate, tree and review identities. Its evidence tree links every
+present authoritative blob so Git retains the bytes, not only their textual IDs.
+Both completed-preparation heads must equal the candidate. Older readers refuse version 3;
+version-1 and correction version-2 records keep their existing behavior.
+
+Source, local refs and the published branch stay unchanged. An interruption
+before the binding transaction retains the predecessor; an interruption after
+it may leave the successor despite a failed return. Once gates are invalidated,
+neither state restores them or authorizes automatic replay. Inspect retained
+identity and evidence, then run fresh ordinary `prepare-gates` through the
+admitted workflow. Successful succession is not CI proof or merge permission;
+all review, retention and branch-deletion protections still apply.
 
 ## Reconcile a completed CI review
 
@@ -695,16 +772,16 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 ## Captured baseline evidence hashes
 
 Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
-to the selected Git executable through a complete, private temporary file. The
-writer closes before a fresh read-only descriptor is opened at offset zero; on
-the supported POSIX host the pathname and directory are removed before Git starts.
-Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
-and operation supervision are unchanged.
-
-Temporary storage must accommodate the largest individual captured file. Ordinary
-write, spawn, and Git failures fail closed and clean up owned resources. Unlinking
-is not secure erasure, and abrupt termination before unlink can retain a private
-snapshot under `TMPDIR`; no automatic sweep of another operation's files occurs.
+through a pipe to the selected Git executable's `hash-object --no-filters --stdin`.
+Git never reopens the authority pathname, and hashing does not spool captured bytes
+to temporary storage. Reconstructed blobs still use Git's `-w` object write;
+signatures, authority checks, and operation supervision are unchanged. Pipe, spawn,
+and Git failures fail closed.
+Within one invocation, repeated non-writing hashes reuse a successful native Git
+result only after the captured bytes compare equal. Reuse retains at most 1,024
+payloads and 8 MiB; larger or excess payloads still use Git. Every authority file
+is reread and every signature and tree check still runs. Object writes always
+invoke Git, including after a read hash of identical bytes.
 
 ## Rerun failed CI tests
 

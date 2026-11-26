@@ -1,2 +1,0 @@
-# Regression proof for bounded materialization normalization across mutable, frozen, and rewritten plugin policy snapshots.
-44

@@ -58,7 +58,9 @@ function parseArgs(argv) {
     }
     const value = inline ?? argv[i + 1];
     if (inline === undefined) i += 1;
-    if (value === undefined) throw new Error(`Missing value for --${key}`);
+    if (value === undefined || (inline === undefined && value.startsWith("--"))) {
+      throw new Error(`Missing value for --${key}`);
+    }
     if (key === "text") {
       flags.text = [...(flags.text ?? []), value];
     } else {

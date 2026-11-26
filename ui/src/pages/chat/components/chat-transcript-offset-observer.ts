@@ -1,6 +1,6 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
+import { isTranscriptScrollKey, isTranscriptScrollWheel } from "../chat-scroll-input.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
@@ -28,6 +28,10 @@ export class TranscriptOffsetState {
   touching = false;
   touchScrolling = false;
   nativeInputActive = false;
+  inputTargetsStart = false;
+  // WebKit starts a keyboard scroll a frame after keydown, so the previous movement's idle
+  // (timer or scrollend) can arrive in between. Only the input's own scrolling can end it.
+  inputAwaitingScroll = false;
   renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
@@ -250,6 +254,10 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
+  // Reader input starts a gesture; a transcript write ends it. Native motion inside it belongs to
+  // the reader even after an early idle (virtual-core's debounce, or WebKit's scrollend firing
+  // before a smooth scroll finishes).
+  let inputGesture = false;
   const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
@@ -264,11 +272,15 @@ export function observeTranscriptOffset(
     // provenance until its native event arrives, even after command retirement.
     if (before !== after) {
       owner.state.nativeInputActive = false;
+      inputGesture = false;
       owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
     }
   };
   const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
+    if (!maintenance) {
+      owner.state.inputTargetsStart = false;
+    }
     // Measurement retries can move the old end after the grown range commits.
     // Layout/composer receipts already carry their anchor correction separately.
     if (maintenance && before !== after) {
@@ -327,6 +339,9 @@ export function observeTranscriptOffset(
     // Capture arrival before the new window can grow the native extent.
     const atEnd = owner.endAnchor.recordViewport(element);
     if (delta !== 0 && !programmatic) {
+      if (inputGesture) {
+        owner.state.nativeInputActive = true;
+      }
       // Measurement can observe arrival before the native event unlocks pane following.
       if (delta > 0 && !owner.canFollowEnd() && (reachedRecordedEnd || atEnd)) {
         owner.onReaderScroll(true);
@@ -412,7 +427,9 @@ export function observeTranscriptOffset(
     }
   };
   const finishScroll = () => {
-    owner.state.nativeInputActive = false;
+    if (!owner.state.inputAwaitingScroll) {
+      owner.state.nativeInputActive = false;
+    }
     // Only touch scrolling holds history; wheel and trackpad settles need no render.
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
@@ -470,7 +487,7 @@ export function observeTranscriptOffset(
     ) {
       return;
     }
-    if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event)) {
+    if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event, element)) {
       return;
     }
     if (event instanceof PointerEvent && event.target !== element) {
@@ -492,6 +509,9 @@ export function observeTranscriptOffset(
     owner.state.pendingInteractionAnchor = null;
     owner.state.maintenanceScrollOffset = null;
     owner.state.nativeInputActive = true;
+    owner.state.inputTargetsStart = event instanceof KeyboardEvent && event.key === "Home";
+    inputGesture = true;
+    owner.state.inputAwaitingScroll = true;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -521,12 +541,18 @@ export function observeTranscriptOffset(
       owner.onRequestEnd();
       return;
     }
+    // Directional input owns policy before native movement, including a wheel
+    // departure while the composer remains focused. Contact alone has no direction.
     const towardEnd =
-      (event instanceof WheelEvent && event.deltaY > 0) ||
-      (event instanceof KeyboardEvent &&
-        (["ArrowDown", "PageDown", "End"].includes(event.key) ||
-          (event.key === " " && !event.shiftKey)));
-    publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
+      event instanceof WheelEvent
+        ? isTranscriptScrollWheel(event, element)
+          ? event.deltaY > 0
+          : undefined
+        : event instanceof KeyboardEvent
+          ? ["ArrowDown", "PageDown", "End"].includes(event.key) ||
+            (event.key === " " && !event.shiftKey)
+          : undefined;
+    publishReaderIntent(towardEnd);
     if (wheelDelta) {
       // Native travel can precede this listener. It is not a wheel receipt;
       // reduce speculation by same-direction travel without claiming a causal match.
@@ -555,6 +581,7 @@ export function observeTranscriptOffset(
     owner.onComposerLayout(true);
     if (event.target === element) {
       nativeScrollEvent = event;
+      owner.state.inputAwaitingScroll = false;
     }
   };
   const listeners = new AbortController();
@@ -631,6 +658,7 @@ export function observeTranscriptOffset(
     owner.state.touching = false;
     owner.state.touchScrolling = false;
     owner.state.nativeInputActive = false;
+    owner.state.inputTargetsStart = false;
     listeners.abort();
   };
 }

@@ -1,4 +1,5 @@
-import { ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { restoreExecaResult } from "./execa-protocol.js";
@@ -7,10 +8,11 @@ import { startBrokerExeca } from "./execa-worker.js";
 const boundary = vi.hoisted(() => ({ execa: vi.fn() }));
 vi.mock("execa", () => ({ execa: boundary.execa }));
 
-class CommandChild extends ChildProcess {
-  override stdio: ChildProcess["stdio"] = [null, null, null, null, null];
-  override exitCode: number | null = null;
-  override signalCode: NodeJS.Signals | null = null;
+class CommandChild extends EventEmitter {
+  stdin = null;
+  stdio: ChildProcess["stdio"] = [null, null, null, null, null];
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
 }
 
 function commandFixture() {

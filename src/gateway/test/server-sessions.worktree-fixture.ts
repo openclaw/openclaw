@@ -96,6 +96,8 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       onError: vi.fn(),
     });
     await clock.advanceBy(130_000);
+    // Finish the startup pass before tests exercise archive-triggered cleanup.
+    await clock.advanceBy(0);
     onTestFinished(async () => {
       await maintenance.stop();
       await scheduler.stop();
@@ -118,8 +120,8 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       ...transcriptScope,
       contents: ["Preserve this conversation."],
     });
-    const tickWorktreeMaintenance = async () => {
-      await clock.advanceBy(0);
+    const tickWorktreeMaintenance = async (milliseconds = 0) => {
+      await clock.advanceBy(milliseconds);
     };
     const cleanupWorktrees = async () => {
       maintenance.request();

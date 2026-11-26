@@ -54,6 +54,7 @@ import {
   settleDurableDelivery,
 } from "./delivery-completion.js";
 import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
+import { settleFailedQueuedDeliveryCompletion } from "./delivery-queue-failure-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   cancelDeliveryQueueMediaRetention,
@@ -72,6 +73,7 @@ import {
   isPermanentDeliveryError,
   recoveryPlatformAttemptId,
   resolveMaxRetries,
+  resolveUnknownSendReplay,
   shouldInspectQueuedDelivery,
 } from "./delivery-queue-recovery-policy.js";
 import {
@@ -291,11 +293,9 @@ async function settleQueuedFailure(
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
     if (entry.deliveryCompletion) {
-      await settleDurableDelivery(
+      await settleFailedQueuedDeliveryCompletion(
         entry.deliveryCompletion,
-        settlement.outcome === "failed" && settlement.rejectionError !== undefined
-          ? { rejectionError: settlement.rejectionError }
-          : { platformSendStarted: true },
+        settlement,
         params.stateDir,
         stateContext,
       );
@@ -535,13 +535,13 @@ async function drainQueuedEntry(
   const attemptBudgetExhausted = resolveDeliveryQueueAttemptCount(entry) >= maxRetries;
   let reconciledPlatformSendAttemptId: string | undefined;
   let reconciledPlatformSendStartedAt: number | undefined;
+  let unknownSendReplay: "blind" | "proven" | undefined;
   const ownerState = await resolveCompletedOwnerBeforeRecovery({ ...opts, owner }, stateContext);
   if (ownerState !== "continue") {
     return ownerState;
   }
   if (needsUnknownSendReconciliation(entry)) {
-    // A crash after platform send start cannot be blindly replayed; adapters
-    // must reconcile whether the platform already committed the message.
+    // Unconfirmed sends: adapter reconciliation decides first, then the shared final-text rule.
     const reconciliation =
       entry.legacyUnknownSendReconciliation ??
       (await reconcileUnknownQueuedDelivery({
@@ -594,14 +594,12 @@ async function drainQueuedEntry(
         return await recordRecoveryFailure(owner, errMsg);
       }
     }
-    const reconciliationProvedPreSendFailure =
-      reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
-    const replayFinalText = !attemptBudgetExhausted && canReplayAmbiguousFinalText(entry);
-    if (reconciliationProvedPreSendFailure || replayFinalText) {
+    unknownSendReplay = resolveUnknownSendReplay(entry, reconciliation);
+    if (unknownSendReplay) {
       reconciledPlatformSendAttemptId = entry.platformSendAttemptId;
       reconciledPlatformSendStartedAt = entry.platformSendStartedAt;
       opts.log.info(
-        replayFinalText
+        unknownSendReplay === "blind"
           ? `Delivery entry ${entry.id} retrying an unconfirmed final text reply`
           : `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
       );
@@ -669,7 +667,7 @@ async function drainQueuedEntry(
         reconciledPlatformSendStartedAt,
         reconciledPlatformSendAttemptId,
         stateContext,
-        canReplayAmbiguousFinalText(entry) ? true : undefined,
+        unknownSendReplay === "blind" ? true : undefined,
       )
     : undefined;
   if (requiresProducerClaim && !producerClaimId) {

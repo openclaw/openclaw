@@ -79,7 +79,6 @@ function ProcessRow(props: {
         <button
           class="chat-details-processes__action chat-details-processes__stop"
           type="button"
-          title={t("chat.processesPanel.stopProcess")}
           aria-label={t("chat.processesPanel.stop", { name: props.row.name })}
           disabled={!props.presented || stop().stopping()}
           onClick={() => {

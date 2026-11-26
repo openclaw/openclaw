@@ -1,7 +1,7 @@
 import { ok } from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowRunner, readWorkflow } from "./ci-workflow.test-support.js";
 
 type Job = {
   if?: string;
@@ -21,37 +21,6 @@ const runnerTemp = "${{ runner.temp }}";
 function admission(condition: string, context: Record<string, unknown>) {
   return expect(Boolean(runInNewContext(condition.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context)));
 }
-
-const sha = "a".repeat(40);
-
-it.each([
-  { change: {}, selected: true },
-  { change: { event_name: "push" }, selected: false },
-  { change: { event_name: "schedule" }, selected: false },
-  { change: { release_gate: true }, selected: false },
-  { change: { validation_tier: "main" }, selected: false },
-  { change: { release_scope: "npm" }, selected: false },
-  { change: { checkout_revision: "b".repeat(40) }, selected: false },
-  { change: { compatibility_target: "true" }, selected: false },
-  { change: { run_android_job: "false" }, selected: false },
-])("admits only the selected full manual source: $change", ({ change, selected }) => {
-  const job = readCiWorkflow().jobs["android-release-e2e"];
-  const defaults = {
-    event_name: "workflow_dispatch",
-    release_gate: false,
-    validation_tier: "full",
-    release_scope: "full",
-    checkout_revision: sha,
-    compatibility_target: "false",
-    run_android_job: "true",
-    ...change,
-  };
-  admission(job.if, {
-    github: { event_name: defaults.event_name, sha },
-    inputs: { release_gate: defaults.release_gate },
-    needs: { preflight: { outputs: defaults } },
-  }).toBe(selected);
-});
 
 it.each(["success", "failure", "cancelled", "skipped"])(
   "gates store signing/upload on qualification: %s",
@@ -77,6 +46,21 @@ it.each(["success", "failure", "cancelled", "skipped"])(
     admission(release.if ?? "", context).toBe(result === "success");
     expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
     expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
+  },
+);
+
+it.each(["", "blacksmith", "hybrid", "runson", "github", "boat"] as const)(
+  "keeps Android Store runner routing stable across retries for backend %s",
+  (runnerBackend) => {
+    const release = readWorkflow(".github/workflows/android-store-release.yml").jobs.release;
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowRunner(release["runs-on"], {
+          runnerBackend,
+          runAttempt,
+        }),
+      ).toBe(runnerBackend === "boat" ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+    }
   },
 );
 

@@ -12,7 +12,7 @@ import {
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
 } from "./gateway-state-owner.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 
 // Worker renewal proves custody, not main-thread progress through startup.
 const GATEWAY_STARTUP_BUDGET_MS = 5 * 60_000;

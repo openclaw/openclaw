@@ -1,21 +1,9 @@
-/* Discovery must not push the platform cards away after the page appears. */
-openclaw-apps-page openclaw-mcp-app-catalog:not([surface]):not(:empty) {
-  display: flow-root;
-  block-size: clamp(18rem, 45dvh, 28rem);
-  margin-bottom: 16px;
-}
-
-openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog {
-  display: flex;
-  flex-direction: column;
-  block-size: 100%;
-  margin-bottom: 0;
-}
-
-openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__entries {
-  flex: 1;
-  min-block-size: 0;
-  overflow-y: auto;
+/* The Apps page reads in the standard wide page column, under its header. */
+openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-workspace__body {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .apps-hero {
@@ -29,7 +17,7 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
 .apps-hero__title {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(30px * var(--control-ui-text-scale));
+  font-size: 30px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -57,6 +45,16 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--space-4, 16px);
+}
+
+/* A native setup report belongs to Chrome, not to the neighboring Plugins card. */
+.apps-grid:has(.native-chrome-setup) {
+  align-items: start;
+}
+
+/* An ordinary browser has no native controls and needs no flex gap for them. */
+.apps-card__body > openclaw-native-chrome-setup:empty {
+  display: none;
 }
 
 .apps-card {
@@ -265,6 +263,6 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
 
 @media (max-width: 560px) {
   .apps-hero__title {
-    font-size: calc(25px * var(--control-ui-text-scale));
+    font-size: 25px;
   }
 }

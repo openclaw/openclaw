@@ -24,7 +24,6 @@ import type { ToolsEffectiveModelState } from "./tools-effective.ts";
 
 export type { AgentsPanel } from "./panels.ts";
 export { watchAgentScope } from "./watch-agent-scope.ts";
-export { watchSelectedAgent } from "./watch-selected-agent.ts";
 
 export type AgentsState = ToolsEffectiveModelState &
   AgentCapabilityState & {

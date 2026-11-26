@@ -1,4 +1,3 @@
-import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const MAX_SQLITE_READER_OPERATIONS = 256;
@@ -79,14 +78,7 @@ export function receive(source: object, counter: SqliteReaderCounter): void {
 }
 
 /** Native retirement folds final values before discarding the worker's shared buffers. */
-export function retire(source: { memoryPort?: MessagePort }): void {
-  const port = source.memoryPort;
-  if (port) {
-    // Short-lived workers can exit before their first registration's callback runs.
-    for (let next = receiveMessageOnPort(port); next; next = receiveMessageOnPort(port)) {
-      port.emit("message", next.message);
-    }
-  }
+export function retire(source: object): void {
   const counters = metrics.workers.get(source);
   if (counters) {
     accumulateSqliteReaderCounters(metrics.retired, counters.values());

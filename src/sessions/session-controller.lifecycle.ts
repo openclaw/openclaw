@@ -16,7 +16,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   agentWorkAdmissionIdentity,
   type AgentWorkAdmissionTarget,
@@ -32,7 +31,10 @@ import type {
   SessionControllerInput,
 } from "./session-controller.contracts.js";
 import { createSessionControllerPhaseLogger } from "./session-controller.diagnostics.js";
-import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecycle-agent.js";
+import {
+  assertAgentControllerAdmissionOpen,
+  assertAgentControllerDeletionAdmissionOpen,
+} from "./session-controller.lifecycle-agent.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
@@ -580,16 +582,7 @@ export async function beginSessionEffect(
     );
     signal.throwIfAborted();
     if (effect.agent) {
-      const journal = await readAgentDeletionJournalStatusInWorker(
-        effect.agent.agentId,
-        { path: effect.agent.statePath, env: params.env },
-        signal,
-      );
-      if (journal !== "absent") {
-        throw new Error(
-          "Agent " + effect.agent.agentId + " deletion is in progress; new work is unavailable.",
-        );
-      }
+      await assertAgentControllerDeletionAdmissionOpen(effect.agent, params.env, signal);
       assertAgentControllerAdmissionOpen(effect);
       signal.throwIfAborted();
     }

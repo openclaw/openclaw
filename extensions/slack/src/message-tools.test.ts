@@ -179,7 +179,6 @@ describe("Slack message tools", () => {
     const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
-    // The complete default action inventory is owned by the channel-actions contract suite.
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
@@ -240,6 +239,7 @@ describe("Slack message tools", () => {
       "list-pins",
       "member-info",
       "emoji-list",
+      "channel-list",
     ]);
   });
 
@@ -261,6 +261,7 @@ describe("Slack message tools", () => {
             pins: false,
             memberInfo: false,
             emojiList: false,
+            channelInfo: false,
           },
         },
       },

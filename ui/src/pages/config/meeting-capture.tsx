@@ -251,7 +251,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return available;
     });
     const selectedProvider = () =>
-      captureStatus()?.providers.find((item) => item.providerId === editedProviderId());
+      knownCaptureStatus()?.providers.find((item) => item.providerId === editedProviderId());
     const fields = () =>
       [
         "title",
@@ -285,7 +285,9 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 />
               }
             />
-            {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (
+            {editedProviderId() &&
+            knownCaptureStatus() &&
+            !supportsAutoStartSetup(selectedProvider()) ? (
               <SettingsUnavailable message={t("meetingCapture.autoStartUnavailable")} />
             ) : undefined}
             <For each={fields()}>

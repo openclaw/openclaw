@@ -2,9 +2,11 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 // Defaults for agent metadata when upstream does not supply them.
-// Keep this aligned with the product-level latest-model baseline.
+/**
+ * Provider that qualifies a bare model id written without a provider (`gpt-6` → `openai/gpt-6`).
+ * Parsers take it as `defaultProvider`; it never selects a model. No configured model means none.
+ */
 export const DEFAULT_PROVIDER = "openai";
-export const DEFAULT_MODEL = "gpt-6-astra";
 // Conservative fallback used when model metadata is unavailable.
 export const DEFAULT_CONTEXT_TOKENS = 200_000;
 /** Output-token cap used when no authored, provider, or catalog limit exists. */
@@ -48,10 +50,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
   };
 }
 
-/**
- * Returns the structural model when the selected plugin harness lists this exact model itself.
- * Native rows carry no host transport, so host model resolution cannot materialize them.
- */
+/** Native rows carry no host transport; supply structural metadata for their runtime. */
 export function resolveNativeOwnedRuntimeModel(params: {
   catalog: Pick<ModelCatalogSnapshot, "entries" | "routeVariants"> | undefined;
   provider: string;
@@ -64,7 +63,24 @@ export function resolveNativeOwnedRuntimeModel(params: {
   }
   const owned = (entry: ModelCatalogSnapshot["entries"][number]) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === runtimeId;
-  return catalog.entries.some(owned) || catalog.routeVariants.some(owned)
-    ? createNativeModelOwnedRuntimeModel({ provider, modelId })
-    : undefined;
+  const entry = catalog.entries.find(owned) ?? catalog.routeVariants.find(owned);
+  if (!entry) {
+    return undefined;
+  }
+  const model = createNativeModelOwnedRuntimeModel({ provider, modelId });
+  return {
+    ...model,
+    name: entry.name,
+    reasoning: entry.reasoning ?? model.reasoning,
+    input: entry.input?.filter((kind) => kind === "text" || kind === "image") ?? model.input,
+    contextWindow: entry.contextWindow ?? model.contextWindow,
+    maxTokens: entry.contextWindow
+      ? resolveDefaultModelMaxTokens(entry.contextWindow)
+      : model.maxTokens,
+    ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
+    ...(entry.contextWindows ? { contextWindows: entry.contextWindows } : {}),
+    ...(entry.contextWindowDefault ? { contextWindowDefault: entry.contextWindowDefault } : {}),
+    ...(entry.compat ? { compat: entry.compat } : {}),
+    ...(entry.mediaInput ? { mediaInput: entry.mediaInput } : {}),
+  };
 }

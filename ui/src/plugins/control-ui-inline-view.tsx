@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show, useContext } from "solid-js";
+import { createMemo, createSignal, lazy, Show, useContext } from "solid-js";
 import type { PluginInlineViewBlock } from "../../../src/shared/plugin-inline-view.js";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -7,6 +7,10 @@ import { sharedPluginsProjection } from "../lib/reactive/shared-application-proj
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
+
+const NativeTemplateReview = lazy(() => import("../pages/templates/creator-inline-review.tsx"), {
+  export: "TemplateCreatorInlineReview",
+});
 
 /** Rows own only a small placeholder offscreen, never a parked plugin/component cache. */
 export function PluginInlineView(props: {
@@ -37,6 +41,11 @@ export function PluginInlineView(props: {
       }
     },
   );
+  const nativeTemplate = () =>
+    props.block.pluginId === "openclaw" &&
+    props.block.viewId === "template-review" &&
+    props.block.version === 1 &&
+    props.block.toolName === "screen";
   const key = () => props.block.pluginId + "/" + props.block.viewId + "@" + props.block.version;
   const status = createMemo(() => {
     const owner = runtime?.read();
@@ -66,18 +75,30 @@ export function PluginInlineView(props: {
       style={{ "min-height": active() ? undefined : height() + "px" }}
     >
       <Show when={active()}>
-        <Show when={status() === "ok"} fallback={notice()}>
-          <PluginContribution
-            kind="inlineViews"
-            contributionKey={key()}
-            props={{
-              payload: props.block.payload,
-              toolCallId: props.block.toolCallId,
-              toolName: props.block.toolName,
-              sessionKey: props.sessionKey,
-              agentId: props.agentId,
-            }}
-            fallback={notice}
+        <Show
+          when={nativeTemplate() && app}
+          fallback={
+            <Show when={status() === "ok"} fallback={notice()}>
+              <PluginContribution
+                kind="inlineViews"
+                contributionKey={key()}
+                props={{
+                  payload: props.block.payload,
+                  toolCallId: props.block.toolCallId,
+                  toolName: props.block.toolName,
+                  sessionKey: props.sessionKey,
+                  agentId: props.agentId,
+                }}
+                fallback={notice}
+              />
+            </Show>
+          }
+        >
+          <NativeTemplateReview
+            context={app!}
+            payload={props.block.payload}
+            sessionKey={props.sessionKey}
+            agentId={props.agentId}
           />
         </Show>
       </Show>

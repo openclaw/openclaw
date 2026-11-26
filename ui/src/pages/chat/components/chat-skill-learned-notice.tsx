@@ -30,7 +30,7 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
     <openclaw-chat-skill-learned-notice>
       <Show when={props.notice} keyed>
         {(notice) => {
-          const [undone, setUndone] = createSignal(false);
+          const [undoStatus, setUndoStatus] = createSignal<SkillsWorkshopUndoResult["status"]>();
           const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
           // A pending outcome must not hold the co-written Undoing affordance.
           const outcome = createMemo(() => attempt()?.result.then(() => null), {
@@ -49,7 +49,7 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
               !context ||
               !client ||
               inFlight ||
-              undone() ||
+              undoStatus() ||
               !canCallGatewayMethod(snapshot, "skills.workshop.undo", "operator.admin")
             ) {
               return;
@@ -57,13 +57,15 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
             inFlight = true;
             setPending(true);
             try {
-              // "already-undone" also means the review's changes were successfully reverted.
-              yield client.request<SkillsWorkshopUndoResult>("skills.workshop.undo", {
-                agentId: notice.agentId,
-                runId: notice.runId,
-              });
-              if (!disposed) {
-                setUndone(context.gateway.snapshot.client === client);
+              const result: SkillsWorkshopUndoResult = yield client.request(
+                "skills.workshop.undo",
+                {
+                  agentId: notice.agentId,
+                  runId: notice.runId,
+                },
+              );
+              if (!disposed && context.gateway.snapshot.client === client) {
+                setUndoStatus(result.status);
               }
             } catch (error) {
               if (!disposed && context.gateway.snapshot.client === client) {
@@ -88,7 +90,7 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
           };
           return (
             <div
-              class={["chat-skill-notice", { "chat-skill-notice--undone": undone() }]}
+              class={["chat-skill-notice", { "chat-skill-notice--undone": Boolean(undoStatus()) }]}
               role="group"
               aria-label={t("chat.skillLearned.label")}
             >
@@ -121,7 +123,7 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
                   }}
                 </For>
                 <Show
-                  when={undone()}
+                  when={undoStatus()}
                   fallback={
                     <Show
                       when={canCallGatewayMethod(
@@ -147,7 +149,9 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
                 >
                   <span class="chat-skill-notice__done" role="status">
                     <Icon name="check" />
-                    {t("chat.skillLearned.undone")}
+                    {undoStatus() === "already-undone"
+                      ? t("chat.skillLearned.alreadyUndone")
+                      : t("chat.skillLearned.undone")}
                   </span>
                 </Show>
               </div>

@@ -44,6 +44,7 @@ retire_prep_evidence() {
     .local/correction-review.md \
     .local/correction-incoming-review.json \
     .local/correction-incoming-review.md \
+    .local/pending-proof-acceptance.json \
     .local/prepare-baseline.json \
     .local/gates-*.log; do
     if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
@@ -66,6 +67,16 @@ retire_prep_evidence() {
       cp -p "$artifact" "$archive/" && cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
     done
   fi
+  if [ "${2:-}" = ready ]; then
+    # The sealed inventory includes required absences, not just copied files.
+    local path oid
+    while read -r path oid; do
+      [ "$oid" != absent ] || continue
+      cp -p "$path" "$archive/" && cmp -s "$path" "$archive/${path##*/}" || return 1
+    done <<< "$3"
+    printf '%s' "$3" > "$archive/ready-review-snapshot" || return 1
+    [ "$(cat "$archive/ready-review-snapshot")" = "$3" ] || return 1
+  fi
   PREP_RETIRED_EVIDENCE="$archive"
   [ "${1:-}" != retain ] || return 0
 
@@ -78,6 +89,7 @@ retire_prep_evidence() {
     .local/correction-review.md \
     .local/correction-incoming-review.json \
     .local/correction-incoming-review.md \
+    .local/pending-proof-acceptance.json \
     .local/prepare-baseline.json \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
@@ -87,17 +99,21 @@ retire_prep_evidence() {
 
 prepare_workflow_successor() (
   local pr="$1" request="${PR_WORKFLOW_SUCCESSOR:-}" head tree review hosted snapshot next
-  local purpose=qualified
+  local purpose review_path=.local/correction-review.json
   [ -n "$request" ] || return 1
-  [ "$(printf '%s\n' "$request" | jq -r '.purpose // "qualified"')" != proof ] || purpose=proof
+  purpose=$(printf '%s\n' "$request" | jq -r '.purpose // "qualified"') || return 1
+  [ "$purpose" != ready ] || review_path=.local/review.json
   enter_worktree "$pr" false true || return 1
   [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   require_artifact .local/prep-context.env || return 1
   local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_REVIEW_MODE=""
   source .local/prep-context.env || return 1
-  [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_REVIEW_MODE" = correction ] || {
-    echo "Workflow succession requires an existing correction preparation." >&2; return 1;
-  }
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$purpose" = ready ]; then
+    [ "$PREP_REVIEW_MODE" = ready ] || { echo "READY succession requires ordinary preparation." >&2; return 1; }
+  elif [ "$PREP_REVIEW_MODE" != correction ]; then
+    echo "Workflow succession requires an existing correction preparation." >&2; return 1
+  fi
   IFS=$'\t' read -r head tree review hosted < <(printf '%s\n' "$request" | jq -r '[.head,.tree,.review,.hostedHead] | @tsv')
   [ "$(pr_git rev-parse HEAD)" = "$head" ] && [ "$(pr_git rev-parse 'HEAD^{tree}')" = "$tree" ] &&
     [ -z "$(pr_git status --porcelain --untracked-files=no)" ] &&
@@ -108,8 +124,20 @@ prepare_workflow_successor() (
     { [ -f .local/gates.env ] && grep -q '^PENDING_CRABBOX_' .local/gates.env; }; then
     echo "Retained merge or pending dispatch evidence requires its existing reconciliation owner." >&2; return 1
   fi
-  snapshot=$(correction_review_snapshot "$pr" "$purpose") || return 1
-  [ -n "$snapshot" ] && [ "$(pr_git hash-object --no-filters -- .local/correction-review.json)" = "$review" ] || return 1
+  successor_snapshot() {
+    if [ "$purpose" = ready ]; then ready_workflow_review_snapshot "$pr" "$head" "$tree" "$review"
+    else correction_review_snapshot "$pr" "$purpose"; fi
+  }
+  verify_successor_snapshot() {
+    local current
+    current=$(successor_snapshot) || return 1
+    [ -n "$current" ] && [ "$current" = "$snapshot" ] || {
+      echo "Workflow successor review authority changed." >&2; return 1;
+    }
+  }
+  snapshot=$(successor_snapshot) || return 1
+  [ -n "$snapshot" ] && [ "$(pr_git hash-object --no-filters -- "$review_path")" = "$review" ] || return 1
+  [ "$purpose" != ready ] || [ "$hosted" = "$head" ] || return 1
   resolve_prep_publication_target "$pr" "$head" || return 1
   [ "$PREP_PUBLICATION_LEASE_SHA" = "$hosted" ] || {
     echo "Workflow succession hosted authority changed; retain the publication receipts." >&2; return 1;
@@ -119,12 +147,13 @@ prepare_workflow_successor() (
   local observation
   observation=$(cat .local/pr-meta.json) || return 1
   revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" "$hosted" "$hosted" || return 1
-  if [ "$purpose" = proof ]; then
+  if [ "$purpose" = proof ] || [ "$purpose" = ready ]; then
     require_proof_publication_hosted_state "$pr" "$hosted" "$hosted" || return 1
   fi
-  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
-  retire_prep_evidence retain || return 1
-  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
+  verify_successor_snapshot || return 1
+  if [ "$purpose" = ready ]; then retire_prep_evidence retain ready "$snapshot" || return 1
+  else retire_prep_evidence retain || return 1; fi
+  verify_successor_snapshot || return 1
   # prep.env can be the only surviving authority for a completed publication.
   # Retire only qualification, before CAS: either binding then fails closed.
   if [ -e .local/gates.env ] || [ -L .local/gates.env ]; then
@@ -132,11 +161,12 @@ prepare_workflow_successor() (
       cmp -s .local/gates.env "$PREP_RETIRED_EVIDENCE/gates.env" || return 1
     rm .local/gates.env || return 1
   fi
-  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
+  verify_successor_snapshot || return 1
   next=$(pr_batch_wrapper_git workflow-successor-commit "$canonical_repo_root" "$pr" \
     "$PR_WORKFLOW_SOURCE_REVISION" "$request" "$PR_WORKFLOW_TRUST_ANCHOR" "$snapshot" \
     "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PWD") || return 1
-  printf 'Correction workflow successor admitted: %s\n' "$next"
+  if [ "$purpose" = ready ]; then printf 'READY workflow successor admitted: %s\n' "$next"
+  else printf 'Correction workflow successor admitted: %s\n' "$next"; fi
   if [ "$purpose" = proof ]; then
     printf 'Source and pending proof retained; only scripts/pr prepare-publish-for-proof %s is admitted. Ordinary gates and merge remain blocked.\n' "$pr"
   else
@@ -152,10 +182,8 @@ prepare_baseline_successor() (
 prepare_baseline_refresh() { prepare_baseline_materialize initial "$@"; }
 prepare_baseline_signing_request() { prepare_baseline_materialize request "$@"; }
 
-revalidate_baseline_publication() (
-  local pr="$1" observation="$2" source="$3" artifacts="${4:-.local}"
-  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
-  source "$artifacts/prep-context.env" || return 1
+resolve_baseline_publication_target() {
+  local pr="$1" source="$2" artifacts="${3:-.local}"
   resolve_prep_publication_target "$pr" "$source" "$artifacts" || return 1
   verify_prep_head_extends_hosted_head "$PREP_PUBLICATION_LEASE_SHA" "$source" || return 1
   if [ "$PREP_PUBLICATION_LEASE_SHA" != "$PR_HEAD_SHA_BEFORE" ]; then
@@ -173,6 +201,13 @@ revalidate_baseline_publication() (
       return 1
     fi
   fi
+}
+
+revalidate_baseline_publication() (
+  local pr="$1" observation="$2" source="$3" artifacts="${4:-.local}"
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+  source "$artifacts/prep-context.env" || return 1
+  resolve_baseline_publication_target "$pr" "$source" "$artifacts" || return 1
   # Only a native receipt can advance hosted authority beyond the incoming head.
   # The local candidate alone does not prove that this workflow published it.
   revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" \
@@ -278,8 +313,8 @@ prepare_baseline_materialize() (
       --signer) [ "$admission" = request ] && [ -z "$signer" ] || return 2; signer="$2" ;;
       --expected-tree) [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
       --expected-review) [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
-      --predecessor-head) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
-      --predecessor-binding) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
+      --predecessor-head) [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
+      --predecessor-binding) [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
       *) return 2 ;;
     esac
     shift 2
@@ -294,12 +329,17 @@ prepare_baseline_materialize() (
       [[ "$option" =~ ^[0-9a-f]{40}$ ]] || return 2
     done
   fi
-  local continuation=null
+  local continuation=null predecessor=null
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
   if [ "$proof" = true ]; then
     # Snapshot caller-relative metadata before checkout, evidence retirement or admission.
     if [ -n "$coauthors_path" ]; then coauthors=$(node "$helper" coauthors "$coauthors_path") || return 1; fi
-    [ "$admission" = initial ] && [ "$successor" = false ] && [ -z "$signer$predecessor_head$predecessor_binding" ] || return 2
+    [ "$admission" = initial ] && [ "$successor" = false ] && [ -z "$signer" ] || return 2
+    if [ -n "$predecessor_head$predecessor_binding" ]; then
+      [[ "$predecessor_head" =~ ^[0-9a-f]{40}$ ]] && [[ "$predecessor_binding" =~ ^[0-9a-f]{40}$ ]] || return 2
+      [ -z "$incoming_head$incoming_review$receipt$receipt_oid" ] || return 2
+      predecessor=$(jq -cn --arg head "$predecessor_head" --arg binding "$predecessor_binding" '{head:$head,binding:$binding}') || return 1
+    fi
     [[ "$expected_tree" =~ ^[0-9a-f]{40}$ ]] && [[ "$expected_review" =~ ^[0-9a-f]{40}$ ]] || return 2
     [ -n "$source_review" ] || source_review=.local/correction-review.json
     if [ -n "$incoming_head$incoming_review$receipt$receipt_oid" ]; then
@@ -310,9 +350,10 @@ prepare_baseline_materialize() (
     enter_worktree "$pr" false true || return 1
     [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
     if [ -e .local/review-transition.json ] || [ -L .local/review-transition.json ]; then
-      jq -e --arg source "$expected" --arg baseline "$baseline" --arg review "$expected_review" --arg tree "$expected_tree" --argjson continuation "$continuation" --argjson coauthors "$coauthors" '
+      jq -e --arg source "$expected" --arg baseline "$baseline" --arg review "$expected_review" --arg tree "$expected_tree" --argjson continuation "$continuation" --argjson predecessor "$predecessor" --argjson coauthors "$coauthors" '
         .mode == "prep" and .source == $source and (.binding | @base64d | fromjson |
         .version == 2 and .purpose == "proof" and .baselineHead == $baseline and .proofSource.sourceReviewOid == $review and .proofSource.sourceTree == $tree and (.coauthors // []) == $coauthors and
+        (if $predecessor == null then .sourceAdmission == null else .sourceAdmission.predecessorHead == $predecessor.head and .sourceAdmission.predecessorBinding == $predecessor.binding end) and
         (if $continuation == null then .proofSource.continuation == null else .proofSource.continuation.incoming == $continuation.incoming and .proofSource.continuation.review == $continuation.review and .proofSource.continuation.receipt == $continuation.receipt and .proofSource.continuation.receiptOid == $continuation.receiptOid end))' .local/review-transition.json >/dev/null || { echo "Proof baseline operation or co-author attribution changed." >&2; return 1; }
       recover_review_transition "$pr" || return 1
       run_prepared_correction_review "$pr" init || return 1
@@ -321,6 +362,7 @@ prepare_baseline_materialize() (
     fi
   else
     [ -z "$source_review$incoming_head$incoming_review$receipt$receipt_oid$coauthors_path" ] || return 2
+    if [ "$successor" = false ]; then [ -z "$predecessor_head$predecessor_binding" ] || return 2; fi
     if [ "$successor" = false ] && [ "$admission" != request ]; then [ -z "$expected_tree$expected_review" ] || return 2; fi
     enter_worktree "$pr" false || return 1
   fi
@@ -337,7 +379,7 @@ prepare_baseline_materialize() (
   node "$helper" check-signing-source "$expected" || return 1
 
   if [ "$proof" = true ] && [ "$(pr_git rev-parse HEAD)" != "$expected" ]; then
-    snapshot=$(node "$helper" completed-proof "$pr" "$expected" "$baseline" "$expected_tree" "$expected_review" "$continuation" "$PR_MAIN_SHA" "$coauthors") || return 1
+    snapshot=$(node "$helper" completed-proof "$pr" "$expected" "$baseline" "$expected_tree" "$expected_review" "$continuation" "$PR_MAIN_SHA" "$coauthors" "$predecessor") || return 1
     observation=$(cat .local/pr-meta.json) || return 1
     local completed_head
     completed_head=$(pr_git rev-parse HEAD) || return 1
@@ -357,13 +399,18 @@ prepare_baseline_materialize() (
     # continuation owner derives the new context but installs nothing yet.
     mark_pr_operation_side_effects_started
     retire_prep_evidence retain proof || return 1
-    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation") || return 1
+    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation" "$predecessor") || return 1
     snapshot=$(printf '%s' "$proof_prepared" | jq -er .snapshot) || return 1
     proof_source=$(printf '%s' "$proof_prepared" | jq -ce .proofSource) || return 1
   elif [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
     snapshot=$(node "$helper" incoming-source-snapshot "$pr" "$expected" "$PREP_INCOMING_JSON_OID") || return 1
   else
     snapshot=$(correction_review_snapshot "$pr") || return 1
+    case "$snapshot" in
+      *".local/pending-proof-acceptance.json "*)
+        echo "Qualified baseline admission still requires a READY correction review; pending proof acceptance applies only to the published head." >&2
+        return 1 ;;
+    esac
   fi
   observation=$(cat .local/pr-meta.json) || return 1
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
@@ -395,7 +442,7 @@ prepare_baseline_materialize() (
   set -- "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$snapshot" "$resolutions"
   if [ "$proof" = true ]; then
     create_command=create-proof
-    set -- "$@" "$proof_source" "$coauthors"
+    set -- "$@" "$proof_source" "$coauthors" "$predecessor"
   elif [ "$successor" = true ]; then
     create_command=create-successor
     set -- "$@" "$predecessor_head" "$predecessor_binding" "$expected_review" "$expected_tree"
@@ -965,7 +1012,7 @@ prepare_publish_for_proof() {
   mark_pr_operation_side_effects_started || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$head" "$lease" .local/prepare-push-result.env "$observation" || return $?
   printf 'Published exact candidate %s for pending proof: %s\n' "$head" "$PREP_PROOF_PENDING_FINDINGS"
-  echo "Publication only: NEEDS WORK and unresolved findings remain; fresh proof, READY review and ordinary gates are still required."
+  echo "Publication only: NEEDS WORK and unresolved findings remain. Obtain proof and a READY review, or record explicit maintainer risk acceptance, before ordinary gates."
 }
 
 prepare_push() {

@@ -39,7 +39,9 @@ final class ESPSetupBLELink: NSObject, ESPSetupLink {
                     }
                     self.device = device
                     device.bleDelegate = self
-                    device.connect { [weak self] status in
+                    // ESPProvision calls this from a global queue; without @Sendable it would
+                    // inherit main-actor isolation and trap at the runtime isolation check.
+                    device.connect { @Sendable [weak self] status in
                         let connected = if case .connected = status {
                             true
                         } else {
@@ -66,7 +68,7 @@ final class ESPSetupBLELink: NSObject, ESPSetupLink {
             throw ESPSetupError.unavailable("The secure device connection is closed.")
         }
         return try await self.perform(seconds: 20) { id in
-            device.sendData(path: "oc-setup", data: plaintext) { [weak self] data, error in
+            device.sendData(path: "oc-setup", data: plaintext) { @Sendable [weak self] data, error in
                 let validData = error == nil ? data : nil
                 Task { @MainActor [weak self] in
                     guard let self, self.pendingID == id else { return }

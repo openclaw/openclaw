@@ -22,8 +22,10 @@ import type {
   SessionSourcePredicateFacts,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -72,6 +74,7 @@ export type SessionEntryListWorkerResult = {
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
+  readCustody?: readonly SessionStoreReadCustody[];
 } & SessionExactEntriesWorkerRequest;
 
 export type SessionExactEntriesWorkerSelection =
@@ -131,6 +134,8 @@ export type SessionExactEntriesWorkerRequest = (
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
+  /** Admission class only: the transport uses the reserved lane and never sends this field. */
+  pointRead?: true;
   /** Inspect authority facts without opening the original SQLite family. */
   preserveSourceArtifacts?: true;
   inspectionSourcePath?: string;
@@ -158,6 +163,7 @@ export type SessionEntryCohortRequest = Pick<
   | "transcript"
 > & {
   sessionKeys: readonly string[];
+  readCustody?: readonly SessionStoreReadCustody[];
   includeAuthProfileSource?: boolean;
   runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
   includeColdMetadata?: boolean;
@@ -180,8 +186,7 @@ export type SessionExactEntriesWorkerResult = {
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   sourceValidation?: SessionSourceValidation;
-  manualCompact?: {
-    archive?: Omit<SessionColdArchive, "archive_blob">;
+  manualCompact?: SessionColdMetadataWorkerResult & {
     refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
   };
   pendingArchives?: boolean;
@@ -206,7 +211,11 @@ export type SessionExactEntriesWorkerResult = {
   sharing?: {
     source: { agentId: string; path: string };
     databaseIdentity: string;
-    members: Array<{ sessionKey: string; identityIds: string[] }>;
+    members: Array<{
+      sessionKey: string;
+      identityIds: string[];
+      memberAccess?: Record<string, NonNullable<SessionMember["access"]>>;
+    }>;
     placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
   transcript?: SessionTranscriptAnchorFacts;

@@ -7,8 +7,10 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
+import { readPreparedActivity } from "../../lib/chat/prepared-activity.ts";
+import { lastUserMessageIndex } from "./stream-causal-boundary.ts";
 import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 
 type ToolMessageRef = {
@@ -37,23 +39,6 @@ export function toolStreamIdentityRunId(identity: string): string | undefined {
     : undefined;
 }
 
-function addToolMessageRef(
-  refs: ToolMessageRef[],
-  seen: Set<string>,
-  id: string | undefined,
-  runId?: string,
-) {
-  if (!id) {
-    return;
-  }
-  const identity = runId ? buildToolStreamIdentity(runId, id) : id;
-  if (seen.has(identity)) {
-    return;
-  }
-  seen.add(identity);
-  refs.push({ id, ...(runId ? { runId } : {}) });
-}
-
 function isToolMessageContentBlock(block: Record<string, unknown>): boolean {
   return isToolCallContentType(block.type) || isToolResultContentType(block.type);
 }
@@ -61,15 +46,19 @@ function isToolMessageContentBlock(block: Record<string, unknown>): boolean {
 /** Reads invocation ids without confusing row ids or inventing a missing run owner. */
 export function extractToolMessageRefs(
   message: unknown,
-  options: { resultsOnly?: boolean } = {},
+  settledCalls?: ReadonlySet<string>,
 ): ToolMessageRef[] {
   const record = asToolRecord(message);
   if (!record) {
     return [];
   }
 
-  const refs: ToolMessageRef[] = [];
-  const seen = new Set<string>();
+  const refs = new Map<string, ToolMessageRef>();
+  const add = (id: string | undefined, runId: string | undefined, result: boolean) => {
+    if (id && (result || !settledCalls || settledCalls.has(id))) {
+      refs.set(buildToolStreamIdentity(runId ?? "", id), { id, runId });
+    }
+  };
   const blocks = Array.isArray(record.content)
     ? record.content.filter(
         (block): block is Record<string, unknown> => Boolean(block) && typeof block === "object",
@@ -79,31 +68,27 @@ export function extractToolMessageRefs(
   const topLevelRunId =
     readSessionMessageIdentity(record)?.runId ?? normalizeOptionalString(record.runId);
   const role = record.role;
-  const messageHasToolShape =
-    (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
-    (!options.resultsOnly &&
-      (TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(record[field]))) ||
-        blocks.some(isToolMessageContentBlock)));
-
-  if (messageHasToolShape) {
-    addToolMessageRef(refs, seen, topLevelToolId, topLevelRunId);
+  const isResult = typeof role === "string" && normalizeRoleForGrouping(role) === "tool";
+  if (
+    topLevelToolId &&
+    (isResult ||
+      TOOL_NAME_FIELDS.some((field) => normalizeOptionalString(record[field])) ||
+      blocks.some(isToolMessageContentBlock))
+  ) {
+    add(topLevelToolId, topLevelRunId, isResult);
   }
-
   for (const block of blocks) {
-    if (
-      options.resultsOnly ? !isToolResultContentType(block.type) : !isToolMessageContentBlock(block)
-    ) {
-      continue;
+    const result = isToolResultContentType(block.type);
+    if (result || isToolCallContentType(block.type)) {
+      add(
+        resolveToolUseId(block) ?? topLevelToolId,
+        normalizeOptionalString(block.runId) ?? topLevelRunId,
+        result,
+      );
     }
-    addToolMessageRef(
-      refs,
-      seen,
-      resolveToolUseId(block) ?? topLevelToolId,
-      normalizeOptionalString(block.runId) ?? topLevelRunId,
-    );
   }
 
-  return refs;
+  return [...refs.values()];
 }
 
 export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolStreamRef[] {
@@ -111,8 +96,22 @@ export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolS
     const entry = state.toolStreamById.get(identity);
     const id = normalizeOptionalString(entry?.toolCallId) ?? identity;
     const runId = normalizeOptionalString(entry?.runId);
-    return runId ? { identity, id, runId } : { identity, id };
+    return { identity, id, runId };
   });
+}
+
+/** Persisted prefixes and keyed commentary do not consume an indexed live call. */
+export function createSegmentToolRefReader(refs: LiveToolStreamRef[]) {
+  let index = 0;
+  return (segment: ChatStreamSegment) => {
+    const itemId = normalizeOptionalString(segment.itemId);
+    return {
+      itemId,
+      runId: normalizeOptionalString(segment.runId),
+      callId: normalizeOptionalString(segment.toolCallId),
+      indexed: !itemId && segment.persisted !== true ? refs[index++] : undefined,
+    };
+  };
 }
 
 /** Unscoped history cannot prove which sibling owns a reused tool call id. */
@@ -136,11 +135,8 @@ export function persistedCurrentToolStreamIds(
   if (liveToolRefs.length === 0) {
     return matchedToolIds;
   }
-  const lastUserIndex = messages.findLastIndex((message) => {
-    const role = asToolRecord(message)?.role;
-    return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
-  });
-  for (const message of messages.slice(lastUserIndex + 1)) {
+  for (let index = lastUserMessageIndex(messages) + 1; index < messages.length; index++) {
+    const message = messages[index];
     // A saved call only proves invocation identity. Retire its live execution
     // facts when history has an outcome, including prepared receipts whose
     // result lies outside the rendered page.
@@ -149,11 +145,7 @@ export function persistedCurrentToolStreamIds(
         .filter((item) => item.phase === "end" && !item.unpairedCall)
         .map((item) => item.toolCallId ?? item.itemId),
     );
-    const refs = [
-      ...extractToolMessageRefs(message, { resultsOnly: true }),
-      ...extractToolMessageRefs(message).filter((ref) => settledCalls.has(ref.id)),
-    ];
-    for (const ref of refs) {
+    for (const ref of extractToolMessageRefs(message, settledCalls)) {
       const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
       if (identity) {
         matchedToolIds.add(identity);

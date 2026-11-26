@@ -6,6 +6,7 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
   resolveMissingAgentHarnessSessionError,
 } from "../sessions/agent-harness-session-key.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -18,6 +19,7 @@ export function validateSessionPatchAdmission(params: {
   storeKey: string;
   patch: SessionsPatchParams;
   existingEntry?: SessionEntry;
+  deferredSelfSnooze?: ChatRef;
   authorizedAgentHarnessId?: string;
 }): ReturnType<typeof invalid> | undefined {
   const { cfg, storeKey, patch } = params;
@@ -44,7 +46,14 @@ export function validateSessionPatchAdmission(params: {
     if (!params.existingEntry?.sessionId) {
       return invalid(`session not found: ${storeKey}`);
     }
-    if (patch.expectedSessionId === undefined) {
+    // Only the in-process deferred snooze carries a chat selected by the writer.
+    // Public lifecycle patches still require their caller's view precondition.
+    const selectedChat =
+      params.deferredSelfSnooze?.sessionKey === storeKey &&
+      typeof patch.snoozedUntil === "number" &&
+      patch.archived === undefined &&
+      patch.sidebarRoot === undefined;
+    if (patch.expectedSessionId === undefined && !selectedChat) {
       return invalid(`expectedSessionId required for session lifecycle patch: ${storeKey}`);
     }
   }
