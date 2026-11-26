@@ -45,12 +45,19 @@ cleanup_outer() {
   fi
   if [ -n "$WORKER_RUNTIME_HOST_ROOT" ]; then
     if [ "$exit_status" -eq 0 ] && [ "$run_completed" = "1" ]; then
-      # The image user owns the private child and can differ from the host user.
+      # Existing worker cases clean their private child as the image user.
+      local cleanup_user_args=()
+      local cleanup_paths=(/tmp/openclaw-worker-cleanup/runtime)
+      if [ "${SCENARIO:-}" = sqlite-migration-budget ]; then
+        # Nightly caches are host-created and can have a different owner.
+        cleanup_user_args=(--user root)
+        cleanup_paths+=(/tmp/openclaw-worker-cleanup/cache /tmp/openclaw-worker-cleanup/vite /tmp/openclaw-worker-cleanup/vitest-artifacts)
+      fi
       if ! docker_e2e_docker_cmd run --rm --network none \
-        --user root \
+        ${cleanup_user_args[@]+"${cleanup_user_args[@]}"} \
         --entrypoint rm \
         -v "$WORKER_RUNTIME_HOST_ROOT:/tmp/openclaw-worker-cleanup" \
-        "$IMAGE_NAME" -rf -- /tmp/openclaw-worker-cleanup/runtime /tmp/openclaw-worker-cleanup/cache /tmp/openclaw-worker-cleanup/vite ||
+        "$IMAGE_NAME" -rf -- "${cleanup_paths[@]}" ||
         ! rm -rf "$WORKER_RUNTIME_HOST_ROOT"; then
         echo "Worker-cell runtime cleanup failed: $WORKER_RUNTIME_HOST_ROOT" >&2
         exit_status=1
@@ -539,16 +546,17 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
       echo "Nightly SQLite migration needs the selected source's prepared Linux dependencies." >&2
       exit 2
     fi
-    mkdir -p "$ROOT_DIR/.cache" "$ROOT_DIR/node_modules/.vite"
+    mkdir -p "$ROOT_DIR/.cache" "$ROOT_DIR/node_modules/.vite" "$ROOT_DIR/.artifacts"
     WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ROOT_DIR/.cache/openclaw-nightly-migration.XXXXXX")"
-    mkdir "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite"
+    mkdir "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite" "$WORKER_RUNTIME_HOST_ROOT/vitest-artifacts"
     chmod a+rwxt "$WORKER_RUNTIME_HOST_ROOT"
-    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite"
+    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite" "$WORKER_RUNTIME_HOST_ROOT/vitest-artifacts"
     UPGRADE_SCENARIO_ARGS+=(
       -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
       -v "$ROOT_DIR:/tmp/openclaw-nightly-source:ro"
       -v "$WORKER_RUNTIME_HOST_ROOT/cache:/tmp/openclaw-nightly-source/.cache"
       -v "$WORKER_RUNTIME_HOST_ROOT/vite:/tmp/openclaw-nightly-source/node_modules/.vite"
+      -v "$WORKER_RUNTIME_HOST_ROOT/vitest-artifacts:/tmp/openclaw-nightly-source/.artifacts"
       -e OPENCLAW_NIGHTLY_SOURCE_ROOT=/tmp/openclaw-nightly-source
       -e "OPENCLAW_NIGHTLY_SOURCE_SHA=$(git -C "$ROOT_DIR" rev-parse HEAD)"
       -e "OPENCLAW_NIGHTLY_RUNNER_BACKEND=${OPENCLAW_CI_RUNNER_BACKEND:-${RUNNER_ENVIRONMENT:-not supplied}}"
