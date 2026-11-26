@@ -325,7 +325,7 @@ class BrokerHost implements SpawnBrokerHost {
   }
 
   private transmit(
-    message: BrokerRequest | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
+    message: BrokerRequest | Buffer | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
     handle?: SendHandle,
     initiateSpawn?: SpawnInitiation,
   ): Promise<void> {
