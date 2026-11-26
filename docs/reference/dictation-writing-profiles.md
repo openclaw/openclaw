@@ -12,6 +12,73 @@ The complete application-specific feature is **not qualified or complete**.
 The proposal needs maintainer acceptance of profile ownership, the bounded
 preference value, destination-context authority, and supported clients.
 
+## Proposed manual-first milestone
+
+The [issue review](https://github.com/openclaw/openclaw/issues/205638#issuecomment-7178292514)
+asks for useful manual/global behavior before automatic application and origin selection.
+This recommendation is **not accepted or implemented**. The catalog behavior below
+describes the current draft.
+
+The proposed first client is the main Control UI chat composer in en-US.
+Maintainers still need to select the supported browser and operating system.
+Coordinate the preparation and preference contract with
+[M02 cleanup](https://github.com/openclaw/openclaw/issues/205635) and its
+[draft PR](https://github.com/openclaw/openclaw/pull/205789).
+
+Three immutable presets would patch one optional browser-local
+`dictationPreparation` group in the existing `UiSettings` / `UiPreferences` owner.
+Each preset uses version 1 and `literalProfile: "prose"`:
+
+| Preset     | Punctuation | Cleanup  | Correction | Structure | Refinement |
+| ---------- | ----------- | -------- | ---------- | --------- | ---------- |
+| Literal    | preserve    | off      | off        | off       | off        |
+| Clean      | review      | review   | review     | off       | off        |
+| Structured | review      | review   | review     | review    | off        |
+
+The displayed name would derive from those values, without a saved preset ID or
+catalog. A missing group would preserve existing prose insertion with optional
+processing off. All three presets keep remote refinement off.
+Exact developer-token and whitespace handling remains outside this proposal.
+
+Clean and Structured need accepted, useful semantic effects through one existing
+preparation/review owner. An unavailable effect must preserve the original text
+and explain that it did not run. No regular-expression semantic fallback or
+profile-specific model service belongs in this slice.
+
+Keep capture, ordered publication, and insertion with `ComposerDictationOwner`,
+`ComposerDictationSession`, `ComposerDictationCommits`, and the existing input/Undo
+owner. Snapshot the policy once when work starts. Keep existing input-revision,
+destination, Stop, recovery, and transport-authority checks. Policy reload affects
+the next request. Reconnecting alone does not establish a new user or destination.
+
+The proposed group limit is **1 KiB of serialized UTF-8**, subject to acceptance.
+Gateway limits remain 4096 bytes per ordinary value, 128 keys per profile, and
+32 entries per update. The current draft's catalog-specific one-MiB exception
+still exists. Removing it needs an explicit preservation, export, or migration
+decision for any experimental data.
+
+Browser-local storage must exclude the group from both `config.patch` and
+`users.prefs.set`, including queued work and reconnect. Storage failures, unknown
+versions, older-client writes, and simultaneous tabs need an accepted recovery
+contract and actual proof. A local storage write alone does not establish these
+guarantees.
+
+Maintainers can choose among these alternatives:
+
+1. Accept the three presets, useful policy effects, and small browser-local group.
+2. Keep the same manual selection session-only until persistence is accepted.
+3. Defer profiles and preserve existing transcription behavior.
+
+Application/origin selectors, authored catalogs, arbitrary rewriting prompts, and
+cross-device storage remain outside the proposed first slice. A smaller milestone
+does not complete the original application-specific issue or establish native
+qualification. The original acceptance criteria remain open.
+
+Before implementing the selected alternative, record the shared preparation and
+settings owner, supported effects, persistence choice, and experimental-data
+treatment. Real browser/Gateway/provider/microphone, accessibility, and
+stable-upgrade evidence must qualify the resulting implementation.
+
 ## What this draft supports
 
 The Control UI's main chat composer can load manual/global writing profiles,
