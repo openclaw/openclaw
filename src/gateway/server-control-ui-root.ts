@@ -156,11 +156,11 @@ export function readControlUiRootAsset(
       return previous;
     }
     // A sidecar must not pin identity bytes after the independent identity entry is evicted.
-    const { path, size, mtimeMs } = source;
+    const { path: sourcePath, size, mtimeMs } = source;
     const asset =
       encoding === "identity"
         ? { ...(unchanged && previous.asset), file: selected }
-        : { file: { path, size, mtimeMs }, [encoding]: selected };
+        : { file: { path: sourcePath, size, mtimeMs }, [encoding]: selected };
     const entry = { asset, selected };
     if (
       retain &&
@@ -179,14 +179,14 @@ export function readControlUiRootAsset(
     source?: ControlUiPreparedFile,
   ): Promise<PreparedRepresentation | null> => {
     const cacheKey = representationKey(encoding);
-    const cached = source && owner.cached.get(cacheKey);
+    const candidate = source && owner.cached.get(cacheKey);
     if (
       source &&
-      cached &&
-      sameFile(cached.asset.file, source) &&
-      (!includeBody || cached.selected.body)
+      candidate &&
+      sameFile(candidate.asset.file, source) &&
+      (!includeBody || candidate.selected.body)
     ) {
-      return Promise.resolve(cached);
+      return Promise.resolve(candidate);
     }
     // Only identical physical reads share work. A metadata read cannot hold up a GET or a different encoding.
     const work = `${cacheKey}:${input.filePath}`;
