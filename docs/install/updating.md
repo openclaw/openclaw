@@ -538,16 +538,11 @@ recovery, or an actionable failure. Lost ownership, named data risk, and
 unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
-The in-place updater bounds the migrated finalizer process even without an
-explicit `--timeout`. The default allowance accounts for SQLite state size and
-installed plugins. The waiting updater joins the worker's process tree before
-returning control to the managed helper. Interrupted managed recovery requires
-a successful health RPC and the expected identity from the same authenticated
-connection; HTTP readiness alone is not recovery proof. Existing data-risk and
-process-ownership refusals still apply. The installed updater and its managed
-helper must contain these changes. A candidate installed by 2026.11.8 cannot
-retrofit its waiting parent or helper. Release-launcher trials have their own
-restart and rollback deadline and do not use the migrated finalizer.
+Interrupted managed recovery requires a successful health RPC and the expected
+identity from the same authenticated connection; HTTP readiness alone is not
+recovery proof. Existing data-risk and process-ownership refusals still apply.
+The managed helper that starts the update must contain this change; a candidate
+installed by an older helper cannot retrofit it.
 
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while

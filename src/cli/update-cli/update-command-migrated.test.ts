@@ -28,7 +28,6 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import * as finalizationBudget from "../../infra/update-finalization-budget.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -323,9 +322,6 @@ it.for([
     const nativeProbe = childCommands.runUtf8CommandWithTimeout;
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
       async (argv, options) => {
-        if (argv.at(-1) !== "--check") {
-          return await nativeProbe(argv, options);
-        }
         const child = legacy ? await nativeProbe(argv, options) : candidateContract;
         const allowance = typeof options === "number" ? options : options.timeoutMs;
         // Keep the native admission/cleanup flow; model cold-start work in this phase only.
@@ -647,32 +643,17 @@ it.for([
 it.each([
   { code: 3, error: /worker termination=exit, code=3, signal=null, cleanup=normal\.$/u },
   { code: 0, error: /the worker exited without a readable result\.$/u },
-  { code: null, error: /worker termination=timeout, .*cleanup=(cooperative|forced)\.$/u },
-])("reports a finalizer that exits $code or stalls without a result", async ({ code, error }) => {
+])("reports a finalizer that exits $code without a result", async ({ code, error }) => {
   const stateDir = await fs.realpath(dirs.make("migrated-worker-exit-"));
   const root = path.join(stateDir, "candidate");
   const worker = path.join(root, "dist", "infra", "update-migrated-finalize.worker.js");
   await fs.mkdir(path.dirname(worker), { recursive: true });
   await fs.writeFile(
     worker,
-    `process.stderr.write("finalizer failed before its result\\n"); ${code === null ? "setInterval(() => {}, 100);" : `process.exitCode = ${code};`}`,
+    `process.stderr.write("finalizer failed before its result\\n"); process.exitCode = ${code};`,
   );
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const runId = "migrated-worker-exit";
-  const budget = vi
-    .spyOn(finalizationBudget, "resolveUpdateFinalizationTimeoutMs")
-    .mockResolvedValue(1_000);
-  const runNative = childCommandBuffers.runUtf8CommandBuffersWithTimeout;
-  const runWorker = vi
-    .spyOn(childCommandBuffers, "runUtf8CommandBuffersWithTimeout")
-    .mockImplementation((argv, options) =>
-      runNative(
-        argv,
-        typeof options === "number"
-          ? options
-          : { ...options, timeoutMs: options.timeoutMs ?? 2_000 },
-      ),
-    );
   let stderr = "";
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
     stderr += String(chunk);
@@ -693,9 +674,4 @@ it.each([
   expect(failure).not.toBeInstanceOf(UpdateCommandRecoveryPendingError);
   expect(failure).toMatchObject({ message: expect.stringMatching(error) });
   expect(stderr).toContain("finalizer failed before its result");
-  expect(budget).toHaveBeenCalledOnce();
-  expect(runWorker).toHaveBeenCalledExactlyOnceWith(
-    expect.any(Array),
-    expect.objectContaining({ timeoutMs: 1_000 }),
-  );
 });
