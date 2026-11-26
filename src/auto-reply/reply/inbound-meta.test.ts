@@ -357,6 +357,34 @@ describe("buildInboundUserContextPrefix", () => {
     expect(parseConversationInfoPayload(text)["sender"]).toEqual({ id: "15551234567" });
   });
 
+  it("includes dynamic per-turn flags in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      WasMentioned: true,
+      ExplicitlyMentionedBot: false,
+      MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
+      MentionedSubteamIds: [" S_ONCALL "],
+      ImplicitMentionKinds: ["bot_thread_participant"],
+      MentionSource: "implicit_thread",
+      ReplyToBody: "quoted",
+      ForwardedFrom: "sender",
+      ThreadStarterBody: "starter",
+      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["inbound_event_kind"]).toBe("room_event");
+    expect(conversationInfo["is_group_chat"]).toBe(true);
+    expect(conversationInfo["was_mentioned"]).toBe(true);
+    expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
+    expect(conversationInfo["mentioned_user_ids"]).toEqual(["U_OTHER", "U_HELPER"]);
+    expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
+    expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
+    expect(conversationInfo["mention_source"]).toBe("implicit_thread");
+    expect(conversationInfo["history_count"]).toBe(1);
+  });
+
   it("strips null bytes from serialized untrusted metadata blocks", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
