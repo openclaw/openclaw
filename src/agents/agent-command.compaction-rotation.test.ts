@@ -346,30 +346,20 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    [true, "external_user", true],
-    [true, "internal_system", false],
-    [false, "external_user", false],
-  ] as const)(
-    "preserves human transcript ownership for %s/%s",
-    async (senderIsOwner, kind, owner) => {
-      const inputProvenance = { kind, sourceTool: "test" };
-      state.runAgentAttemptMock.mockResolvedValueOnce(
-        makeResult({ sessionId: "owned", text: "ok" }),
-      );
-      await agentCommand({
-        message: "remember",
-        sessionId: "owned",
-        senderIsOwner,
-        inputProvenance,
-      });
-      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
-        opts: { senderIsOwner, inputProvenance },
-        userTurnTranscriptRecorder: {
-          message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
-        },
-      });
-    },
-  );
+    ["external_user", true],
+    ["internal_system", false],
+  ] as const)("preserves human transcript ownership for %s", async (kind, owner) => {
+    const inputProvenance = { kind, sourceTool: "test" };
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId: "owned", text: "ok" }));
+    await agentCommand({ message: "remember", sessionId: "owned", inputProvenance });
+    // A local run's sender is the local host, the owner.
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      opts: { senderIsOwner: true, inputProvenance },
+      userTurnTranscriptRecorder: {
+        message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+      },
+    });
+  });
 
   it.each([95_000, undefined])(
     "keeps successor context %s from the private ordered fact, not public snapshots",

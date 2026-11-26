@@ -8,6 +8,8 @@ export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
   lifecycle?: boolean;
+  /** Only for single-recipient history replies to a legacy client. */
+  includeLegacyPins?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
@@ -36,6 +38,11 @@ export function buildGatewaySessionSnapshot(params: {
       ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
       : {};
   const sessionRow = { ...storedRow, ...patch };
+  // Session events are shared; a metadata update must not overwrite a recipient’s personal pins.
+  if (!params.includeLegacyPins) {
+    delete sessionRow.pinned;
+    delete sessionRow.pinnedAt;
+  }
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }
@@ -78,9 +85,10 @@ export function buildGatewaySessionSnapshot(params: {
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
-    pinned: sessionRow.pinned ?? false,
+    // Reserve the original wire slots; the shared producer never supplies a personal value.
+    pinned: params.includeLegacyPins ? (sessionRow.pinned ?? false) : undefined,
     sidebarRoot: sessionRow.sidebarRoot ?? false,
-    pinnedAt: sessionRow.pinnedAt ?? null,
+    pinnedAt: params.includeLegacyPins ? (sessionRow.pinnedAt ?? null) : undefined,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,
     unread: sessionRow.unread ?? false,

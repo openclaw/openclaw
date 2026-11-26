@@ -129,6 +129,8 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  "test/scripts/node-cache-disabled-control.test.ts",
+  "test/scripts/node-cache-qualification.test.ts",
   "test/scripts/vitest-pair-benchmark.test.ts",
   // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
   "test/vitest-performance-config.test.ts",

@@ -211,7 +211,10 @@ export function selectReleaseStateArtifacts(
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
 ): ReturnType<typeof verifyReleaseStateArtifacts>;
-export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
+export function formatReleaseStateOutcome(
+  payload: ReleaseRecord,
+  options?: { observedDrainStatus?: string },
+): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

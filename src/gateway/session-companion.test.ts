@@ -26,6 +26,7 @@ import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runLoop = vi.hoisted(() =>
   vi.fn<
@@ -523,7 +524,7 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
         sessionKey: target.sessionKey,
         question: "Will this time out?",
       },
-      client: { connId: "conn-1" },
+      client: { ...sharingPolicyClient({ scopes: [] }), connId: "conn-1" },
       context: { sessionCompanion: harness.service, getRuntimeConfig: () => cfg },
       respond,
     } as never),

@@ -113,6 +113,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
         (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
       ),
       runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
+      { allowAdditive: true },
     );
   }
   if (fresh) {
@@ -155,6 +156,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   publishStateSchemaVersionAdmission(db, {
     userVersion: facts.version,
     contentVersion: facts.version,
+    minReader: facts.minReader,
   });
   publishStateRuntimeSchemaAdmission(db, true);
 }

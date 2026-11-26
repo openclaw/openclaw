@@ -5,6 +5,7 @@ import "../../../styles/chat.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
+import { createWorkspace } from "./chat-session-workspace-rail.test-support.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 it.each([false, true])(
@@ -575,5 +576,70 @@ it.each([400, 820, 1280])(
     });
     await userEvent.fill(mounted.getByRole("searchbox"), "");
     await waitForSolid(() => expect(rows().length).toBeGreaterThan(2));
+  },
+);
+
+it.each(["mobile", "desktop"] as const)(
+  "keeps the filename stem visible and truncates a long extension on one line in a narrow %s Files rail",
+  async (presentation) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(390, 844);
+    const name = "review-export." + "0123456789abcdef".repeat(4);
+    const ordinary = "AccessibilityReview".repeat(8) + ".ts";
+    const container = document.createElement("div");
+    container.style.cssText = "width:310px;height:450px;position:fixed;inset:0 auto auto 0";
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const workspace = createWorkspace({
+      presentation,
+      connected: true,
+      list: {
+        root: "/workspace",
+        files: [],
+        browser: {
+          path: "",
+          entries: [name, ordinary].map((entry) => ({
+            name: entry,
+            path: entry,
+            kind: "file" as const,
+          })),
+        },
+      },
+    });
+    const view = mountSolid(() => <SessionWorkspaceRail workspace={workspace} />, { container });
+    onTestFinished(() => view.unmount());
+    const label = (n: string) =>
+      Array.from(
+        container.querySelectorAll(".chat-workspace-mobile__name,.workspace-desktop__filename"),
+      ).find((el) => el.textContent === n)!;
+    await waitForSolid(() => expect(label(name)).toBeDefined());
+    await document.fonts.ready;
+    const long = label(name);
+    const stem = long.firstElementChild!;
+    const suffix = long.lastElementChild!;
+    expect(stem.clientWidth).toBeGreaterThan(0);
+    expect(stem.scrollWidth).toBeLessThanOrEqual(stem.clientWidth + 1);
+    expect(suffix.scrollWidth).toBeGreaterThan(suffix.clientWidth);
+    expect(getComputedStyle(suffix).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(suffix).overflowX).toBe("hidden");
+    expect(getComputedStyle(suffix).whiteSpace).toBe("nowrap");
+    expect(suffix.getBoundingClientRect().right).toBeLessThanOrEqual(
+      long.getBoundingClientRect().right + 1,
+    );
+    expect(long.getBoundingClientRect().height).toBeCloseTo(
+      label(ordinary).getBoundingClientRect().height,
+      0,
+    );
+    const short = label(ordinary);
+    expect(short.lastElementChild!.textContent).toBe(".ts");
+    expect(short.firstElementChild!.scrollWidth).toBeGreaterThan(
+      short.firstElementChild!.clientWidth,
+    );
+    expect(
+      Math.abs(
+        short.firstElementChild!.getBoundingClientRect().top -
+          short.lastElementChild!.getBoundingClientRect().top,
+      ),
+    ).toBeLessThan(2);
   },
 );

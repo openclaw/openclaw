@@ -33,7 +33,11 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
-import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
+import {
+  gitIsAncestor,
+  inspectCandidateChangelogRange,
+  validateCandidateChangelog,
+} from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
@@ -1736,20 +1740,19 @@ function candidateParallelsLoginPrefix() {
 function preflightCandidateParallels() {
   // P can check the host before FRV identifies Q. Q still selects the exact
   // guests and snapshots and performs the actual smoke against C's tarballs.
-  const check = `
-import { detectParallelsHostIp } from './scripts/e2e/parallels/host-server.ts';
-import { listVmNames } from './scripts/e2e/parallels/parallels-vm.ts';
-import { resolveProviderAuth } from './scripts/e2e/parallels/provider-auth.ts';
-if (listVmNames().length === 0) throw new Error('no Parallels guests are registered');
-if (!detectParallelsHostIp()) throw new Error('failed to detect Parallels host IP');
-resolveProviderAuth({ provider: '${CANDIDATE_PARALLELS_PROVIDER}' });
-`;
+  const preflightPath = fileURLToPath(
+    new URL("./e2e/parallels/candidate-preflight.ts", import.meta.url),
+  );
   const command = [
     ...candidateParallelsLoginPrefix(),
     "exec",
-    ...[process.execPath, "--import", "./scripts/tsx.mjs", "--input-type=module", "-e", check].map(
-      shellQuote,
-    ),
+    ...[
+      process.execPath,
+      "--import",
+      "./scripts/tsx.mjs",
+      preflightPath,
+      CANDIDATE_PARALLELS_PROVIDER,
+    ].map(shellQuote),
   ].join(" ");
   const result = spawnSync("bash", ["-lc", command], {
     cwd: TOOLING_ROOT,
@@ -2127,7 +2130,7 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText, changelogPaths } =
     validateCandidateChangelog({
       rootDir: targetRoot,
       repository: options.repo,
@@ -2511,6 +2514,13 @@ async function main() {
   if (prepareCommand) {
     publishPreflight.command = prepareCommand;
   }
+  const candidateRange = inspectCandidateChangelogRange({
+    rootDir: targetRoot,
+    repository: options.repo,
+    recordedTarget: releaseNotesProvenance.target,
+    targetSha,
+    changelogPaths,
+  });
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2539,7 +2549,7 @@ async function main() {
       fullReleaseValidation: fullArtifactName,
     },
     releaseNotesCheck,
-    releaseNotesProvenance,
+    releaseNotesProvenance: { ...releaseNotesProvenance, candidateRange },
     androidVersionCheck,
     localGeneratedCheck,
     tarball: {
@@ -2583,11 +2593,14 @@ async function main() {
       }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
-      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`,
+      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target}). ${candidateRange.summary}`,
       `- ${
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
       }`,
+      ...(releaseNotesProvenance.diagnostics ?? []).map(
+        (diagnostic) => "- Changelog warning: " + diagnostic,
+      ),
       `- local generated release checks: ${localGeneratedCheck.status}${
         localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
       }`,
@@ -2624,6 +2637,7 @@ async function main() {
   );
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  console.log(candidateRange.summary);
   console.log(publishPreflightTable);
   if (publishPreflight.failed) {
     throw new Error("Publish preflight failed; resolve the reported gates before publication.");

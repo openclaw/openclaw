@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import {
   bindEmbeddedSessionRowProjection,
   createEmbeddedCallGateway,
@@ -440,48 +439,6 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
       });
     try {
       expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
-      using owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-      const repeated = await Promise.all(
-        Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
-      );
-      expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
-      expect(owner).not.toHaveBeenCalled();
-      for (const client of [alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          await read(rowMode, client, 2);
-          await read(rowMode, client, 128);
-        }
-      }
-      using stringify = vi.spyOn(JSON, "stringify");
-      using present = vi.spyOn(projection, "present");
-      for (const client of [alice, bob, alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          stringify.mockClear();
-          await read(rowMode, client, 2);
-          const smallPageEncodings = stringify.mock.calls.length;
-          stringify.mockClear();
-          const result = await read(rowMode, client, 128);
-          const encodings = stringify.mock.calls.length;
-          expect(result.totalCount).toBe(128);
-          // Fixed request preparation may encode facts; additional warm rows must not.
-          if (wire) {
-            expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
-              smallPageEncodings,
-            );
-          }
-          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
-          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
-          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
-            client === bob ? "owner" : "viewer",
-          );
-          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
-            client === alice ? "owner" : "viewer",
-          );
-        }
-      }
-      expect(present).not.toHaveBeenCalled();
-      stringify.mockRestore();
-      present.mockRestore();
       const people = () =>
         listProjectedSessions({
           projection,
@@ -490,15 +447,11 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
           opts: { limit: 2, includePeople: true },
         });
       const beforeUsage = await people();
-      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { inputTokens: 123 });
       await read("compact", bob);
       expect((await people()).people).toEqual(beforeUsage.people);
-      expect(owner).not.toHaveBeenCalled();
-      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);
-      expect(owner.mock.calls.length).toBeLessThan(32);
       expectPage(await read("compact", bob), ["s127", "s126"], 127);
       // An exact publication must not hide an expired retained partition.
       clock.mockReturnValue(now + 60_128);

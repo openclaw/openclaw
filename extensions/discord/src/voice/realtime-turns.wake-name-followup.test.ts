@@ -23,7 +23,7 @@ defineDiscordVoiceTests(
         await vi.advanceTimersByTimeAsync(260);
 
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "u-guest" } });
       } finally {
         clock.mockRestore();
         vi.useRealTimers();

@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { getCanonicalUserPreferences } from "../state/user-preferences.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -95,7 +96,21 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
     expect((await request(method, member, context, [foreignKey], { pinned: true }))?.[0]).toBe(
       true,
     );
-    expect(read(foreignKey)?.pinnedAt).toEqual(expect.any(Number));
+    const sharedPin = read(foreignKey)?.pinnedAt;
+    expect(sharedPin).toEqual(expect.any(Number));
+    member.connect.caps = ["personal-session-pins"];
+    const pin = await request(method, member, context, [foreignKey], { pinned: true });
+    expect(pin).toMatchObject(
+      method === "sessions.patchMany"
+        ? [true, { outcomes: [{ key: foreignKey, ok: true }] }, undefined]
+        : [true, { entry: { pinned: true } }, undefined],
+    );
+    expect(read(foreignKey)?.pinnedAt).toBe(sharedPin);
+    expect(
+      (await getCanonicalUserPreferences(memberId, ["ui.railShortcuts"]))?.entries[
+        "ui.railShortcuts"
+      ],
+    ).toContain(`session:${foreignKey}`);
     for (const [role, client, key] of [
       ["member creator", member, ownKey],
       ["creator", creator, foreignKey],

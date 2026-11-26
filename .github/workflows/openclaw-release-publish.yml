@@ -1407,7 +1407,8 @@ jobs:
       contents: write
       id-token: write
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Child waits plus up to one hour each of core visibility and final npm readback.
+    timeout-minutes: 270
     environment: npm-release
     steps:
       - name: Checkout release SHA

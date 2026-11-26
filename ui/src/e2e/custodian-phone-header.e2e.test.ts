@@ -70,6 +70,51 @@ async function expectInViewport(page: Page, locator: Locator) {
 }
 
 suite.define(() => {
+  it("reveals the completed New agent welcome above the composer after loading history", async () => {
+    await suite.withPage(phone, async ({ page }) => {
+      const gateway = await install(page, {
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        deferredMethods: ["openclaw.chat"],
+        methodResponses: {
+          "openclaw.chat.history": {
+            turns: Array.from({ length: 16 }, (_, index) => ({
+              role: index % 2 ? "assistant" : "user",
+              text: "Earlier fieldwork conversation " + index,
+              at: 1_700_000_000_000 + index,
+            })),
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "custodian?intent=new-agent");
+      await gateway.waitForRequest("openclaw.chat");
+      const messages = page.locator(".custodian__messages");
+      await messages.getByText("Earlier fieldwork conversation 15", { exact: true }).waitFor();
+      await gateway.resolveDeferred("openclaw.chat", {
+        sessionId: "e2e-new-agent-roles",
+        reply:
+          "Pick a role or describe your own.\n\n1. Chief of staff\n2. Researcher\n3. Writer\n4. Reviewer\n5. A small team\n6. Something custom",
+        action: "none",
+      });
+      const lastRole = messages.getByText("Something custom", { exact: true });
+      await lastRole.waitFor();
+      await expect
+        .poll(() =>
+          lastRole.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const region = element.closest(".custodian__messages")!.getBoundingClientRect();
+            return bounds.top >= region.top && bounds.bottom <= region.bottom;
+          }),
+        )
+        .toBe(true);
+      await messages.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page.locator(".custodian-surface textarea").fill("Keep this draft");
+      expect(await messages.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
+    });
+  });
+
   it("moves History to the top bar and keeps the wizard's cancel on screen", async () => {
     await suite.withPage(phone, async ({ page }) => {
       await install(page);

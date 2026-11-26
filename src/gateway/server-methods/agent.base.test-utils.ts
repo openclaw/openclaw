@@ -26,7 +26,6 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-g
 import {
   getAgentTestMocks,
   makeContext,
-  type AgentHandlerArgs,
   type AgentParams,
   type AgentCommandCall,
   setDateOnlyFakeClockActive,
@@ -46,6 +45,7 @@ import {
   runMainAgentAndCaptureEntry,
   backendGatewayClient,
   operatorWriteCliClient,
+  localOwnerCliClient,
   waitForAgentCommandCall,
   waitForAgentCommandCallAfter,
   invokeAgent,
@@ -235,12 +235,7 @@ describe("gateway agent handler", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: runId,
       },
-      {
-        client: {
-          ...operatorWriteCliClient(["operator.admin"]),
-          internal: { isLocalClient: true },
-        } as AgentHandlerArgs["client"],
-      },
+      { client: localOwnerCliClient() },
     );
 
     await waitForAssertion(() => expect(capability?.active).toBe(false));

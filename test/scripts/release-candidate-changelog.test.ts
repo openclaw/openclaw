@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateCandidateChangelog } from "../../scripts/lib/release-candidate-changelog.mts";
+import {
+  inspectCandidateChangelogRange,
+  validateCandidateChangelog,
+} from "../../scripts/lib/release-candidate-changelog.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { fixtureGit } from "./release-publish.test-support.js";
 
@@ -61,6 +64,49 @@ function createFixture(selectedVersion = version, split = true) {
 }
 
 describe("candidate publication changelog scope", () => {
+  it("describes the exact history after the recorded target without blocking release preparation", () => {
+    const f = createFixture();
+    const snapshot = (recordedTarget: string, targetSha: string) =>
+      inspectCandidateChangelogRange({
+        rootDir: f.root,
+        repository: "example/project",
+        recordedTarget,
+        targetSha,
+        changelogPaths: f.validate(undefined, targetSha).changelogPaths,
+      });
+    expect(snapshot(f.targetSha, f.targetSha)).toMatchObject({
+      commitCount: 0,
+      summary: "Contribution record covers the candidate.",
+    });
+    f.writeSelected(clean + " More detail.");
+    const notes = f.commit();
+    expect(snapshot(f.targetSha, notes)).toMatchObject({
+      commitCount: 1,
+      latestChangeOutsideChangelog: null,
+      summary: "1 commit after the audited record (selected changelog paths only).",
+    });
+    f.write("package.json", '{"version":"2026.8.1"}');
+    f.write("docs/reference/database-schemas/state-schema-history.md", "2026.8.1");
+    const prepared = f.commit();
+    expect(snapshot(f.targetSha, prepared)).toMatchObject({
+      candidate: prepared,
+      commitCount: 2,
+      latestChangeOutsideChangelog: prepared,
+      compareUrl: `https://github.com/example/project/compare/${f.targetSha}...${prepared}`,
+    });
+    f.write("src/product.ts", "export const enabled = true;");
+    f.commit();
+    f.git("revert", "--no-edit", "HEAD");
+    const reverted = f.git("rev-parse", "HEAD");
+    expect(snapshot(prepared, reverted)).toMatchObject({
+      commitCount: 2,
+      latestChangeOutsideChangelog: reverted,
+      summary: expect.stringContaining(
+        `Review changes outside the selected changelog: https://github.com/example/project/compare/${prepared}...${reverted}`,
+      ),
+    });
+  });
+
   it.each([true, false])("ignores archived bot credits with split=%s", (split) => {
     const f = createFixture(version, split);
     const result = f.validate();

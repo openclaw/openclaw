@@ -44,7 +44,7 @@ it.each([
     resetGatewayWorkAdmission();
     // Keep prewarming from consuming the discovery pause intended for retention.
     setRuntimeConfigSnapshot({ agents: { defaults: { promptCacheKeepWarm: false } } });
-    vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
+    vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
