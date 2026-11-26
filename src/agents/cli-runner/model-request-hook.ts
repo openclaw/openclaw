@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageContent } from "../../llm/types.js";
 import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
@@ -55,11 +56,10 @@ function readCliModelRequestPayload(value: unknown, allowImages: boolean): CliMo
         ? "before_model_request must keep text fields as strings and images as inline image blocks"
         : "before_model_request must keep the CLI payload as { prompt, prependContext?, appendContext? } strings",
     );
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw invalid();
   }
-  // SAFETY: the guard above proved value is a non-null, non-array object; every field is read as unknown and validated below.
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (
     Object.keys(record).some((key) => !PAYLOAD_KEYS.has(key) && !(allowImages && key === "images"))
   ) {
@@ -80,10 +80,10 @@ function readCliModelRequestPayload(value: unknown, allowImages: boolean): CliMo
     }
     const values: unknown[] = images;
     for (const image of values) {
-      if (typeof image !== "object" || image === null || Array.isArray(image)) {
+      if (!isRecord(image)) {
         throw invalid();
       }
-      const imageRecord = image as Record<string, unknown>;
+      const imageRecord = image;
       const { type, data, mimeType, displayName } = imageRecord;
       if (
         type !== "image" ||
