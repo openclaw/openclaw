@@ -511,7 +511,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard self.retiredDocumentURL == nil else { return }
         self.webView.stopLoading()
         guard self.auth.usesNativeDevice, self.isTrustedDashboardDocument else { return }
-        self.retiredDocumentURL = self.webView.url ?? self.currentURL
+        // Revival reloads this URL as a document, so a private chat must re-enter through its session entry.
+        self.retiredDocumentURL = self.webView.url
+            .flatMap { WebChatRoute.recoveryDocumentURL(for: $0, baseURL: self.currentURL) } ?? self.currentURL
         // stopLoading only cancels navigation; a retained closed page otherwise keeps reconnecting
         // even though its native auth owner has already withdrawn this window's authority.
         self.documentHost.retireDocument()
