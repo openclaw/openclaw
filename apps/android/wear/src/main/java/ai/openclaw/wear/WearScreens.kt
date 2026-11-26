@@ -1565,7 +1565,7 @@ private fun selectedAgentName(snapshot: WearConversationSnapshot): String {
 }
 
 @Composable
-private fun selectedModelName(snapshot: WearConversationSnapshot): String = snapshot.models.firstOrNull(WearModelSummary::selected)?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
+private fun selectedModelName(snapshot: WearConversationSnapshot): String = snapshot.models.firstOrNull { it.ref == snapshot.selectedModelRef }?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
 
 internal enum class WearContextPicker {
   Agent,
@@ -1714,7 +1714,7 @@ private fun ContextPickerOverlay(
               title = model.name,
               detail = model.ref,
               status = null,
-              selected = model.selected,
+              selected = model.ref == snapshot.selectedModelRef,
               enabled = !actionBusy,
               onClick = { onSelectModel(model.ref) },
             )

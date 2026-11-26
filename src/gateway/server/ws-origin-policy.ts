@@ -1,6 +1,6 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -97,6 +97,28 @@ export function disconnectDisallowedGatewayPolicyClients(
         // A retired profile cannot retain its connection's grants.
         roleAuthorityRevoked = true;
       }
+    }
+    // A role that now allows a scope this connection lost to its role at connect reconnects it,
+    // so widening applies right away instead of waiting for the person to reconnect.
+    const capped = client.internal?.roleCappedScopes;
+    const roleAccessWidened =
+      capped !== undefined &&
+      (currentRole ? intersectOperatorScopes(capped, currentRole.scopes) : capped).some(
+        (scope) =>
+          !roleScopesAllow({
+            role: "operator",
+            requestedScopes: [scope],
+            allowedScopes: client.connect?.scopes ?? [],
+          }),
+      );
+    if (!roleAuthorityRevoked && roleAccessWidened) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "operator-role-widened",
+        code: 4001,
+        message: "gateway policy changed",
+        revokeSource: false,
+      });
+      continue;
     }
     if (roleAuthorityRevoked || !isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
       invalidateGatewayPolicyClient(client, {

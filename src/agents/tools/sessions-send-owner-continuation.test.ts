@@ -5,7 +5,6 @@ import * as agentRuns from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
-  bindRequesterOwnerIdentity,
   bindRequesterYieldCronAuthority,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -312,19 +311,12 @@ describe("child followup requester continuation", () => {
     "observer closed",
     "receipt replay",
     "requester failed while pending",
-  ])("returns the original owner's plugin authority after %s", async (outcome) => {
-    const owner = {
-      senderId: "owner",
-      channel: "telegram",
-      accountId: "test",
-    };
+  ])("returns the original owner's automation management after %s", async (outcome) => {
     const capability = createCronCreatorAuthorityCapability(
       "original",
       { kind: "unknown" },
       { source: "channel-owner" },
       () => true,
-      undefined,
-      owner,
     )!;
     const { completion, runId, released } = await inRun(
       "original",
@@ -367,7 +359,6 @@ describe("child followup requester continuation", () => {
         admission!.managementEntitlement,
         admission!.isCurrent,
         undefined,
-        admission!.requesterOwner,
       )!;
       admission!.bindRunScope(scope);
       await inRun(
@@ -377,13 +368,8 @@ describe("child followup requester continuation", () => {
             completion.close();
             expect(fixture.release).not.toHaveBeenCalled();
           }
-          const binding = bindRequesterOwnerIdentity({
-            runId: admission!.runId,
-            ...requester,
-            sessionId: SESSION_ID,
-          });
-          expect(binding?.isCurrent()).toBe(true);
-          binding!.assertCurrent();
+          expect(admission!.managementEntitlement).toEqual({ source: "channel-owner" });
+          expect(scope.isCurrent?.()).toBe(true);
           invoked();
         },
         scope,

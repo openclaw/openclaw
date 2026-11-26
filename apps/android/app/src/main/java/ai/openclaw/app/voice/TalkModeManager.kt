@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.asObjectOrNull
 import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -15,7 +16,6 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.parseJsonBooleanFlag
 import ai.openclaw.app.node.parseJsonDouble
 import ai.openclaw.app.node.parseJsonParamsObject
@@ -143,6 +143,15 @@ private data class TalkStatus(
   val route: TalkModeRoute? = null,
   val failureAcknowledged: Boolean = false,
 )
+
+private val TalkModeRoute.description: NativeText?
+  get() =
+    when (this) {
+      TalkModeRoute.RealtimeRelay -> null
+      TalkModeRoute.NativeConfigured -> nativeText("Native Talk: using device speech recognition and configured Talk voice.")
+      TalkModeRoute.NativeAndroidFallback -> nativeText("Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.")
+      TalkModeRoute.NativeGatewayFallback -> nativeText("Native Talk: Gateway relay is unavailable for this configuration; using device speech recognition and configured Talk voice.")
+    }
 
 /** Identity is the failure's status owner, retained across its relay close event. */
 internal data class TalkFailureNotice(

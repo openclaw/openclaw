@@ -2,6 +2,7 @@ import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveCompactionTimeoutMs } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
@@ -139,6 +140,7 @@ export async function prepareGatewaySessionCompaction(
     transcriptTarget,
     { kind: "preflight" },
     params.abortSignal,
+    resolveCompactionTimeoutMs(params.cfg),
   );
   if (prepared.status !== "preflight") {
     throw new Error("Expected compaction preflight facts");

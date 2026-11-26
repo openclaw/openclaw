@@ -18,6 +18,7 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
@@ -137,6 +138,7 @@ export async function runWorkerDescriptor(
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
     nativeInference?: NativeInferenceStartup;
+    nodeExecution?: NodeExecutionContext;
     /** Managed device folders retain the node-approved canonical target across startup. */
     assertWorkspaceCurrent?: () => void;
   } = {},
@@ -357,6 +359,12 @@ export async function runWorkerDescriptor(
           allowedToolNames: toolAuthority.allowedToolNames,
           toolSurface,
           execAuthority: toolAuthority.exec,
+          // A turn with its own GitHub identity must never fall back to the node's Git helper,
+          // including when the worker cannot create a private identity profile.
+          nodeExecution:
+            descriptor.assignment.github && options.nodeExecution?.gitConfigFile
+              ? { ...options.nodeExecution, gitConfigFile: undefined }
+              : options.nodeExecution,
           ...(computer
             ? {
                 computer: {

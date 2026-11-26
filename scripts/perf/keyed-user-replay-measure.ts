@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import type { SessionMessageEntry } from "../../src/agents/sessions/session-manager-types.js";
 import { CURRENT_SESSION_VERSION } from "../../src/config/sessions/version.js";
 import type { PersistedUserTurnMessage } from "../../src/sessions/user-turn-input.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -89,12 +90,7 @@ accepted = rejected = 0;
 global.gc?.();
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const hostLoad = loadavg();
 const cpuStart = process.threadCpuUsage();

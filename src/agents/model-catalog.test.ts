@@ -8,6 +8,8 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
   buildOpenAICompatibleLiveProviderCatalog,
   clearLiveCatalogCacheForTests,
@@ -24,6 +26,7 @@ import {
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   createEmptyAgentDiscoveryStores,
@@ -33,7 +36,7 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
-import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   resolveLogicalVisibleModelCatalog,
@@ -728,16 +731,6 @@ it("uses the lifecycle auth snapshot for provider catalog augmentation", async (
   );
 });
 
-it("reports image capability from the prepared row", () => {
-  const entry: ModelCatalogEntry = {
-    id: "media",
-    name: "Media",
-    provider: "test",
-    input: ["text", "image", "document"],
-  };
-  expect(modelSupportsVision(entry)).toBe(true);
-});
-
 describe("model catalog metadata projection", () => {
   it("retains runtime capabilities without exporting request credentials", () => {
     const capabilities = row("custom", "configured-model", {
@@ -931,6 +924,52 @@ describe("catalog declaration planning", () => {
         normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
       ).toEqual([2]);
     });
+  });
+  function hostedPublication() {
+    return {
+      sourceUrl: resolveRemoteCatalogUrl(config),
+      generatedAt: 1,
+      revision: "fixture",
+      providers: {},
+      recommendations: {},
+      pricing: {},
+      upstreamPricing: {},
+    };
+  }
+  it("reuses declaration rows only for the current hosted publication or its absence", () => {
+    const { load } = catalog("static", "manifest-model");
+    const hosted = hostedPublication();
+    const absent = withRemoteModelCatalogSnapshot(null, load);
+    const published = withRemoteModelCatalogSnapshot(hosted, load);
+    expect(published).not.toBe(absent);
+    expect(withRemoteModelCatalogSnapshot(hosted, load)).toBe(published);
+
+    const replacement = withRemoteModelCatalogSnapshot({ ...hosted }, load);
+    expect(replacement).not.toBe(published);
+    const withdrawn = withRemoteModelCatalogSnapshot(null, load);
+    expect(withdrawn).not.toBe(replacement);
+    expect(withRemoteModelCatalogSnapshot(null, load)).toBe(withdrawn);
+  });
+  it("releases generated declaration rows when their hosted publication expires", async () => {
+    const { load } = catalog("static", "manifest-model");
+    function observe(source: ReturnType<typeof hostedPublication>) {
+      const rows = withRemoteModelCatalogSnapshot(source, load);
+      expect(rows.map((entry) => entry.id)).toEqual(["manifest-model"]);
+      return { source: new WeakRef(source), rows: new WeakRef(rows), row: new WeakRef(rows[0]!) };
+    }
+
+    const expired = observe(hostedPublication());
+    // Keep the config and metadata live without replacing the expired cache entry.
+    await collectForRetentionCheck("expired manifest declaration rows");
+    expect(expired.source.deref()).toBeUndefined();
+    expect([Boolean(expired.rows.deref()), Boolean(expired.row.deref())]).toEqual([false, false]);
+
+    const hosted = hostedPublication();
+    const live = observe(hosted);
+    await collectForRetentionCheck("live manifest declaration rows");
+    const current = withRemoteModelCatalogSnapshot(hosted, load);
+    expect(live.rows.deref()).toBe(current);
+    expect(live.row.deref()).toBe(current[0]);
   });
   it("keeps the old declaration cache when replacement planning fails", async () => {
     const initial = catalog("static", "initial");

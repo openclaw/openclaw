@@ -16,6 +16,7 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.PERSONAL_SESSION_PINS_CAPABILITY
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -28,6 +29,7 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -86,8 +88,6 @@ import ai.openclaw.app.node.SmsHandler
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.node.SystemHandler
 import ai.openclaw.app.node.TalkHandler
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
@@ -347,6 +347,19 @@ internal fun operatorScopesAllowRead(scopes: Collection<String>): Boolean =
 internal fun operatorScopesAllowWrite(scopes: Collection<String>): Boolean = scopes.any { scope -> scope == OperatorWriteScope || scope == OperatorAdminScope }
 
 internal fun operatorScopesAllowAdmin(scopes: Collection<String>): Boolean = OperatorAdminScope in scopes
+
+internal sealed interface PersonalSessionPinAccess {
+  data object Unsupported : PersonalSessionPinAccess
+
+  data object ReadOnly : PersonalSessionPinAccess
+
+  data class Verified(
+    val ownSessionsOnly: Boolean,
+    val savedKeys: Set<String> = emptySet(),
+  ) : PersonalSessionPinAccess
+
+  fun canEdit(sharingRole: String?): Boolean = this is Verified && (!ownSessionsOnly || sharingRole == "owner")
+}
 
 internal fun sessionCatalogAvailableFor(
   methods: Set<String>,
@@ -1106,8 +1119,6 @@ class NodeRuntime internal constructor(
     val realtime: VoiceE2eSliceResult?,
   )
 
-  private val _isConnected = MutableStateFlow(false)
-  val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
   private val _desktopObserveAvailable = MutableStateFlow(false)
@@ -1241,10 +1252,14 @@ class NodeRuntime internal constructor(
   private val usageSummary = GatewaySummaryOwner<GatewayUsageSummary>()
   val usageState: StateFlow<GatewaySummaryState<GatewayUsageSummary>> = usageSummary.state
   private var usageIncompleteRetryJob: Job? = null
-  private val skillsSummary = GatewaySummaryOwner<GatewaySkillsSummary>()
-  val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
+  private val skillsSummary = GatewaySummaryOwner<List<GatewaySkillSummary>>()
+  val skillsState: StateFlow<GatewaySummaryState<List<GatewaySkillSummary>>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+
+  @Volatile private var pinGrantIfProfileVerified: PersonalSessionPinAccess.Verified? = null
+  private val personalSessionPinAccessState = MutableStateFlow<PersonalSessionPinAccess>(PersonalSessionPinAccess.Unsupported)
+  internal val personalSessionPinAccess = personalSessionPinAccessState.asStateFlow()
   private val _sessionDiffAvailable = MutableStateFlow(false)
   val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
@@ -1416,7 +1431,7 @@ class NodeRuntime internal constructor(
         )
         synchronized(gatewayDataScopeLock) { appearancePreferenceScopeOwner = null }
         replaceGatewayMethods(hello.methods)
-        replaceGatewayCapabilities(hello.capabilities)
+        replaceGatewayCapabilities(hello.capabilities, personalPinGrant(hello, operatorScopes))
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
@@ -2393,7 +2408,6 @@ class NodeRuntime internal constructor(
           nodeProblem = nodeConnectionProblem,
         )
       _gatewayConnectionDisplay.value = display
-      _isConnected.value = display.isConnected
     }
   }
 
@@ -6209,6 +6223,9 @@ class NodeRuntime internal constructor(
     val refreshGeneration = appearancePreferenceRefreshGuard.begin()
     try {
       val revisionSnapshot = appearancePreferenceKeys.associateWith(prefs::appearancePreferenceRevision)
+      // A pin writer need not be able to read Gateway configuration. Use the ordinary
+      // preference read as the sole profile verdict, including on subsequent refreshes.
+      val pinProfileRead = pinGrantIfProfileVerified?.let { fetchProfileAppearancePreferences(gatewayScope, lease, refreshGeneration) }
       val res = requestAppearancePreference(gatewayScope, lease, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
@@ -6220,7 +6237,7 @@ class NodeRuntime internal constructor(
             resolveGatewaySourcePreviewConfig(config, gatewayControlPageBaseUrl(endpoint), gatewayScope.generation)
           }
       }
-      val profileRead = fetchProfileAppearancePreferences(gatewayScope, lease)
+      val profileRead = pinProfileRead ?: fetchProfileAppearancePreferences(gatewayScope, lease, refreshGeneration)
       if (profileRead is GatewayAppearancePreferencesRead.Unavailable) return
       val profile =
         (profileRead as? GatewayAppearancePreferencesRead.Available)
@@ -6306,12 +6323,16 @@ class NodeRuntime internal constructor(
   private suspend fun fetchProfileAppearancePreferences(
     gatewayScope: GatewayDataScope,
     lease: GatewaySession.RequestLease,
+    refreshGeneration: Long,
   ): GatewayAppearancePreferencesRead {
     val method = GatewayMethod.UsersPrefsGet.rawValue
     if (gatewayAdvertisesMethod(method) == false) return GatewayAppearancePreferencesRead.Unsupported
 
+    val pinGrant = pinGrantIfProfileVerified
+    var verifiedPins: PersonalSessionPinAccess.Verified? = null
     return try {
-      val keys = JsonArray(appearancePreferenceKeys.map(::JsonPrimitive))
+      val requestedKeys = if (pinGrant == null) appearancePreferenceKeys else appearancePreferenceKeys + "ui.railShortcuts"
+      val keys = JsonArray(requestedKeys.map(::JsonPrimitive))
       val res =
         requestAppearancePreference(
           gatewayScope,
@@ -6323,6 +6344,21 @@ class NodeRuntime internal constructor(
       when ((root?.get("status") as? JsonPrimitive)?.contentOrNull) {
         "ok" -> {
           val entries = root.get("entries").asObjectOrNull() ?: return GatewayAppearancePreferencesRead.Unavailable
+          if (pinGrant != null) {
+            val saved = entries["ui.railShortcuts"]
+            if (saved == null || saved is JsonArray) {
+              val keys =
+                saved.orEmpty().mapNotNullTo(mutableSetOf()) { item ->
+                  item
+                    .asStringOrNull()
+                    ?.takeIf { it.startsWith("session:") }
+                    ?.substringAfter(':')
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
+                }
+              verifiedPins = pinGrant.copy(savedKeys = keys)
+            }
+          }
           val profileId = refreshCurrentProfileId(gatewayScope, lease)
           // Writable values without an authenticated owner must not replace a
           // previous profile's appearance while its offline edits remain queued.
@@ -6359,6 +6395,28 @@ class NodeRuntime internal constructor(
       }
     } catch (_: Throwable) {
       GatewayAppearancePreferencesRead.Unavailable
+    } finally {
+      publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
+        if (pinGrant != null) personalSessionPinAccessState.value = verifiedPins ?: PersonalSessionPinAccess.ReadOnly
+      }
+    }
+  }
+
+  private fun personalPinGrant(
+    hello: GatewayHelloSummary,
+    scopes: List<String>,
+  ): PersonalSessionPinAccess.Verified? {
+    if (hello.authRole != "operator" || PERSONAL_SESSION_PINS_CAPABILITY !in hello.capabilities.orEmpty() ||
+      !hello.methods.orEmpty().containsAll(setOf(GatewayMethod.SessionsPatch.rawValue, GatewayMethod.UsersPrefsGet.rawValue))
+    ) {
+      return null
+    }
+    // A session-only writer also needs a named operator, not the shared Gateway owner.
+    val namedOperator = hello.authSessionCap != null || hello.profileActivityViewerId?.let { it.isNotBlank() && it != "gateway-owner" } == true
+    return when {
+      operatorScopesAllowWrite(scopes) -> PersonalSessionPinAccess.Verified(ownSessionsOnly = false)
+      "operator.sessions.write" in scopes && namedOperator -> PersonalSessionPinAccess.Verified(ownSessionsOnly = true)
+      else -> null
     }
   }
 
@@ -7158,15 +7216,13 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private suspend fun refreshSkillsFromGateway(): GatewaySkillsSummary? =
+  private suspend fun refreshSkillsFromGateway(): List<GatewaySkillSummary>? =
     refreshGatewaySummary(
       summary = skillsSummary,
       failureText = nativeText("Could not load skills."),
     ) { gatewayScope ->
       val root = requestGatewayObject(gatewayScope, "skills.status", "{}")
-      GatewaySkillsSummary(
-        skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
-      )
+      parseSkillSummaries(root?.get("skills") as? JsonArray)
     }
 
   private suspend fun setSkillEnabledOnGateway(
@@ -7428,7 +7484,7 @@ class NodeRuntime internal constructor(
     slug: String,
     version: String?,
   ): Boolean {
-    val skills = refreshSkillsFromGateway()?.skills ?: return false
+    val skills = refreshSkillsFromGateway() ?: return false
     if (!isGatewayDataScopeCurrent(gatewayScope)) return false
     // Only an install-only source installs without a version. Its reference is not a `@owner/slug`
     // spelling, so the slug comparison never matches it; the Gateway records the exact reference.
@@ -8142,9 +8198,16 @@ class NodeRuntime internal constructor(
 
   private fun gatewayAdvertisesMethod(method: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
 
-  private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
+  private fun replaceGatewayCapabilities(
+    capabilities: Set<String>?,
+    pinGrant: PersonalSessionPinAccess.Verified? = null,
+  ) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
+      pinGrantIfProfileVerified = pinGrant
+      // A new hello advertises the row contract, not a verified profile on this socket.
+      personalSessionPinAccessState.value =
+        if (PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()) PersonalSessionPinAccess.ReadOnly else PersonalSessionPinAccess.Unsupported
       chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }
@@ -8435,25 +8498,6 @@ class NodeRuntime internal constructor(
         )
       }
 
-  private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
-    jobs
-      .mapObjects { obj ->
-        val id = obj.nonBlankString("id") ?: return@mapObjects null
-        val name = obj.nonBlankString("name") ?: return@mapObjects null
-        val schedule = obj["schedule"].asObjectOrNull()
-        val state = obj["state"].asObjectOrNull()
-        val payload = obj["payload"].asObjectOrNull()
-        GatewayCronJobSummary(
-          id = id,
-          name = name,
-          enabled = obj.boolean("enabled"),
-          scheduleLabel = cronScheduleLabel(schedule?.get("kind").asStringOrNull(), schedule),
-          promptPreview = cronPayloadPreview(payload),
-          nextRunAtMs = state.long("nextRunAtMs"),
-          lastRunStatus = cronJobLastRunStatus(state),
-        )
-      }
-
   private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
     providers
       .mapObjects { obj ->
@@ -8476,39 +8520,6 @@ class NodeRuntime internal constructor(
           resetAtMs = obj.long("resetAt"),
         )
       }
-
-  private fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
-    skills
-      .mapObjects { obj ->
-        val name = obj.nonBlankString("name") ?: return@mapObjects null
-        val missing = obj["missing"].asObjectOrNull()
-        val clawHub = obj["clawhub"].asObjectOrNull()
-        GatewaySkillSummary(
-          skillKey = obj.nonBlankString("skillKey") ?: name,
-          name = name,
-          description = obj.nonBlankString("description"),
-          source = obj.nonBlankString("source") ?: "unknown",
-          emoji = obj.nonBlankString("emoji"),
-          disabled = obj.boolean("disabled"),
-          eligible = obj.boolean("eligible"),
-          blockedByAllowlist = obj.boolean("blockedByAllowlist"),
-          blockedByAgentFilter = obj.boolean("blockedByAgentFilter"),
-          bundled = obj.boolean("bundled"),
-          missingCount = skillMissingCount(missing),
-          installCount = (obj["install"] as? JsonArray)?.size ?: 0,
-          clawHubSlug =
-            clawHub.nonBlankString("slug"),
-          clawHubValid = clawHub?.boolean("valid") == true,
-          clawHubRequestedReference =
-            clawHub.nonBlankString("requestedReference"),
-          clawHubOwnerHandle =
-            clawHub.nonBlankString("ownerHandle"),
-          clawHubInstalledVersion =
-            clawHub.nonBlankString("installedVersion"),
-        )
-      }
-
-  private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -8537,14 +8548,18 @@ class NodeRuntime internal constructor(
     devices
       .mapObjects { obj ->
         val deviceId = obj.nonBlankString("deviceId") ?: return@mapObjects null
+        val tokenRevocations =
+          (obj["tokens"] as? JsonArray).mapObjects { token ->
+            if (token.nonBlankString("role") == null) null else token.long("revokedAtMs") != null
+          }
         GatewayPairedDeviceSummary(
           deviceId = deviceId,
           displayName = obj.nonBlankString("displayName"),
           remoteIp = obj.nonBlankString("remoteIp"),
           roles = parseDeviceRoles(obj),
           scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
-          tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
-          approvedAtMs = obj.long("approvedAtMs"),
+          tokenCount = tokenRevocations.size,
+          activeTokenCount = tokenRevocations.count { revoked -> !revoked },
         )
       }
 
@@ -8553,18 +8568,6 @@ class NodeRuntime internal constructor(
     if (roles.isNotEmpty()) return roles
     return listOfNotNull(device.nonBlankString("role"))
   }
-
-  private fun parseDeviceTokens(tokens: JsonArray?): List<GatewayDeviceTokenSummary> =
-    tokens
-      .mapObjects { obj ->
-        val role = obj.nonBlankString("role") ?: return@mapObjects null
-        GatewayDeviceTokenSummary(
-          role = role,
-          scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
-          revoked = obj.long("revokedAtMs") != null,
-          updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
-        )
-      }
 
   private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
     val order = parseGatewayStringArray(root?.get("channelOrder") as? JsonArray)
@@ -8643,21 +8646,6 @@ class NodeRuntime internal constructor(
       .mapNotNull(::parseGatewayDreamDiaryEntry)
       .asReversed()
       .take(4)
-  }
-
-  private fun cronPayloadPreview(payload: JsonObject?): NativeText {
-    val text =
-      when (payload?.get("kind").asStringOrNull()) {
-        "systemEvent" -> payload?.get("text").asStringOrNull()
-        "agentTurn" -> payload?.get("message").asStringOrNull()
-        else -> null
-      }
-    return text
-      ?.trim()
-      ?.replace(Regex("\\s+"), " ")
-      ?.takeIf { it.isNotEmpty() }
-      ?.let(::verbatimText)
-      ?: nativeText("No prompt")
   }
 
   private fun resolveActiveAgentId(): String = resolveAgentIdFromMainSessionKey(_mainSessionKey.value) ?: gatewayDefaultAgentId.value?.trim().orEmpty()
@@ -8812,22 +8800,6 @@ data class GatewayModelProviderSummary(
   val profileCount: Int,
 )
 
-data class GatewayCronStatus(
-  val enabled: Boolean,
-  val jobs: Int,
-  val nextWakeAtMs: Long?,
-)
-
-data class GatewayCronJobSummary(
-  val id: String,
-  val name: String,
-  val enabled: Boolean,
-  val scheduleLabel: NativeText,
-  val promptPreview: NativeText,
-  val nextRunAtMs: Long?,
-  val lastRunStatus: String?,
-)
-
 data class GatewayUsageSummary(
   val updatedAtMs: Long?,
   val providers: List<GatewayUsageProviderSummary>,
@@ -8845,31 +8817,6 @@ data class GatewayUsageWindowSummary(
   val label: String,
   val usedPercent: Double,
   val resetAtMs: Long?,
-)
-
-data class GatewaySkillsSummary(
-  val skills: List<GatewaySkillSummary>,
-)
-
-data class GatewaySkillSummary(
-  val skillKey: String,
-  val name: String,
-  val description: String?,
-  val source: String,
-  val emoji: String?,
-  val disabled: Boolean,
-  val eligible: Boolean,
-  val blockedByAllowlist: Boolean,
-  val blockedByAgentFilter: Boolean,
-  val bundled: Boolean,
-  val missingCount: Int,
-  val installCount: Int,
-  val clawHubSlug: String? = null,
-  val clawHubValid: Boolean = false,
-  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
-  val clawHubRequestedReference: String? = null,
-  val clawHubOwnerHandle: String? = null,
-  val clawHubInstalledVersion: String? = null,
 )
 
 data class GatewayNodesDevicesSummary(
@@ -9019,15 +8966,8 @@ data class GatewayPairedDeviceSummary(
   val remoteIp: String?,
   val roles: List<String>,
   val scopes: List<String>,
-  val tokens: List<GatewayDeviceTokenSummary>,
-  val approvedAtMs: Long?,
-)
-
-data class GatewayDeviceTokenSummary(
-  val role: String,
-  val scopes: List<String>,
-  val revoked: Boolean,
-  val updatedAtMs: Long?,
+  val tokenCount: Int,
+  val activeTokenCount: Int,
 )
 
 data class GatewayChannelsSummary(
@@ -9119,13 +9059,6 @@ internal fun sanitizeGatewayLogText(value: String): String =
     .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
-
-private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
-
-internal fun cronJobLastRunStatus(state: JsonObject?): String? =
-  state
-    .nonBlankString("lastStatus")
-    ?: state.nonBlankString("lastRunStatus")
 
 private fun parseGatewayStringArray(items: JsonArray?): List<String> =
   items

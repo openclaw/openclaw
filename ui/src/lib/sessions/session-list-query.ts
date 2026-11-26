@@ -1,7 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import type { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
@@ -15,6 +18,7 @@ import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
+  type SessionWindowExpiry,
 } from "./session-requests.ts";
 import {
   hasSessionChangedAncestorCoverage,
@@ -34,6 +38,16 @@ import type {
 } from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
+
+/** Config and profile-targeted pin writes can move a window boundary without a row event. */
+export function isSessionListInvalidation(event: GatewayEventFrame): boolean {
+  if (event.event !== "users.prefs.changed") {
+    return isConversationConfigChange(event);
+  }
+  // The Gateway targets the authenticated connection, including aliases of the canonical profile.
+  const keys = asOptionalRecord(event.payload)?.keys;
+  return Array.isArray(keys) && keys.includes(UI_RAIL_SHORTCUTS_PREFERENCE_KEY);
+}
 
 /** Held members and certified query exclusions can replace a list read. */
 export function canApplySessionListSnapshot(
@@ -230,6 +244,8 @@ export function canApplySessionListSnapshot(
       (existing.archived === true) !== (next.archived === true) ||
       (existing.pinned === true) !== (next.pinned === true) ||
       existing.pinnedAt !== next.pinnedAt ||
+      // A row event cannot replace the Gateway wake deadline for the whole list.
+      existing.snoozedUntil !== next.snoozedUntil ||
       JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
       JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor) ||
       existing.spawnedBy !== next.spawnedBy ||
@@ -461,8 +477,8 @@ export type ManagedSessionListRefresh = {
 
 export type PrimarySessionListPresentation = {
   isCurrent: () => boolean;
+  finishWindowRead: (error?: unknown) => void;
   accept: (
-    read: SessionListRead,
     result: SessionsListResult | null,
     failure?: { error: unknown },
   ) => SessionRefreshAttempt | null;
@@ -476,11 +492,14 @@ export type PrimarySessionListRead = {
 };
 type ManagedRead = {
   refresh: ManagedSessionListRefresh;
+  finishWindowRead: (error?: unknown) => void;
   completion: ReturnType<typeof createDeferredCore<void>>;
 };
 /** One admitted transport attempt, independent of either consumer's publication lifetime. */
 export type SessionListRead = {
   entry: ManagedSessionList;
+  issuedAt: number;
+  expiry?: SessionWindowExpiry;
   params: Readonly<ReturnType<typeof buildSessionListParams> & { pageSize?: number }>;
   scope: SessionConnectionScope;
   revision: number;

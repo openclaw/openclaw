@@ -12,6 +12,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../src/secrets/provider-env-vars.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "4000"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -89,12 +90,7 @@ const observer = new PerformanceObserver((list) => {
 });
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

@@ -125,6 +125,62 @@ const ordinaryFixture = reuseBaselineFixture(createFixture);
 const baselineFixture = reuseBaselineFixture((root) => createFixture(root, true));
 const fixture = (baseline = false) => (baseline ? baselineFixture : ordinaryFixture)();
 
+describePosix("workflow successor selection handoff", () => {
+  it.each([false, true])(
+    "requalifies the captured request after tracking advances, fresh main advances=%s",
+    (advanceMain) => {
+      const f = fixture();
+      const advanced = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        `${f.current}^{tree}`,
+        "-p",
+        f.current,
+        "-m",
+        "Unrelated main advance",
+      );
+      const realGit = spawnSync("sh", ["-c", "command -v git"], {
+        env: f.env,
+        encoding: "utf8",
+      }).stdout.trim();
+      const reached = join(f.root, "handoff-reached");
+      // Change only the fixture's external Git state at the real descriptor
+      // reader. The supervisor, held descriptor and locked admission stay real.
+      writeFileSync(
+        join(f.root, "bin/node"),
+        `#!/bin/sh
+case " $* " in
+  *' workflow-context-read '*)
+    if [ ! -f '${reached}' ]; then
+      '${realGit}' -C '${f.repo}' update-ref refs/remotes/origin/main '${advanced}' '${f.current}' || exit
+      ${advanceMain ? `'${realGit}' -C '${f.repo}' update-ref refs/heads/main '${advanced}' '${f.current}' || exit` : ":"}
+      printf reached > '${reached}'
+    fi ;;
+esac
+exec '${process.execPath}' "$@"
+`,
+        { mode: 0o700 },
+      );
+      const result = f.transition();
+      expect(readFileSync(reached, "utf8")).toBe("reached");
+      if (advanceMain) {
+        expectExit(result, 1);
+        expect(result.stdout + result.stderr).toContain("Workflow successor identity changed");
+        expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
+        expect(f.readLocal("gates.env").equals(f.originalGate)).toBe(true);
+      } else {
+        expectExit(result, 0);
+        expect(JSON.parse(f.git(f.repo, "show", `${bindingRef}:binding.json`))).toMatchObject({
+          predecessor: f.binding,
+          source: f.current,
+        });
+      }
+      f.unchanged();
+    },
+  );
+});
+
 function expectExit(result: ReturnType<typeof spawnSync>, status: number) {
   expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(status);
 }

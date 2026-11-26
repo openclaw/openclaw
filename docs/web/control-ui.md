@@ -686,9 +686,10 @@ Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
 Detected PDFs opened from chat file links or the Files panel use the same
-browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
-larger PDFs retain **Download file**. Rendering depends on your browser's PDF
-support; the generic text and image inline-preview limit is unchanged.
+browser-native preview as PDF attachments, up to 16 MiB. In browsers that support
+these settings, the PDF fits the preview pane's width and opens with page
+thumbnails collapsed. Preview failures and larger PDFs retain **Download file**.
+The generic text and image inline-preview limit is unchanged.
 Refreshing unchanged file metadata keeps the PDF reader's page and scroll
 position. The preview still reads fresh bytes and checks file access; changed
 contents reload the document, and selecting a different source replaces it.
