@@ -128,10 +128,13 @@ export function readTranscriptSummarySnapshot(
   }
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
   let utterances = readTranscriptUtterances(database, session, maxUtterances);
+  let hasSpeakerAliases = false;
   if (row.next_utterance_seq > utterances.length) {
     // A capped tail can omit the first owner of a name. Seed from the session's
     // compact roster so later summaries cannot swap speaker suffixes.
-    const speakerLabel = createTranscriptSpeakerLabels();
+    const speakerLabel = createTranscriptSpeakerLabels(() => {
+      hasSpeakerAliases = true;
+    });
     for (const speaker of iterateTranscriptSpeakerObservations(database, session)) {
       speakerLabel(speaker.speaker_id, speaker.speaker_label);
     }
@@ -148,6 +151,7 @@ export function readTranscriptSummarySnapshot(
     );
   }
   return {
+    ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
     inputRevision: transcriptSummaryInputRevisionFromRow(row),
     nextSequence: row.next_utterance_seq,
     stoppedAt: row.stopped_at ?? undefined,

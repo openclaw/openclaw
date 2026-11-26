@@ -54,12 +54,11 @@ function formatSpeakerLine(utterance: TranscriptUtterance): string {
 }
 
 /** Build a deterministic summary from transcript utterances. */
-export function summarizeTranscripts(params: {
-  session: TranscriptSessionDescriptor;
-  utterances: TranscriptUtterance[];
-}): TranscriptsSummary {
+export function summarizeTranscripts(
+  params: { session: TranscriptSessionDescriptor; utterances: TranscriptUtterance[] },
+  speakerLabel = createTranscriptSpeakerLabels(),
+): TranscriptsSummary {
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
-  const speakerLabel = createTranscriptSpeakerLabels();
   // Reserve names in recording order, even if a particular line is filtered
   // out of the notes. The roster and Markdown export use the same order.
   const utterances = params.utterances

@@ -124,6 +124,7 @@ async function readTranscriptSummary(
             : resolveDefaultAgentId(params.cfg),
         session: params.session,
         utterances,
+        hasSpeakerAliases: params.snapshot.hasSpeakerAliases,
         abortSignal: params.abortSignal,
         assertCurrent: params.assertCurrent,
       });

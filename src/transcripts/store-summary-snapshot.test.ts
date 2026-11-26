@@ -32,6 +32,7 @@ it("keeps session-first speaker names in capped live and final summary snapshots
     await store.appendUtteranceForSession(target, utterance);
   }
   const live = await store.readSummarySnapshot(target, 1);
+  expect(live?.hasSpeakerAliases).toBe(true);
   expect(live?.utterances).toMatchObject([
     { speaker: { ...second, label: "Sam (2)" }, text: "We agreed to review." },
   ]);
@@ -76,9 +77,9 @@ it("keeps session-first speaker names in capped live and final summary snapshots
   await store.writeSession(nextMeeting);
   await store.appendUtteranceForSession(nextMeeting, { speaker: second, text: "Next meeting." });
   await store.appendUtteranceForSession(nextMeeting, { speaker: second, text: "Next response." });
-  expect((await store.readSummarySnapshot(nextMeeting, 1))?.utterances).toMatchObject([
-    { speaker: second, text: "Next response." },
-  ]);
+  const next = await store.readSummarySnapshot(nextMeeting, 1);
+  expect(next?.hasSpeakerAliases).toBeUndefined();
+  expect(next?.utterances).toMatchObject([{ speaker: second, text: "Next response." }]);
 });
 
 it("primes capped names from the first usable label for each identity", async () => {
