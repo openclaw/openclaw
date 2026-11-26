@@ -120,7 +120,8 @@ function listCgroupV2Directories(): string[] {
   return directoriesToMount(directory);
 }
 
-function directoriesToMount(directory: string): string[] {
+function directoriesToMount(start: string): string[] {
+  let directory = start;
   const directories = [directory];
   while (directory !== CGROUP_V2_MOUNT) {
     directory = path.dirname(directory);
@@ -144,15 +145,15 @@ function readCgroupV2AncestorView() {
       ...readFileSync("/proc/self/mountinfo", "utf8").matchAll(
         /^(\d+) (\d+) \d+:\d+ (\S+) (\/sys\/fs\/cgroup(?:\/\S*)?) .*? - (\S+) /gmu,
       ),
-    ];
+    ].map(([, id, parent, root, point, type]) => ({ id, parent, root, point, type }));
     // For stacked mounts, the visible one is not the parent mount of another at the same path.
-    const atMount = views.filter(([, , , , point]) => point === CGROUP_V2_MOUNT);
-    const visible = atMount.filter(([, id]) => !atMount.some(([, , parent]) => parent === id));
+    const atMount = views.filter(({ point }) => point === CGROUP_V2_MOUNT);
+    const visible = atMount.filter(({ id }) => !atMount.some(({ parent }) => parent === id));
     const controller = visible.length === 1 ? visible[0] : undefined;
-    if (!controller || controller[5] !== "cgroup2") {
+    if (!controller || controller.type !== "cgroup2") {
       return undefined;
     }
-    const root = decodeMountInfoPath(controller[3]!);
+    const root = decodeMountInfoPath(controller.root!);
     const relative = path.relative(root, membership);
     if (
       !root.startsWith("/") ||
@@ -166,9 +167,9 @@ function readCgroupV2AncestorView() {
       return undefined;
     }
     directory = path.dirname(directory);
-    for (const [, , parent, , point] of views) {
+    for (const { parent, point } of views) {
       // A mount attached to a hidden lower view cannot cover the selected controller.
-      if (parent !== controller[1] || point === CGROUP_V2_MOUNT) {
+      if (parent !== controller.id || point === CGROUP_V2_MOUNT) {
         continue;
       }
       const child = decodeMountInfoPath(point!);
