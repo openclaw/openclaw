@@ -1,4 +1,5 @@
 import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -587,19 +588,34 @@ describe("CodexNativeSubagentMonitor", () => {
     replacementClient.close();
   });
 
-  it("does not bypass terminal delivery backoff when the parent registers again", async () => {
+  it.each([
+    [undefined, "child-thread"],
+    ["first", "codex-thread:child-thread:turn:first"],
+    ["second", "codex-thread:child-thread:turn:second"],
+  ] as const)("keeps the delivery ID and backoff on reattach (%s)", async (turnId, identity) => {
     vi.useFakeTimers();
     try {
-      const client = createClient();
-      const runtime = createRuntime();
+      const { client, runtime, monitor } = createFixture();
       runtime.deliverAgentHarnessCompletion
         .mockResolvedValueOnce({ delivered: false, path: "direct", error: "pending" })
         .mockResolvedValueOnce({ delivered: true, path: "direct" });
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
+      const history = createDeferred<ReturnType<typeof threadRead>>();
+      let reconciliation: Promise<boolean> | undefined;
+      if (turnId) {
+        await client.startTurn(turnId);
+      } else {
+        const readHistory = vi.fn(() => history.promise);
+        client.setThreadReadFactory("child-thread", readHistory);
+        reconciliation = monitor.reconcileChildThread("child-thread");
+        expect(readHistory).toHaveBeenCalledOnce();
+      }
       await client.notify(nativeCompletionNotification());
 
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+      history.resolve(threadRead({ turnId: "recovered-turn", result: "child final result" }));
+      await reconciliation;
+
       const parent = await registerParent(monitor);
       await vi.advanceTimersByTimeAsync(0);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
@@ -608,6 +624,10 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
       await parent.unregister();
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+      for (const [request] of runtime.deliverAgentHarnessCompletion.mock.calls) {
+        expect(request.childSessionKey).toBe("codex-thread:child-thread");
+        expect(request.announceId).toBe(`codex-native:parent-thread:${identity}:succeeded`);
+      }
       client.close();
     } finally {
       vi.useRealTimers();

@@ -516,6 +516,8 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /** Requested discovery scope; omitted for unscoped picker enumeration. */
+  providerIds?: readonly string[];
 };
 
 export type AgentHarnessModelCatalogResult =
@@ -760,6 +762,8 @@ type AgentHarnessContract<
     },
   ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
+  /** Providers listed by this catalog, independent of configured execution routes. */
+  modelCatalogProviderIds?: readonly string[];
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,

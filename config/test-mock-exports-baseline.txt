@@ -398,7 +398,6 @@
 ["extensions/github-copilot/index.test.ts","./register.runtime.js","cc0cc8c3fa6b36e2b3f3b8db796f6ebef343316a3ca58a6fcdc7bb52993783e7",1]
 ["extensions/github-copilot/oauth.test.ts","./login.js","6ac7f1ee277213da62557c916edbd6e736af161248ff7d8c1ed0f80a91e0ae3a",1]
 ["extensions/github/index.test.ts","openclaw/plugin-sdk/gateway-method-runtime","8b4b5271a0a42a91f9d972cc9df3e6fc24b82bdd15c8252360d304724e28a7ab",1]
-["extensions/google-meet/participation-registration.test.ts","./src/runtime.js","a81e01d6249a2fc6c587c24dc0423ee1827f698d2aa5588663d7a148ea40cbcb",1]
 ["extensions/google-meet/src/drive.test.ts","openclaw/plugin-sdk/ssrf-runtime","e353c0fd5c76fa60603a25d3360fb39c400582b71b8450be06db2e00b09155fb",1]
 ["extensions/google-meet/src/google-api-errors.test.ts","openclaw/plugin-sdk/ssrf-runtime","e353c0fd5c76fa60603a25d3360fb39c400582b71b8450be06db2e00b09155fb",1]
 ["extensions/google/music-generation-provider.test.ts","./google-genai-runtime.js","b1a7ce8a9b5ece694e3872d2036744ec5f9bf27a4e8d7365e8e029dc6c4afa86",1]

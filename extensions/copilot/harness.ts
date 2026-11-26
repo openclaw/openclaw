@@ -426,6 +426,19 @@ export function createCopilotAgentHarness(
         return await runCopilotSideQuestion(params, getPool);
       }),
 
+    modelCatalogProviderIds: [...COPILOT_PROVIDER_IDS],
+    loadModelCatalog: (params) =>
+      trackOperation(async () => {
+        if (disposed) {
+          throw new Error("[copilot] harness has been disposed; cannot discover models");
+        }
+        if (params.providerIds && !params.providerIds.includes("github-copilot")) {
+          return [];
+        }
+        const { loadCopilotModelCatalog } = await import("./src/model-catalog.js");
+        return await loadCopilotModelCatalog(params, await getPool(), options?.id ?? "copilot");
+      }),
+
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
       return projectSettledTurnFinalizationAttemptResult(result);

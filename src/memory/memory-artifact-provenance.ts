@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { isMissingPathError } from "../infra/errors.js";
+import { getAgentWorkspaceAccess } from "../agents/workspace-access.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
+import { isMissingPathError, readErrorCause } from "../infra/errors.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
@@ -48,6 +51,14 @@ function normalizeWorkspaceKey(workspaceDir: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+/** Root MEMORY.md/USER.md and personal USER.md: records certify only the bytes they hashed. */
+function isCuratedMemoryArtifactPath(relativePath: string): boolean {
+  return (
+    ["MEMORY.md", "memory.md", "USER.md"].includes(relativePath) ||
+    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(relativePath)
+  );
+}
+
 export function normalizeMemoryArtifactRelativePath(relativePath: string): string | undefined {
   const normalized = relativePath.replaceAll("\\", "/");
   if (
@@ -57,10 +68,7 @@ export function normalizeMemoryArtifactRelativePath(relativePath: string): strin
   ) {
     return undefined;
   }
-  if (
-    ["MEMORY.md", "memory.md", "USER.md"].includes(normalized) ||
-    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(normalized)
-  ) {
+  if (isCuratedMemoryArtifactPath(normalized)) {
     return normalized;
   }
   if (!normalized.startsWith("memory/") || !normalized.endsWith(".md")) {
@@ -129,7 +137,7 @@ function toPublicProvenance(stored: StoredMemoryArtifactProvenance): MemoryArtif
 export async function recordMemoryArtifactWriteProvenance(params: {
   workspaceDir: string;
   relativePath: string;
-  contentBefore: string;
+  contentBefore: string | Uint8Array;
   contentAfter: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
@@ -148,9 +156,16 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   let observation = await store.observe(address.storeKey);
   for (;;) {
     previous = normalizeStoredProvenance(observation.value, address);
+    // A stale curated record means an unrecorded writer (Control UI, editor,
+    // sync) replaced the bytes it certified; classify as if no record exists.
+    // Daily files keep the record sticky so flush quarantine survives edits.
+    const certified =
+      isCuratedMemoryArtifactPath(address.relativePath) && previous?.fileHash !== beforeHash
+        ? undefined
+        : previous;
     const originClass =
       params.originClass === "agent" &&
-      (!previous || (previous.originClass === "agent" && previous.fileHash === beforeHash))
+      (!certified || (certified.originClass === "agent" && certified.fileHash === beforeHash))
         ? "agent"
         : "untrusted";
     const result = await store.compareAndApply(address.storeKey, observation.comparison, {
@@ -193,6 +208,53 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   };
 }
 
+/**
+ * Automatic rewrite of a curated file (dreaming promotion, memory forget). The owner reads the
+ * current bytes itself, so the new bytes inherit their class: a caller cannot mark untrusted
+ * content trusted. Daily files are not recorded; their quarantine stays sticky.
+ */
+export async function recordCuratedMemoryArtifactRewrite(params: {
+  workspaceDir: string;
+  relativePath: string;
+  contentAfter: string;
+  observedAt: number;
+}): Promise<(() => Promise<void>) | undefined> {
+  const relativePath = normalizeMemoryArtifactRelativePath(params.relativePath);
+  if (!relativePath || !isCuratedMemoryArtifactPath(relativePath)) {
+    return undefined;
+  }
+  let contentBefore: Uint8Array = new Uint8Array();
+  try {
+    contentBefore = await readCurrentBytes(params.workspaceDir, relativePath);
+  } catch (error) {
+    if (!isMissingPathError(error) && !isMissingPathError(readErrorCause(error))) {
+      throw error;
+    }
+  }
+  return await recordMemoryArtifactWriteProvenance({
+    ...params,
+    relativePath,
+    contentBefore,
+    originClass: "agent",
+  });
+}
+
+async function readCurrentBytes(workspaceDir: string, relativePath: string): Promise<Uint8Array> {
+  const access = getAgentWorkspaceAccess(workspaceDir);
+  const filePath = path.join(workspaceDir, relativePath);
+  // Memory maintenance reads curated files whole; the document bridge applies the bootstrap cap.
+  const maintenance = access?.memoryFiles?.maintenance;
+  if (maintenance) {
+    return await maintenance.readFile(filePath);
+  }
+  return access
+    ? await access.bridge.readFile({
+        filePath: relativePath,
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      })
+    : await fs.readFile(filePath);
+}
+
 export async function clearMemoryArtifactProvenance(params: {
   workspaceDir: string;
   relativePath: string;
@@ -226,7 +288,20 @@ export async function readMemoryArtifactProvenance(params: {
     return undefined;
   }
   const stored = normalizeStoredProvenance(await openStore().lookup(address.storeKey), address);
-  return stored ? toPublicProvenance(stored) : undefined;
+  if (!stored) {
+    return undefined;
+  }
+  if (isCuratedMemoryArtifactPath(address.relativePath)) {
+    // An unreadable file keeps its recorded class.
+    const current = await readCurrentBytes(params.workspaceDir, address.relativePath).catch(
+      () => undefined,
+    );
+    // The record certifies only the bytes it hashed; other bytes are owner-controlled.
+    if (current && sha256Hex(current) !== stored.fileHash) {
+      return undefined;
+    }
+  }
+  return toPublicProvenance(stored);
 }
 
 export async function listMemoryArtifactProvenance(params: {

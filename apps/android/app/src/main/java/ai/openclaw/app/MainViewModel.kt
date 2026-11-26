@@ -150,9 +150,13 @@ private const val CHAT_COMPOSER_DRAFTS_STATE_KEY = "chat-composer-text-drafts"
 internal class ChatShareDraftQueue(
   private val capacity: Int = MAX_PENDING_CHAT_SHARES,
 ) {
+  private class QueuedDraft(
+    val draft: ChatShareDraft,
+    var owner: ChatComposerOwner,
+  )
+
   private val lock = Any()
-  private val drafts = ArrayDeque<ChatShareDraft>()
-  private val ownersById = mutableMapOf<Long, ChatComposerOwner>()
+  private val drafts = ArrayDeque<QueuedDraft>()
   private val headLease = Mutex()
   private val _queued = MutableStateFlow<List<ChatShareDraft>>(emptyList())
   val queued: StateFlow<List<ChatShareDraft>> = _queued.asStateFlow()
@@ -169,8 +173,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       if (drafts.size >= capacity) return@synchronized false
-      drafts.addLast(draft)
-      ownersById[draft.id] = owner
+      drafts.addLast(QueuedDraft(draft, owner))
       publishQueueLocked()
       true
     }
@@ -182,9 +185,8 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       val ownedHead = firstForOwnerLocked(owner)
-      if (ownedHead?.id != id) return@synchronized false
+      if (ownedHead?.draft?.id != id) return@synchronized false
       drafts.remove(ownedHead)
-      ownersById.remove(id)
       publishQueueLocked()
       true
     }
@@ -197,7 +199,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     headLease.withLock {
       synchronized(lock) {
-        if (firstForOwnerLocked(owner)?.id != id) return@withLock false
+        if (firstForOwnerLocked(owner)?.draft?.id != id) return@withLock false
       }
       block()
       true
@@ -209,16 +211,15 @@ internal class ChatShareDraftQueue(
   ) {
     if (from == to) return
     synchronized(lock) {
-      val ownedIds = ownersById.filterValues { it == from }.keys
-      ownedIds.forEach { ownersById[it] = to }
-      if (ownedIds.isNotEmpty()) _ownerRevision.value += 1
+      val ownedDrafts = drafts.filter { it.owner == from }
+      ownedDrafts.forEach { it.owner = to }
+      if (ownedDrafts.isNotEmpty()) _ownerRevision.value += 1
     }
   }
 
   fun clear() {
     synchronized(lock) {
       drafts.clear()
-      ownersById.clear()
       publishQueueLocked()
     }
   }
@@ -226,23 +227,19 @@ internal class ChatShareDraftQueue(
   suspend fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
     headLease.withLock {
       synchronized(lock) {
-        val removedIds = ownersById.filterValues(matches).keys
-        if (removedIds.isEmpty()) return@synchronized
-        drafts.removeAll { it.id in removedIds }
-        removedIds.forEach(ownersById::remove)
-        publishQueueLocked()
+        if (drafts.removeAll { matches(it.owner) }) publishQueueLocked()
       }
     }
   }
 
-  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { ownersById[id] }
+  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { drafts.firstOrNull { it.draft.id == id }?.owner }
 
   internal fun size(): Int = synchronized(lock) { drafts.size }
 
-  private fun firstForOwnerLocked(owner: ChatComposerOwner): ChatShareDraft? = drafts.firstOrNull { draft -> ownersById[draft.id] == owner }
+  private fun firstForOwnerLocked(owner: ChatComposerOwner): QueuedDraft? = drafts.firstOrNull { it.owner == owner }
 
   private fun publishQueueLocked() {
-    _queued.value = drafts.toList()
+    _queued.value = drafts.map { it.draft }
   }
 }
 

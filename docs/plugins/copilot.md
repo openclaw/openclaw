@@ -40,6 +40,15 @@ For the broader model/provider/runtime split, start with
 session-state ownership and future config migrations. It does not check the
 Copilot CLI environment.
 
+## Model discovery
+
+The model picker queries the Copilot SDK with the agent's configured credential.
+Sign in with `openclaw models auth login-github-copilot` before discovery.
+The native catalog includes account-enabled Fusion routing when the SDK reports
+an available tier. Set `params.fusionTier` for `github-copilot/fusion` to choose
+the routing tier; discovery does not copy account defaults into requests. Disabled models and hidden Fusion
+tiers are excluded from discovery; account policy still applies to each request.
+
 ## Install
 
 The Copilot runtime ships as an external plugin so the core `openclaw`
