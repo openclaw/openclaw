@@ -318,13 +318,15 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       void (async () => {
         try {
           const [connection, NpmWebSocket] = await Promise.all([
-            this.resolveConnection(),
+            this.resolveConnection(
+              () => !settled && ownsGeneration() && !this.closed && this.ensureCurrent(),
+            ),
             loadWebSocket(),
           ]);
           if (settled) {
             return;
           }
-          if (!ownsGeneration() || this.closed || !this.ensureCurrent()) {
+          if (!connection || !ownsGeneration() || this.closed || !this.ensureCurrent()) {
             finishClosedConnect();
             return;
           }
@@ -361,7 +363,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         });
 
         socket.on("message", (data) => {
-          if (!ownsSocket()) {
+          if (!ownsSocket() || !this.ensureCurrent()) {
             return;
           }
           const payload = data as Buffer;
@@ -428,13 +430,22 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     });
   }
 
-  private async resolveConnection(): Promise<{
-    headers?: Record<string, string>;
-    url: string;
-  }> {
+  private async resolveConnection(isCurrent: () => boolean): Promise<
+    | {
+        headers?: Record<string, string>;
+        url: string;
+      }
+    | undefined
+  > {
+    if (!isCurrent()) {
+      return undefined;
+    }
     const url = await (typeof this.options.url === "function"
       ? this.options.url()
       : this.options.url);
+    if (!isCurrent()) {
+      return undefined;
+    }
     const headers = await (typeof this.options.headers === "function"
       ? this.options.headers()
       : this.options.headers);
