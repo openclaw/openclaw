@@ -49,6 +49,7 @@ type PageOptions = {
   templatesEnabled?: boolean;
   pathname?: string;
   templateIconUrl?: string;
+  detailPackageName?: string;
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
   clawHubTrustWarning?: string;
@@ -138,6 +139,7 @@ export function createPage(options: PageOptions = {}) {
       return {
         detail: {
           ...workflowOperator,
+          packageName: options.detailPackageName ?? workflowOperator.packageName,
           iconUrl: options.templateIconUrl,
           version: "1.2.0",
           agentId: "workflow-operator",

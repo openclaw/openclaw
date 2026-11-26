@@ -76,16 +76,22 @@ describe("Templates discovery", () => {
       "schemas/report.json",
       "avatars/agent.svg",
     ];
-    const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
+    const { detail, request } = createDetail({
+      templatesEnabled: true,
+      workspaceFileNames: names,
+      detailPackageName: "workflow-operator",
+    });
     await vi.waitFor(() =>
       expect(detail.querySelector(".templates-personality__file")?.textContent).toBe("SOUL.md"),
     );
     detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "templates.catalog.preview",
-        expect.objectContaining({ name: "SOUL.md" }),
-      ),
+      expect(request).toHaveBeenCalledWith("templates.catalog.preview", {
+        packageName: "workflow-operator",
+        version: workflowOperator.latestVersion,
+        kind: "instruction",
+        name: "SOUL.md",
+      }),
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
@@ -439,11 +445,14 @@ describe("Templates discovery", () => {
     expect(find(".plugin-capabilities")).not.toBeNull();
   });
 
-  it.each([undefined, workflowOperator.latestVersion])(
-    "loads contents without search and pins Add to resolved release (version: %s)",
-    async (version) => {
+  it.each([
+    [undefined, workflowOperator.packageName],
+    [workflowOperator.latestVersion, "workflow-operator"],
+  ] as const)(
+    "loads contents without search and pins Add to the resolved release (version: %s, stored name: %s)",
+    async (version, detailPackageName) => {
       const { detail, request, navigate, setTemplatesEnabled } = createDetail(
-        { templatesEnabled: false },
+        { templatesEnabled: false, detailPackageName },
         version,
       );
       const original = request.getMockImplementation()!;
@@ -464,7 +473,7 @@ describe("Templates discovery", () => {
         ...(version ? { version } : {}),
       });
       const source = {
-        packageName: workflowOperator.packageName,
+        packageName: detailPackageName,
         version: workflowOperator.latestVersion,
       };
       expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
@@ -478,6 +487,23 @@ describe("Templates discovery", () => {
       expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
     },
   );
+
+  it.each([
+    ["@another/workflow-operator", workflowOperator.latestVersion],
+    ["@openclaw/another", workflowOperator.latestVersion],
+    [workflowOperator.packageName, "9.9.9"],
+  ])("rejects a different release returned for %s@%s", async (packageName, version) => {
+    const { find, setPackageName, setTemplatesEnabled } = createDetail(
+      { templatesEnabled: false, detailPackageName: "workflow-operator" },
+      version,
+    );
+    setPackageName(packageName);
+    setTemplatesEnabled(true);
+    await waitForSolid(() =>
+      expect(find("[role=alert]")?.textContent).toContain("did not return the contents"),
+    );
+    expect(find(".templates-personality__file")).toBeNull();
+  });
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });

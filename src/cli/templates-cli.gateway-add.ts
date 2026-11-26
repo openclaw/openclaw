@@ -9,12 +9,9 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { clawHubTemplateRef } from "../shared/clawhub-template-ref.js";
 import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
-import {
-  clawHubTemplateRef,
-  isCanonicalClawHubPackageName,
-  isExactSemVer,
-} from "../templates/schema-portability.js";
+import { isCanonicalClawHubPackageName, isExactSemVer } from "../templates/schema-portability.js";
 import type { OwnerRequest } from "./local-state-owner.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { promptYesNo } from "./prompt.js";
