@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   isDeliveredCurrentSourceReply,
   mirrorDeliveredSourceReplyToTranscript,
@@ -14,17 +17,10 @@ const transcriptMocks = vi.hoisted(() => ({
     ok: true,
   })),
 }));
-const previewFailure = {
-  type: "attachment_error",
-  attachment: { code: "delivery-failed", kind: "document", label: "report.pdf" },
-};
 vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: transcriptMocks.append,
 }));
 vi.mock("../../channels/plugins/index.js", () => channelPluginMocks);
-vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
-  buildAssistantReplyContent: async () => ({ assistantContent: [previewFailure] }),
-}));
 
 type Source = Parameters<typeof isDeliveredCurrentSourceReply>[0];
 type MirrorSource = Source & { sessionKey: string };
@@ -207,27 +203,30 @@ it.each([
 it.each([
   ["with a platform receipt", { ok: true, messageId: "sent-1" }, true],
   ["without a platform receipt", { ok: true }, false],
-] as const)(
-  "mirrors an unavailable attachment preview %s",
-  async (_name, deliveredPayload, sent) => {
+] as const)("mirrors an untrusted local document %s", (_name, deliveredPayload, sent) =>
+  withOpenClawTestState({ label: "source-reply-document" }, async ({ workspaceDir }) => {
+    const report = path.join(workspaceDir, "report.pdf");
+    await fs.writeFile(report, "%PDF-1.4\n%%EOF\n");
     await expect(
       mirrorDeliveredSourceReplyToTranscript({
         ...direct,
         deliveredPayload,
-        deliveredPayloads: [{ mediaUrl: "/workspace/output/report.pdf" }],
-        mediaAccess: { localRoots: ["/workspace/output"] },
+        deliveredPayloads: [{ mediaUrl: report }],
+        mediaAccess: { localRoots: [workspaceDir] },
       }),
     ).resolves.toBe(true);
 
     const prepareDisplayContent = transcriptMocks.append.mock.lastCall?.[0]?.prepareDisplayContent;
-    expect(prepareDisplayContent).toBeDefined();
-    await expect(prepareDisplayContent?.()).resolves.toEqual([
+    await expect(prepareDisplayContent?.()).resolves.toMatchObject([
       sent
         ? {
             type: "text",
             text: "Attachment sent to the channel. Preview unavailable in chat history.",
           }
-        : previewFailure,
+        : {
+            type: "attachment_error",
+            attachment: { code: "delivery-failed", label: "report.pdf" },
+          },
     ]);
-  },
+  }),
 );
