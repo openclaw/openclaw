@@ -5,6 +5,7 @@ import {
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { decideTurnGrant } from "../../gateway/operator-admission.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
@@ -29,6 +30,7 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   recordFailure: vi.fn(),
   resolveDecision: vi.fn(),
+  route: vi.fn(),
 }));
 
 vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", () => ({
@@ -72,6 +74,11 @@ vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 vi.mock("../../sessions/session-run-error.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../sessions/session-run-error.js")>()),
   recordGatewaySessionRunFailure: state.recordFailure,
+}));
+
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  routeReply: (...args: unknown[]) => state.route(...args),
 }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
@@ -525,6 +532,46 @@ describe("createFollowupRunner", () => {
       );
       expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
       expectTypingComplete();
+    },
+  );
+
+  it.each(["allow", "deny"] as const)(
+    "tells a channel sender why their queued input was refused before it started (send %s)",
+    async (sendPolicy) => {
+      const refusal = new OperatorRefusalError("role-denies", {
+        action: "run your queued request",
+      });
+      Object.assign(turn.queued, {
+        originatingChannel: "telegram",
+        originatingTo: "telegram:1234",
+        originatingAccountId: "default",
+      });
+      state.admit.mockRejectedValueOnce(refusal);
+      state.route.mockResolvedValue({ ok: true, delivered: true });
+      await createRunner({
+        sessionKey: "main",
+        sessionStore: { main: { sessionId: "session", updatedAt: 1, sendPolicy } },
+      })(turn.queued);
+      expect(state.execute).not.toHaveBeenCalled();
+      expect(state.recordFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ notice: refusal.message }),
+      );
+      expect(state.route.mock.calls).toEqual(
+        sendPolicy === "allow"
+          ? [
+              [
+                expect.objectContaining({
+                  payload: { text: refusal.message, isError: true },
+                  channel: "telegram",
+                  to: "telegram:1234",
+                  accountId: "default",
+                  mirror: false,
+                }),
+              ],
+            ]
+          : [],
+      );
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     },
   );
 
