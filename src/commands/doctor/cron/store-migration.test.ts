@@ -29,9 +29,9 @@ function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unkno
     createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "tick" },
+    payload: { kind: "agentTurn", message: "tick" },
     state: {},
     ...overrides,
   };
@@ -136,7 +136,12 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   [
     "systemEvent message",
     { payload: { kind: "systemEvent", message: "tick" } },
-    { payload: { kind: "systemEvent", text: "tick" } },
+    { payload: { kind: "agentTurn", message: "tick" } },
+  ],
+  [
+    "missing legacy reminder text",
+    { payload: { kind: "systemEvent" } },
+    { enabled: false, description: expect.stringContaining("There is no task text") },
   ],
   [
     "agentTurn casing",
@@ -146,7 +151,7 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   [
     "systemEvent casing",
     { payload: { kind: "SYSTEMEVENT", text: "pong" } },
-    { payload: { kind: "systemEvent", text: "pong" } },
+    { payload: { kind: "agentTurn", message: "pong" } },
   ],
   [
     "invalid stagger",
@@ -339,7 +344,6 @@ it.each([
     values: [
       { kind: "agentTurn", message: ["tick"] },
       undefined,
-      { kind: "systemEvent" },
       { kind: "command", command: "echo daily" },
       { kind: "agentmessage", message: "summarize" },
     ],
@@ -421,10 +425,10 @@ it("migrates legacy string schedules and command-only payloads (#18445)", () => 
   expect(result.mutated).toBe(true);
   expect(job).toMatchObject({
     schedule: { kind: "cron", expr: "0 */2 * * *" },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
   });
-  expect(job?.payload).toEqual({ kind: "systemEvent", text: "bash /tmp/imessage-refresh.sh" });
+  expect(job?.payload).toEqual({ kind: "agentTurn", message: "bash /tmp/imessage-refresh.sh" });
   for (const key of ["command", "timeout"]) {
     expect(key in expectDefined(job, "job")).toBe(false);
   }

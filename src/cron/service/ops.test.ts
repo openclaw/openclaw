@@ -66,9 +66,9 @@ function createFutureEveryJob(now: number, id: string, overrides: Partial<CronJo
     createdAtMs: now - 60_000,
     updatedAtMs: now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: id },
+    payload: { kind: "agentTurn", message: id },
     state: {},
     ...overrides,
   };
@@ -483,7 +483,7 @@ describe("cron service operations", () => {
       createdAtMs: now - 86_400_000,
       updatedAtMs: now - 3_600_000,
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
+      payload: { kind: "agentTurn", message: "test" },
       state: { nextRunAtMs: 0 },
     });
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
@@ -511,9 +511,9 @@ describe("cron service operations", () => {
       name: "lifecycle target",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick" },
     });
     expect(events.map((event) => event.action)).toEqual(["added"]);
 
@@ -544,9 +544,9 @@ describe("cron service operations", () => {
       name: "added target",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "added" },
+      payload: { kind: "agentTurn", message: "added" },
     });
 
     expect(events.map(({ jobId, action }) => ({ jobId, action }))).toEqual([

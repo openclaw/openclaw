@@ -19,11 +19,9 @@ export function buildCronFailureRepairBrief(params: {
   const payloadText =
     payload.kind === "agentTurn"
       ? payload.message
-      : payload.kind === "systemEvent"
-        ? payload.text
-        : payload.kind === "script"
-          ? payload.script
-          : "";
+      : payload.kind === "script"
+        ? payload.script
+        : "";
   const error = [params.errorReason ? `cause: ${params.errorReason}` : "", params.error?.trim()]
     .filter(Boolean)
     .join("\n");

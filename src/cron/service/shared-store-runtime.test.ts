@@ -58,7 +58,7 @@ function addJob(cron: CronService, name: string, target = false) {
     sessionTarget: target ? "main" : "isolated",
     wakeMode: "next-heartbeat",
     payload: target
-      ? { kind: "systemEvent", text: "target" }
+      ? { kind: "agentTurn", message: "target" }
       : { kind: "agentTurn", message: "run canary" },
   });
 }

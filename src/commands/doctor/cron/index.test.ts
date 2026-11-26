@@ -95,7 +95,7 @@ function createCurrentCronJob(overrides: StoredJob = {}) {
     schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     sessionTarget: "isolated",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "SQLite brief" },
+    payload: { kind: "agentTurn", message: "SQLite brief" },
     state: {},
     ...overrides,
   };
@@ -786,7 +786,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const job = requirePersistedJob(await readPersistedJobs(), 0);
     expect(job.notify).toBeUndefined();
-    expect(job.delivery).toBeUndefined();
+    expect(job.delivery).toEqual({ mode: "announce" });
     const { configJobs: persisted } = await loadCronJobsStoreWithConfigJobs(storePath);
     expect(persisted[0]?.notify).toBe(true);
     expectNoteContaining(
@@ -881,7 +881,7 @@ describe("maybeRepairLegacyCronStore", () => {
 it("inspects cron under offline Doctor custody when disposable snapshot allocation is unavailable", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempRoot! };
   vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
-  await saveCronStore(storePath, { version: 1, jobs: [createLegacyCronJob() as never] });
+  await writeCronStore([createLegacyCronJob()]);
   await closeOpenClawStateDatabaseAsync();
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const maintenance = createOpenClawDatabaseMaintenanceScope({

@@ -198,11 +198,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     context.cron.getDefaultAgentId(),
   );
   const namingSource =
-    jobCreate.payload.kind === "agentTurn"
-      ? jobCreate.payload.message
-      : jobCreate.payload.kind === "systemEvent"
-        ? jobCreate.payload.text
-        : undefined;
+    jobCreate.payload.kind === "agentTurn" ? jobCreate.payload.message : undefined;
   // Only the interactive editor requests model naming. Other callers keep the
   // deterministic name without disclosing the prompt to a title provider.
   if (

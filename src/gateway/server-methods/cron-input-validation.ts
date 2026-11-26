@@ -366,10 +366,9 @@ export async function captureCronCreatorSession(
 ) {
   const inheritedAuthority = caller.client?.internal?.operatorRunAuthority;
   const hasConversationResult =
-    job.sessionTarget !== "main" &&
-    (job.payload.kind === "agentTurn" ||
-      job.payload.kind === "script" ||
-      job.payload.kind === "command");
+    job.payload.kind === "agentTurn" ||
+    job.payload.kind === "script" ||
+    job.payload.kind === "command";
   const sessionKey =
     callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
@@ -416,7 +415,7 @@ export async function captureCronCreatorSession(
       : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
       ? await captureCronInferenceForCaller(
           {
             cfg,
@@ -468,11 +467,6 @@ export async function captureCronCreatorSession(
       });
     }
     const operatorAuthority = captured?.authority ?? inheritedAuthority;
-    if (operatorAuthority?.participationCeiling && job.payload.kind === "systemEvent") {
-      throw new TypeError(
-        "Participating inputs require an agentTurn automation with retained authority.",
-      );
-    }
     const parentLinked =
       callerScope &&
       loaded &&
@@ -676,9 +670,6 @@ export async function cronRunQueuesBehindCaller(params: {
   const { job, cfg, caller } = params;
   if (!caller?.sessionKey) {
     return false;
-  }
-  if (job.sessionTarget === "main") {
-    return true;
   }
   const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
   const isCallerSession = (sessionKey: string | undefined) => {

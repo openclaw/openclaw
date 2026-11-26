@@ -16,8 +16,8 @@ function checkMaintenance(
   const job = cronTestJob({
     id: "maintenance",
     schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
-    sessionTarget: "main",
-    payload: { kind: "systemEvent", text: "tick" },
+    sessionTarget: "session:agent:main:main",
+    payload: { kind: "agentTurn", message: "tick" },
     ...overrides,
   });
   const state = createMockCronStateForJobs({ jobs: [job], nowMs });

@@ -22,9 +22,9 @@ const mainJob = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     name: "one-shot",
     schedule: { kind: "at", at: new Date(atMs).toISOString() },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
-    payload: { kind: "systemEvent", text: "hello" },
+    payload: { kind: "agentTurn", message: "hello" },
     ...overrides,
   });
 const isolatedJob = (overrides: Partial<CronJobCreate> = {}) =>

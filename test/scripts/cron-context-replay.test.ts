@@ -174,7 +174,7 @@ describe("cron context replay fixtures", () => {
     const toolsAllow = ["write", "edit", "exec", "process", "web_search", "message"];
     for (const payload of [
       { kind: "script", script: "return 'private script'", toolsAllow },
-      { kind: "systemEvent", text: "private text", toolsAllow },
+      { kind: "agentTurn", message: "private text", toolsAllow },
     ] as const) {
       const job = storedJob({ payload });
       const fixture = anonymize(job, "ops", 1);

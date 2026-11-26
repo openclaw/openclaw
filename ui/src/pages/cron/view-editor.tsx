@@ -34,21 +34,14 @@ type EditorProps = CronProps & {
 function payloadFacts(props: CronProps) {
   const payloadLocked = () => props.form.payloadLocked;
   const isAgentTurn = () => !payloadLocked() && props.form.payloadKind === "agentTurn";
-  const supportsAnnounce = () =>
-    props.form.payloadKind === "agentTurn" ||
-    (props.form.sessionTarget !== "main" && payloadLocked());
-  const selectedDeliveryMode = () =>
-    props.form.deliveryMode === "announce" && !supportsAnnounce()
-      ? "none"
-      : props.form.deliveryMode;
-  return { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode };
+  return { payloadLocked, isAgentTurn, selectedDeliveryMode: () => props.form.deliveryMode };
 }
 
 /** Why the save button is disabled, and which fields block it. */
 function createSubmitState(props: CronProps) {
   const { selectedDeliveryMode } = payloadFacts(props);
   const blockingFields = createMemo(() =>
-    collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode()),
+    collectBlockingFields(props.fieldErrors, selectedDeliveryMode()),
   );
   const blockedByValidation = () => props.canManage && !props.busy && blockingFields().length > 0;
   const submitDisabledReason = () =>
@@ -101,11 +94,10 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
 }
 
 export function Editor(props: EditorProps & { phoneLayout: boolean }) {
-  const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
-    payloadFacts(props);
+  const { payloadLocked, isAgentTurn, selectedDeliveryMode } = payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
   const sessionTarget = () => props.form.sessionTarget;
-  const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
+  const knownSessionTarget = () => sessionTarget() === "isolated";
   const formDisabled = () => props.busy || !props.canManage;
   const editableJob = () =>
     props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
@@ -143,7 +135,6 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
               help={t("cron.form.sessionHelp")}
               quietHelp
               options={[
-                { value: "main", label: t("cron.form.mainSession") },
                 { value: "isolated", label: t("cron.form.isolatedSession") },
                 ...(knownSessionTarget()
                   ? []
@@ -157,7 +148,6 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
             {...props}
             mode={props.mode}
             isAgentTurn={isAgentTurn()}
-            supportsAnnounce={supportsAnnounce()}
             selectedDeliveryMode={selectedDeliveryMode()}
           />
           {blockedByValidation() ? (
@@ -275,17 +265,9 @@ function PromptBlock(
   const lockedPayloadLabel = () =>
     props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = () =>
-    props.payloadLocked
-      ? lockedPayloadLabel()
-      : props.form.payloadKind === "systemEvent"
-        ? t("cron.form.mainTimelineMessage")
-        : t("cron.form.assistantTaskPrompt");
+    props.payloadLocked ? lockedPayloadLabel() : t("cron.form.assistantTaskPrompt");
   const promptHelp = () =>
-    props.payloadLocked
-      ? t("cron.form.readOnlyPayloadHelp")
-      : props.form.payloadKind === "systemEvent"
-        ? t("cron.form.systemEventHelp")
-        : t("cron.form.agentTurnHelp");
+    props.payloadLocked ? t("cron.form.readOnlyPayloadHelp") : t("cron.form.agentTurnHelp");
   const payloadError = () => props.fieldErrors.payloadText;
   return (
     <div class="cron-prompt cron-prompt--editing">

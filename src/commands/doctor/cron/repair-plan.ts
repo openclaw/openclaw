@@ -1,10 +1,13 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
+import type { LoadedCronStore } from "../../../cron/store/types.js";
+import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
+import { isLegacyMainAutomation } from "./main-session-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -121,4 +124,34 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
       : {}),
     ...(params.runtimeEntry?.state ? { state: structuredClone(params.runtimeEntry.state) } : {}),
   };
+}
+
+export function mergeLegacyCronJobsForRepair(loaded: LoadedCronStore) {
+  const invalidConfigRows: QuarantinedCronConfigJob[] = [];
+  const indexedJobs = loaded.configJobs.map((job, index) => ({
+    sourceIndex: loaded.configJobIndexes[index] ?? index,
+    job: mergeRuntimeEntryIntoConfigJob({
+      job,
+      runtimeEntry: loaded.configJobRuntimeEntries[index],
+    }),
+  }));
+  for (const row of loaded.invalidConfigRows) {
+    if (
+      row.reason === "unsupported-definition" &&
+      row.job &&
+      isLegacyMainAutomation(row.job) &&
+      !row.raw
+    ) {
+      indexedJobs.push({
+        sourceIndex: row.sourceIndex,
+        job: mergeRuntimeEntryIntoConfigJob({ job: row.job, runtimeEntry: row }),
+      });
+    } else {
+      invalidConfigRows.push(row);
+    }
+  }
+  const currentJobs = indexedJobs
+    .sort((a, b) => a.sourceIndex - b.sourceIndex)
+    .map(({ job }) => job);
+  return { currentJobs, invalidConfigRows };
 }

@@ -219,7 +219,7 @@ export function addSystemEventJob(
   text: string,
   overrides: CronJobOverrides = {},
 ) {
-  return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
+  return addCronJob(service, name, { kind: "agentTurn", message: text }, overrides);
 }
 
 export function addAgentTurnJob(

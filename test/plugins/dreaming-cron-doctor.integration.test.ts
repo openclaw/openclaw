@@ -48,9 +48,9 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
     createdAtMs: 1_800_000_000_000,
     updatedAtMs: 1_800_000_000_005,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "operator event" },
+    payload: { kind: "agentTurn", message: "operator event" },
     state: { nextRunAtMs: 1_800_000_060_000, lastRunStatus: "ok" },
     runtimeAuthorityRecoveryRequired: true,
     ...fields,
@@ -89,8 +89,8 @@ async function withCronFixture(
       name: "Memory Dreaming Promotion",
       description: "[managed-by=memory-core.short-term-promotion] legacy",
       payload: {
-        kind: "systemEvent",
-        text: "__openclaw_memory_core_short_term_promotion_dream__",
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
       },
     };
     for (const [storePath, jobs] of [
@@ -115,6 +115,17 @@ async function withCronFixture(
       seedCronStoreInCurrentDatabase(storePath, { version: 1, jobs: [...jobs] });
     }
     runOpenClawStateWriteTransaction(({ db }) => {
+      db.prepare(`UPDATE cron_jobs SET payload_kind = 'systemEvent',
+        job_json = json_set(job_json, '$.payload', json(?))
+        WHERE (store_key = ? AND job_id IN ('survivor', 'duplicate'))
+          OR (store_key = ? AND job_id = 'retired')`).run(
+        JSON.stringify({
+          kind: "systemEvent",
+          text: "__openclaw_memory_core_short_term_promotion_dream__",
+        }),
+        activeStore,
+        retiredStore,
+      );
       db.prepare("UPDATE cron_jobs SET sort_order = 17 WHERE store_key = ? AND job_id = ?").run(
         activeStore,
         "survivor",
@@ -155,11 +166,21 @@ function findJob(inventory: PluginDoctorCronInventory, storeKey: string, id: str
   return job;
 }
 
-function changeDescription(job: PluginDoctorCronJob) {
+function repairDefinition(job: PluginDoctorCronJob) {
   if (!job.definition) {
     throw new Error("Expected a valid fixture definition");
   }
-  return { job, definition: { ...job.definition, description: "Doctor repaired definition" } };
+  return {
+    job,
+    definition: {
+      ...job.definition,
+      description: "Doctor repaired definition",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
+    },
+  };
 }
 
 function makeAuthority(): PluginDoctorRepairAuthority {
@@ -776,8 +797,6 @@ describe("host Cron Doctor repair", () => {
       });
       const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
       try {
-        // Admit existing schedules before isolating the dreaming reconciliation's mutations.
-        await cron.list({ includeDisabled: true });
         const before = readRows(fixture.db());
         const previousRevisions = revisions(fixture);
         const original = before.jobs.find(
@@ -792,9 +811,10 @@ describe("host Cron Doctor repair", () => {
             },
           },
         };
-        await runRegisteredDreamingService(config, cron, logger, scheduler);
+        await expect(cron.list({ includeDisabled: true })).rejects.toThrow(
+          "Run openclaw doctor --fix before starting automations",
+        );
         expect(mutations).toEqual([]);
-        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
         expect(readRows(fixture.db())).toEqual(before);
         expect(revisions(fixture)).toEqual(previousRevisions);
         expect(await listBackups(fixture.databasePath)).toEqual([]);
@@ -895,7 +915,7 @@ describe("host Cron Doctor repair", () => {
         try {
           await expect(
             repairCronJobsForDoctor(fixture.scope, authority, inventory, [
-              changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
+              repairDefinition(findJob(inventory, fixture.activeStore, "survivor")),
               ...(phase === "retirement" || phase === "concurrent definition"
                 ? [
                     {

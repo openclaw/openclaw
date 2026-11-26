@@ -39,7 +39,11 @@ describe("resolveCronBindParent", () => {
       /session key alone/,
     ],
     ["no parent key", {}, /session key alone/],
-    ["main target", { sessionTarget: "main", scheduledToolPolicy: account }, /main-session/],
+    [
+      "main target",
+      { sessionTarget: "session:agent:main:main", scheduledToolPolicy: account },
+      /main-session/,
+    ],
   ])("refuses %s", (_name, fields, message) => {
     const result = resolveCronBindParent({ ...base, ...fields } as CronStoredJob);
     expect(result).toEqual({ refusal: expect.stringMatching(message) });

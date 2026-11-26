@@ -110,9 +110,9 @@ describe("createLazyGatewayCronState", () => {
       createdAtMs: 1,
       updatedAtMs: 1,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-      sessionTarget: "main",
+      sessionTarget: "session:agent:main:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick" },
       state: {},
     }));
     const store = createMockCronStateForJobs({ jobs });

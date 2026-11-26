@@ -7,8 +7,8 @@ function onExitCandidate(overrides: Record<string, unknown> = {}) {
   return {
     id: "job-1",
     schedule: { kind: "on-exit", command: "make build" },
-    payload: { kind: "systemEvent", text: "done" },
-    sessionTarget: "main",
+    payload: { kind: "agentTurn", message: "done" },
+    sessionTarget: "session:agent:main:main",
     ...overrides,
   };
 }

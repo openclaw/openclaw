@@ -55,7 +55,7 @@ function capture(
   return target;
 }
 const agentPayload = { kind: "agentTurn" as const, message: "work" };
-const wakePayload = { kind: "systemEvent" as const, text: "wake" };
+const wakePayload = { kind: "agentTurn" as const, message: "wake" };
 
 describe("cron tool creator cap", () => {
   it("distinguishes explicit stream creates from kindless stream update fields", () => {
@@ -118,7 +118,7 @@ describe("cron tool creator cap", () => {
 
     // Legacy "cron" creator allowlists normalize to the canonical tool id.
     const creatorSnapshot = { toolsAllow: ["read", "automations"], toolsAllowIsDefault: true };
-    expect(triggerJob.payload).toEqual({ kind: "systemEvent", text: "wake", ...creatorSnapshot });
+    expect(triggerJob.payload).toEqual({ kind: "agentTurn", message: "wake", ...creatorSnapshot });
     expect(agentJob.payload).toEqual({ kind: "agentTurn", message: "work", toolsAllow: ["*"] });
     expect(codexAppJob.payload).toEqual({ kind: "agentTurn", message: "work", ...creatorSnapshot });
     expect(plainJob.payload).toEqual(wakePayload);
@@ -263,7 +263,7 @@ describe("cron tool creator cap", () => {
     for (const requested of [["gateway_exec"], ["exec"], ["gateway_exec", "read"]]) {
       const job = {
         trigger: { script: "return { fire: false }" },
-        payload: { kind: "systemEvent", text: "wake", toolsAllow: [...requested] },
+        payload: { kind: "agentTurn", message: "wake", toolsAllow: [...requested] },
       };
       capCronJobToolsAllowOnCreate(job, creator);
       const expected = requested.includes("read") ? ["exec", "read"] : ["exec"];
@@ -272,7 +272,7 @@ describe("cron tool creator cap", () => {
 
     const unrelated = {
       trigger: { script: "return { fire: false }" },
-      payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "wake", toolsAllow: ["write"] },
     };
     expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
       'Requested automation tool "write" cannot be carried',
@@ -285,14 +285,14 @@ describe("cron tool creator cap", () => {
 
     const job = {
       trigger: { script: "return { fire: false }" },
-      payload: { kind: "systemEvent", text: "wake", toolsAllow: ["gateway_exec"] },
+      payload: { kind: "agentTurn", message: "wake", toolsAllow: ["gateway_exec"] },
     };
     expect(cronCreateRequiresCreatorAuthority(job, creator)).toBe(false);
     expect(
       cronCreateRequiresCreatorAuthority(
         {
           trigger: { script: "return { fire: false }" },
-          payload: { kind: "systemEvent", text: "wake", toolsAllow: ["exec", "browser"] },
+          payload: { kind: "agentTurn", message: "wake", toolsAllow: ["exec", "browser"] },
         },
         creator,
       ),

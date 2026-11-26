@@ -3,7 +3,7 @@ import type { CronPayload, CronPayloadPatch } from "../types.js";
 import { mergeCronPayload } from "./payload-merge.js";
 
 type MergeCase = [string, CronPayload, CronPayloadPatch, CronPayload];
-const event = { kind: "systemEvent", text: "before" } as const;
+const beforeAgent = { kind: "agentTurn", message: "before" } as const;
 const agent = { kind: "agentTurn", message: "after" } as const;
 const command = { kind: "command", argv: ["echo", "after"] } as const;
 const tools = { toolsAllow: ["read", "cron"] };
@@ -32,16 +32,16 @@ const commandPayload = {
 
 const mergeCases = [
   [
-    "preserves systemEvent toolsAllow when omitted",
-    { ...event, ...tools },
-    { kind: "systemEvent", text: "after" },
-    { ...event, text: "after", ...tools },
+    "preserves agentTurn toolsAllow when omitted",
+    { ...beforeAgent, ...tools },
+    { kind: "agentTurn", message: "after" },
+    { ...agent, ...tools },
   ],
   [
-    "updates systemEvent toolsAllow",
-    { ...event, ...tools },
-    { kind: "systemEvent", toolsAllow: ["cron"] },
-    { ...event, toolsAllow: ["cron"] },
+    "updates agentTurn toolsAllow",
+    { ...beforeAgent, ...tools },
+    { kind: "agentTurn", toolsAllow: ["cron"] },
+    { ...beforeAgent, toolsAllow: ["cron"] },
   ],
   [
     "preserves toolsAllow from agentTurn to command",
@@ -49,10 +49,10 @@ const mergeCases = [
     { ...command, argv: [...command.argv] },
     { ...command, argv: [...command.argv], ...tools },
   ],
-  ["systemEvent to agentTurn with overrides", event, structuredClone(agentPayload), agentPayload],
+  ["command to agentTurn with overrides", command, structuredClone(agentPayload), agentPayload],
   [
-    "systemEvent to command with execution settings",
-    event,
+    "agentTurn to command with execution settings",
+    beforeAgent,
     structuredClone(commandPayload),
     commandPayload,
   ],
@@ -70,13 +70,13 @@ const mergeCases = [
   ],
   [
     "clears toolsAllow explicitly across a kind change",
-    { ...event, ...tools },
+    { ...command, ...tools },
     { ...agent, toolsAllow: null },
     agent,
   ],
   [
     "preserves default-cap provenance across a kind change",
-    { ...event, ...defaultTools },
+    { ...command, ...defaultTools },
     agent,
     { ...agent, ...defaultTools },
   ],

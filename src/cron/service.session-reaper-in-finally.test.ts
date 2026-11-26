@@ -214,8 +214,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
           ...dueJob("worker-job"),
           enabled: false,
           sessionKey: "agent:worker:main",
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "worker task" },
+          sessionTarget: "session:agent:main:main",
+          payload: { kind: "agentTurn", message: "worker task" },
         },
       ],
       {

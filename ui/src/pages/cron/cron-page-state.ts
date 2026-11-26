@@ -8,11 +8,7 @@ import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
-import {
-  hasCronFormErrors,
-  normalizeCronFormState,
-  validateCronForm,
-} from "../../lib/cron/form.ts";
+import { hasCronFormErrors, validateCronForm } from "../../lib/cron/form.ts";
 import { canManageCronJob } from "../../lib/cron/human-owner.ts";
 import {
   addCronJob,
@@ -479,7 +475,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       current,
       resolveCronEventPatch(current, patch),
     );
-    const next = normalizeCronFormState({ ...cron.cronForm, ...resolvedPatch }, resolvedPatch);
+    const next = { ...cron.cronForm, ...resolvedPatch };
     cron.cronForm = next;
     cron.cronFieldErrors = validateCronForm(cron.cronForm);
     if (requiresDirectoryReload(current, next)) {

@@ -170,9 +170,6 @@ export function formatCronPayload(job: CronJob) {
       plugin: job.payloadSource.pluginId,
     });
   }
-  if (p.kind === "systemEvent") {
-    return t("cron.job.system", { text: p.text });
-  }
   if (p.kind === "command") {
     return t("cron.job.command", { command: p.argv.join(" ") });
   }

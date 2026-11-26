@@ -11,7 +11,6 @@ import type { CronJobScratchState } from "../cron/scratch-contract.js";
 import { computeJobNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import {
   assertCronStoreCanPersist,
-  loadedCronStoreFromRows,
   loadCronRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
@@ -21,6 +20,7 @@ import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import { migrateHeartbeatPrompt } from "./doctor-heartbeat-legacy.js";
 import {
   heartbeatTaskDeclarationKey,
@@ -127,10 +127,10 @@ export function convertStoredHeartbeatTask(
   if (!isHeartbeatTaskCronJob(previous)) {
     throw new Error(`Job ${previous.id} is not a legacy task`);
   }
-  const { text, kind: _kind, ...toolPolicy } = previous.payload;
+  const { message, toolsAllow, toolsAllowIsDefault } = previous.payload;
   const job: CronJob = {
     ...structuredClone(previous),
-    payload: { ...taskPayload(monitor, text), ...toolPolicy },
+    payload: { ...taskPayload(monitor, message), toolsAllow, toolsAllowIsDefault },
     enabled: previous.enabled && monitor.enabled,
     sessionTarget: monitor.sessionTarget,
     sessionKey: monitor.sessionKey,
@@ -216,7 +216,9 @@ export function loadHeartbeatTaskPlanningSnapshot(
   const rows = loadCronRows(db, storePath);
   const sortOrderByJobId = new Map(rows.map((row) => [row.job_id, row.sort_order] as const));
   return {
-    jobs: loadedCronStoreFromRows(rows).store.jobs,
+    jobs: decodeDoctorHeartbeatJobRows(rows).filter(
+      (job): job is CronJob => job.payload.kind !== "heartbeat",
+    ),
     sortOrderByJobId,
     nextSortOrder: rows.reduce((max, row) => Math.max(max, row.sort_order + 1), 0),
   };
@@ -258,7 +260,9 @@ export function commitHeartbeatTaskMigrationInDatabase(params: {
 
   const rows = loadCronRows(db, storeKey);
   const jobsById = new Map(
-    loadedCronStoreFromRows(rows).store.jobs.map((job) => [job.id, job] as const),
+    decodeDoctorHeartbeatJobRows(rows)
+      .filter((job): job is CronJob => job.payload.kind !== "heartbeat")
+      .map((job) => [job.id, job] as const),
   );
   const monitor = jobsById.get(params.plan.monitor.id);
   const agentId = monitor

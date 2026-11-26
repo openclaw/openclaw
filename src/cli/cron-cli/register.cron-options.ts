@@ -19,7 +19,7 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     )
     .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
     .option("--agent <id>", "Agent id for this job")
-    .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
+    .option("--session <target>", "Session target (isolated|current|session:<id>)")
     .option("--session-key <key>", "Session key for job routing")
     .option("--wake <mode>", "Wake mode (now|next-heartbeat)", create ? "now" : undefined)
     .option("--at <when>", "One-shot time (ISO, offset-less uses --tz) or duration like 20m")
@@ -50,7 +50,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--exact", "Disable cron staggering (set stagger to 0)", create ? false : undefined)
     .option("--trigger-script <path|->", "Condition script file, or - for stdin")
     .option("--trigger-once", "Disable after the first successful triggered run", false)
-    .option("--system-event <text>", "System event payload (main session)")
     .option("--message <text>", "Agent message payload")
     .option(
       "--skip-if-scratch-empty",

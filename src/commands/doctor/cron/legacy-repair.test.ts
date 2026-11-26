@@ -5,6 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
+import { createTestCronOperatorSource } from "../../../cron/execution-context.test-support.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import * as cronStore from "../../../cron/store.js";
 import {
   loadCronQuarantinedJobs,
@@ -92,8 +94,9 @@ it(
     const canonical: CronJob = {
       ...job("canonical-at"),
       schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "tick" },
+      delivery: { mode: "announce" },
     };
     await saveJobs(storePath, canonical);
     const { cfg, state } = await loadRepairStateForStore(storePath);
@@ -420,33 +423,31 @@ it(
   }),
 );
 
-const legacyJob = (overrides: Partial<CronJob> = {}) =>
-  job("legacy", {
-    name: "Legacy",
-    sessionTarget: "main",
-    payload: { kind: "systemEvent", text: "keep me" },
-    ...overrides,
-  });
+const legacyJob = (overrides: Record<string, unknown> = {}) => ({
+  ...job("legacy"),
+  name: "Legacy",
+  sessionTarget: "main",
+  payload: { kind: "systemEvent", text: "keep me" },
+  ...overrides,
+});
 
 it(
   "imports pre-July cron jobs and runtime state, preserves current jobs, and archives all history",
   withState(async (fixture) => {
     const storePath = fixture.statePath("cron", "jobs.json");
-    const current = legacyJob({
-      id: "current",
+    const current = job("current", {
       name: "Current definition",
       enabled: false,
       agentId: "main",
       updatedAtMs: 8,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-      payload: { kind: "systemEvent", text: "current" },
+      payload: { kind: "agentTurn", message: "current" },
       state: { lastRunAtMs: 7 },
     });
     await saveCronStore(storePath, { version: 1, jobs: [current] });
     const retained = (await readJobs(storePath))[0];
     const legacy = {
-      ...current,
-      id: "legacy",
+      ...legacyJob(),
       name: "Legacy definition",
       enabled: true,
       state: {},
@@ -638,5 +639,141 @@ it(
     );
 
     expect(result.warnings).toEqual([]);
+  }),
+);
+
+it.each(["per-sender", "global"] as const)(
+  "converts a stored system event in %s scope without replacing its job identity",
+  (scope) =>
+    withState(async (fixture) => {
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const cfg = {
+        cron: { store: storePath },
+        session: { scope, mainKey: "home" },
+        agents: { entries: { ops: {} } },
+      } as OpenClawConfig;
+      const saved = job("calendar", {
+        agentId: "ops",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        delivery: { mode: "webhook", to: "https://example.invalid/finished" },
+        state: { lastRunAtMs: 45, lastRunStatus: "ok" },
+      });
+      await saveJobs(storePath, saved);
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = ?",
+        )
+        .run(
+          JSON.stringify({ kind: "systemEvent", text: " Check the calendar. ", toolsAllow: [] }),
+          cronStoreKey(storePath),
+          saved.id,
+        );
+      const before = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      const repaired = await applyLegacyCronStoreRepair({ cfg, state: before });
+      expect(repaired.warnings).toEqual([]);
+      expect(repaired.changes).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Saved pre-repair cron backup"),
+          expect.stringContaining("Converted calendar (calendar)"),
+        ]),
+      );
+      const [converted] = await readJobs(storePath);
+      expect(converted).toMatchObject({
+        id: saved.id,
+        agentId: "ops",
+        enabled: false,
+        schedule: saved.schedule,
+        state: saved.state,
+        delivery: saved.delivery,
+        sessionTarget: scope === "global" ? "session:global" : "session:agent:ops:home",
+        payload: { kind: "agentTurn", message: " Check the calendar. ", toolsAllow: [] },
+      });
+      const after = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      expect((await applyLegacyCronStoreRepair({ cfg, state: after })).changes).toEqual([]);
+    })(),
+);
+
+it(
+  "rebinds a matching saved permission without reviving a stale source",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const cfg = { agents: { entries: { main: {} } } };
+    const source = {
+      version: 1 as const,
+      kind: "gateway" as const,
+      agentId: "main",
+      sourceRunId: "source-run",
+      snapshot: createTestCronOperatorSource("agent:main:main").source.snapshot,
+    };
+    const revision = "sha256:tikCDhRVocK9_99YDhSrISm3pnkNyIV_OEHomY1J-sg";
+    await saveJobs(
+      storePath,
+      ...["approved", "stale"].map((id) =>
+        job(id, { agentId: "main", delivery: { mode: "none" } }),
+      ),
+    );
+    for (const id of ["approved", "stale"]) {
+      const saved = job(id, { agentId: "main", delivery: { mode: "none" } });
+      const legacy = {
+        ...saved,
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        operatorSource: { source, executionRevision: revision },
+      };
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+        .run(JSON.stringify(legacy), cronStoreKey(storePath), id);
+    }
+    const state = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    const result = await applyLegacyCronStoreRepair({ cfg, state });
+    expect(result.warnings).toEqual([]);
+    const converted = await readJobs(storePath);
+    const approved = expectDefined(converted.find((entry) => entry.id === "approved"));
+    const stale = expectDefined(converted.find((entry) => entry.id === "stale"));
+    expect(approved.enabled).toBe(true);
+    expect(approved.operatorSource).toEqual({
+      source,
+      executionRevision: resolveCronOperatorExecutionRevision(approved),
+    });
+    expect(approved.operatorSource?.executionRevision).not.toBe(revision);
+    expect(stale.enabled).toBe(false);
+    expect(stale.operatorSource).toEqual({ source, executionRevision: revision });
+    expect(stale.description).toContain("Recreate this automation from an authenticated turn");
+  }),
+);
+
+it(
+  "quarantines unknown legacy delivery without rolling back other reminders",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const cfg = { agents: { entries: { main: {} } } };
+    await saveJobs(storePath, job("bad", { agentId: "main" }), job("good", { agentId: "main" }));
+    const db = openOpenClawStateDatabase().db;
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ?",
+    ).run(JSON.stringify({ kind: "systemEvent", text: "tick" }), cronStoreKey(storePath));
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery', json(?)) WHERE store_key = ? AND job_id = 'bad'",
+    ).run(JSON.stringify({ mode: "custom", to: "preserve-me" }), cronStoreKey(storePath));
+    const state = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    const original = structuredClone(state.rawJobs.find((entry) => entry.id === "bad"));
+    const result = await applyLegacyCronStoreRepair({ cfg, state });
+    expect(result.warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Failed writing")]),
+    );
+    expect(await readJobs(storePath)).toMatchObject([
+      {
+        id: "good",
+        enabled: true,
+        sessionTarget: "session:agent:main:main",
+        payload: { kind: "agentTurn", message: "tick" },
+      },
+    ]);
+    expect(await loadCronQuarantinedJobs(storePath)).toMatchObject([
+      { reason: "unsupported-delivery", job: original },
+    ]);
+    const after = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    expect((await applyLegacyCronStoreRepair({ cfg, state: after })).changes).toEqual([]);
   }),
 );

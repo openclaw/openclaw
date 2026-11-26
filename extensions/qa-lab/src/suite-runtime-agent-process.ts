@@ -277,7 +277,7 @@ function isManagedDreamingCronJob(job: QaCronJob) {
   if (job.name !== MANAGED_DREAMING_CRON_NAME) {
     return false;
   }
-  if (job.payload?.kind === "systemEvent" && job.payload.text === MANAGED_DREAMING_PROMPT) {
+  if (job.payload?.kind === "agentTurn" && job.payload.message === MANAGED_DREAMING_PROMPT) {
     return true;
   }
   return (

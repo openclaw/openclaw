@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { classifyCronAgentTurnShellPrompt } from "../../../cron/agent-turn-command-prompt.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
@@ -25,6 +26,11 @@ import {
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
+import {
+  isLegacyMainAutomation,
+  migrateMainAutomation,
+  rebindMainAutomationSource,
+} from "./main-session-migration.js";
 import {
   collectLegacyOpenAICodexCronModelRoutes,
   copyTopLevelAgentTurnFields,
@@ -102,6 +108,7 @@ type NormalizeCronStoreJobsResult = {
   legacyTriggerScriptJobs: string[];
   unsupportedLegacyTriggerScriptJobs: string[];
   unsupportedDeliveryModeJobs: string[];
+  mainSessionRepairs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
@@ -158,6 +165,7 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
+    cfg?: OpenClawConfig;
     migrateCodexModelRefs?: boolean;
     shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
   } = {},
@@ -168,6 +176,7 @@ export function normalizeStoredCronJobs(
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
+  const mainSessionRepairs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
@@ -181,11 +190,20 @@ export function normalizeStoredCronJobs(
   const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
 
   for (const [sourceIndex, raw] of jobs.entries()) {
+    const originalMainJob = isLegacyMainAutomation(raw) ? structuredClone(raw) : undefined;
     if (!canRepairCronDeliveryForDoctor(raw.delivery)) {
-      unsupportedDeliveryModeJobs.push(storedCronJobId(raw) ?? "<unnamed>");
-      keptJobs.push(raw);
+      const id = storedCronJobId(raw) ?? "<unnamed>";
+      unsupportedDeliveryModeJobs.push(id);
+      if (originalMainJob) {
+        removedJobs.push({ job: originalMainJob, reason: "unsupported-delivery", sourceIndex });
+        mainSessionRepairs.push("Quarantined " + id + ": review the unsupported delivery mode.");
+        mutated = true;
+      } else {
+        keptJobs.push(raw);
+      }
       continue;
     }
+    let mainSessionReport: string | undefined;
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -349,7 +367,7 @@ export function normalizeStoredCronJobs(
           }
         }
       }
-      if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
+      if (!isLegacyMainAutomation(raw) && migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
         trackChange("legacyAgentTurnCommandPayload");
       } else {
         const unresolvedPromptKind = classifyCronAgentTurnShellPrompt(payloadRecord);
@@ -480,6 +498,12 @@ export function normalizeStoredCronJobs(
       setField(raw, "sessionTarget", isRunnablePayload ? "isolated" : "main");
     }
 
+    if (isLegacyMainAutomation(raw)) {
+      const cfg = options.cfg ?? {};
+      mainSessionReport = migrateMainAutomation(raw, cfg);
+      mutated = true;
+    }
+
     const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
     const isIsolatedTarget =
       sessionTarget === "isolated" ||
@@ -490,7 +514,7 @@ export function normalizeStoredCronJobs(
       payload: payloadRecord,
     });
 
-    if (!delivery && isIsolatedTarget && isRunnablePayload) {
+    if (raw.delivery === undefined && isIsolatedTarget && isRunnablePayload) {
       raw.delivery = normalizedLegacy.delivery ?? { mode: "announce" };
       mutated = true;
     } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
@@ -521,13 +545,34 @@ export function normalizeStoredCronJobs(
         trackIssue("invalidSchedule");
       } else if (
         invalidPersistedReason === "missing-payload" ||
-        invalidPersistedReason === "invalid-payload"
+        invalidPersistedReason === "invalid-payload" ||
+        invalidPersistedReason === "unsupported-definition"
       ) {
         trackIssue("invalidPayload");
       }
       removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
+    }
+    if (originalMainJob && raw.operatorSource !== undefined) {
+      let rebound = false;
+      try {
+        rebound = rebindMainAutomationSource(raw, originalMainJob);
+      } catch {
+        // A malformed saved definition cannot borrow its old execution grant.
+      }
+      if (!rebound) {
+        const reason =
+          "The saved operator permission could not be verified. Recreate this automation from an authenticated turn.";
+        raw.enabled = false;
+        raw.description = [raw.description, "Paused by Doctor: " + reason]
+          .filter(Boolean)
+          .join("\n\n");
+        mainSessionReport = "Paused " + String(raw.name) + " (" + String(raw.id) + "): " + reason;
+      }
+    }
+    if (mainSessionReport) {
+      mainSessionRepairs.push(mainSessionReport);
     }
     keptJobs.push(raw);
   }
@@ -544,6 +589,7 @@ export function normalizeStoredCronJobs(
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
     unsupportedDeliveryModeJobs,
+    mainSessionRepairs,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,

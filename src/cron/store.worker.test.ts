@@ -38,9 +38,9 @@ function jobInput(name: string, text: string, enabled = true) {
     name,
     enabled,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text },
+    payload: { kind: "agentTurn", message: text },
   } satisfies CronJobCreate;
 }
 

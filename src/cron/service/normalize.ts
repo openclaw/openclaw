@@ -21,16 +21,14 @@ function truncateText(input: string, maxLen: number) {
 /** Infers a compact cron job name from payload text first, then schedule shape. */
 export function inferCronJobName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
-  payload?: { kind?: unknown; text?: unknown; message?: unknown; argv?: unknown };
+  payload?: { kind?: unknown; message?: unknown; argv?: unknown };
 }) {
   const text =
-    job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
-      ? job.payload.text
-      : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
-        ? job.payload.message
-        : job?.payload?.kind === "command" && Array.isArray(job.payload.argv)
-          ? job.payload.argv.join(" ")
-          : "";
+    job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
+      ? job.payload.message
+      : job?.payload?.kind === "command" && Array.isArray(job.payload.argv)
+        ? job.payload.argv.join(" ")
+        : "";
   const firstLine =
     text
       .split("\n")

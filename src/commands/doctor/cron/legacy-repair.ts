@@ -52,7 +52,7 @@ import {
 } from "./legacy-quarantine-migration.js";
 import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
-import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
+import { mergeLegacyCronJobsForRepair, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
   assertCronStateSchemaSupportedAsync,
@@ -155,16 +155,7 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  const currentJobs =
-    loaded.configJobs.length > 0
-      ? loaded.configJobs.map((job, index) =>
-          mergeRuntimeEntryIntoConfigJob({
-            job,
-            runtimeEntry: loaded.configJobRuntimeEntries[index],
-          }),
-        )
-      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  const { currentJobs, invalidConfigRows } = mergeLegacyCronJobsForRepair(loaded);
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -255,6 +246,7 @@ export async function applyLegacyCronStoreRepair(params: {
     params.normalized && quarantineRecovery.recoveredJobs.length === 0
       ? params.normalized
       : normalizeStoredCronJobs(state.rawJobs, {
+          cfg: params.cfg,
           migrateCodexModelRefs: params.migrateCodexModelRefs,
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
@@ -409,7 +401,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
-  changes.push(...retirementChanges);
+  changes.push(...normalized.mainSessionRepairs, ...retirementChanges);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

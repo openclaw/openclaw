@@ -44,9 +44,9 @@ function job(overrides: Partial<CronJob>): CronJob {
     createdAtMs: time("2025-12-10T12:00:00Z"),
     updatedAtMs: time("2025-12-13T04:01:00Z"),
     schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "tick" },
+    payload: { kind: "agentTurn", message: "tick" },
     ...overrides,
   });
 }
@@ -294,7 +294,7 @@ describe("CronService restart catch-up", () => {
     expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         text: "tick",
-        job: expect.objectContaining({ sessionTarget: "main" }),
+        job: expect.objectContaining({ sessionTarget: "session:agent:main:main" }),
       }),
     );
     expect(deps.requestHeartbeat).not.toHaveBeenCalled();

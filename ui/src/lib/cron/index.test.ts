@@ -181,7 +181,7 @@ it("saves exact event timing and clears its owner", async () => {
   expect(patch).toMatchObject({
     agentId: null,
     schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 0 },
-    payload: { kind: "systemEvent", text: "updated" },
+    payload: { kind: "agentTurn", message: "updated" },
     delivery: { mode: "none" },
   });
   expect(patch).not.toHaveProperty("deleteAfterRun");

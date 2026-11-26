@@ -13,7 +13,7 @@ import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
-import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
+import { runsDetachedFromSession } from "./timer-execution-timeout.js";
 
 export function createCronReceiptExecutionIdentity(
   state: CronServiceState,
@@ -73,7 +73,7 @@ export function markServiceCronJobActive(
       ? toAgentStoreSessionKey({ agentId: runReceipt.agentId, requestKey: sessionKey })
       : undefined,
     stateIdentityKey: context.admission.identity.key,
-    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
+    preserveAcrossGenerationAdvance: !runsDetachedFromSession(job),
   });
   return marker;
 }

@@ -234,8 +234,8 @@ describe("CronService.remove session cleanup", () => {
 
   it("does not delete a shared main session", async () => {
     const { cron, job, read, write } = await setup(undefined, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "work" },
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "work" },
     });
     const sessionKey = "agent:main:main";
     await write(sessionKey, "main-session");

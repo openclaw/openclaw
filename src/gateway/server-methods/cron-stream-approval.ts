@@ -84,9 +84,7 @@ export async function withCronStreamExecApproval<T>(params: {
     const outputAction =
       job.payload.kind === "agentTurn"
         ? `starts the agent task ${JSON.stringify(job.payload.message)}`
-        : job.payload.kind === "systemEvent"
-          ? `posts the session event ${JSON.stringify(job.payload.text)}`
-          : "runs this automation's configured script";
+        : "runs this automation's configured script";
     const outputSelection =
       job.schedule.mode === "match"
         ? `Output matching ${JSON.stringify(job.schedule.match)}`
