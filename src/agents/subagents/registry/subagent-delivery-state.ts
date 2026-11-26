@@ -131,6 +131,7 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
   // Rows persisted before the single retirement fact carried it on the wake or under the
   // old row name. Remove this fold once no supported build can leave such rows.
+  // SAFETY: both fields are optional, read only with `=== true`, and deleted here.
   const legacy = entry as {
     retireAfterRequesterTurn?: boolean;
     requesterSettleWake?: { retireAfterSettle?: boolean };
