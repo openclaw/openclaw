@@ -380,6 +380,42 @@ const descendantCleanupFailure = "service child cleanup did not complete before 
 
 const unconfirmedCleanupNote = expect.stringContaining("OpenClaw could not confirm");
 
+// A stopped tree can outlive the cleanup deadline (e.g. a process outside it holds its output).
+// The host join may fail with the same expiry, succeed (only the output stayed open), or be absent.
+it.each(["rejects", "succeeds", "absent"] as const)(
+  "keeps the timeout as the result when cleanup then expires (extinction join %s)",
+  async (extinctionJoin) => {
+    const expired = new Error(descendantCleanupFailure);
+    queueRun(undefined, "@1\n", (input) => ({
+      wait: async () => {
+        input.onCancel?.("overall-timeout");
+        throw expired;
+      },
+      ...(extinctionJoin === "absent"
+        ? {}
+        : {
+            waitForExtinction: async () => {
+              if (extinctionJoin === "rejects") {
+                throw expired;
+              }
+            },
+          }),
+    }));
+    const cleanupScope = createAgentCleanupScope();
+    await cleanupScope.run(async () => {
+      const run = await runTestExecProcess({ command: "sleep 60", timeoutSec: 5 });
+      const outcome = await run.promise;
+      assert(outcome.status === "failed");
+      expect(outcome).toMatchObject({ failureKind: "overall-timeout", timedOut: true });
+      expect(outcome.reason).toMatch(/^@1\n\nCommand timed out after 5 seconds\./);
+      const [beforeFailure, ...afterFailure] = outcome.reason.split(descendantCleanupFailure);
+      expect(beforeFailure).toContain("Command timed out");
+      expect(afterFailure).toHaveLength(1);
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
+  },
+);
+
 it.each([
   // A foreground result reports the note as a warning; the output stays the command's own.
   { exitCode: 0, status: "completed", backgrounded: false, aggregated: "@1" },
