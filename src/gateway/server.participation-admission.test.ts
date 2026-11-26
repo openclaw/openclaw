@@ -266,14 +266,6 @@ it("readmits pending native child and scheduled work under current invitation bo
             sentinel: { payload: { stats: { requiresRestart: false } } },
           });
         };
-        const requestSummaries: Array<{
-          phase: "permission" | "tools" | "wide";
-          step: number;
-          index: number;
-          lastType: "message" | "function_call" | "function_call_output" | "other" | "missing";
-          readProof: boolean;
-          execDenied: boolean;
-        }> = [];
         const outputs: string[] = [];
         let toolCalls = 0;
         const invokeStoredJob = async (phase: "permission" | "tools" | "wide") => {
@@ -282,24 +274,6 @@ it("readmits pending native child and scheduled work under current invitation bo
             const input = (JSON.parse(body) as { input: { type?: string; output?: string }[] })
               .input;
             const output = input.findLast((item) => item.type === "function_call_output")?.output;
-            const lastType = input.at(-1)?.type;
-            if (requestSummaries.length < 16) {
-              requestSummaries.push({
-                phase,
-                step,
-                index: toolCalls,
-                lastType:
-                  lastType === "message" ||
-                  lastType === "function_call" ||
-                  lastType === "function_call_output"
-                    ? lastType
-                    : lastType === undefined
-                      ? "missing"
-                      : "other",
-                readProof: output?.includes("READ_PROOF") ?? false,
-                execDenied: output === "Tool exec not found",
-              });
-            }
             if (output) {
               outputs.push(output);
             }
@@ -351,7 +325,6 @@ it("readmits pending native child and scheduled work under current invitation bo
         expect(retainedJob.operatorSource?.executionRevision).not.toBe(
           job.operatorSource?.executionRevision,
         );
-        console.info("native-admission-proof", JSON.stringify({ toolCalls, requestSummaries }));
         expect(toolCalls).toBe(10);
         expect(afterParent).toBe(beforeRelease);
         // No membership is ever created on this independent owner-only session.
