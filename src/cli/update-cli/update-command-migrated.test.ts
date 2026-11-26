@@ -323,6 +323,9 @@ it.for([
     const nativeProbe = childCommands.runUtf8CommandWithTimeout;
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
       async (argv, options) => {
+        if (argv.at(-1) !== "--check") {
+          return await nativeProbe(argv, options);
+        }
         const child = legacy ? await nativeProbe(argv, options) : candidateContract;
         const allowance = typeof options === "number" ? options : options.timeoutMs;
         // Keep the native admission/cleanup flow; model cold-start work in this phase only.
