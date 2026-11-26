@@ -171,7 +171,7 @@ it("honors a selected local plugin's quarantine without pinned-source support", 
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(memoryPath, "Memory quarantined by the selected plugin");
     const classifyWorkspaceMemoryPaths = vi.fn(async () => [
-      { relativePath: "MEMORY.md", originClass: "untrusted" },
+      { relativePath: "MEMORY.md", originClass: "untrusted" as const },
     ]);
     registerMemoryCapability("memory-fixture", {
       runtime: { ...noSearchRuntime(), classifyWorkspaceMemoryPaths },
