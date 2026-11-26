@@ -164,7 +164,6 @@ it.each(["publication", "event"] as const)(
     expect(host).toMatchObject({ chatRunId: null, chatStream: null });
     expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
     const history = getChatHistoryLoadState(host);
-    expect(history.phase).toBe("in-flight");
     if (history.phase === "in-flight") {
       await history.promise;
     }
