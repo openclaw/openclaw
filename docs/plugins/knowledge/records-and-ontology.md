@@ -59,15 +59,31 @@ are stored as one directed edge and traversed in both directions.
 | Field                       | Applies to          | Meaning                                                     |
 | --------------------------- | ------------------- | ----------------------------------------------------------- |
 | `occurred_at`               | Claim               | Date or timestamp of the source event or statement          |
+| `occurred_until`            | Claim               | Inclusive end of the event's span; requires `occurred_at`   |
 | `owner`                     | Commitment claim    | Known owner page ID; omit if unknown                        |
 | `due_at`                    | Commitment claim    | Source due date or timestamp; never schedules work          |
+| `takeaway`                  | Claim               | The lesson or "so what", 1–1000 characters, beside the body |
+| `inferred_by`               | Inference claim     | `{agent, at, confidence}`: who inferred it, when, how sure  |
+| `tags`                      | Page, claim         | Free-form labels; `knowledge_search` filters by `tag`       |
 | `valid_from`, `valid_until` | Claim, relationship | UTC validity interval, inclusive start and exclusive end    |
 | `expires_at`                | Claim, relationship | UTC instant after which the assertion leaves active results |
 
-Occurrence and due values accept a real `YYYY-MM-DD` date or a timestamp with
-seconds and an explicit `Z` or numeric offset. No midnight or time zone is
-inferred. Validity and expiry accept UTC timestamps. Unknown values must be
-omitted, not empty strings. Expired, not-yet-valid, and ended assertions leave
+Occurrence, span end, due, and `inferred_by.at` values accept a real
+`YYYY-MM-DD` date or a timestamp with seconds and an explicit `Z` or numeric
+offset. No midnight or time zone is inferred.
+`occurred_until` must not precede `occurred_at`; a date-only bound compares as a
+calendar day.
+`inferred_by` is only valid with `assertion_origin: agent_inference`. `agent`
+names the extractor or model (up to 100 characters), `at` is when it inferred
+the claim, and `confidence` is `high`, `medium`, or `low`. `agent` and `at` are
+required; `confidence` is optional. It records the inference's own provenance;
+the agent that saved the claim is still journaled separately (see Displayed
+author).
+The span, takeaway, and inference rules are checked when a claim is written.
+Existing authored frontmatter that already uses these names is read as before.
+
+Validity and expiry accept UTC timestamps. Unknown values must be omitted, not
+empty strings. Expired, not-yet-valid, and ended assertions leave
 active lookup, search, and connections; occurrence and due dates do not affect
 eligibility.
 

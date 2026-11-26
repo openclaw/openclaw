@@ -17,7 +17,7 @@ import {
   type Detail,
   type Summary,
 } from "./page-dom.js";
-import { formatSourceDate } from "./temporal.js";
+import { formatSourceDate, occurredText } from "./temporal.js";
 import { icon } from "./ui-icons.js";
 
 // Full metadata is only for inspection, so it loads when its disclosure first opens.
@@ -131,6 +131,9 @@ export function renderClaim(
             "knowledge-claim-text",
           )),
   );
+  if (record.metadata?.takeaway) {
+    copy.append(el("p", `Takeaway: ${record.metadata.takeaway}`, "knowledge-claim-takeaway"));
+  }
   const metadata = el("div", undefined, "knowledge-claim-meta");
   const assertionOrigin = el(
     "span",
@@ -262,8 +265,18 @@ export function renderClaim(
     if (about.childNodes.length) {
       field("About", about);
     }
+    if (m?.occurred_at) {
+      field("Occurred", occurredText(m.occurred_at, m.occurred_until));
+    }
     if (!originInMeta) {
       field("Origin", origin(record.assertionOrigin, record.attribution));
+    }
+    if (m?.inferred_by) {
+      const { agent, at, confidence } = m.inferred_by;
+      field(
+        "Inferred by",
+        `${agent} · ${formatSourceDate(at)}${confidence ? ` · ${confidence} confidence` : ""}`,
+      );
     }
     field(
       "Saved",

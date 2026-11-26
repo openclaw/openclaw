@@ -82,8 +82,12 @@ const CreateClaim = Type.Object(
     entities: Envelope.properties.entities,
     subject_hint: Envelope.properties.subject_hint,
     occurred_at: Envelope.properties.occurred_at,
+    occurred_until: Envelope.properties.occurred_until,
     owner: Envelope.properties.owner,
     due_at: Envelope.properties.due_at,
+    takeaway: Envelope.properties.takeaway,
+    tags: Envelope.properties.tags,
+    inferred_by: Envelope.properties.inferred_by,
   },
   { additionalProperties: false },
 );

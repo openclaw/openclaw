@@ -8,6 +8,11 @@ const timestamp = Type.String({
   pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
 });
 export const strings = Type.Array(text(), { maxItems: 100 });
+// A real date, or a timestamp with seconds and an explicit offset; precision is preserved.
+const sourceDate = Type.String({
+  pattern:
+    "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2}))?$",
+});
 export const Recall = Type.Object(
   {
     summary: Type.String({ minLength: 1, maxLength: 500, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
@@ -217,11 +222,25 @@ export const Envelope = Type.Object(
         Type.Literal("agent_inference"),
       ]),
     ),
-    occurred_at: Type.Optional(
-      Type.String({
-        pattern:
-          "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2}))?$",
-      }),
+    occurred_at: Type.Optional(sourceDate),
+    /** Inclusive end of the claimed event's span; requires occurred_at. */
+    occurred_until: Type.Optional(sourceDate),
+    /** The lesson or "so what" of a claim, separate from the assertion text in the body. */
+    takeaway: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 1000, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
+    ),
+    /** Which extractor or agent produced an agent_inference claim, when, and how sure it was. */
+    inferred_by: Type.Optional(
+      Type.Object(
+        {
+          agent: Type.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\r\\n]+$" }),
+          at: sourceDate,
+          confidence: Type.Optional(
+            Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
     ),
     valid_from: Type.Optional(timestamp),
     valid_until: Type.Optional(timestamp),

@@ -34,6 +34,9 @@ export function claimCard(
       ...(m.owner !== undefined ? { owner: m.owner } : {}),
       ...(m.due_at !== undefined ? { due_at: m.due_at } : {}),
       ...(m.occurred_at !== undefined ? { occurred_at: m.occurred_at } : {}),
+      ...(m.occurred_until !== undefined ? { occurred_until: m.occurred_until } : {}),
+      ...(m.takeaway !== undefined ? { takeaway: m.takeaway } : {}),
+      ...(m.inferred_by !== undefined ? { inferred_by: m.inferred_by } : {}),
       ...(m.source_event !== undefined ? { source_event: m.source_event } : {}),
     },
   };

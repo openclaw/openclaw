@@ -905,6 +905,11 @@
   -webkit-font-smoothing: auto;
   -moz-osx-font-smoothing: auto;
 }
+.knowledge-claim-takeaway {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
 .knowledge-page .knowledge-claim-text {
   display: block;
   width: 100%;

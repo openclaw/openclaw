@@ -49,6 +49,36 @@ export function temporalProblems(m: Envelope): string[] {
   }
   return issues;
 }
+/**
+ * Rules for the optional claim fields, applied to claim-write input only: authored
+ * frontmatter that already uses these names stays valid on read, as before they existed.
+ */
+export function assertClaimInput(
+  input: Pick<Envelope, "occurred_at" | "occurred_until" | "inferred_by" | "assertion_origin">,
+): void {
+  const { occurred_at: from, occurred_until: until, inferred_by: inference } = input;
+  const issues: string[] = [];
+  // Date-only bounds compare as calendar days; two timestamps compare as instants.
+  if (
+    until !== undefined &&
+    (!validSourceDate(until) ||
+      !from ||
+      (from.length > 10 && until.length > 10
+        ? Date.parse(from) > Date.parse(until)
+        : from.slice(0, 10) > until.slice(0, 10)))
+  ) {
+    issues.push("occurred_until must be a real date at or after occurred_at");
+  }
+  if (
+    inference &&
+    (input.assertion_origin !== "agent_inference" || !validSourceDate(inference.at))
+  ) {
+    issues.push("inferred_by needs assertion_origin agent_inference and a real date");
+  }
+  if (issues.length) {
+    throw new Error(`Record validation failed: ${issues.join("; ")}`);
+  }
+}
 /** Validity is [from, until). Expiry is exclusive. Occurrence and due dates never expire a record. */
 export function activeNow(m: Envelope, now = Date.now()): boolean {
   return (
@@ -57,6 +87,11 @@ export function activeNow(m: Envelope, now = Date.now()): boolean {
     (!m.valid_until || Date.parse(m.valid_until) > now) &&
     (!m.expires_at || Date.parse(m.expires_at) > now)
   );
+}
+
+/** One occurrence or an inclusive span, each end at its recorded precision. */
+export function occurredText(at: string, until?: string): string {
+  return until ? `${formatSourceDate(at)} – ${formatSourceDate(until)}` : formatSourceDate(at);
 }
 
 /** Date-only values are calendar dates, not UTC instants to shift into yesterday. */

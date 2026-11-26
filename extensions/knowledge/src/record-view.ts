@@ -23,7 +23,7 @@ import { fileDetails } from "./record-files.js";
 import { recordPanels } from "./record-panels.js";
 import { recordTimeline } from "./record-timeline.js";
 import { claimVersions } from "./record-versions.js";
-import { formatSourceDate, sourceDateNote } from "./temporal.js";
+import { formatSourceDate, occurredText, sourceDateNote } from "./temporal.js";
 import { foldTimeline } from "./timeline-fold.js";
 import { icon } from "./ui-icons.js";
 
@@ -88,7 +88,9 @@ export async function showDetail(
     meta?.occurred_at ??
     (typeof meta?.fields?.occurred_at === "string" ? meta.fields.occurred_at : undefined);
   if (occurred) {
-    heading.append(el("p", `Occurred ${formatSourceDate(occurred)}`, "knowledge-occurred"));
+    heading.append(
+      el("p", `Occurred ${occurredText(occurred, meta?.occurred_until)}`, "knowledge-occurred"),
+    );
     const note = sourceDateNote(occurred);
     if (note) {
       heading.append(el("p", note, "knowledge-muted"));

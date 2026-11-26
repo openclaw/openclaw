@@ -93,6 +93,77 @@ it("structured UI/agent service parity: decision, owned commitment, event, edge 
   ).toMatchObject({ id: commitment.id });
 });
 
+it("extracted claims keep takeaway, tags, event span and inference provenance", async () => {
+  const f = await foundation();
+  const atom = {
+    title: "Option B story angle",
+    body: "Alex chose option B over the incumbent.",
+    claim_kind: "event",
+    assertion_origin: "agent_inference",
+    attribution: "GBrain extractor from the meeting transcript",
+    occurred_at: "2026-09-20",
+    occurred_until: "2026-09-23T10:30:00-07:00",
+    takeaway: "Teams pick the option they can ship by Friday.",
+    tags: ["story_angle"],
+    inferred_by: {
+      agent: "gbrain-extractor/claude",
+      at: "2026-10-01T08:00:00Z",
+      confidence: "medium",
+    },
+  };
+  const receipt = await f.service.create_claim(f.claim(atom), f.owner);
+  const read = await f.service.record_detail({ id: receipt.id, includeMetadata: true }, f.owner);
+  expect(Check(contract.operations.record_detail.output, read)).toBeTruthy();
+  expect(read.record!.metadata).toMatchObject({
+    occurred_at: atom.occurred_at,
+    occurred_until: atom.occurred_until,
+    takeaway: atom.takeaway,
+    tags: atom.tags,
+    inferred_by: atom.inferred_by,
+  });
+  const tagged = await f.service.grep({ query: "option", tag: "story_angle" }, f.owner);
+  expect(tagged.hits.map((hit: any) => hit.record.id)).toStrictEqual([receipt.id]);
+  const listed = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
+  expect(Check(contract.operations.records_detail.output, listed)).toBeTruthy();
+  expect(listed.records.find((r: any) => r.id === receipt.id).card.metadata).toMatchObject({
+    occurred_until: atom.occurred_until,
+    takeaway: atom.takeaway,
+    inferred_by: atom.inferred_by,
+  });
+  for (const change of [
+    { assertion_origin: "source" },
+    { occurred_at: undefined },
+    { occurred_until: "2026-09-19" },
+    { occurred_until: "2026-02-30" },
+    { inferred_by: { agent: "x", at: "2026-02-30" } },
+    { inferred_by: {} },
+    { inferred_by: { agent: "x" } },
+    { inferred_by: { at: "2026-10-01", confidence: "low" } },
+    { inferred_by: { agent: "x", at: "2026-10-01", confidence: "certain" } },
+    { takeaway: " " },
+  ]) {
+    const input = f.claim({ ...atom, ...change });
+    await expect(f.service.create_claim(input, f.owner)).rejects.toThrow();
+    expect((await f.service.mutation({ requestId: input.requestId }, f.owner)).receipt).toBe(null);
+  }
+});
+
+it("authored page frontmatter using the claim field names stays valid and saveable", async () => {
+  const f = await foundation();
+  const page = (await f.service.record_detail({ id: f.pages.project.id }, f.owner)).record!;
+  const file = path.join(f.root, "private", page.path);
+  const raw = await readFile(file, "utf8");
+  await writeFile(
+    file,
+    raw.replace(/^---\n/, '---\ntakeaway: "Ship small"\noccurred_until: "2026-09-23"\n'),
+  );
+  const read = (await f.service.record_detail({ id: page.id, includeMetadata: true }, f.owner))
+    .record!;
+  expect([read.valid, read.metadata!.takeaway]).toStrictEqual([true, "Ship small"]);
+  const saved = await f.service.save_page(edit(read, { title: "Renamed project" }), f.owner);
+  expect(saved.state).toBe("published");
+});
+
 it("all claim kinds roundtrip; contradictions and uncertain attribution are not merged", async () => {
   const f = await foundation();
   for (const claim_kind of ["fact", "preference", "decision", "commitment", "event", "belief"]) {

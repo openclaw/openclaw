@@ -356,7 +356,7 @@ export const contract = defineFeatureContract({
     create_claim: {
       kind: "action",
       description:
-        "Publish one evidence-backed claim (fact, preference, decision, commitment, event or belief). Agent chooses what the source supports; no automatic extraction or semantic deduplication. Required current ontology fingerprint comes from knowledge_ontology. Explicit attribution and assertion_origin distinguish source statements, user beliefs and agent inference. Unknown owner/dates remain absent. occurred_at and due_at preserve date-only or offset timestamp precision; validity/expiry are UTC instants. No task is scheduled. Reuse the exact request and payload for retries; no claim overwrite or lifecycle mutation.",
+        "Publish one evidence-backed claim (fact, preference, decision, commitment, event or belief). Agent chooses what the source supports; no automatic extraction or semantic deduplication. Required current ontology fingerprint comes from knowledge_ontology. Explicit attribution and assertion_origin distinguish source statements, user beliefs and agent inference. Unknown owner/dates remain absent. occurred_at, occurred_until (inclusive span end) and due_at preserve date-only or offset timestamp precision; validity/expiry are UTC instants. Optional takeaway holds the lesson apart from the body; inferred_by {agent, at, confidence} is for agent_inference only. No task is scheduled. Reuse the exact request and payload for retries; no claim overwrite or lifecycle mutation.",
       input: ClaimInput,
       output: receipt,
       tool: { name: "knowledge_create_claim", label: "Create knowledge claim" },
