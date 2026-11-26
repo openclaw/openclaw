@@ -216,12 +216,10 @@ describe("direct CLI command continuity", () => {
       ...options,
     });
     try {
+      // Control operations keep the session prompt since #197535, still without the child role.
       expect(context.systemPrompt).not.toContain("# Subagent Context");
-      if (options.controlOperation) {
-        expect(context.systemPrompt).toBe("");
-      } else {
-        expect(context.systemPrompt).toContain("Return only the requested output.");
-      }
+      expect(context.systemPrompt).not.toContain("Leaf worker");
+      expect(context.systemPrompt).toContain("Return only the requested output.");
     } finally {
       await context.preparedBackend.cleanup?.();
     }
