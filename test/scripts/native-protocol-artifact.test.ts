@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertNativeProtocolContract,
@@ -15,7 +16,7 @@ describe("native protocol build artifacts", () => {
   it("keeps background and Talk identifiers as strings rather than undeclared native models", async () => {
     const output = await generateNativeProtocol(root, "swift");
     assertNativeProtocolContract("swift", output);
-    const swift = output["GatewayModels.swift"];
+    const swift = expectDefined(output["GatewayModels.swift"], "generated Swift protocol");
     const updateStart = swift.indexOf("public struct UpdateRunResult: Codable, Sendable");
     const update = swift.slice(updateStart, swift.indexOf("\n}\n", updateStart));
     expect(update).toContain(
