@@ -33,6 +33,7 @@ import {
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
+import { captureNativeParentToolRegistration } from "./native-subagent-tool-dispatch.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import {
   reportCodexBackgroundCleanupFailure,
@@ -311,8 +312,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         }
         thread.liveThreadOwnership?.assertCurrent();
       };
-      const retainModelSource = params.hostCapabilities.retainSourceAuthority;
-      const modelSource = retainModelSource?.();
+      const toolRegistration = captureNativeParentToolRegistration(context);
+      const { modelSource } = toolRegistration;
       try {
         const configurationQualification = getCodexInferenceThreadQualification(
           client,
@@ -321,7 +322,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         const registration = await codexNativeSubagentMonitorRuntime.register({
           client,
           parentThreadId,
-          ...(retainModelSource ? { modelSource } : {}),
+          ...toolRegistration,
           configurationQualification,
           unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
           onUnqualifiedModelCancelled: connection.abortExplicitly,

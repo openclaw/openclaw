@@ -157,6 +157,19 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it("distinguishes delegated host capabilities from inherited declarations", () => {
+    const instructions = render(
+      {},
+      {
+        dynamicTools: [namespace([spawnTool, tool("search_notes"), tool("write_note")])],
+        nativeChildToolNames: ["search_notes"],
+      },
+    );
+    expect(instructions).toContain("delegated OpenClaw host tools: search_notes.");
+    expect(instructions).toContain("not the child's native sandbox");
+    expect(instructions).not.toContain("Native children cannot execute");
+  });
+
   it("routes new helpers by tool requirements without moving existing children", () => {
     const instructions = render(
       {},

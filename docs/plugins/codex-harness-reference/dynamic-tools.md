@@ -71,8 +71,8 @@ context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or
 resolve a connector-only universe: `agents_list`, `sessions_spawn`, and
 `sessions_yield`. Developer instructions still steer normal Codex subagents
-toward native `spawn_agent` for work using only Codex-native tools. New delegated
-work that needs OpenClaw tools uses the available `sessions_spawn` route with
+toward native `spawn_agent` for work using native tools or explicitly delegated
+host tools. Work that needs other OpenClaw tools uses the available `sessions_spawn` route with
 `runtime="subagent"` when its schema exposes that selector. Native children can
 inherit dynamic tool schemas without an OpenClaw executor. Existing native
 children keep their native follow-up path; tool failures do not migrate them
@@ -102,6 +102,43 @@ the full tool payload.
 
 For supported checks before inference, see
 [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).
+
+## Native child host tools
+
+By default, a native Codex child cannot execute OpenClaw dynamic tools. To
+delegate selected host capabilities, set `plugins.entries.codex.config.nativeChildTools`:
+
+```json
+{
+  "allow": ["search_notes", "research__*"],
+  "deny": ["research__delete_*"]
+}
+```
+
+Use the exposed tool name, not the Codex discovery prefix (`openclaw.`).
+In this example `research` is an OpenClaw-projected MCP server. An empty or
+absent `allow` grants nothing; `deny` takes precedence. A wildcard also matches
+future tools added under that name pattern. Prefer exact names when you need
+to review each new capability individually.
+
+These calls use **OpenClaw host authority**. A child's native Codex sandbox and
+approval settings do not confine them. Host-side availability, tool and action
+policies and approvals still apply; an inherited tool schema is not a grant.
+Parent-session controls and reply delivery do not run on behalf of a child.
+Execution requires a direct child on a host-owned stdio app-server connection
+and a retained requester identity. Shared WebSocket and Unix transports do
+not establish exclusive dispatch ownership. A system turn cannot borrow an
+operator's identity.
+The grant does not change native coding tools, delegation, or MCP tools run
+directly by Codex. Use the normal Gateway restart or replacement procedure
+when changing deployment policy.
+
+To preview the selection, enable debug logging and inspect the
+`codex native child tool catalog` record for the target run. It lists tool
+names, ownership where known, selection decisions and unmatched patterns.
+This is a snapshot of the parent bridge, not a promise of later availability:
+calls still require an owned, active child and an eligible host binding.
+The preview does not invoke tools.
 
 ## Protected conversation continuity
 

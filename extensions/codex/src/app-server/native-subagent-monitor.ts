@@ -106,7 +106,11 @@ import {
   logRecoveryFailure,
 } from "./native-subagent-recovery-coordinator.js";
 import { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
-import { CodexNativeSubagentTurnObservation } from "./native-subagent-turn-observation.js";
+import { createNativeChildToolRequestHandler } from "./native-subagent-tool-dispatch.js";
+import {
+  CodexNativeSubagentTurnObservation,
+  recoverPendingChildTurns,
+} from "./native-subagent-turn-observation.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -140,6 +144,7 @@ class Monitor {
   >();
   private readonly cancellationTurnWaiters = new Map<ChildState, () => void>();
   private readonly removeNotificationHandler: () => void;
+  private removeToolRequestHandler?: () => void;
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
   private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
@@ -413,8 +418,10 @@ class Monitor {
     }
     this.disposed = true;
     this.removeNotificationHandler();
+    this.removeToolRequestHandler?.();
     this.removeCloseHandler();
     for (const childState of this.childStates.values()) {
+      childState.toolTurn?.controller.abort();
       try {
         this.turnObservation.invalidate(childState);
       } catch (error) {
@@ -501,6 +508,15 @@ class Monitor {
   }
 
   registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle> {
+    if (params.executeDynamicTool && !this.disposed) {
+      this.removeToolRequestHandler ??= this.client.addRequestHandler(
+        createNativeChildToolRequestHandler(
+          this.knownChildren,
+          (id) => this.currentChild(id),
+          (state) => this.isCurrentParent(state),
+        ),
+      );
+    }
     return registerNativeSubagentParent(params, {
       states: this.parentStates,
       isClosed: () => this.disposed,
@@ -681,6 +697,7 @@ class Monitor {
             assertChild();
             if (!child.terminal) {
               child.cancellationRequested = true;
+              child.toolTurn?.controller.abort();
               if (!turnId) {
                 const observed = createDeferred<void>();
                 this.cancellationTurnWaiters.set(child, () => observed.resolve());
@@ -957,6 +974,11 @@ class Monitor {
     // Revoke the whole captured lineage before cleanup can admit another completion.
     for (const state of states) {
       this.retiredParentStates.add(state);
+    }
+    for (const child of this.childStates.values()) {
+      if (states.some((state) => state.parentThreadId === child.parentThreadId)) {
+        child.toolTurn?.controller.abort();
+      }
     }
     const settlements: Promise<void>[] = [];
     for (const state of states) {
@@ -1652,7 +1674,8 @@ class Monitor {
       return undefined;
     }
     const claimDirectChild = options.directOwner?.claimDirectChild;
-    if (claimDirectChild && this.recovery.isTerminalThread(childThreadId)) {
+    const claimsDirectAuthority = claimDirectChild || options.directOwner?.executeDynamicTool;
+    if (claimsDirectAuthority && this.recovery.isTerminalThread(childThreadId)) {
       // A late spawn event is observational only after this client has seen
       // the child's terminal state; it must not recreate direct authority.
       return undefined;
@@ -1728,7 +1751,7 @@ class Monitor {
       }
     }
     if (
-      claimDirectChild &&
+      claimsDirectAuthority &&
       !childState.terminal &&
       !childState.settledWithoutCompletion &&
       !childState.releaseDirectChild
@@ -1737,7 +1760,7 @@ class Monitor {
       childState.requesterTurnRunId = options.directOwner?.requesterTurnRunId;
       childState.requestCustody = options.directOwner?.requestCustody;
       childState.cancelProcesses = options.directOwner?.cancelChildProcesses;
-      childState.releaseDirectChild = claimDirectChild(childThreadId);
+      childState.releaseDirectChild = claimDirectChild?.(childThreadId);
     }
     // Execution relay custody ends before completion; retain the admitting source independently.
     childState.completionCustody ??= (
@@ -2408,31 +2431,8 @@ class Monitor {
     assignment: NativeSubagentAssignment,
     observedTurns: readonly NativeTurnObservation[] = [],
   ): void {
-    const currentIndex = observedTurns.findIndex((turn) => turn.turnId === assignment.nativeTurnId);
-    const pendingTurns: KnownChild["pendingTurns"] = observedTurns
-      .filter((turn, index) => index > currentIndex && turn.turnId !== assignment.nativeTurnId)
-      .map((turn, index, turns) => ({
-        turnId: turn.turnId,
-        state: turn.state === "active" && index < turns.length - 1 ? undefined : turn.state,
-      }));
     const previous = this.knownChildren.get(assignment.childThreadId);
-    const previousRunId = previous?.assignment.runId;
-    const retainedPending = previous?.pendingTurns.filter((pending) => pending.modelSource) ?? [];
-    for (const retained of retainedPending) {
-      const recovered = pendingTurns.find((pending) => pending.turnId === retained.turnId);
-      if (recovered) {
-        recovered.modelSource = retained.modelSource;
-        recovered.completionCustody = retained.completionCustody;
-        retained.completionCustody = undefined;
-      } else {
-        pendingTurns.push(retained);
-      }
-    }
-    for (const pending of previous?.pendingTurns ?? []) {
-      if (!pendingTurns.includes(pending)) {
-        releaseCompletionCustody(pending);
-      }
-    }
+    const pendingTurns = recoverPendingChildTurns(previous, assignment.nativeTurnId, observedTurns);
     this.knownChildren.set(assignment.childThreadId, {
       configurationQualification: previous?.configurationQualification,
       parent: state,
@@ -2466,7 +2466,7 @@ class Monitor {
         this.knownChildren.get(assignment.childThreadId)?.agentPaths ??
         new Set([assignment.childThreadId]),
     });
-    if (previousRunId !== assignment.runId) {
+    if (previous?.assignment.runId !== assignment.runId) {
       this.refreshWaitDependency(state, assignment.childThreadId);
     }
   }

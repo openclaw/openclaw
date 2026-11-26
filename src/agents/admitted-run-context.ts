@@ -444,6 +444,15 @@ type AdmittedRunBeforeToolCallRecovery = Readonly<{
   release: () => void;
 }>;
 
+/** Capture the original source checks, not the foreground run's tool/approval lease. */
+export function captureAdmittedRunSourceForChild(context: AdmittedRunContext) {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease?.operatorAuthority || !getAdmittedRunDelegatedAuthority(context)) {
+    return undefined;
+  }
+  return { operator: lease.operatorAuthority, assertCurrent: lease.assertSourceCurrent };
+}
+
 /** Recovery-only lease for the already-created native pre-tool policy callback. */
 export function retainAdmittedRunBeforeToolCallRecovery(
   context: AdmittedRunContext,

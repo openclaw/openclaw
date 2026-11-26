@@ -173,6 +173,7 @@ export function createClient() {
       fixture.notify(factory(...args));
   return {
     client: fixture.client,
+    handleServerRequest: fixture.handleServerRequest,
     request: fixture.request,
     setLoadedThreads(threadIds: readonly string[]) {
       loadedThreads = [...threadIds];

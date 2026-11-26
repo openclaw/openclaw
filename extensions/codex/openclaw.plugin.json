@@ -141,7 +141,7 @@
       "id": "dynamic-tools",
       "title": "Dynamic tools",
       "order": 10,
-      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude"]
+      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude", "nativeChildTools"]
     },
     {
       "id": "native-sessions",
@@ -187,6 +187,14 @@
         "type": "array",
         "items": { "type": "string" },
         "default": []
+      },
+      "nativeChildTools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allow": { "type": "array", "items": { "type": "string", "pattern": "\\S" } },
+          "deny": { "type": "array", "items": { "type": "string", "pattern": "\\S" } }
+        }
       },
       "sessionCatalog": {
         "type": "object",
@@ -548,6 +556,19 @@
       "label": "Dynamic Tool Excludes",
       "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
       "advanced": true
+    },
+    "nativeChildTools": {
+      "label": "Native Child Host Tools",
+      "help": "Delegate selected OpenClaw tools to native Codex children under the owning OpenClaw session's authority, not the child's native sandbox. Omit the allowlist or leave it empty to disable.",
+      "advanced": true
+    },
+    "nativeChildTools.allow": {
+      "label": "Allowed Native Child Host Tools",
+      "help": "Canonical tool names or anchored * patterns. Wildcards can grant newly matching host tools after a plugin or server update."
+    },
+    "nativeChildTools.deny": {
+      "label": "Denied Native Child Host Tools",
+      "help": "Canonical tool names or * patterns excluded even when they match an allow entry."
     },
     "discovery": {
       "label": "Model Discovery",

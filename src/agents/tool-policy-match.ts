@@ -11,6 +11,12 @@ import {
   readToolAllowlistIntersection,
 } from "./tool-policy-shared.js";
 
+/** Canonical tool names only: no tool groups, plugin IDs, or implied sibling grants. */
+export function createToolNamePatternMatcher(pattern: string): (name: string) => boolean {
+  const compiled = compileGlobPatterns({ raw: [pattern], normalize: normalizeToolPolicyName });
+  return (name) => matchesAnyGlobPattern(normalizeToolPolicyName(name), compiled);
+}
+
 /** Exclude a server before discovery only when every tool in its namespace is denied. */
 export function createMcpServerToolDenyMatcher(toolDenylist?: string[]) {
   const denials = toolDenylist?.map(normalizeToolPolicyName) ?? [];

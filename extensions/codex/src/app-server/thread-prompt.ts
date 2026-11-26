@@ -252,6 +252,7 @@ export function buildCodexConversationTurnInstructions(
 export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
   options: {
+    nativeChildToolNames?: readonly string[];
     dynamicTools?: readonly CodexDynamicToolSpec[];
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
@@ -344,10 +345,10 @@ export function buildDeveloperInstructions(
       : undefined,
     deferredToolDiscoveryGuidance,
     policyInDeveloperCarrier ? listToolPromptGuidance(toolNames.keys()).join("\n\n") : undefined,
-    // Deferred native tools still need discovery. Inherited dynamic schemas do
-    // not give native children OpenClaw executors, so choose that owner up front.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for work that only needs Codex-native tools. \`spawn_agent\` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas.${managedDelegationTool ? ` For new delegated work that needs OpenClaw tools, use ${managedDelegationTool} from the start.` : " Keep work needing OpenClaw tools in this session when no managed worker route is available."} For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.`
+      ? options.nativeChildToolNames?.length
+        ? `Use native \`spawn_agent\` for Codex-native work and for work using these delegated OpenClaw host tools: ${options.nativeChildToolNames.join(", ")}. Only directly owned children with a retained requester can use the grant. Other inherited schemas do not grant access. Calls use OpenClaw host permissions, not the child's native sandbox; host restrictions still apply.${managedDelegationTool ? ` Use ${managedDelegationTool} for new work needing other OpenClaw tools.` : " Keep work needing other OpenClaw tools in this session."} Use native collaboration for follow-up work on an existing native child.`
+        : `Use Codex native \`spawn_agent\` for work that only needs Codex-native tools. \`spawn_agent\` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas.${managedDelegationTool ? ` For new delegated work that needs OpenClaw tools, use ${managedDelegationTool} from the start.` : " Keep work needing OpenClaw tools in this session when no managed worker route is available."} For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
@@ -362,7 +363,7 @@ export function buildDeveloperInstructions(
           // Subagent/none prompt modes stay lean and must not be told to delegate further.
           isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
           hiddenDelegationTool: nativeDelegationAvailable
-            ? `native \`spawn_agent\` for Codex-native work${managedDelegationTool ? `, or ${managedDelegationTool} for new work needing OpenClaw tools` : ""}`
+            ? `native \`spawn_agent\` for Codex-native work${options.nativeChildToolNames?.length ? " or delegated host tools" : ""}${managedDelegationTool ? `, or ${managedDelegationTool} for new work needing ${options.nativeChildToolNames?.length ? "other " : ""}OpenClaw tools` : ""}`
             : sessionsSpawnTool
               ? (managedDelegationTool ?? `\`${sessionsSpawnTool.name}\``)
               : "",

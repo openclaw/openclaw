@@ -16,6 +16,10 @@ import type {
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
+export {
+  runWithCodexNativeChildToolHost,
+  retainCodexNativeChildToolSource,
+} from "../agents/harness/native-child-tool-bindings.js";
 export { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 export { resolveBootstrapFilesForPreparation } from "../agents/bootstrap-files.js";
 export { loadCodexBundleMcpApprovalConfig } from "../agents/codex-mcp-config.js";

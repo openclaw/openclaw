@@ -44,6 +44,7 @@ export function createNativeModelSourceOwner(
   state: ParentState,
   assertCurrent: () => void,
   onReleased: () => void,
+  releaseToolPolicy?: () => void,
 ): NativeModelSourceOwner {
   let references = 1;
   let foregroundReleased = false;
@@ -60,7 +61,11 @@ export function createNativeModelSourceOwner(
     state.modelSourceReferences = (state.modelSourceReferences ?? 1) - 1;
     try {
       if (references === 0) {
-        source?.release();
+        try {
+          releaseToolPolicy?.();
+        } finally {
+          source?.release();
+        }
       }
     } finally {
       onReleased();
@@ -210,6 +215,7 @@ export function releaseNativeModelExecution(child: ChildState): void {
   const execution = child.modelExecution;
   child.modelExecution = undefined;
   if (execution) {
+    child.toolTurn?.controller.abort();
     if (execution.executionOwner.modelExecutionCancelled) {
       child.cancelledModelTurnId = execution.executionOwner.turnId;
     }
@@ -220,6 +226,7 @@ export function releaseNativeModelExecution(child: ChildState): void {
 }
 
 export function releaseNativeDirectChild(child: ChildState): void {
+  child.toolTurn?.controller.abort();
   const release = child.releaseDirectChild;
   child.releaseDirectChild = undefined;
   child.directOwner = undefined;

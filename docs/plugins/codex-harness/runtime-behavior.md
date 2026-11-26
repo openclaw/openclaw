@@ -89,8 +89,9 @@ credentials. Side questions use reasoning capabilities from their selected model
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
 direct because they are turn-control or delegation contracts. Guidance uses
-Codex's native `spawn_agent` for work using only Codex-native tools. New work
-requiring OpenClaw tools goes through the available managed `sessions_spawn`
+Codex's native `spawn_agent` for work using native tools or explicitly delegated
+[host tools](/plugins/codex-harness-reference/dynamic-tools#native-child-host-tools).
+New work requiring other OpenClaw tools goes through the available managed `sessions_spawn`
 route from the start; existing native children stay with native collaboration.
 See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
 selection. In Codex Code Mode, generic OpenClaw

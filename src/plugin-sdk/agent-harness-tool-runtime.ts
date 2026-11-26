@@ -5,6 +5,8 @@ import { isLocalModelLeanEnabled } from "../agents/local-model-lean.js";
 import { withLegacySessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store-legacy.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
+export { isKnownCoreToolId } from "../agents/core-tool-facts.js";
+export { createToolNamePatternMatcher } from "../agents/tool-policy-match.js";
 export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 export { normalizeAgentToolResultMiddlewareRuntimeIds } from "../plugins/agent-tool-result-middleware.js";
 export {

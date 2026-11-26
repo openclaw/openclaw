@@ -14,13 +14,14 @@ Supported `plugins.entries.codex.config` fields and their defaults. Part of the 
 
 Supported top-level Codex plugin fields:
 
-| Field                      | Default        | Meaning                                                                                  |
-| -------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
-| `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
-| `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
-| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
-| `sessionCatalog`           | enabled        | Sidebar discovery for native Codex sessions on this Gateway and eligible paired nodes.   |
-| `supervision`              | disabled       | Agent-facing native-session transcript and write-control policy.                         |
+| Field                      | Default        | Meaning                                                                                                         |
+| -------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
+| `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                        |
+| `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                     |
+| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.                                  |
+| `nativeChildTools`         | no grants      | [Host tool grants for native children](/plugins/codex-harness-reference/dynamic-tools#native-child-host-tools). |
+| `sessionCatalog`           | enabled        | Sidebar discovery for native Codex sessions on this Gateway and eligible paired nodes.                          |
+| `supervision`              | disabled       | Agent-facing native-session transcript and write-control policy.                                                |
 
 Supported `appServer` fields:
 

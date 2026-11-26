@@ -11,7 +11,13 @@ export function readWebchatMcpRequester(run: {
   sessionKey?: string;
 }): WebchatMcpRequester | undefined {
   const caller = getGatewayToolCallerIdentity();
-  return caller?.sessionKey === run.sessionKey ? caller?.webchatMcpRequester : undefined;
+  const requester = caller?.webchatMcpRequester;
+  return caller &&
+    requester &&
+    (caller.sessionKey === run.sessionKey ||
+      (requester.connectionSessionKey && requester.connectionSessionKey === run.sessionKey))
+    ? requester
+    : undefined;
 }
 
 /** Only the host's prepared tool-authority scope can supply these admission facts. */

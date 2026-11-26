@@ -41,6 +41,7 @@ export type NativeParentRegistration = Pick<
     | "requesterTurnRunId"
     | "requestCustody"
     | "cancelChildProcesses"
+    | "executeDynamicTool"
     | "claimDirectChild"
     | "rejectPendingDirectChild"
     | "onDirectChildAccepted"
@@ -49,6 +50,7 @@ export type NativeParentRegistration = Pick<
   > & {
     /** Explicit undefined records System; omission leaves model custody unknown. */
     modelSource?: NativeModelSource;
+    retainDynamicToolPolicy?: () => () => void;
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
     unqualifiedModelExecution?: true;
@@ -165,6 +167,7 @@ export async function registerNativeSubagentParent(
   let owner: ParentOwner = {
     requestCustody: params.requestCustody,
     cancelChildProcesses: params.cancelChildProcesses,
+    executeDynamicTool: params.executeDynamicTool,
     requesterAgentId: params.agentId,
     requesterSessionKey: params.requesterSessionKey,
     requesterTurnRunId: params.requesterTurnRunId,
@@ -230,6 +233,9 @@ export async function registerNativeSubagentParent(
           }
         },
         () => dependencies.prune(registeredState),
+        params.modelSource && params.executeDynamicTool
+          ? params.retainDynamicToolPolicy?.()
+          : undefined,
       );
     }
     if (owner.unqualifiedModelExecution && params.modelSource) {
