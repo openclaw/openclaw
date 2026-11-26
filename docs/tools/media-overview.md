@@ -64,7 +64,8 @@ default workspace is elsewhere.
 Workspace-only access follows the session's approved filesystem root, which can
 include parent directories of the current working directory. Host tools can also
 read the Gateway's media store, including browser screenshots and staged inbound
-attachments. Paths and symlinks outside these roots are rejected. Sandboxed tools
+attachments. Unless `tools.fs.workspaceOnly` is `true`, they can also open host
+files that `read` can open. Other paths and symlinks outside these roots are rejected. Sandboxed tools
 read through the sandbox filesystem; selecting a host worktree does not grant
 access outside the sandbox.
 

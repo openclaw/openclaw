@@ -107,6 +107,18 @@ it("loads Gateway media with workspace-only access while rejecting outside files
   }
 });
 
+it("loads host images outside the workspace when no fsPolicy is passed and tools.fs is unrestricted", async () => {
+  const workspaceDir = tempDirs.make("openclaw-media-workspace-");
+  const outsidePath = path.join(tempDirs.make("openclaw-media-outside-"), "photo.png");
+  await fs.writeFile(outsidePath, png);
+  await expectLoadedImage(createMediaTool("view_image", { workspaceDir }), outsidePath);
+  const restricted = createMediaTool("view_image", {
+    workspaceDir,
+    config: { plugins: { enabled: false }, tools: { fs: { workspaceOnly: true } } },
+  });
+  await expectOutside(restricted.execute("outside-image", { path: outsidePath }));
+});
+
 it("loads session-worktree images with workspaceOnly=true", async () => {
   const { outsidePath, options } = await sessionFiles("shared.png");
   const imagePath = path.join(options.cwd, "screenshot.png");
@@ -213,7 +225,10 @@ it.runIf(process.platform !== "win32")(
     const workspaceDir = path.join(aliasState, "workspace");
     await fs.writeFile(path.join(workspaceDir, "photo.png"), png);
     await fs.writeFile(path.join(base, "secret.png"), png);
-    const tool = createMediaTool("view_image", { workspaceDir });
+    const tool = createMediaTool("view_image", {
+      workspaceDir,
+      fsPolicy: { workspaceOnly: true, root: workspaceDir },
+    });
 
     await expectLoadedImage(tool, path.join(workspaceDir, "photo.png"));
     const missing = tool.execute("missing", {

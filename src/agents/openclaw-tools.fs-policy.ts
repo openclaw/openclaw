@@ -13,7 +13,7 @@ export function resolveCapturedOpenClawToolsFsPolicy(
     "fsPolicy" | "config" | "sessionPermissionPolicy" | "runSessionKey" | "agentSessionKey"
   >,
   sessionAgentId: string,
-): ToolFsPolicy | undefined {
+): ToolFsPolicy {
   return (
     options.fsPolicy ??
     resolveOpenClawToolsFsPolicy({
