@@ -1,6 +1,9 @@
 import { resolve } from "node:path";
-import type { CopilotSession, SessionConfig } from "@github/copilot-sdk";
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CopilotSession, MessageOptions, SessionConfig } from "@github/copilot-sdk";
+import type {
+  AgentHarness,
+  AgentHarnessSideQuestionRequest,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
@@ -116,6 +119,10 @@ async function awaitWithinCompletionBoundary<T>(params: {
 export async function runCopilotIsolatedCompletion(
   params: AgentHarnessIsolatedCompletionParams,
   getPool: () => Promise<CopilotClientPool>,
+  message?: AgentHarnessSideQuestionRequest,
+  prepareRequest?: (
+    request: AgentHarnessSideQuestionRequest,
+  ) => Promise<AgentHarnessSideQuestionRequest>,
 ): Promise<AgentHarnessIsolatedCompletionResult> {
   const reasoningEffort = resolveReasoningEffort(params.thinkLevel);
   if (params.thinkLevel !== undefined && reasoningEffort === undefined) {
@@ -230,12 +237,31 @@ export async function runCopilotIsolatedCompletion(
       boundary,
       start: () => createdSession.rpc.remote.disable(),
     });
+    let request = message ?? { prompt: params.prompt };
+    if (prepareRequest) {
+      request = await awaitWithinCompletionBoundary({
+        boundary,
+        start: () => prepareRequest(request),
+      });
+    }
+    const attachments: MessageOptions["attachments"] = request.images?.map((image) => ({
+      type: "blob",
+      data: image.data,
+      mimeType: image.mimeType,
+      ...(image.displayName !== undefined ? { displayName: image.displayName } : {}),
+    }));
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,
       start: (remainingMs) =>
         createdSession.sendAndWait(
-          { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
+          {
+            prompt: [request.prependContext, request.prompt, request.appendContext]
+              .filter((part): part is string => part !== undefined)
+              .join("\n\n"),
+            ...(attachments?.length ? { attachments } : {}),
+            ...(requestHeaders ? { requestHeaders } : {}),
+          },
           remainingMs,
         ),
       onBoundary: () => {
