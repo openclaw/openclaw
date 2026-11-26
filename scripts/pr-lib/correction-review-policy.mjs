@@ -29,8 +29,21 @@ function proofPublication(review, findings, head, source, binding, reviewOid) {
     proof.workflowSource !== source ||
     ![source, binding, proof.workflowBinding, proof.expectedHostedHead].every(oid)
   ) {
+    const diagnosticOid = (value) => (oid(value) && value.length === 40 ? value : null);
+    // Fixed keys and six OID-or-null values keep the UTF-8 record below 512 bytes.
+    const diagnostic = {
+      schema: "openclaw.pr-proof-rejection.v1",
+      selectedWorkflow: diagnosticOid(source),
+      reviewedWorkflow: diagnosticOid(proof?.workflowSource),
+      reviewBlob: diagnosticOid(reviewOid),
+      candidateHead: diagnosticOid(head),
+      selectedBinding: diagnosticOid(binding),
+      reviewedBinding: diagnosticOid(proof?.workflowBinding),
+    };
     throw new Error(
-      "Proof publication requires an exact typed candidate and workflow authorization.",
+      "Proof publication requires an exact typed candidate and workflow authorization.\n" +
+        "PR_PROOF_REJECTION " +
+        JSON.stringify(diagnostic),
     );
   }
   // A successor retains the old binding and this exact review. Binding the new
