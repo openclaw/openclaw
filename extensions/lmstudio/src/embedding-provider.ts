@@ -219,6 +219,7 @@ export async function createLmstudioEmbeddingProvider(
     }
   };
 
+  let maxInputTokens: number | undefined;
   const preloadPermits = createPermitPool(1);
   const preloadModel = async (
     signal?: AbortSignal,
@@ -247,6 +248,9 @@ export async function createLmstudioEmbeddingProvider(
         });
         if (initializeIdentity) {
           client.model = prepared.modelKey;
+          // LM Studio can return a vector after truncating text. Leave room for tokenizer
+          // framing when the indexer splits documents for the prepared context.
+          maxInputTokens = Math.max(1, prepared.contextLength - 4);
         }
         return prepared;
       } catch (error) {
@@ -350,6 +354,7 @@ export async function createLmstudioEmbeddingProvider(
   };
   const provider: MemoryEmbeddingProvider = {
     ...remoteProvider,
+    maxInputTokens,
     embed,
     embedBatch,
   };

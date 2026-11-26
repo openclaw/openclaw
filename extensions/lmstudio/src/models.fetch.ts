@@ -217,6 +217,7 @@ type LmstudioModelLoadParams = {
 
 export type LmstudioPreparedModel = {
   modelKey: string;
+  contextLength: number;
   instanceId?: string;
 };
 
@@ -276,7 +277,11 @@ export async function prepareLmstudioModelForInference(
         entry.id.trim().length > 0 &&
         (asPositiveSafeInteger(entry.config?.context_length) ?? 0) >= contextLengthForLoad,
     );
-    return { modelKey: canonicalModelKey, instanceId: instance?.id?.trim() };
+    return {
+      modelKey: canonicalModelKey,
+      contextLength: contextLengthForLoad,
+      instanceId: instance?.id?.trim(),
+    };
   }
 
   try {
@@ -328,6 +333,7 @@ export async function prepareLmstudioModelForInference(
       }
       return {
         modelKey: canonicalModelKey,
+        contextLength: contextLengthForLoad,
         instanceId:
           typeof payload.instance_id === "string"
             ? payload.instance_id.trim() || undefined

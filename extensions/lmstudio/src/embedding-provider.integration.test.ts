@@ -77,6 +77,7 @@ it.each([
       },
     );
 
+    expect(provider.maxInputTokens).toBeUndefined();
     const result = provider.embed("hello", { inputType: "query" });
     await expect(result).resolves.toEqual([0.25, 0.5, 0.75]);
     expect(acquireLocalService).not.toHaveBeenCalled();
@@ -153,7 +154,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               maxTokens: 0,
-              contextTokens: 2048,
+              contextTokens: 4096,
             },
           ],
         },
@@ -170,6 +171,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
         },
       );
       expect(leases).toBe(0);
+      expect(provider.maxInputTokens).toBe(2044);
       await expect(provider.embed("first")).resolves.toEqual([1, 0]);
       expect(requests).not.toContain("/api/v1/models/load");
       loaded = false;
