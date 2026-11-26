@@ -38,6 +38,7 @@ import {
   abortedPartialPersistenceError,
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
+import { appendCaptionUsage, findAssistantCaptionBlocks } from "./chat-assistant-caption.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -107,6 +108,7 @@ export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   managedMediaUrls?: readonly string[];
   retainOriginalText?: true;
 }): Record<string, unknown> {
@@ -172,19 +174,16 @@ export function buildAssistantDisplayRewrite(params: {
   );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
-  const matchingCaptions =
+  const captions =
     params.mediaBySource?.size && joinedCaption
-      ? prepared.content.filter((block) => {
-          const caption =
-            block.type === "text" && typeof block.text === "string"
-              ? sanitizeAssistantDisplayText(block.text)
-              : undefined;
-          return (
-            caption === joinedCaption ||
-            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
-          );
+      ? findAssistantCaptionBlocks({
+          content: prepared.content,
+          caption: joinedCaption,
+          nativeMirror,
+          usageLine: params.responseUsageLine,
         })
-      : [];
+      : { blocks: [], usage: "" };
+  const matchingCaptions = captions.blocks;
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
   let inCommentary = false;
@@ -271,6 +270,7 @@ export function buildAssistantDisplayRewrite(params: {
       content.push({ ...block, text: "" });
     }
   }
+  appendCaptionUsage(content, captions.usage);
   for (const block of prepared.content) {
     if (
       block.type === "text" &&
@@ -605,6 +605,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
@@ -626,6 +627,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
               message: target.message,
               displayContent: params.content,
               mediaBySource: params.mediaBySource,
+              responseUsageLine: params.responseUsageLine,
               managedMediaUrls: params.managedMediaUrls,
             }),
           })
@@ -641,6 +643,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   assistantMessageIndex: number;
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
   rejectedMediaCount: number;
@@ -671,6 +674,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
         message: target.message,
         displayContent: params.content,
         mediaBySource: params.mediaBySource,
+        responseUsageLine: params.responseUsageLine,
         managedMediaUrls: params.mediaUrls,
         // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
         retainOriginalText: true,
@@ -694,6 +698,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
 export async function enrichAssistantTranscriptMediaForRun(params: {
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   mediaUrls: readonly string[];
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
@@ -710,6 +715,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
         message,
         displayContent: params.content,
         mediaBySource: params.mediaBySource,
+        responseUsageLine: params.responseUsageLine,
         managedMediaUrls: params.mediaUrls,
         retainOriginalText: true,
       }),

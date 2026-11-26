@@ -17,12 +17,13 @@ const PROJECT_ONLY_INSTALL_SCRIPTS = [
 
 export async function preparePackage(params: {
   spec: string;
+  archivePath?: string;
   staging: string;
   npm: string[];
   node: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
-  onStep?: (name: string) => void | Promise<void>;
+  onStep?: (name: string, status: "in_progress" | "completed") => void | Promise<void>;
 }): Promise<PrepareResult> {
   const releaseRoot = path.join(params.staging, "openclaw");
   const deadline = Date.now() + params.timeoutMs;
@@ -39,28 +40,31 @@ export async function preparePackage(params: {
   let reason = "package-install-failed";
   try {
     await fs.mkdir(params.staging, { recursive: true });
-    await params.onStep?.("pack");
-    const packed = await runCommandWithTimeout(
-      [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
-      {
-        cwd: params.staging,
-        baseEnv: env,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        killProcessTree: true,
-      },
-    );
-    if (packed.code !== 0 || packed.killed || packed.signal) {
-      throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
+    await params.onStep?.("pack", "in_progress");
+    let archivePath = params.archivePath;
+    if (!archivePath) {
+      const packed = await runCommandWithTimeout(
+        [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
+        {
+          cwd: params.staging,
+          baseEnv: env,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          killProcessTree: true,
+        },
+      );
+      if (packed.code !== 0 || packed.killed || packed.signal) {
+        throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
+      }
+      // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
+      const packages = (await fs.readdir(params.staging, { withFileTypes: true })).filter(
+        (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
+      );
+      const archive = packages[0];
+      if (packages.length !== 1 || !archive) {
+        throw new Error("npm pack did not produce one package archive.");
+      }
+      archivePath = path.join(params.staging, archive.name);
     }
-    // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
-    const packages = (await fs.readdir(params.staging, { withFileTypes: true })).filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
-    );
-    const archive = packages[0];
-    if (packages.length !== 1 || !archive) {
-      throw new Error("npm pack did not produce one package archive.");
-    }
-    const archivePath = path.join(params.staging, archive.name);
     await fs.mkdir(releaseRoot);
     await extractArchive({
       archivePath,
@@ -72,6 +76,7 @@ export async function preparePackage(params: {
       durable: false,
     });
     await fs.rm(archivePath);
+    await params.onStep?.("pack", "completed");
     const manifestPath = path.join(releaseRoot, "package.json");
     const manifest: {
       name?: string;
@@ -124,7 +129,7 @@ export async function preparePackage(params: {
     }
     // Bun also imports checkout workspaces from pnpm's configuration.
     await fs.rm(path.join(releaseRoot, "pnpm-workspace.yaml"), { force: true });
-    await params.onStep?.("install");
+    await params.onStep?.("install", "in_progress");
     // Bun rejects --production with --trust; this manifest already has no development dependencies.
     const result = await runCommandWithTimeout(
       bun
@@ -149,6 +154,7 @@ export async function preparePackage(params: {
         result.stderr || result.stdout || `${bun ? "bun" : "npm"} exited ${result.code}`,
       );
     }
+    await params.onStep?.("install", "completed");
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {

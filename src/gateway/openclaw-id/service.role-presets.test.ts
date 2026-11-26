@@ -83,7 +83,7 @@ describe("OpenClaw ID member role preset activation", () => {
     await f.service.reconcileRuntimePolicy();
     expect((await f.read()).gateway?.roles).toEqual({
       ...roles,
-      definitions: { ...roles.definitions, viewer: presets.viewer },
+      definitions: { ...roles.definitions, admin: presets.admin, viewer: presets.viewer },
     });
     const seeded = await f.read();
     await f.save({ ...seeded, gateway: { ...seeded.gateway, openclawId: { enabled: false } } });

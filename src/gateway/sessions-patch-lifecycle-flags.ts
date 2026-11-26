@@ -1,8 +1,30 @@
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
+import { SessionsPatchMutationSchema } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
+
+export function preservesSessionRecency(patch: SessionsPatchParams): boolean {
+  // Target and compare-and-swap fields in a guarded batch are not mutations.
+  const fields = Object.entries(patch)
+    .filter(
+      ([key, value]) =>
+        value !== undefined && Object.hasOwn(SessionsPatchMutationSchema.properties, key),
+    )
+    .map(([key]) => key);
+  if (fields.length === 1) {
+    const [field] = fields;
+    if (
+      field === "unread" ||
+      field === "pinned" ||
+      (field === "archived" && patch.archived === true)
+    ) {
+      return true;
+    }
+  }
+  return fields.length > 0 && fields.every((field) => field === "icon" || field === "color");
+}
 
 export function applySessionPatchLifecycleFlags(params: {
   patch: SessionsPatchParams;

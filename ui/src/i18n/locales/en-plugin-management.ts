@@ -171,7 +171,7 @@ const enPluginManagement = {
       installContinue: "Install and continue",
     },
     compatibilityDeprecatedDated:
-      "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+      "Uses older OpenClaw APIs. Migration date: {date}. Check for a plugin update.",
     compatibilityDeprecatedUndated:
       "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
     compatibilityDetails: "Details",
@@ -569,6 +569,11 @@ const enPluginManagement = {
     removeConfirmTitle: "Remove {name}?",
     removeConfirmMessage:
       "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
+    removeDefaultModelWarning:
+      "Your default model, {model}, will stay selected but won’t be available after removal. Choose another model in Models first.",
+    removeModelCheckUnavailable:
+      "Could not check whether your default model uses this plugin. Removing it may make that model unavailable. Your saved model selection will not change; open Models to review it first.",
+    chooseAnotherModel: "Choose another model",
     cancel: "Cancel",
     reload: "Reload",
     installSaved: "Installation of {name} was saved. {error}",

@@ -117,6 +117,23 @@ describe("sessions.usage result cache and owner attribution", () => {
 
   afterEach(() => vi.useRealTimers().restoreAllMocks());
 
+  it("reuses a detail snapshot when adding a sort and page offset", async () => {
+    const query = fixture(
+      [
+        { sessionId: "recent", updatedAt: 200 },
+        { sessionId: "heavy", updatedAt: 100 },
+      ],
+      { recent: 1, heavy: 9 },
+    );
+
+    expect((await query()).sessions.map(({ sessionId }) => sessionId)).toEqual(["recent"]);
+    const page = await query({ sort: "tokens", sortDirection: "asc", offset: 1 });
+    expect(page.sessions.map(({ sessionId }) => sessionId)).toEqual(["heavy"]);
+    expect(page.totals.totalTokens).toBe(10);
+    expect(page.overview?.total).toBe(2);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["detail", "overview"] as const)(
     "%s usage follows invited membership and drops a revoked source",
     async (projectionKind) => {

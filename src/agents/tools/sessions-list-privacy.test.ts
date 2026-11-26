@@ -315,7 +315,7 @@ test.each([
         };
         const options = {
           callGateway,
-          supportsActiveOnly: !embedded,
+          gatewayBacked: !embedded,
           requireSessionReadOwner: embedded,
         };
         const invoke = () => list(cfg, args, options);

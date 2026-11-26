@@ -40,7 +40,6 @@ function steeringRequester() {
     profileId: "steering-requester",
     scopes: ["operator.read", "operator.write"],
     source: {},
-    assertCurrent() {},
   });
 }
 

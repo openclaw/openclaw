@@ -122,7 +122,7 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importO
 }));
 
 const announceSpy = vi.fn(
-  async (_params: unknown): Promise<"delivered" | "retryable"> => "delivered",
+  async (_params: unknown): Promise<"delivered" | "undelivered"> => "delivered",
 );
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.hoisted(() => vi.fn());
@@ -254,7 +254,7 @@ describe("subagent registry steer restarts", () => {
 
   const createDeferredAnnounce = () => {
     const entered = createDeferred();
-    const delivery = createDeferred<"delivered" | "retryable">();
+    const delivery = createDeferred<"delivered" | "undelivered">();
     announceSpy.mockImplementationOnce(() => {
       entered.resolve();
       return delivery.promise;
@@ -668,7 +668,7 @@ describe("subagent registry steer restarts", () => {
       const typed = params as { childRunId?: string };
       if (typed.childRunId === "run-parent") {
         parentAttempts += 1;
-        return parentAttempts >= 2 ? "delivered" : "retryable";
+        return parentAttempts >= 2 ? "delivered" : "undelivered";
       }
       return "delivered";
     });

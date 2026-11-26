@@ -16,6 +16,12 @@ Keep the raw video as evidence, attach the polished MP4, and never commit media 
 `.artifacts/` output. Inspect the entire capture for unrelated or private content
 before publishing under the PR's existing authorization.
 
+For added or changed errors, empty states, and loading states, follow the
+[state capture gate](../openclaw-pr-maintainer/references/media.md#error-empty-and-loading-states).
+Capture every changed state, including real-channel link forms when applicable.
+Use stills when they prove the state. Record transitions when motion is the claim.
+Copy-only ellipsis removal does not authorize adding loading animation.
+
 ## Point out the claim
 
 For target selection, native/web geometry, and inspection, read

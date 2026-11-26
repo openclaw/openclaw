@@ -8,6 +8,8 @@ import {
 import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -23,7 +25,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import {
   resolveDirectStoredModelOverride,
-  resolveStoredModelOverrideCore,
+  resolveStoredModelOverrideCoreAsync,
 } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
@@ -42,6 +44,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveNativeModelPrimary,
+  resolveSessionAgentId,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
@@ -269,8 +272,26 @@ export async function resolveEmbeddedModelSelection(params: {
 
   const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? null
-    : resolveStoredModelOverrideCore({
+    : await resolveStoredModelOverrideCoreAsync({
         sessionEntry,
+        // A prepared command store holds only this session, so its parent's pick is read
+        // on demand. A complete one-off override never consults the inherited pick.
+        loadSessionEntry:
+          explicitProviderOverride && explicitModelOverride
+            ? undefined
+            : (parentKey) => {
+                const agentId = resolveSessionAgentId({
+                  sessionKey: parentKey,
+                  config: params.cfg,
+                  fallbackAgentId: params.sessionAgentId,
+                });
+                return readSessionEntryReadOnlyInWorker({
+                  agentId,
+                  storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+                  sessionKey: parentKey,
+                  readConsistency: "latest",
+                });
+              },
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         parentSessionKey: sessionEntry?.parentSessionKey,

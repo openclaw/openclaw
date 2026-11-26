@@ -105,6 +105,13 @@ export interface StreamOptions {
   /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
   promptCacheTtl?: "30m" | "12h";
   /**
+   * Read the prompt into the provider's prompt cache without generating output:
+   * Anthropic Messages `max_tokens: 0`, OpenAI Responses `prompt_cache_options.prewarm`.
+   * The rest of the request is unchanged, so it reads and refreshes the cached prefix.
+   * Only those two transports honor it; callers send it only on such a route.
+   */
+  cachePrewarm?: true;
+  /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
    * session-aware features. Ignored by providers that don't support it.
@@ -399,6 +406,8 @@ export interface UserMessage {
   runtimeContextCarrierRetained?: boolean;
   /** Operator-authored text projected to system authority on capable routes. */
   operatorMessage?: { turnScoped: boolean };
+  /** `false`: sent once and never replayed, so transports place no prompt-cache checkpoint on it. */
+  cacheCheckpoint?: false;
 }
 
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";

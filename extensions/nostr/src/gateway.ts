@@ -1,9 +1,7 @@
-import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import type {
   ChannelGatewayContext,
   ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
@@ -18,6 +16,7 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { normalizeNostrAllowEntry, nostrIngressIdentity } from "./ingress-identity.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -44,33 +43,6 @@ function projectNostrText(text: string, cfg: OpenClawConfig, accountId?: string 
     : "";
 }
 
-function normalizeNostrAllowEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  const accessGroup = parseAccessGroupAllowFromEntry(trimmed);
-  if (accessGroup) {
-    return `accessGroup:${accessGroup}`;
-  }
-  try {
-    return normalizePubkey(trimmed.replace(/^nostr:/i, ""));
-  } catch {
-    return null;
-  }
-}
-
-function normalizeNostrSenderPubkey(value: string): string | null {
-  try {
-    return normalizePubkey(value);
-  } catch {
-    return null;
-  }
-}
-
 function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | undefined {
   if (account.config.dmPolicy !== "allowlist" || !account.config.allowFrom?.length) {
     return undefined;
@@ -89,14 +61,6 @@ function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | unde
   }
   return [...new Set(pubkeys)];
 }
-
-const nostrIngressIdentity = {
-  key: "nostr-pubkey",
-  normalizeEntry: normalizeNostrAllowEntry,
-  normalizeSubject: normalizeNostrSenderPubkey,
-  sensitivity: "pii",
-  entryIdPrefix: "nostr-entry",
-} satisfies StableChannelIngressIdentityParams;
 
 export async function startNostrGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedNostrAccount>,

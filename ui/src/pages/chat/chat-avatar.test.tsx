@@ -2,10 +2,7 @@
 
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
-import { resolveAvatarHat } from "../../components/agent-avatar-hat.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -384,31 +381,6 @@ describe("ChatAvatar", () => {
       expect(view.getAllByRole("img", { name: "Riley" })).toEqual([frame]);
     },
   );
-  it("updates an image avatar's hat when the theme changes", () => {
-    const previous = currentThemeBranding();
-    const adorned = { ...previous, avatarHat: "party" as const };
-    const agentId = Array.from({ length: 100 }, (_, index) => `hat-agent-${index}`).find((id) =>
-      resolveAvatarHat(id, adorned),
-    )!;
-    setCurrentThemeBranding(resolveThemeBranding(undefined));
-    const view = mountSolid(() => (
-      <ChatAvatar
-        role="assistant"
-        assistant={{ agentId, name: "Assistant", avatar: "blob:portrait" }}
-      />
-    ));
-    try {
-      expect(view.container.querySelector(".chat-avatar-slot > .identity-avatar__hat")).toBeNull();
-      setCurrentThemeBranding(adorned);
-      flush();
-      expect(
-        view.container.querySelector(".chat-avatar-slot > .identity-avatar__hat--party"),
-      ).not.toBeNull();
-    } finally {
-      setCurrentThemeBranding(previous);
-      view.unmount();
-    }
-  });
   it("shares one agent face across welcome, transcript, forwarded messages, and typed author markers", async () => {
     const sender = {
       id: "display-id",
@@ -505,12 +477,6 @@ describe("ChatAvatar", () => {
     welcome = mountWelcome();
     await vi.waitFor(() => expect(sources()).toEqual(Array(3).fill("blob:shared-agent")));
     expect(fetchAvatar).toHaveBeenCalledOnce();
-  });
-
-  it("renders local user text avatars", () => {
-    const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {

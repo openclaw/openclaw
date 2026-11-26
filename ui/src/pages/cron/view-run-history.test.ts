@@ -156,8 +156,14 @@ describe("cron view run history", () => {
   it("shows empty guidance only for settled history and offers recovery after failure", async () => {
     for (const runsState of ["idle", "pending", "failed"] as const) {
       for (const runsQuery of ["", "fail"]) {
-        const onRefresh = vi.fn();
-        const container = await renderView({ runsState, runsQuery, onRefresh });
+        const onRetryRuns = vi.fn();
+        const container = await renderView({
+          runsState,
+          runsError:
+            runsState === "failed" ? { reason: "load", detail: "History unavailable" } : null,
+          runsQuery,
+          onRetryRuns,
+        });
         expect(container.textContent).not.toContain("No activity yet.");
         expect(container.textContent).not.toContain("No activity matches the current filters.");
         expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
@@ -171,18 +177,23 @@ describe("cron view run history", () => {
         );
         expect(retry !== undefined).toBe(runsState === "failed");
         retry?.click();
-        expect(onRefresh).toHaveBeenCalledTimes(runsState === "failed" ? 1 : 0);
+        expect(onRetryRuns).toHaveBeenCalledTimes(runsState === "failed" ? 1 : 0);
       }
     }
     const retained = await renderView({
       runsState: "failed",
-      error: "History unavailable",
+      runsError: { reason: "load", detail: "History unavailable" },
       runs: [createRun({ status: undefined, summary: "Previously accepted run" })],
     });
     expect(retained.querySelector(".cron-run-entry")?.textContent).toContain(
       "Previously accepted run",
     );
-    expect(retained.textContent).toContain("History unavailable");
+    expect(retained.querySelector(".cron-runs [role=alert] strong")?.textContent).toBe(
+      "Couldn’t load run history.",
+    );
+    expect(retained.querySelector(".cron-runs details:not([open]) code")?.textContent).toBe(
+      "History unavailable",
+    );
     const empty = await renderView();
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No activity yet.");
 

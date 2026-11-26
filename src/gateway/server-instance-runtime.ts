@@ -188,7 +188,6 @@ export function createGatewayInstanceRuntime(
       const operatorAuthority = dispatchOptions.operatorRunAuthority;
       if (operatorAuthority) {
         assertAdmittedRunOperatorAuthority(operatorAuthority);
-        operatorAuthority.assertCurrent();
       }
       const releaseOperatorAuthority = operatorAuthority?.retain?.();
       let delegatedToolPolicyHandoffId: string | undefined;
@@ -245,7 +244,6 @@ export function createGatewayInstanceRuntime(
             assertContextCurrent();
             dispatchOptions.signal?.throwIfAborted();
             dispatchOptions.assertAdmissionCurrent?.();
-            operatorAuthority?.assertCurrent();
           },
           executionSource: dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,

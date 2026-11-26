@@ -90,11 +90,13 @@ export function applyUpdateRunStep(
       record.status === "failed" ||
       record.status === "rolled-back") &&
     (step.status === "completed" ||
+      (step.step === "plugins" && step.status === "failed") ||
       (step.status === "skipped" && step.step === "warning:recovery-artifact-cleanup")) &&
     [
       "recovery-artifact-cleanup",
       "warning:recovery-artifact-cleanup",
       "diagnostic:recovery-artifact-cleanup",
+      "plugins",
       "post-activation doctor inspections",
       "warning:post-activation doctor inspections",
       "diagnostic:post-activation doctor inspections",

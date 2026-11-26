@@ -84,7 +84,6 @@ function operatorSource(
   return createTestOperatorAuthority({
     profileId: "compaction-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: restrictedConfig,
       policy: {},
@@ -227,7 +226,7 @@ describe("harness compaction cancellation", () => {
       const source = new AbortController();
       const sourceReleased = createDeferredCore();
       const operatorAuthority = operatorSource({
-        assertCurrent: () => source.signal.throwIfAborted(),
+        signal: source.signal,
         retain: () => {
           sourceHolds += 1;
           return () => {

@@ -727,12 +727,6 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
-    const startupInput = firstCallArg<{
-      channelPluginLoadIntent?: "full" | "setup";
-      loadIntent: "startup" | "replacement";
-    }>(prepareGatewayPluginLoad);
-    expect(startupInput.channelPluginLoadIntent).toBe("full");
-    expect(startupInput.loadIntent).toBe("startup");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );

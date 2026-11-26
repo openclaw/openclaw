@@ -175,7 +175,7 @@ test.each(["two-leases-missing", "revoked-after-open"] as const)(
       expect(transferred).toBeDefined();
       expect(Atomics.load(new Int32Array(transferred!.valid), 0)).toBe(1);
       if (proof === "revoked-after-open") {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
       }
       await expect(reclaim({ plan: plans[0]! })).resolves.toMatchObject(removedArtifact);
       expect(fullChecks()).toBe(0);
@@ -195,7 +195,7 @@ test.each(["two-leases-missing", "revoked-after-open"] as const)(
 
 test("warm Worker results cannot revive proof invalidated after a competing parent verification", async () => {
   const { database, plans } = createFixture();
-  invalidateOpenClawAgentDatabaseValidation(database.path);
+  invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
   const observed: {
     worker?: OpenClawAgentDatabaseValidation;
     parent?: OpenClawAgentDatabaseValidation;
@@ -214,7 +214,7 @@ test("warm Worker results cannot revive proof invalidated after a competing pare
   expect(observed.parent).toBeDefined();
   expect(getOpenClawAgentDatabaseValidation(database)).toBe(observed.parent);
 
-  invalidateOpenClawAgentDatabaseValidation(database.path);
+  invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
   expect(Atomics.load(new Int32Array(observed.worker!.valid), 0)).toBe(1);
   expect(Atomics.load(new Int32Array(observed.parent!.valid), 0)).toBe(0);
   await reclaim({ plan: plans[1]! });
@@ -230,7 +230,7 @@ test.each([
   async ({ cold, agentId }) => {
     const fixture = createFixture(undefined, agentId);
     const { options, database, plans, scopes } = fixture;
-    invalidateOpenClawAgentDatabaseValidation(database.path);
+    invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
     validation.admissionPath = database.path;
     const leases = observeReclamationLeaseReceipts(database);
     const spawned = observeReclamationWorkers(leases.onSpawn);
@@ -426,8 +426,8 @@ test("retains reclamation Workers across alternating databases and retires all i
 test("joins explicit Worker retirement before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
-  invalidateOpenClawAgentDatabaseValidation(first.database.path);
-  invalidateOpenClawAgentDatabaseValidation(second.database.path);
+  invalidateOpenClawAgentDatabaseValidation(first.database.path, "a maintenance write");
+  invalidateOpenClawAgentDatabaseValidation(second.database.path, "a maintenance write");
   validation.admissionPath = first.database.path;
   const closeEntered = createDeferredCore();
   let closeRetained: (() => Promise<void>) | undefined;
@@ -598,7 +598,7 @@ test.each([
   async (role, idleMs) => {
     vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue(role);
     const fixture = createFixture(["first", "second", "third"]);
-    invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
+    invalidateOpenClawAgentDatabaseValidation(fixture.database.path, "a maintenance write");
     validation.admissionPath = fixture.database.path;
     const spawned = observeReclamationWorkers();
     await reclaim({ plan: fixture.plans[0]! });

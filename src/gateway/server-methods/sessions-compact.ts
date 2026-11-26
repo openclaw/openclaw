@@ -70,10 +70,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const requestedAgentId = requestedAgent.agentId;
     const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
-    const assertRequestCurrent = () => {
-      requestAuthority.assertCurrent();
-      capturedOperator?.authority.assertCurrent();
-    };
+    const assertRequestCurrent = () => requestAuthority.assertCurrent();
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,

@@ -10,7 +10,9 @@ const FILE_BYTES = 16;
 const FORMAT_VERSION = 1;
 const RACY_CTIME_NS = -1n;
 
-function filePaths(records: ReadonlyMap<string, LocalWorkspaceManifestRecord>): string[] {
+type FileRecords = ReadonlyMap<string, Pick<LocalWorkspaceManifestRecord, "node">>;
+
+function filePaths(records: FileRecords): string[] {
   const paths: string[] = [];
   for (const { node } of records.values()) {
     if (node.type === "file") {
@@ -21,9 +23,46 @@ function filePaths(records: ReadonlyMap<string, LocalWorkspaceManifestRecord>): 
   return paths;
 }
 
+function decodeFingerprints(blob: Uint8Array, reference: string, fileCount?: number) {
+  try {
+    const bytes = resolveZstdCodec().decompress(
+      blob,
+      HEADER_BYTES + MAX_WORKSPACE_INVENTORY_ENTRIES * FILE_BYTES,
+    );
+    if (
+      bytes.length >= HEADER_BYTES &&
+      bytes.length === HEADER_BYTES + bytes.readUInt32LE(41) * FILE_BYTES &&
+      (fileCount === undefined || bytes.readUInt32LE(41) === fileCount) &&
+      bytes.readUInt8(0) === FORMAT_VERSION &&
+      bytes.subarray(9, 41).equals(Buffer.from(reference.slice("sha256:".length), "hex"))
+    ) {
+      return bytes;
+    }
+  } catch {
+    // Fingerprints are a performance hint. Corrupt or unsupported blobs must hash all files.
+  }
+  return undefined;
+}
+
+/** Btrfs cloning preserves file identities; only the device and directory-only baseline change. */
+export function rebindClonedWorkspaceFingerprints(
+  blob: Uint8Array | null | undefined,
+  manifestRef: string,
+  treeRef: string,
+  device: bigint,
+): Buffer | null {
+  const bytes = blob && decodeFingerprints(blob, manifestRef);
+  if (!bytes) {
+    return null;
+  }
+  bytes.writeBigUInt64LE(device, 1);
+  Buffer.from(treeRef.slice("sha256:".length), "hex").copy(bytes, 9);
+  return resolveZstdCodec().compress(bytes);
+}
+
 /** Fingerprints belong to one scan and projection root; tree packs never carry stat facts. */
 export function prepareLocalWorkspaceFingerprints(
-  records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
+  records: FileRecords,
   treeRef: string,
   blob: Uint8Array | null,
   scanStartedAtMs: number,
@@ -36,25 +75,7 @@ export function prepareLocalWorkspaceFingerprints(
       ? blob
       : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
   const paths = filePaths(records);
-  let decoded: Buffer | undefined;
-  if (blob) {
-    try {
-      const bytes = resolveZstdCodec().decompress(
-        blob,
-        HEADER_BYTES + MAX_WORKSPACE_INVENTORY_ENTRIES * FILE_BYTES,
-      );
-      if (
-        bytes.length === HEADER_BYTES + paths.length * FILE_BYTES &&
-        bytes.readUInt8(0) === FORMAT_VERSION &&
-        bytes.subarray(9, 41).equals(Buffer.from(treeRef.slice("sha256:".length), "hex")) &&
-        bytes.readUInt32LE(41) === paths.length
-      ) {
-        decoded = bytes;
-      }
-    } catch {
-      // Fingerprints are a performance hint. Corrupt or unsupported blobs must hash all files.
-    }
-  }
+  const decoded = blob ? decodeFingerprints(blob, treeRef, paths.length) : undefined;
   const offsets = new Map<string, number>();
   for (let index = 0; index < paths.length; index++) {
     offsets.set(paths[index]!, HEADER_BYTES + index * FILE_BYTES);
@@ -100,7 +121,7 @@ export function prepareLocalWorkspaceFingerprints(
       changed.set(entryPath, { identity, reusable });
     },
     encode(
-      currentRecords: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
+      currentRecords: FileRecords,
       currentTreeRef: string,
       invalidatedPaths?: ReadonlySet<string>,
     ) {

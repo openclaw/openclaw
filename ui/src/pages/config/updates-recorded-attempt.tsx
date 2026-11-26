@@ -155,7 +155,17 @@ export function RecordedAttempt(
               </div>
             }
           />
-          <Show when={failed() && run()?.target.installationMethod !== "ocm"}>
+          <Show
+            when={
+              failed() &&
+              run()?.target.installationMethod !== "ocm" &&
+              !(
+                run()?.verification.rollbackOutcome?.status === "succeeded" &&
+                run()?.verification.serviceRunning &&
+                run()?.verification.coreReady
+              )
+            }
+          >
             <SettingsRow
               title={t("updates.page.cliFallback")}
               description={t("updates.triage.hostHint")}

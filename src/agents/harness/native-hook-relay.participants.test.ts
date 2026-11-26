@@ -64,7 +64,6 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-    assertCurrent() {},
   });
   const admission = prepareSystemAgentRunAdmission(
     {},
