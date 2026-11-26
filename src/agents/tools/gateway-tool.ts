@@ -8,7 +8,7 @@ import type {
   UsersListResult,
   UsersSetRoleResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { readOperatorToolRunAuthority } from "../../gateway/operator-invocation-authority.js";

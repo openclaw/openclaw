@@ -39,6 +39,7 @@ import {
   createPluginReloadDiagnostics,
 } from "./server-plugin-reload-cleanup.js";
 import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
+import { reverifyReloadedPluginPayloads } from "./server-plugin-reload-quarantine.js";
 import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
@@ -207,6 +208,9 @@ export async function reloadGatewayPlugins(
           }),
         );
         await checkpoint();
+        if (params.pluginLifecycle?.reason === "reload") {
+          await reverifyReloadedPluginPayloads(requestedIds, nextMetadata, params.env);
+        }
         const activationConfig = resolveGatewayStartupPluginActivationConfig({
           runtimeConfig: params.nextConfig,
           activationSourceConfig: params.sourceConfig,

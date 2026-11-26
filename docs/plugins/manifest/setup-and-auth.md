@@ -200,6 +200,19 @@ identity, not an email or a shared workspace alone. Without that proof, a new
 OAuth account slot is created and old chat pins retain their original credential.
 API keys and static tokens reuse a slot only when their literal value matches.
 
+An OAuth auth method can also declare account actions for its saved sign-ins.
+With an optional `revoke({ profileId, credential, config, signal })` hook, Settings
+shows **Sign out on this device** (deletes the saved profile on this Gateway) and a
+disconnect action that calls `revoke` first. Resolve when the provider revoked the
+grant or it is already invalid; OpenClaw then deletes the saved profile. Throw an
+`Error` with a user-facing message when the grant may still be active: OpenClaw
+keeps the profile and shows the message with **Try again**. Honor `signal`; the
+Gateway aborts after 30 seconds. `disconnectLabel` names the action (default
+**Disconnect account**). `accountManagementUrl` (HTTPS) and
+`accountManagementLabel` (default **Manage connected apps**) add a link to the
+provider's connected-apps page. These fields are read from the loaded plugin, not
+the manifest.
+
 ## setup reference
 
 Use `setup` when setup and onboarding surfaces need cheap plugin-owned metadata before runtime loads.

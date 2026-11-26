@@ -830,7 +830,7 @@ it.skipIf(process.platform === "win32")(
         );
         expect(instance.logs()).toContain(key(0, "stream"));
         expect(instance.logs()).toContain(
-          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+          "I did not run your queued request. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role.",
         );
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);

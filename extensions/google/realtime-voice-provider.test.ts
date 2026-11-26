@@ -568,12 +568,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           ],
         },
       });
-      expect(onAudio).toHaveBeenCalledOnce();
-      expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-      if (format === "pcm") {
-        expect(onAudio).toHaveBeenCalledExactlyOnceWith(output);
-      } else {
-        expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+      expect(onAudio).toHaveBeenCalledExactlyOnceWith(
+        format === "pcm" ? output : expect.any(Buffer),
+      );
+      if (format === "telephony") {
+        content({ turnComplete: true });
+        expect(onAudio.mock.calls.map(([chunk]) => chunk.length)).toEqual([75, 5]);
       }
       expect(onTranscript).not.toHaveBeenCalled();
       await bridge.close();
@@ -977,35 +977,30 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
-  it.each([undefined, EXTENDED])("handles sustained telephony silence for %s", async (model) => {
+  it.each([undefined, EXTENDED])("handles both telephony zero codes for %s", async (model) => {
     const bridge = await openBridge({ providerConfig: { model, silenceDurationMs: 60 } });
-
-    const silence20ms = Buffer.alloc(160, 0xff);
-    if (model === EXTENDED) {
-      for (let frame = 0; frame < 10; frame += 1) {
-        bridge.sendAudio(silence20ms);
-      }
-      expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
-      expect(session.sendRealtimeInput).toHaveBeenCalledTimes(10);
-      return;
+    const frames = [0xff, 0x7f, 0xff, 0x7f, 0xfe, 0x7f, 0xff, 0x7f];
+    for (const sample of frames) {
+      bridge.sendAudio(Buffer.alloc(160, sample));
     }
-    bridge.sendAudio(silence20ms);
-    bridge.sendAudio(silence20ms);
-    bridge.sendAudio(silence20ms);
+    const events = session.sendRealtimeInput.mock.calls.flatMap(([input]) => Object.keys(input));
+    const silentTurn = ["audio", "audio", "audio", "audioStreamEnd"];
+    expect(events).toEqual(
+      model === EXTENDED ? frames.map(() => "audio") : [...silentTurn, "audio", ...silentTurn],
+    );
+  });
 
-    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
-
-    const callsAfterStreamEnd = session.sendRealtimeInput.mock.calls.length;
-    bridge.sendAudio(silence20ms);
-    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(callsAfterStreamEnd);
-
-    session.sendRealtimeInput.mockClear();
-    bridge.sendAudio(Buffer.alloc(160, 0x7f));
-    bridge.sendAudio(silence20ms);
-    bridge.sendAudio(silence20ms);
-    bridge.sendAudio(silence20ms);
-
-    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  it.each([1, 4])("counts queued and live silence in %i-sample frames", async (size) => {
+    const bridge = await connectBridge({ providerConfig: { silenceDurationMs: 1 } });
+    const frame = Buffer.alloc(size, 0xff);
+    bridge.sendAudio(frame);
+    activate();
+    for (let sent = size; sent < 8 - size; sent += size) {
+      bridge.sendAudio(frame);
+    }
+    expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
+    bridge.sendAudio(frame);
+    expect(session.sendRealtimeInput).toHaveBeenLastCalledWith({ audioStreamEnd: true });
   });
 
   it.each([

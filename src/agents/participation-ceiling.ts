@@ -4,6 +4,7 @@ import {
   type SessionParticipationSource,
 } from "../config/sessions/session-participation-source.js";
 import { intersectExecPolicyCeilings, type ExecPolicyCeiling } from "../infra/exec-policy.js";
+import { DEFAULT_PARTICIPATION_TOOLS } from "../shared/participation-tools.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { intersectSessionPermissionModes } from "./session-permission-mode.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
@@ -41,26 +42,7 @@ export type BoundParticipationCeiling = ParticipationCeiling & {
 export function participationPermission(ceiling: ParticipationCeiling): SessionPermissionMode {
   return ceiling.permission ?? "guarded";
 }
-export const DEFAULT_PARTICIPATION_TOOLS = Object.freeze([
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "ls",
-  "exec",
-  "process",
-  "sessions_spawn",
-  "sessions_yield",
-  "skills_search",
-  "skills_read",
-  "web_search",
-  "web_fetch",
-  "tool_search",
-  "tool_describe",
-  "dispatch_action",
-  "view_image",
-  "progress_card",
-]);
+export { DEFAULT_PARTICIPATION_TOOLS };
 
 /** Resolve role replacement/addition once before capturing the input's tool ceiling. */
 export function resolveParticipationTools(policy?: {

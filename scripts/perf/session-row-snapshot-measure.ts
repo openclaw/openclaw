@@ -210,6 +210,7 @@ const publication: NonNullable<
 };
 const recipient = {
   ...read.state,
+  omitSharedPins: false,
   presentFastMode: prepareSessionFastModePresentation(undefined),
   publicationState: publication,
   sharing: prepareProjectedSessionSharing({ cfg, client: null, isMember: () => false }),

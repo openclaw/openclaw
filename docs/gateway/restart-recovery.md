@@ -762,8 +762,9 @@ When the requester's access has ended (its saved grant or access record is gone,
 or its profile was deleted), startup settles that child's delivery once instead of
 retrying it at every restart. The run record keeps
 the result with the delivery marked discarded. The requesting chat, and no other,
-gets one notice: "A background task's result couldn't be delivered because the
-access it ran under has ended." Results whose latest recorded time (result capture,
+gets one notice: "I did not deliver a background task's result. The access of the
+person who started it has ended. Ask them or a Gateway admin to restore that access,
+then start the task again." Results whose latest recorded time (result capture,
 end, or delivery attempt; creation time only when nothing later exists) is more
 than 7 days old settle without a notice; the Gateway logs one count per recovery
 pass. Any other failure, including other refusals, an unavailable access policy or

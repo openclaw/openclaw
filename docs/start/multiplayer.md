@@ -114,7 +114,7 @@ tools. To keep the defaults and add browser access instead, use:
 Both fields require `maxInvitedAccess` and `others: "invited"`. Setting both is a
 config error, even if either list is empty. Omit both, or use
 `invitedAlsoAllow: []`, to keep the defaults. These include file, shell, web,
-discovery, skill, image, progress, and native child tools.
+discovery, skill, image, progress, GitHub publication, and native child tools.
 Both lists accept ordinary tool names, groups, and wildcards for core, plugin,
 and MCP tools that are otherwise offered and authorized. There is no fixed upper
 allowlist, but the `openclaw` tool and Gateway configuration, role, membership,
@@ -173,7 +173,7 @@ The Gateway binds to loopback by default. Give teammates access through authenti
 
 - **Tailnet (recommended):** put the host on your tailnet and enable [Tailscale Serve](/gateway/tailscale). With `gateway.auth.allowTailscale`, Control UI sign-in can use each person's Tailscale identity - no shared secret to distribute.
 - **Trusted proxy:** front the Gateway with an identity-aware proxy such as Cloudflare Access - see [Trusted proxy auth](/gateway/trusted-proxy-auth).
-- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Authentication](/gateway/authentication).
+- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Gateway auth settings](/gateway/config-gateway#gateway).
 
 The identity-backed options are worth the setup: they are what turns "someone did something" into "who did what" in the session UI and commit credit below.
 
@@ -259,9 +259,9 @@ A guest's CLI stays within a session-only device grant. `openclaw gateway call` 
 For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
 [OpenClaw ID members](/concepts/experimental-features#member-roles) use that same
-profile role on every sign-in route. Invite approval and **Access → Change role**
-assign the role to their linked profile; owners and administrators can also use
-`users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
+profile role on every sign-in route. Invite approval assigns the role to their
+linked profile; afterwards owners and administrators change it in
+**Settings → Team → Roles** or with `users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
 `guest` definitions without setting a default. Members with no resolvable role or
 no granted scopes cannot connect. Clearing an assignment exposes any configured
 mapping or default rather than disabling that fallback. Role changes disconnect

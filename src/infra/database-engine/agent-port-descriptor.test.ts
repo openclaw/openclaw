@@ -64,11 +64,16 @@ it.each([37, 38])(
   },
 );
 
-it.each([39, 40, 41, 42, 43, 44])(
+it.each([39, 40, 41, 42, 43, 44, 45])(
   "keeps companion tables and deletion indexes at schema %s",
   async (version) => {
     const descriptor = await loadAgentPortDescriptor(version);
     const usage = "agent_tool_usage";
+    expect(
+      descriptor.tables
+        .find(({ name }) => name === "session_nodes")
+        ?.columns.some(({ name }) => name === "archive_undo_marker"),
+    ).toBe(version >= 45);
     expect(
       descriptor.tables
         .find(({ name }) => name === "session_members")

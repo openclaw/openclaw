@@ -394,7 +394,7 @@ extensions/matrix/src/matrix/monitor/room-history.ts	1
 extensions/matrix/src/matrix/monitor/rooms.ts	1
 extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	1
-extensions/matrix/src/matrix/poll-types.ts	7
+extensions/matrix/src/matrix/poll-types.ts	5
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/sdk.ts	6
 extensions/matrix/src/matrix/sdk/client-base.ts	1
@@ -2080,7 +2080,7 @@ src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	1
 src/plugins/plugin-package-update.ts	1
-src/plugins/plugin-peer-link.ts	2
+src/plugins/plugin-peer-link.ts	1
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-auth-choice-helpers.ts	5
@@ -2328,7 +2328,6 @@ ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1
-ui/src/pages/chat/export.ts	1
 ui/src/pages/chat/input-history.ts	1
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1

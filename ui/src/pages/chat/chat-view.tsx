@@ -147,12 +147,13 @@ function ChatFooterContent(
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
+            onClose={input.props.onCloseSessionSuggestion}
+            liveResolutions={input.props.sessionSuggestionLiveResolutions}
+            messages={input.props.messages}
             busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
             archived={input.props.sessionSuggestionsArchived === true}
             canResolve={input.props.canResolveSessionSuggestions === true}
-            onResolve={(suggestion, resolution) =>
-              input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-            }
+            onResolve={input.props.onResolveSessionSuggestion}
           />
         </ChatLazyBoundary>
       </Show>
@@ -596,7 +597,16 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                           type="button"
                           inert={!input.props.showNewMessages}
                           aria-hidden={!input.props.showNewMessages ? "true" : "false"}
-                          onClick={() => input.props.onScrollToBottom?.({ smooth: true })}
+                          onClick={(event) => {
+                            const transcript = getTranscriptElement();
+                            if (
+                              transcript &&
+                              transcript.ownerDocument.activeElement === event.currentTarget
+                            ) {
+                              transcript.focus({ preventScroll: true });
+                            }
+                            input.props.onScrollToBottom?.({ smooth: true });
+                          }}
                           aria-label={t("chat.actions.scrollToLatest")}
                         >
                           <Icon name="arrowDown" />

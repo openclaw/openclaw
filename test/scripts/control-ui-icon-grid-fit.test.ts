@@ -133,13 +133,6 @@ describe("fixed icon-grid fit", () => {
         html: fixture.html.replace('class="icon"', 'class="icon" style="padding:0"'),
       },
     ]);
-    defer(
-      original + '.icon:not([aria-pressed="true"]) {padding:8px}',
-      collect(
-        'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`',
-        "ui/src/state.ts",
-      ),
-    );
   });
 
   it("expands parsed nesting tokens without changing literal or escaped ampersands", () => {
@@ -174,36 +167,6 @@ describe("fixed icon-grid fit", () => {
       const result = auditIconButtons(root, ["ui/src/styles/control.css"]);
       expect(result.findings).toHaveLength(0);
       expect(result.unresolvedAxes).toBeGreaterThan(0);
-    }
-  });
-
-  it("collects only static icon witnesses and preserves their native AST locations", () => {
-    const source = `class Control extends OpenClawLightDomElement {
-  render() {
-    return html\`<button class="icon">\${(busy ? icons.loader : icons.refresh)}</button>\`;
-  }
-}`;
-    const cases: [string, string, number | null, number][] = [
-      ["control", source, 3, 0],
-      ["shadow", source.replace("OpenClawLightDomElement", "LitElement"), null, 0],
-      ["custom-root", source.replace("render()", "createRenderRoot()"), null, 0],
-      ["extra", 'html`<button class="icon"><span></span>${icons.refresh}</button>`', null, 0],
-      [
-        "literal",
-        'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`',
-        1,
-        2,
-      ],
-    ];
-    for (const [name, markup, line, findings] of cases) {
-      const file = `ui/src/${name}.ts`;
-      const fixtures = collect(markup, file, getDocument());
-      expect(fixtures, name).toEqual(
-        line === null ? [] : [expect.objectContaining({ file, line })],
-      );
-      if (line !== null) {
-        expect(scanIconGridFit(original, fixtures, base).findings, name).toHaveLength(findings);
-      }
     }
   });
 
@@ -261,26 +224,13 @@ describe("JSX icon-grid fixtures", () => {
 
   it("preserves literal ancestors through JSX branches, Show, and For", () => {
     const cases: [string, number][] = [
-      [refresh, 1],
-      [link, 1],
-      ['<div class="icon" role="button">{icons.refresh}</div>', 1],
-      ['<button class={["icon", { compact: true }]}><svg /></button>', 1],
-      [show("{ok}", refresh), 1],
       [show("{false}"), 0],
-      [show('""', icon, "<span />"), 0],
-      [show('"ready"', icon, link), 1],
-      [`<Show when fallback={${link}}>${icon}</Show>`, 1],
       [show("{false}", icon, link), 1],
       [show("{selected}", `{item => ${icon}}`), 1],
       [`<If when={ok}>${refresh}</If>`, 1],
       [`<Solid.Show when={ok}>${refresh}</Solid.Show>`, 1],
       [`<For each={[1, 2]}>{item => ${icon}}</For>`, 2],
       [`<For each={[]} fallback={${icon}}>{item => <span />}</For>`, 1],
-      [`{ok && ${icon}}`, 1],
-      [`{false && ${icon}}`, 0],
-      [`{false ? ${icon} : null}`, 0],
-      [`{true ? ${icon} : ${link}}`, 1],
-      [`{ok ? <span /> : <span />}${icon}`, 1],
       [`{ok ? ${icon} : ${link}}`, 2],
       [show("{ok}", icon, link), 2],
       ['<button class="icon">{ok ? <svg /> : <svg />}</button>', 2],

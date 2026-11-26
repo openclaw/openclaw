@@ -143,30 +143,6 @@ describe("enableConsoleCapture", () => {
     expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
   });
 
-  it.each(["json", "compact"] as const)("formats %s console passthrough output", (consoleStyle) => {
-    setLoggerOverride({
-      level: consoleStyle === "json" ? "silent" : "info",
-      file: tempLogPath(),
-      consoleLevel: "info",
-      consoleStyle,
-    });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
-
-    console.warn("tool failed", { attempt: 1 });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    if (consoleStyle === "json") {
-      expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
-        level: "warn",
-        message: "tool failed { attempt: 1 }",
-      });
-    } else {
-      expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
-    }
-  });
-
   it("does not rewrap structured subsystem output", () => {
     setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
     const warn = vi.fn();

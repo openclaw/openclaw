@@ -30,26 +30,39 @@
     width: 100%;
   }
 
-  .model-picker .picker-select__option {
-    /* Access metadata belongs to the option list, beside the model name. */
-    .picker-select__copy {
-      display: flex;
-      flex: 1;
-      align-items: center;
-      gap: var(--space-2);
-    }
+  .model-picker .picker-select__label {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
 
-    .picker-select__label {
-      flex: 1;
-      white-space: nowrap;
-    }
+  .picker-select__split-label {
+    display: flex;
+    min-width: 0;
+  }
 
-    .picker-select__description {
-      max-width: 50%;
-      color: var(--muted);
-      text-align: end;
-      white-space: nowrap;
-    }
+  .picker-select__split-label > :first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .picker-select__split-label > :last-child {
+    flex: none;
+    white-space: pre;
+  }
+
+  .model-picker .picker-select__option .picker-select__copy {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .model-picker .picker-select__description {
+    color: var(--muted);
+    overflow-wrap: anywhere;
   }
 
   .settings-segmented > .settings-segmented__btn {

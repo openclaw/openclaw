@@ -1,6 +1,10 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  canSuggestInSession,
+  hasOperatorAdminAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
@@ -214,7 +218,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       getSnapshot: () => this.context.gateway.snapshot,
       state,
       sessionParticipationBlocked,
-      onDenied: (reason) => this.publishHeaderError(reason),
+      onDenied: (reason) => this.publishHeaderError(reason, undefined, true),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
@@ -280,6 +284,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
     const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
+    const suggestionViewer = canSuggestInSession(gatewaySnapshot, selectedSession, {
+      multiIdentity,
+      archived: selectedSessionArchived,
+    });
     const route = this.catalogAccess.route;
     const composerAccess = catalogKey
       ? route &&
@@ -288,15 +296,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         route.generation === this.connectionGeneration
         ? Boolean(route.methods.continue)
         : hasWriteScope
-      : hasWriteScope || mutationAccess.composeScope.allowed;
-    const suggestionViewer =
-      multiIdentity &&
-      !selectedSessionArchived &&
-      hasWriteScope &&
-      selectedSession?.visibility === "suggest" &&
-      selectedSession.sharingRole === "viewer" &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
+      : hasWriteScope || mutationAccess.composeScope.allowed || suggestionViewer;
     const nativeConversation = !catalog && !suggestionViewer;
     // Placement progress explains its gate; other gates need a reason or a banner.
     const disabledReason = nativeConversation
@@ -382,7 +382,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
-      // A locally created session can still be preparing its first input.
       loading: catalogKey
         ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
@@ -487,6 +486,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               // Separately hydrated session-list metadata must not cancel an active query.
               ownerKey: JSON.stringify([state.connectionEpoch, selfProfileId]),
               params: { sessionKey: state.sessionKey, agentId: currentAgentId },
+              ...this.sessionMentionInvitationProps(),
             }
           : undefined,
       modelCatalog: state.chatModelCatalog,

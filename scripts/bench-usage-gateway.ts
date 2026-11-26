@@ -72,6 +72,7 @@ const { values } = parseArgs({
     smoke: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     "cold-backend": { type: "boolean", default: false },
+    "cold-backend-utc-switch": { type: "boolean", default: false },
     "cold-pairs": { type: "string" },
     diagnostic: { type: "boolean", default: false },
     structure: { type: "boolean", default: false },
@@ -82,7 +83,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--engine chromium|webkit] [--warm-cpu 1|4] [--warm-sequence] [--screenshots] [--profile-last-pair] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--engine chromium|webkit] [--warm-cpu 1|4] [--warm-sequence] [--screenshots] [--profile-last-pair] [--smoke | --cold | --cold-backend [--cold-pairs 20] [--cold-backend-utc-switch] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
@@ -175,6 +176,10 @@ if (coldPairs !== undefined) {
   assert(values["cold-backend"], "--cold-pairs requires --cold-backend");
   assert(Number.isInteger(coldPairs) && coldPairs > 0, "--cold-pairs must be positive");
 }
+assert(
+  !values["cold-backend-utc-switch"] || values["cold-backend"],
+  "--cold-backend-utc-switch requires --cold-backend",
+);
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
 assert(
@@ -535,6 +540,7 @@ async function prepareFixture(
                 OPENCLAW_SKIP_CRON: "1",
                 OPENCLAW_SKIP_GMAIL_WATCHER: "1",
                 OPENCLAW_SKIP_PROVIDERS: "1",
+                ...(values["cold-backend-utc-switch"] && { OPENCLAW_USAGE_BENCH_COUNT_READS: "1" }),
               },
             }),
             stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -1232,7 +1238,11 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
     peer.start();
     await connected.promise;
     clearTimeout(connectionTimer);
-    assert.deepEqual(await owner.snapshot(), [], "No report aggregation before the first RPC");
+    assert.deepEqual(
+      (await owner.snapshot()).filter(({ kind }) => !kind.startsWith("usage-cost:")),
+      [],
+      "No report aggregation before the first RPC",
+    );
     const query = {
       startDate: owner.ready.startDate,
       endDate: owner.ready.endDate,
@@ -1316,8 +1326,51 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
         assert.equal(response.overview?.total, population);
         assert.equal(response.totals.totalTokens, owner.ready.allTokens);
         assert.equal(response.sessions.length, Math.min(population, 50));
-        assert(dispatches.length > 0, "Usage request aggregated the snapshot");
+        assert(
+          dispatches.some(({ kind }) => !kind.startsWith("usage-cost:")),
+          "Usage request aggregated the snapshot",
+        );
         if (mode === "cold") {
+          if (values["cold-backend-utc-switch"]) {
+            // A complete response can race a startup usage publication and leave a
+            // stale snapshot. Prove reuse of Local before timing the first UTC request.
+            let warmDispatches = dispatches.length;
+            let warm = response;
+            let warmHits = false;
+            const warmSignal = AbortSignal.timeout(15_000);
+            for (let probe = 0; probe < 4; probe += 1) {
+              warm = await requestSessionUsage(peer, query, {
+                projection: "overview",
+                signal: warmSignal,
+              });
+              const observed = await owner.snapshot();
+              warmHits =
+                !warm.partial &&
+                !observed.slice(warmDispatches).some(({ kind }) => kind === "usage-cost:overview");
+              warmDispatches = observed.length;
+              if (warmHits) {
+                break;
+              }
+            }
+            assert(warmHits, "Local Usage snapshot must be warm before switching to UTC");
+            const switchBefore = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+            const switchStart = performance.now();
+            const switched = await requestSessionUsage(
+              peer,
+              { ...query, timeZone: "utc" },
+              { projection: "overview", signal: AbortSignal.timeout(15_000) },
+            );
+            const wallMs = performance.now() - switchStart;
+            const switchAfter = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+            sample.utcSwitch = {
+              wallMs,
+              gatewayCpu: measureGatewayCpuUsage(switchBefore, switchAfter),
+              dispatches: (await owner.snapshot()).slice(warmDispatches),
+            };
+            const { updatedAt: _a, ...local } = warm;
+            const { updatedAt: _b, ...utc } = switched;
+            assert.deepEqual(utc, local, "Equivalent UTC modes return the same complete report");
+          }
           const resourcesFile = `${suffix}-cold-backend-resources.json`;
           sample.resourcesFile = resourcesFile;
           await writeFile(
