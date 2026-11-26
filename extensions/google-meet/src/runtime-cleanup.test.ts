@@ -3,7 +3,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
-import { meetLaunchedTab, meetRuntime, MEET_URL } from "./test-support/fixtures.test-helpers.js";
+import {
+  meetAudioBridge,
+  meetLaunchedTab,
+  meetRuntime,
+  MEET_URL,
+} from "./test-support/fixtures.test-helpers.js";
 import * as chromeTransport from "./transports/chrome.js";
 
 const state = useMeetingTestState(createOpenClawTestState);
@@ -73,4 +78,45 @@ it("does not close an adopted tab when the failed session retries leave", async 
     await Promise.allSettled([replacing, retrying]);
     allowAdoptedLeave = true;
   }
+});
+
+it("keeps the original requester when a reused meeting starts audio after admission", async () => {
+  state.onCleanup(async () => {
+    vi.restoreAllMocks();
+  });
+  const ready = { inCall: true, micMuted: false, audioInputRouted: true, audioOutputRouted: true };
+  const bridge = meetAudioBridge();
+  const launch = vi
+    .spyOn(chromeTransport, "launchChromeMeet")
+    .mockResolvedValueOnce({ ...meetLaunchedTab("meet-tab"), browser: { inCall: false } })
+    .mockResolvedValueOnce({ ...meetLaunchedTab("meet-tab"), browser: ready, audioBridge: bridge });
+  vi.spyOn(chromeTransport, "recoverCurrentMeetTab").mockResolvedValue({
+    found: true,
+    targetId: "meet-tab",
+    browser: ready,
+    transport: "chrome",
+    message: "Ready",
+  });
+  vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({ left: true, note: "left" });
+  const runtime = state.track(
+    meetRuntime(
+      { defaultTransport: "chrome", defaultMode: "agent", realtime: { introMessage: "" } },
+      { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      { transcripts: { enabled: false } },
+    ),
+  );
+  const firstKey = "agent:main:session:first";
+  const first = await runtime.join({ url: MEET_URL, requesterSessionKey: firstKey });
+  const second = await runtime.join({
+    url: MEET_URL,
+    requesterSessionKey: "agent:main:session:later",
+  });
+  expect(second.session.id).toBe(first.session.id);
+  expect(JSON.stringify(await runtime.status(first.session.id))).not.toContain(firstKey);
+  expect((await runtime.speak(first.session.id, "hello")).spoken).toBe(true);
+  expect(launch).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({ requesterSessionKey: firstKey }),
+  );
+  expect(bridge.speak).toHaveBeenCalledWith("hello");
 });

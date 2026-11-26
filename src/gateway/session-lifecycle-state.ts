@@ -237,6 +237,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       suppressErrorNotice,
       notice,
       desktopNotice,
+      summaryAsTitle,
       errorObservation,
     } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
@@ -256,6 +257,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       suppressErrorNotice,
       notice,
       desktopNotice,
+      summaryAsTitle,
       errorObservation,
       assertCommitAllowed: params.assertCommitAllowed,
     };

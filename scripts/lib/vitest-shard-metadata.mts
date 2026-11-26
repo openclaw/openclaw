@@ -209,7 +209,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/plugin-release-git-lifecycle.test.ts", 35],
   ["test/scripts/pr-main-refresh.test.ts", 30],
   ["test/plugin-npm-package-manifest.test.ts", 26],
-  ["test/scripts/ci-node-test-plan.test.ts", 24],
   ["test/scripts/run-vitest-state-cleanup.test.ts", 127],
   ["test/scripts/ci-platform-checkout.test.ts", 75],
   ["test/scripts/watch-pr-ci.test.ts", 54],

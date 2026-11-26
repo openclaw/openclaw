@@ -21,6 +21,7 @@ import type { PreparedModelCatalogWorkerTask } from "../../src/agents/prepared-m
 import { AuthStorage } from "../../src/agents/sessions/auth-storage.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -118,12 +119,7 @@ for (let i = 0; i < 20; i++) {
 global.gc?.();
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const loadStart = os.loadavg();
 const cpuStart = process.cpuUsage();

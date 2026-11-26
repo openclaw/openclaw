@@ -4,6 +4,7 @@
  * requester check, then pass the results in as facts.
  */
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import { KNOWLEDGE_CONVERSATION_SCRIBE } from "../agents/knowledge-conversation-scribe.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
@@ -82,6 +83,7 @@ type ScheduledToolPolicy = Readonly<{
   policy?: CronScheduledToolPolicy;
   callerOrigin: CronScheduledToolCallerOrigin;
   execTarget?: CronToolsAllowExecTarget;
+  sessionReadAgentOnly?: true;
   automations: ScheduledAutomationsScope;
 }>;
 
@@ -176,6 +178,7 @@ export type ScheduledExecutionContextResult =
 type BuilderJob = Pick<
   CronStoredJob,
   | "id"
+  | "declarationKey"
   | "sessionTarget"
   | "owner"
   | "scheduledToolPolicy"
@@ -462,6 +465,9 @@ export function buildScheduledExecutionContext(
           job.toolsAllowProvenance?.callerOrigin,
         ),
         ...(job.toolsAllowExecTarget ? { execTarget: job.toolsAllowExecTarget } : {}),
+        ...(job.declarationKey === KNOWLEDGE_CONVERSATION_SCRIBE
+          ? { sessionReadAgentOnly: true }
+          : {}),
         automations: resolveAutomationsScope(job, principal, authority, allow),
       },
       resources: {

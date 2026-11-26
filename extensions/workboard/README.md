@@ -28,12 +28,11 @@ failures appear in plugin service health, and shutdown joins outstanding repair.
 ## Large boards
 
 The Control UI loads cards and sessions in pages of 100. **Load more cards** and
-**Load more sessions** extend the current view. Card search and filters, and the
-Sessions board's agent filter, apply to loaded rows; the page displays this scope
-while more rows are available. Dashboard widgets also disclose incomplete counts
-and offer **Load more cards**, including cards not loaded yet. Load all cards
-before reordering them. Session
-people filters continue to apply to the complete authorized session population.
+**Load more sessions** extend the current view. Card search and filters apply to
+loaded cards, and the page notes this while more cards are available.
+Dashboard widgets also disclose incomplete counts and offer **Load more cards**,
+including cards not loaded yet. Load all cards before reordering them. Sessions
+board agent and people filters apply to all authorized sessions before paging.
 
 Gateway clients continue `workboard.cards.list` with the returned `nextCursor` as
 `after` (the `{ position, createdAt, id }` object), and

@@ -265,7 +265,9 @@ type EnglishCatalog = TranslationMap & {
       | "automationPrefix"
       | "actionRequiresConnection"
       | "actionUnavailable"
-      | "actionRequiresScope"
+      | "actionPermissionDenied"
+      | "movePermissionDenied"
+      | "createPermissionDenied"
       | "actionRequiresOwnership"
       | "draftCleanupFailed"
       | "createdBy"
@@ -705,7 +707,9 @@ const startupEnglish = {
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
-    actionRequiresScope: "This action requires {scope} access.",
+    actionPermissionDenied: "You don’t have permission to do this.",
+    movePermissionDenied: "You don’t have permission to move this session.",
+    createPermissionDenied: "You don’t have permission to create a session.",
     actionRequiresOwnership: "Only the session creator or an admin can make this change.",
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
     createdBy: "Created by {name}",
@@ -911,6 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation needs attention",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -937,6 +942,7 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
+    settingsGroupTeam: "Team",
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
@@ -1022,8 +1028,10 @@ const startupEnglish = {
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
+    roles: "Roles",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",

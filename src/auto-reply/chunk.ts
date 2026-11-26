@@ -1,4 +1,5 @@
 import {
+  createGraphemeChunkEndFinder,
   findGraphemeChunkEnd,
   firstGraphemeClusterLength,
   skipWhitespaceGraphemes,
@@ -316,6 +317,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   }
 
   const chunks: string[] = [];
+  const findEnd = createGraphemeChunkEndFinder(text);
   const spans = parseFenceSpans(text);
   const links = findMarkdownLinkSourceSpans(text).filter(
     ([linkStart, linkEnd]) => linkEnd - linkStart <= normalizedLimit,
@@ -343,14 +345,14 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     reopenFence = undefined;
     const windowEnd = Math.min(text.length, start + contentLimit);
     const softBreak = pickSafeBreakIndex(text, start, windowEnd, breakSpans);
-    let breakIdx = findGraphemeChunkEnd(text, start, windowEnd, softBreak);
+    let breakIdx = findEnd(start, windowEnd, softBreak);
     let link = links[linkIndex];
     while (link && link[1] <= breakIdx) {
       linkIndex += 1;
       link = links[linkIndex];
     }
     if (link && link[0] > start && link[0] < breakIdx) {
-      breakIdx = findGraphemeChunkEnd(text, start, link[0]);
+      breakIdx = findEnd(start, link[0]);
     }
 
     const initialFence = findFenceSpanAt(spans, breakIdx);
@@ -359,7 +361,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
       if (!resolveFenceReopenLine(initialFence, normalizedLimit)) {
-        breakIdx = findGraphemeChunkEnd(text, start, windowEnd);
+        breakIdx = findEnd(start, windowEnd);
         fenceToSplit = undefined;
       } else {
         const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
@@ -389,12 +391,11 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
 
         if (!pickedNewline && minProgressIdx >= maxIdxIfAlreadyNewline) {
-          breakIdx = findGraphemeChunkEnd(text, start, windowEnd);
+          breakIdx = findEnd(start, windowEnd);
           fenceToSplit = undefined;
           reopenFence = initialFence;
         } else {
-          breakIdx = findGraphemeChunkEnd(
-            text,
+          breakIdx = findEnd(
             start,
             pickedNewline ? maxIdxIfAlreadyNewline : maxIdxIfNeedNewline,
             pickedNewline ? breakIdx : maxIdxIfNeedNewline,

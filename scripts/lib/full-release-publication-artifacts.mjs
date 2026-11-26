@@ -3,6 +3,10 @@
 import { parse as parseYaml } from "yaml";
 import { validateArtifactProducerRun } from "../full-release-artifacts.mjs";
 import { inspectActionsArtifactZip } from "./actions-artifact-archive.mjs";
+import {
+  INITIAL_NPM_PREPARATION_JOB,
+  npmPreparationJobName,
+} from "./full-release-publication-inputs.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const MAX_BYTES = 256 * 1024;
@@ -71,20 +75,59 @@ export async function witnessedRun(client, jobs, jobName, workflow, allowReuse =
   return { run: await client.getRun(match[4]), log, reused: match[1] === "Reused" };
 }
 
+// Both slots execute the same producer. Select from the authenticated request
+// and reject a conflicting live row before reading any dispatch log or receipt.
+export function artifactProducerSlots(workflow, inputs, attemptJobs) {
+  const jobs = Object.values(workflow.jobs ?? {});
+  const variants = jobs.filter(
+    (job) => job?.env?.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND !== undefined,
+  );
+  const activeName = npmPreparationJobName(inputs);
+  if (
+    !variants.length &&
+    workflow.env?.FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT === undefined &&
+    activeName !== INITIAL_NPM_PREPARATION_JOB
+  ) {
+    return jobs;
+  }
+  const original = one(
+    jobs.filter((job) => job?.env?.CHILD_WORKFLOW_KIND === "artifact-npm"),
+    "original npm producer",
+  );
+  const first = one(variants, "initial npm producer");
+  requireValue(
+    workflow.env?.FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT === "1" &&
+      original.name === npmPreparationJobName() &&
+      first.name === INITIAL_NPM_PREPARATION_JOB &&
+      first.env.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND === "artifact-npm" &&
+      !first.env.CHILD_WORKFLOW_KIND,
+    "frozen npm scheduling slots differ",
+  );
+  const inactive = activeName === first.name ? original : first;
+  requireValue(
+    attemptJobs
+      .filter((job) => job.name === inactive.name)
+      .every((job) => job.conclusion === "skipped"),
+    "inactive npm scheduling slot also executed",
+  );
+  const earlyProducer = { ...first, env: { ...first.env, CHILD_WORKFLOW_KIND: "artifact-npm" } };
+  return jobs.filter((job) => job !== inactive).map((job) => (job === first ? earlyProducer : job));
+}
+
 export async function discoverPublicationArtifacts(
   parent,
   source,
   jobs,
   client,
   originalCandidate,
+  qualificationInputs,
 ) {
   const workflow = parseYaml(client.getWorkflowSource(parent.head_sha));
+  const producers = artifactProducerSlots(workflow, qualificationInputs, jobs);
   const records = {};
   for (const stage of originalCandidate ? ["npm", "docker"] : ["npm", "candidate", "docker"]) {
     const job = one(
-      Object.values(workflow.jobs).filter(
-        (entry) => entry.env?.CHILD_WORKFLOW_KIND === "artifact-" + stage,
-      ),
+      producers.filter((entry) => entry.env?.CHILD_WORKFLOW_KIND === "artifact-" + stage),
       "frozen artifact job " + stage,
     );
     const { run } = await witnessedRun(client, jobs, job.name, "full-release-artifacts.yml");

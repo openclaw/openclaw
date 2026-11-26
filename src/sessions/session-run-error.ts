@@ -28,6 +28,7 @@ type GatewaySessionRunFailure = {
   suppressErrorNotice?: boolean;
   /** Host-authored copy already shown to the requester; wins over error-derived copy. */
   notice?: string;
+  summaryAsTitle?: true;
   /** Desktop-only presentation metadata; never replaces shared content. */
   desktopNotice?: string;
   /** Provider error observation; only its bounded provider, failover reason and code are kept. */
@@ -68,6 +69,7 @@ export async function recordGatewaySessionRunFailure(
     details: {
       runId,
       error,
+      ...(params.summaryAsTitle ? { summaryAsTitle: true } : {}),
       ...(params.desktopNotice ? { desktopNotice: params.desktopNotice } : {}),
       ...(params.errorKind ? { errorKind: params.errorKind } : {}),
       ...(cause ? { cause } : {}),

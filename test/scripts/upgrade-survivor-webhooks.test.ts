@@ -17,6 +17,7 @@ let configPath: string;
 let available: boolean;
 let retired: boolean;
 let workshopProperties: Record<string, unknown>;
+let pluginOwnsWorkshop: boolean;
 const modeSchema = {
   anyOf: ["off", "propose", "auto"].map((mode) => ({ type: "string", const: mode })),
 };
@@ -49,6 +50,7 @@ beforeEach(() => {
   available = true;
   retired = false;
   workshopProperties = { mode: modeSchema };
+  pluginOwnsWorkshop = false;
   save({ agents: { entries: { main: {}, ops: {} } } });
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_TEST_WORKSPACE_DIR", root);
@@ -59,14 +61,21 @@ beforeEach(() => {
     let stdout = "";
     if (args[0] === "config" && args[1] === "schema") {
       expect(args).toEqual(["config", "schema"]);
+      const workshop = { properties: { autonomous: { properties: workshopProperties } } };
       stdout = JSON.stringify({
-        properties: {
-          skills: {
-            properties: {
-              workshop: { properties: { autonomous: { properties: workshopProperties } } },
-            },
-          },
-        },
+        properties: pluginOwnsWorkshop
+          ? {
+              plugins: {
+                properties: {
+                  entries: {
+                    properties: {
+                      "skill-workshop": { properties: { config: workshop } },
+                    },
+                  },
+                },
+              },
+            }
+          : { skills: { properties: { workshop } } },
       });
     } else if (args[0] === "config" && args[1] === "set") {
       if (
@@ -90,7 +99,11 @@ beforeEach(() => {
         current = nested;
       }
       Reflect.set(current, keys.at(-1)!, JSON.parse(args[3]!));
-      save(value);
+      save(
+        pluginOwnsWorkshop
+          ? { ...value, meta: { migrations: { skillWorkshopPlugin: true } } }
+          : value,
+      );
     } else if (args[0] === "plugins") {
       stdout = JSON.stringify({
         plugins: [
@@ -302,6 +315,33 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", "2026.9.2");
     workshopProperties = { mode: modeSchema };
     expect(() => seedLegacyOperatorState()).toThrow("must seed the published plugin");
+  });
+
+  it("seeds and verifies the opted-out Workshop in the published plugin-owned schema", () => {
+    vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", "2026.11.10");
+    available = false;
+    pluginOwnsWorkshop = true;
+    workshopProperties = { mode: { type: "string", enum: ["off", "propose", "auto"] } };
+    seedLegacyOperatorState();
+    const seeded = config();
+    expect(seeded.skills?.workshop).toBeUndefined();
+    expect(seeded.plugins?.entries?.["skill-workshop"]).toEqual({
+      config: { autonomous: { mode: "off" } },
+    });
+    expect(() => assertLegacyOperatorConfig("baseline")).not.toThrow();
+    expect(() => assertLegacyOperatorConfig("survival")).not.toThrow();
+    save({ ...seeded, meta: {} });
+    expect(() => assertLegacyOperatorConfig("baseline")).toThrow(
+      "Workshop migration marker missing",
+    );
+    save({
+      ...seeded,
+      plugins: { entries: {} },
+      skills: { workshop: { autonomous: { mode: "off" } } },
+    });
+    expect(() => assertLegacyOperatorConfig("baseline")).toThrow(
+      "baseline Workshop placement changed",
+    );
   });
 
   it("rejects missing, ambiguous, or unsupported Workshop schemas before writing config", () => {

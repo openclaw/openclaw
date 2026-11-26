@@ -2,7 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
-import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -11,26 +11,23 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 
 /** Settings screen for gateway channel readiness and account status. */
 @Composable
 internal fun ChannelsSettingsScreen(
-  viewModel: MainViewModel,
+  state: GatewaySummaryState<GatewayChannelsSummary>,
+  isConnected: Boolean,
+  onRefresh: () -> Unit,
   onBack: () -> Unit,
 ) {
-  val state by viewModel.channelsState.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
-
-  SettingsRefreshOnConnect(isConnected) { viewModel.refreshChannels() }
+  SettingsRefreshOnConnect(isConnected, onRefresh)
 
   SettingsDetailFrame(
     subtitle = nativeString("Messaging surfaces connected to this gateway."),
     route = SettingsRoute.Channels,
     onBack = onBack,
   ) {
-    SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshChannels)
+    SettingsRefreshControls(isConnected, state.refreshing, state.errorText, onRefresh)
     SettingsSummaryContent(state, isConnected, nativeString("Connect the gateway to load channels.")) { summary ->
       val channels = summary.channels
       SettingsMetricPanel(

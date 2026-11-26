@@ -331,7 +331,7 @@ describe("replayPendingChatAbort", () => {
     await expect(replayPendingChatAbort(host)).resolves.toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(host.pendingAbort).toBeNull();
-    expect(host.chatError).toContain("operator.sessions.write");
+    expect(host.chatError).toBe("You don’t have permission to do this.");
     expect(host.lastError).toBe(host.chatError);
   });
 

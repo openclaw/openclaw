@@ -65,10 +65,19 @@ describe("parseSessionDiffPatch", () => {
 
   it("bounds output and reports truncation", () => {
     const body = Array.from({ length: 601 }, (_, i) => `+line ${i}`).join("\n");
-    const patch = `--- a/x\n+++ b/x\n@@ -1,0 +1,601 @@\n${body}\n`;
+    const patch = `--- a/x\n+++ b/x\n@@ -0,0 +1,601 @@\n${body}\n`;
     const { lines, truncated } = parseSessionDiffPatch(patch, gap);
     expect(truncated).toBe(true);
     expect(lines).toHaveLength(600);
     expect(lines.at(-1)).toEqual({ kind: "add", lineNo: 600, text: "line 599" });
+  });
+
+  it("stops before a gap when the previous hunk fills the render limit", () => {
+    const deletions = Array.from({ length: 600 }, (_, i) => `-old ${i + 1}`);
+    const patch = ["@@ -1,600 +0,0 @@", ...deletions, "@@ -601,0 +2 @@", "+added"].join("\n");
+    const { lines, truncated } = parseSessionDiffPatch(patch, gap);
+    expect(truncated).toBe(true);
+    expect(lines).toHaveLength(600);
+    expect(lines.at(-1)).toEqual({ kind: "del", lineNo: 600, text: "old 600" });
   });
 });

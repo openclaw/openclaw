@@ -6,19 +6,17 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
-import {
-  beginStateUpgradeRestore,
-  takeStateUpgradeRestoreCleanup,
-  publishStateUpgradeRestore,
-} from "./state-upgrade-restore.js";
-import { applyPlan, type UpgradePlan } from "./state-upgrade-tree.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+import type { DatabaseTarget } from "./state-upgrade-databases.js";
+import { beginStateUpgradeRestore, publishStateUpgradeRestore } from "./state-upgrade-restore.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  takeStateUpgradeRestoreCleanup();
   vi.restoreAllMocks();
 });
 
@@ -39,22 +37,19 @@ async function fixture(phase: Trial["phase"] = "trial") {
   );
   await writeTrial({ ...trial, phase }, resolvePrefix(env));
   const file = path.join(root, "live.sqlite");
-  const next = path.join(root, "next.sqlite");
-  for (const [filename, initialValue] of [
-    [file, "original"],
-    [next, "candidate"],
-  ] as const) {
-    using db = new DatabaseSync(filename);
+  {
+    using db = new DatabaseSync(file);
     db.exec("CREATE TABLE witness (value TEXT)");
-    db.prepare("INSERT INTO witness VALUES (?)").run(initialValue);
+    db.exec("INSERT INTO witness VALUES ('original')");
   }
   const manifest = path.join(resolvePrefix(env), "releases", "candidate-release", ".restore");
-  const image = `${file}.pre-restore-manifest-run`;
-  const plan: UpgradePlan = {
-    appVersion: "candidate-build",
-    ops: [{ kind: "replace", live: file, next }],
-  };
-  return { root, env, trial, file, next, manifest, image, plan };
+  const generation = resolveRuntimeServiceBuildId() ?? VERSION;
+  const image = `${file}.pre-${generation}`;
+  const targets: DatabaseTarget[] = [
+    { kind: "state", path: file, version: 41, minReader: 41, engine: "sqlite" },
+  ];
+  const capture = { targets, config: {} };
+  return { root, env, trial, file, manifest, image, generation, capture };
 }
 
 async function prepareNextTrial(
@@ -85,26 +80,38 @@ it.each(["pending", "committed", "rolled-back"] as const)(
   "does not authorize restore writes from phase %s",
   async (phase) => {
     const f = await fixture(phase);
-    expect(await beginStateUpgradeRestore(f.env)).toBeUndefined();
+    const restore = await beginStateUpgradeRestore(f.env);
+    expect(restore).toBeUndefined();
+    await publishStateUpgradeRestore(restore, f.capture);
     expect(fs.existsSync(f.manifest)).toBe(false);
     expect(fs.existsSync(f.image)).toBe(false);
+    expect(value(f.file)).toBe("original");
   },
 );
 
-it("isolates an old-preparer retry in its own prepared release without resetting older receipts", async () => {
+it("captures old-Gateway writes on a new release retry without resetting an older receipt", async () => {
   const f = await fixture();
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.plan);
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
   const older = fs.readFileSync(f.manifest, "utf8");
+  runInNewContext(
+    `${LEGACY_ROLLBACK_SOURCE}\nrestoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
+    { fs, path, stateDir: f.root, suffix: `.pre-${f.generation}` },
+  );
+  {
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value = 'old-gateway-write'");
+  }
   await writeTrial({ ...f.trial, phase: "rolled-back" }, resolvePrefix(f.env));
   const following = await prepareNextTrial(f, "retry-run", f.trial.previous);
   const restore = await beginStateUpgradeRestore(f.env);
   expect(restore?.existing).toBeUndefined();
-  expect(publishStateUpgradeRestore(restore, f.plan).linked).toBe(1);
+  await publishStateUpgradeRestore(restore, f.capture);
+  expect(value(f.image)).toBe("old-gateway-write");
   expect(JSON.parse(fs.readFileSync(following.manifest, "utf8")).runId).toBe("retry-run");
   expect(fs.readFileSync(f.manifest, "utf8")).toBe(older);
 });
 
-it("folds a crashed writer's committed WAL into a hard-linked single-file image", async () => {
+it("folds a crashed writer's committed WAL into an independent single-file image", async () => {
   const f = await fixture();
   fs.rmSync(f.file);
   const crashed = spawnSync(process.execPath, [
@@ -121,15 +128,10 @@ it("folds a crashed writer's committed WAL into a hard-linked single-file image"
   expect(crashed.error).toBeUndefined();
   expect(crashed.status, crashed.stderr?.toString()).not.toBe(0);
   expect(fs.statSync(`${f.file}-wal`).size).toBeGreaterThan(0);
-  f.plan.ops.push({ kind: "remove", live: `${f.file}-wal` });
   const inode = fs.statSync(f.file).ino;
-  const restore = await beginStateUpgradeRestore(f.env);
-  expect(publishStateUpgradeRestore(restore, f.plan)).toEqual({
-    linked: 1,
-    copied: [],
-    symlinks: 0,
-  });
-  expect(fs.statSync(f.image).ino).toBe(inode);
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
+  expect(fs.statSync(f.file).ino).toBe(inode);
+  expect(fs.statSync(f.image).ino).not.toBe(inode);
   expect(value(f.image)).toBe("committed-wal");
   expect(JSON.parse(fs.readFileSync(f.manifest, "utf8"))).toEqual({
     v: 1,
@@ -145,46 +147,50 @@ it("folds a crashed writer's committed WAL into a hard-linked single-file image"
   expect(fs.existsSync(`${f.file}-wal`)).toBe(false);
 });
 
-it("reuses immutable originals after a partial rename and preserves legacy rollback", async () => {
+it("reuses immutable originals after live writes and preserves the frozen legacy rollback", async () => {
   const f = await fixture();
-  const restore = await beginStateUpgradeRestore(f.env);
-  publishStateUpgradeRestore(restore, f.plan);
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
   const original = fs.statSync(f.image);
-  applyPlan(f.plan);
+  const encoded = fs.readFileSync(f.manifest, "utf8");
+  {
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value = 'candidate'");
+  }
   expect(value(f.file)).toBe("candidate");
-  const resumed = await beginStateUpgradeRestore(f.env);
-  expect(publishStateUpgradeRestore(resumed, f.plan, true)).toEqual({
-    linked: 0,
-    copied: [],
-    symlinks: 0,
-  });
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
   expect(fs.statSync(f.image).ino).toBe(original.ino);
   expect(value(f.image)).toBe("original");
-  const suffix = ".pre-candidate-build";
+  expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
   const preserved = runInNewContext(
-    `${ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); restoreState(files,suffix); files;`,
-    {
-      fs,
-      path,
-      stateDir: f.root,
-      suffix,
-    },
+    `${LEGACY_ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); restoreState(files,suffix); files;`,
+    { fs, path, stateDir: f.root, suffix: `.pre-${f.generation}` },
   ) as string[];
   expect([...preserved]).toEqual([f.file]);
+  const opened = openRootFileSync({
+    absolutePath: f.file,
+    rootPath: f.root,
+    boundaryLabel: "client credential store",
+    rejectSymlinks: true,
+  });
+  if (!opened.ok) {
+    throw opened.error;
+  }
+  fs.closeSync(opened.fd);
   expect(value(f.file)).toBe("original");
-  expect(fs.existsSync(f.image)).toBe(true);
-  expect(fs.existsSync(f.manifest)).toBe(true);
+  expect(fs.existsSync(f.image)).toBe(false);
+  expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
 });
 
-it.each(["missing", "malformed", "version", "coverage"] as const)(
-  "refuses %s recovery evidence before resuming a durable swap plan",
+it.each(["missing-image", "malformed", "version", "coverage"] as const)(
+  "refuses %s recovery evidence without changing live rows",
   async (mode) => {
     const f = await fixture();
-    if (mode === "missing") {
-      const restore = await beginStateUpgradeRestore(f.env);
-      expect(() => publishStateUpgradeRestore(restore, f.plan, true)).toThrow(
-        /no matching restore manifest/,
-      );
+    if (mode === "missing-image") {
+      await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
+      fs.rmSync(f.image);
+      await expect(
+        publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture),
+      ).rejects.toThrow(/missing or invalid/);
     } else {
       fs.writeFileSync(
         f.manifest,
@@ -197,8 +203,9 @@ it.each(["missing", "malformed", "version", "coverage"] as const)(
             }),
       );
       if (mode === "coverage") {
-        const restore = await beginStateUpgradeRestore(f.env);
-        expect(() => publishStateUpgradeRestore(restore, f.plan, true)).toThrow(/does not cover/);
+        await expect(
+          publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture),
+        ).rejects.toThrow(/does not cover/);
       } else {
         await expect(beginStateUpgradeRestore(f.env)).rejects.toThrow(
           /Invalid update restore manifest/,
@@ -206,11 +213,10 @@ it.each(["missing", "malformed", "version", "coverage"] as const)(
       }
     }
     expect(value(f.file)).toBe("original");
-    expect(value(f.next)).toBe("candidate");
   },
 );
 
-it("removes unpublished images when manifest publication fails, without applying the plan", async () => {
+it("refuses a failed manifest publication without mutating live rows", async () => {
   const f = await fixture();
   const rename = fs.renameSync;
   vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
@@ -219,100 +225,153 @@ it("removes unpublished images when manifest publication fails, without applying
     }
     return rename(source, destination);
   });
-  const restore = await beginStateUpgradeRestore(f.env);
-  expect(() => publishStateUpgradeRestore(restore, f.plan)).toThrow(/synthetic manifest/);
+  await expect(
+    publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture),
+  ).rejects.toThrow(/synthetic manifest/);
   expect(fs.existsSync(f.manifest)).toBe(false);
+  expect(value(f.file)).toBe("original");
+});
+
+it("publishes an empty trial receipt once and preserves complete existing receipts on no-op starts", async () => {
+  const f = await fixture();
+  const empty = { targets: [], config: {} };
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), empty);
+  const encoded = fs.readFileSync(f.manifest, "utf8");
+  expect(JSON.parse(encoded)).toEqual({ v: 1, runId: "manifest-run", files: [] });
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), empty);
+  expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
   expect(fs.existsSync(f.image)).toBe(false);
-  expect(value(f.file)).toBe("original");
-});
 
-it("uses a byte copy only when the filesystem refuses a hard link", async () => {
-  const f = await fixture();
-  vi.spyOn(fs, "linkSync").mockImplementation(() => {
-    throw Object.assign(new Error("synthetic cross-device link"), { code: "EXDEV" });
-  });
-  const restore = await beginStateUpgradeRestore(f.env);
-  expect(publishStateUpgradeRestore(restore, f.plan)).toEqual({
-    linked: 0,
-    copied: [`${f.file} (EXDEV)`],
-    symlinks: 0,
-  });
-  expect(fs.statSync(f.image).ino).not.toBe(fs.statSync(f.file).ino);
-  expect(value(f.image)).toBe("original");
-});
-
-it("declares removal of a newly created SQLite file and every possible companion", async () => {
-  const f = await fixture();
-  const live = path.join(f.root, "new.sqlite");
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), {
-    ops: [{ kind: "add", live, next: f.next }],
-  });
-  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).toEqual(
-    ["", "-wal", "-shm", "-journal", ".seal"].map((suffix) => ({
-      live: `${live}${suffix}`,
-      preimage: null,
-    })),
-  );
-  expect(fs.existsSync(live)).toBe(false);
-});
-
-it("keeps an unremovable old image advisory for the next no-upgrade trial", async () => {
-  const f = await fixture();
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.plan);
-  fs.rmSync(f.image);
-  fs.mkdirSync(f.image);
   await writeTrial({ ...f.trial, phase: "committed" }, resolvePrefix(f.env));
-  const cleanup = takeStateUpgradeRestoreCleanup();
-  expect(cleanup?.()).toEqual([expect.stringContaining("Run openclaw triage")]);
-  const following = await prepareNextTrial(f, "after-warning", f.trial.target);
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), { ops: [] });
-  expect(JSON.parse(fs.readFileSync(following.manifest, "utf8"))).toEqual({
-    v: 1,
-    runId: "after-warning",
-    files: [],
-  });
-  expect(fs.statSync(f.image).isDirectory()).toBe(true);
-  expect(value(f.file)).toBe("original");
-});
-
-it("preserves leaf symlinks and external config without following their targets", async () => {
-  const f = await fixture();
-  const external = dirs.make("state-restore-config-");
-  const config = path.join(external, "openclaw.json");
-  fs.writeFileSync(config, "original config", { mode: 0o640 });
-  const link = path.join(f.root, "config-link");
-  fs.symlinkSync("missing-config-target", link, "file");
-  const restore = await beginStateUpgradeRestore(f.env);
-  const plan = {
-    ops: [
-      { kind: "remove" as const, live: config },
-      { kind: "remove" as const, live: link },
-    ],
-  };
-  expect(publishStateUpgradeRestore(restore, plan)).toEqual({ linked: 1, copied: [], symlinks: 1 });
-  expect(fs.readFileSync(`${config}.pre-restore-manifest-run`, "utf8")).toBe("original config");
-  expect(fs.statSync(`${config}.pre-restore-manifest-run`).mode).toBe(fs.statSync(config).mode);
-  expect(fs.readlinkSync(`${link}.pre-restore-manifest-run`)).toBe("missing-config-target");
-});
-
-it("lets delayed cleanup retire only its captured images after another release publishes", async () => {
-  const f = await fixture();
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.plan);
-  await writeTrial({ ...f.trial, phase: "committed" }, resolvePrefix(f.env));
-  const cleanupA = takeStateUpgradeRestoreCleanup();
   const following = await prepareNextTrial(f, "next-run", f.trial.target);
-  publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.plan);
-  const cleanupB = takeStateUpgradeRestoreCleanup();
-  const nextImage = `${f.file}.pre-restore-next-run`;
-  // Release GC may already have removed A's receipt. Its process still owns the
-  // captured list, not whichever manifest happens to exist when IPC completes.
-  fs.rmSync(f.manifest);
-  expect(cleanupA?.()).toEqual([]);
-  expect(fs.existsSync(f.image)).toBe(false);
-  expect(fs.existsSync(nextImage)).toBe(true);
-  await writeTrial({ ...following.trial, phase: "committed" }, resolvePrefix(f.env));
-  expect(cleanupB?.()).toEqual([]);
-  expect(fs.existsSync(nextImage)).toBe(false);
-  expect(JSON.parse(fs.readFileSync(following.manifest, "utf8")).runId).toBe("next-run");
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
+  const complete = fs.readFileSync(following.manifest, "utf8");
+  const image = fs.statSync(f.image);
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), empty);
+  expect(fs.readFileSync(following.manifest, "utf8")).toBe(complete);
+  expect(fs.statSync(f.image).ino).toBe(image.ino);
+  expect(value(f.image)).toBe("original");
+  expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
+});
+
+it("narrows unused legacy-import stores before runtime while preserving boot-created families", async () => {
+  const f = await fixture();
+  const agentPath = path.join(f.root, "agents", "new", "agent", "openclaw-agent.sqlite");
+  const laterPath = path.join(f.root, "agents", "later", "agent", "openclaw-agent.sqlite");
+  const target: DatabaseTarget = {
+    kind: "agent",
+    agentId: "new",
+    path: agentPath,
+    version: 0,
+    minReader: 0,
+    engine: "sqlite",
+  };
+  const complete = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), {
+    targets: [...f.capture.targets, target, { ...target, agentId: "later", path: laterPath }],
+    config: {},
+  });
+  const manifest = JSON.parse(fs.readFileSync(f.manifest, "utf8")) as {
+    files: Array<{ live: string; preimage: string | null }>;
+  };
+  const agentFiles = ["", "-wal", "-shm", "-journal", ".seal"].map(
+    (suffix) => `${agentPath}${suffix}`,
+  );
+  expect(manifest.files.filter((entry) => entry.live.startsWith(agentPath))).toEqual(
+    agentFiles.map((live) => ({ live, preimage: null })),
+  );
+  expect(fs.existsSync(agentPath)).toBe(false);
+  fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+  {
+    using agent = new DatabaseSync(agentPath);
+    ensureOpenClawAgentSchema(agent, "new", agentPath);
+    expect(
+      agent
+        .prepare(
+          "SELECT role, agent_id, schema_version FROM schema_meta WHERE meta_key = 'primary'",
+        )
+        .get(),
+    ).toEqual({ role: "agent", agent_id: "new", schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value = 'candidate'");
+  }
+  complete?.();
+  const narrowed = JSON.parse(fs.readFileSync(f.manifest, "utf8")) as typeof manifest;
+  expect(narrowed.files).not.toContainEqual({ live: laterPath, preimage: null });
+  expect(narrowed.files).toContainEqual({ live: `${f.file}-wal`, preimage: null });
+  fs.mkdirSync(path.dirname(laterPath), { recursive: true });
+  {
+    using later = new DatabaseSync(laterPath);
+    ensureOpenClawAgentSchema(later, "later", laterPath);
+    later.exec("CREATE TABLE witness(value TEXT); INSERT INTO witness VALUES ('later-base')");
+  }
+  // A failed candidate can leave committed WAL companions for the old launcher to remove.
+  const crashed = spawnSync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE schema_meta SET app_version='candidate'");
+    const later = new DatabaseSync(process.argv[2]);
+    later.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('later-WAL')");
+    process.kill(process.pid, "SIGKILL");
+  `,
+    agentPath,
+    laterPath,
+  ]);
+  expect(crashed.error).toBeUndefined();
+  expect(crashed.status, crashed.stderr?.toString()).not.toBe(0);
+  expect(fs.statSync(`${agentPath}-wal`).size).toBeGreaterThan(0);
+  expect(fs.statSync(`${laterPath}-wal`).size).toBeGreaterThan(0);
+  runInNewContext(
+    `${LEGACY_ROLLBACK_SOURCE}\nretirePlans(stateDir,generation); restoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
+    { fs, path, stateDir: f.root, generation: f.generation, suffix: `.pre-${f.generation}` },
+  );
+  for (const file of agentFiles) {
+    expect(fs.existsSync(file)).toBe(false);
+  }
   expect(value(f.file)).toBe("original");
+  {
+    using later = new DatabaseSync(laterPath, { readOnly: true });
+    expect(later.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual([
+      { value: "later-base" },
+      { value: "later-WAL" },
+    ]);
+  }
+});
+
+it("refreshes a narrowed prospective family on retry without re-imaging original rows", async () => {
+  const f = await fixture();
+  const added = path.join(f.root, "new.sqlite");
+  const capture = {
+    targets: [...f.capture.targets, { path: added, engine: "sqlite" as const }],
+    config: {},
+  };
+  const complete = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), capture);
+  complete?.();
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).not.toContainEqual({
+    live: added,
+    preimage: null,
+  });
+  const inode = fs.statSync(f.image).ino;
+  {
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value='candidate'");
+  }
+  const retry = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), capture);
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).toContainEqual({
+    live: added,
+    preimage: null,
+  });
+  {
+    using created = new DatabaseSync(added);
+    created.exec("CREATE TABLE witness(value TEXT)");
+  }
+  retry?.();
+  expect(fs.statSync(f.image).ino).toBe(inode);
+  expect(value(f.image)).toBe("original");
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).toContainEqual({
+    live: added,
+    preimage: null,
+  });
 });

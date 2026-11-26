@@ -19,6 +19,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
+import { revokeSessionParticipationQueueInTransaction } from "./session-participation-queue.kernel.js";
 import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
 import type {
@@ -221,6 +222,13 @@ export function setSessionMemberAccess(
             .where("identity_id", "=", identityId),
         ),
       );
+      if (params.access !== "send") {
+        revokeSessionParticipationQueueInTransaction(database, {
+          sessionKey,
+          sessionId,
+          profileId: identityId,
+        });
+      }
       const actor = readSessionActorTransactionState(database, { sessionKey, sessionId });
       if (actor) {
         const member = actor.hot.members.find((row) => row.identityId === toUSVString(identityId));
@@ -288,6 +296,11 @@ export function removeSessionMember(
       if (!row) {
         return null;
       }
+      revokeSessionParticipationQueueInTransaction(database, {
+        sessionKey,
+        sessionId,
+        profileId: normalizedIdentityId,
+      });
       const actor = readSessionActorTransactionState(database, { sessionKey, sessionId });
       if (actor) {
         actor.hot.members = actor.hot.members.filter(

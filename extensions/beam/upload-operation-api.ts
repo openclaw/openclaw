@@ -66,6 +66,9 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
           value: {
             ...value,
             items: snapshot?.value.items ?? [],
+            ...(snapshot?.value.presentationDigest
+              ? { presentationDigest: snapshot.value.presentationDigest }
+              : {}),
             ...(snapshot?.value.packetText ? { packetText: snapshot.value.packetText } : {}),
           },
         }
@@ -121,7 +124,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
         : { id, agentId, sessionKey: `agent:${agentId}:dashboard:${id}` },
     };
     // Binding is metadata, not a new upload: preserve the publication's actual expiry.
-    const { items: _items, packetText: _text, ...handoff } = session;
+    const { items: _items, packetText: _text, presentationDigest: _image, ...handoff } = session;
     tx.set(1, beamId, handoff);
     if (snapshot) {
       tx.set(
@@ -143,7 +146,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
 export function persistBeamUpload(
   { upload, receivedAt, publisher }: BeamUploadOperations["upload"]["input"],
   tx: PluginStateOperationTransaction,
-  wire?: { packetText: string },
+  wire?: { packetText: string; presentationDigest?: string },
 ): BeamUploadResult {
   const [snapshot, handoff] = tx.lookupMany<BeamStoredSession | BeamHandoff>([
     { store: 0, key: upload.beamId },
@@ -211,6 +214,7 @@ export function persistBeamUpload(
     ...(wire
       ? {
           portable: true as const,
+          ...(wire.presentationDigest ? { presentationDigest: wire.presentationDigest } : {}),
           ...(snapshotBytes(upload) !== wire.packetText ? { packetText: wire.packetText } : {}),
         }
       : {}),
@@ -223,10 +227,16 @@ export function persistBeamUpload(
     createdAt: existing?.createdAt ?? receivedAt,
     receivedAt,
   } satisfies BeamStoredSession;
-  tx.set(0, upload.beamId, session);
+  // Both upload protocols use store 2 for images. Evict the exact snapshot's image
+  // even when a text-only publication takes its last catalog slot.
+  tx.set(0, upload.beamId, session, { evictSameKeysFrom: 2 });
+  if (!wire && snapshot && "presentationDigest" in snapshot && snapshot.presentationDigest) {
+    // A committed legacy upload replaces the entire snapshot, including its preview.
+    tx.delete(2, upload.beamId);
+  }
   if (upload.handoffId) {
     // Archive/expiry removes the snapshot, never this logical identity's release.
-    const { items: _items, packetText: _text, ...ownership } = session;
+    const { items: _items, packetText: _text, presentationDigest: _image, ...ownership } = session;
     tx.set(1, upload.beamId, ownership);
   }
   return upload.handoffId

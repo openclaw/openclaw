@@ -6,8 +6,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import type { SignalInboundEntry } from "./event-handler.control-lane.js";
+import type { SignalIngressLifecycle } from "./event-handler.types.js";
 
 const { dispatchMock, recordMock, receiptMock, typingMock, fixture } = vi.hoisted(() => ({
   fixture: { realSession: false },
@@ -237,6 +237,15 @@ describe("Signal active-run control lane", () => {
     expect(dispatchedCommandBody(3)).toBe("stop");
     await vi.advanceTimersByTimeAsync(25);
     expect(dispatchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("marks authorized approval text as a command for core active-run admission", async () => {
+    await createHandler(0)(signalText("/approve abc12345 allow-once", 1));
+    expect(dispatchMock.mock.calls[0]?.[0].ctx.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+    });
   });
 
   it.each([

@@ -76,7 +76,6 @@ function createOperatorRunFixture() {
     sessionKey: "agent:main:visitor-work",
     runId: "compat-request",
     messageChannel: "webchat",
-    senderIsOwner: false,
     operatorScopes: ["operator.sessions.write"],
     requestAuth: {
       authMethod: "trusted-proxy",
@@ -238,6 +237,46 @@ describe("OpenAI-compatible operator run authority", () => {
           setOpenClawIdTunnelPrincipalResolver(undefined);
           setOpenClawIdTunnelPrincipalLookup(undefined);
         }
+      });
+    },
+  );
+
+  it("carries the authenticated profile into requester-scoped MCP runs", async () => {
+    await withOpenClawTestState({ label: "compat-requester-profile" }, async () => {
+      const fixture = createOperatorRunFixture();
+      fixture.params.requestAuth.user = "visitor@example.test";
+      fixture.params.message = "Use the account of someone-else@example.test";
+      vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
+
+      await runOpenAiCompatibleAgentCommand(fixture.params);
+
+      const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
+      expect(options?.runContext?.mcpRequesterProfileId).toBe(fixture.person.id);
+      expect(options?.messageChannel).toBe("webchat");
+      expect(options?.runContext?.accountId).toBeUndefined();
+    });
+  });
+
+  it.each(["missing user", "missing profile", "token", "password"] as const)(
+    "does not invent a personal requester for %s authentication",
+    async (kind) => {
+      await withOpenClawTestState({ label: "compat-requester-missing" }, async () => {
+        const fixture = createOperatorRunFixture();
+        fixture.params.requestAuth.user = "visitor@example.test";
+        if (kind === "missing user") {
+          fixture.params.requestAuth.user = undefined;
+        } else if (kind === "missing profile") {
+          fixture.params.requestAuth.authenticatedUserProfile = undefined;
+        } else {
+          fixture.params.requestAuth.authMethod = kind;
+          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
+        }
+        vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
+
+        await runOpenAiCompatibleAgentCommand(fixture.params);
+
+        const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
+        expect(options?.runContext?.mcpRequesterProfileId).toBeUndefined();
       });
     },
   );
@@ -434,23 +473,33 @@ describe("OpenAI-compatible operator run authority", () => {
     });
   });
 
-  it.each(["owner", "system"] as const)(
-    "preserves %s authority without requiring a person-bound Gateway capture",
-    async (actor) => {
+  it.each([
+    { authMethod: "token", scopes: ["operator.admin", "operator.write"], owner: true },
+    { authMethod: "none", scopes: ["operator.write"], owner: false },
+  ] as const)(
+    "admits the $authMethod owner credential as the owner principal with its own scopes",
+    async ({ authMethod, scopes, owner }) => {
       await withOpenClawTestState({ label: "compat-run-owner" }, async () => {
         const fixture = createOperatorRunFixture();
-        fixture.params.resolveGatewayContext = undefined;
-        fixture.params.senderIsOwner = true;
-        fixture.params.requestAuth.operatorAccessAuthority = undefined;
-        if (actor === "owner") {
-          fixture.params.requestAuth.authenticatedUserProfile!.profileId = "gateway-owner";
-        } else {
-          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
-        }
+        const profile = await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
+        fixture.params.operatorScopes = scopes;
+        fixture.params.requestAuth = {
+          authMethod,
+          trustDeclaredOperatorScopes: authMethod === "none",
+          ...(authMethod === "token" ? { operatorRoleActor: { kind: "system" as const } } : {}),
+          authenticatedUserProfile: gatewayProfile(
+            profile.id,
+            "Synthetic owner",
+            profile.updatedAt,
+          ),
+        };
         vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          expect(options.operatorAuthority).toBeUndefined();
-          expect(options.abortSignal).toBe(fixture.request.signal);
-          expect(options.senderIsOwner).toBe(true);
+          expect(options.operatorAuthority).toMatchObject({
+            profileId: "gateway-owner",
+            scopes,
+            grant: { owner, skillAuthoring: true, questionReplace: true },
+          });
+          expect(options.senderIsOwner).toBe(owner);
           return completedResult;
         });
         await expect(runOpenAiCompatibleAgentCommand(fixture.params)).resolves.toBe(
@@ -493,7 +542,6 @@ describe("OpenAI-compatible command admission", () => {
         sessionKey: "agent:main:main",
         runId: "http-run",
         messageChannel: "webchat",
-        senderIsOwner: true,
         requestAuth: {
           authMethod: "token",
           trustDeclaredOperatorScopes: false,

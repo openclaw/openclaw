@@ -1,7 +1,8 @@
 /** Synthetic fixture only; run with --expose-gc --import ./scripts/tsx.mjs.
  * Five alternating pairs after warmup. --control uses baseline in both arms.
  * --allocation samples host allocations separately from uninstrumented timing.
- * The baseline generic sweep is absent work, not a competing implementation.
+ * --baseline-sweep accepts the historical sweep source from git show. When omitted,
+ * the baseline predates the generic sweep and has no idle work.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -17,6 +18,7 @@ const { values } = parseArgs({
   options: {
     root: { type: "string" },
     baseline: { type: "string" },
+    "baseline-sweep": { type: "string" },
     output: { type: "string" },
     control: { type: "boolean" },
     allocation: { type: "boolean" },
@@ -47,16 +49,21 @@ const sources = [readFileSync(values.baseline, "utf8"), readFileSync(new URL(can
 if (values.control) {
   sources[1] = sources[0];
 }
+const sweepUrl = sourceUrl("src/gateway/session-yield-sweep.ts");
+const baselineSweepUrl = `${sweepUrl}?yield-measure=baseline`;
+const baselineSweepSource =
+  values["baseline-sweep"] && readFileSync(values["baseline-sweep"], "utf8");
 const urls = sources.map((_, arm) => `${canonical}?yield-measure=${arm}`);
 registerHooks({
   load(url, context, next) {
     const arm = urls.indexOf(url);
-    return arm < 0
+    const source = url === baselineSweepUrl ? baselineSweepSource : sources[arm];
+    return typeof source !== "string"
       ? next(url, context)
       : {
           format: "module",
           shortCircuit: true,
-          source: stripTypeScriptTypes(sources[arm], { sourceUrl: url }),
+          source: stripTypeScriptTypes(source, { sourceUrl: url }),
         };
   },
 });
@@ -69,9 +76,14 @@ const { createSessionRowProjection } = await import(
 const { bindSessionRowProjection } = await import(
   sourceUrl("src/gateway/session-row-projection-access.ts")
 );
-const { sweepUnreachableSessionYields } = await import(
-  sourceUrl("src/gateway/session-yield-sweep.ts")
-);
+const baselineSweep =
+  baselineSweepSource === undefined
+    ? undefined
+    : (await import(baselineSweepUrl)).sweepUnreachableSessionYields;
+const sweeps = [
+  baselineSweep,
+  values.control ? baselineSweep : (await import(sweepUrl)).sweepUnreachableSessionYields,
+];
 const { closeOpenClawAgentDatabasesAsync } = await import(
   sourceUrl("src/state/openclaw-agent-db.ts")
 );
@@ -118,8 +130,8 @@ try {
       if (mode === "admission") {
         const result = await tools[arm].execute("synthetic-yield", {});
         assert.equal(result.details.status, "nothing_pending");
-      } else if (arm === 1 && !values.control) {
-        await sweepUnreachableSessionYields(resolveGatewayContext, signal);
+      } else {
+        await sweeps[arm]?.(resolveGatewayContext, signal);
       }
     };
     for (let warm = 0; warm < 20; warm++) {

@@ -112,6 +112,7 @@ export function createChannelPreflightAudio<TAudio>(params: {
 }
 
 export {
+  createAudioInputBudgetReader,
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,

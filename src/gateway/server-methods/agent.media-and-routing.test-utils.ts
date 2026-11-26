@@ -598,45 +598,6 @@ describe("gateway agent handler", () => {
   // (no modelOverride), while the store-load inside updateSessionStore has the
   // fresh value. If the patch built from the stale entry carries modelOverride:
   // undefined, the merge {...fresh, ...patch} clobbers the fresh value.
-  it("preserves fresh modelOverride when cached entry is stale (#5369)", async () => {
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "subagent-session-id",
-        updatedAt: Date.now() - 1000,
-        // modelOverride absent — stale pre-patch view
-      },
-      canonicalKey: "agent:main:subagent:test-uuid",
-    });
-    let capturedEntry: Record<string, unknown> | undefined;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const freshStore: Record<string, Record<string, unknown>> = {
-        "agent:main:subagent:test-uuid": {
-          sessionId: "subagent-session-id",
-          updatedAt: Date.now(),
-          modelOverride: "qwen3-coder:30b",
-          providerOverride: "ollama",
-        },
-      };
-      const result = await updater(freshStore);
-      capturedEntry = freshStore["agent:main:subagent:test-uuid"];
-      return result;
-    });
-    mockSuccessfulAgentCommand();
-    await invokeAgent(
-      {
-        message: "hi",
-        agentId: "main",
-        sessionKey: "agent:main:subagent:test-uuid",
-        idempotencyKey: "test-5369-race",
-      },
-      { reqId: "race-1" },
-    );
-    expect(capturedEntry?.modelOverride).toBe("qwen3-coder:30b");
-    expect(capturedEntry?.providerOverride).toBe("ollama");
-  });
-
   // Broader regression guard for the #5369 stale-writeback class: any field
   // that the patch blindly carries from the cached entry will clobber a fresh
   // concurrent write. The fix dropped all such fields from the patch; this
@@ -654,6 +615,8 @@ describe("gateway agent handler", () => {
       canonicalKey: "agent:main:subagent:test-broader",
     });
     const freshFields = {
+      modelOverride: "qwen3-coder:30b",
+      providerOverride: "ollama",
       sendPolicy: "allow",
       skillsSnapshot: { tools: ["bash"] },
       thinkingLevel: "high",

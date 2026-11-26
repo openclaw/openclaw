@@ -1,6 +1,11 @@
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import type {
+  ReleasedProcess,
+  RunExit,
+  SpawnInput,
+  TerminationReason,
+} from "../process/supervisor/types.js";
 
 export type DurableControlOptions = Pick<SpawnInput, "env" | "assertCurrent" | "initiateSpawn">;
 export type DurableStopOptions = Pick<DurableControlOptions, "assertCurrent">;
@@ -24,6 +29,8 @@ export type DurableProcessObservation =
       durationMs?: number;
       /** Explains an exit whose outcome the supervisor could not record. */
       note?: string;
+      /** Processes the command left running; undefined when they could not be listed. */
+      survivors?: ReleasedProcess[];
     };
 
 /**
@@ -37,7 +44,10 @@ export type DurableProcessSupervisor = {
   launch(params: DurableLaunchOptions): Promise<{ unitName: string }>;
   read(unit: string): Promise<DurableProcessObservation>;
   stop(unit: string, options?: DurableStopOptions): Promise<void>;
-  /** Release the retained job; the registry records its real result first. */
+  /**
+   * Release the retained job; the registry records its real result first. Never stops
+   * what the command left running: a job that still holds such processes stays retained.
+   */
   cleanup(unit: string, options?: DurableStopOptions): Promise<void>;
 };
 const MAX_OUTPUT = 256_000;

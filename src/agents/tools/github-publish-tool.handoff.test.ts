@@ -11,10 +11,16 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+} from "../../gateway/operator-run-recovery.test-support.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import * as gatewayContinuation from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -22,6 +28,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
 import {
@@ -74,6 +81,7 @@ afterEach(() => {
 it.for([
   "prepared",
   "published",
+  "participant-published",
   "published-behind-full-queue",
   "publication-failed",
   "failed",
@@ -84,7 +92,9 @@ it.for([
 ] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
+    const participantPublication = outcome === "participant-published";
     const localPublication =
+      participantPublication ||
       outcome === "published" ||
       outcome === "published-behind-full-queue" ||
       outcome === "publication-failed";
@@ -104,16 +114,28 @@ it.for([
         const runId = "pr-handoff-run";
         const scope = { agentId: "main", sessionKey };
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const scopes: OperatorScope[] = localPublication
-          ? ["operator.read", "operator.write"]
-          : ["operator.sessions.read", "operator.sessions.write"];
+        const scopes: OperatorScope[] = participantPublication
+          ? ["operator.sessions.read"]
+          : localPublication
+            ? ["operator.read", "operator.write"]
+            : ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
           agents: completionConfig(state.workspaceDir).agents,
           gateway: {
             roles: {
               default: "guest",
               definitions: {
-                guest: { scopes, agents: ["main"], sessions: { others: "none" } },
+                guest: {
+                  scopes,
+                  agents: ["main"],
+                  sessions: participantPublication
+                    ? {
+                        others: "invited",
+                        maxInvitedAccess: "send",
+                        invitedTools: ["github_publish", "read"],
+                      }
+                    : { others: "none" },
+                },
               },
             },
           },
@@ -136,11 +158,20 @@ it.for([
             gatewayAccessGrant: null,
           },
         };
+        const creatorId = participantPublication
+          ? createOperatorClient({ profileName: "pr-handoff-creator", scopes: [] })
+              .authenticatedUserProfile!.profileId
+          : profileId;
         await upsertSessionEntryCore(scope, {
           sessionId,
           updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: profileId },
+          sessionRoot: state.workspaceDir,
+          visibility: participantPublication ? "read-only" : undefined,
+          createdActor: { type: "human", source: "profile", id: creatorId },
         });
+        if (participantPublication) {
+          addSessionMember(scope, { identityId: profileId, addedBy: creatorId, access: "send" });
+        }
         const operation = createTestReplyOperation({
           sessionKey,
           sessionId,
@@ -156,11 +187,30 @@ it.for([
         const cleanup = createDeferredCore();
         const resumed = createDeferredCore<string>();
         const order: string[] = [];
-        const endpoint = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
+        const endpoint = vi.fn<GatewayRequestHandler>(async (options) => {
+          const { params, respond } = options;
+          if (participantPublication) {
+            const admitted = await prepareGitHubPublicationRequesterV2(options, scope);
+            try {
+              expect(admitted.requester.snapshot).toMatchObject({
+                actor: { kind: "operator", profileId },
+                scopes,
+                participation: {
+                  ceiling: { profileId, sessionKey },
+                  target: { ...scope, sessionId },
+                },
+              });
+              expect(params.workspacePath).toBeUndefined();
+            } finally {
+              admitted.release();
+            }
+          }
           expect(params).toMatchObject(
-            localPublication
-              ? { sessionKey, workspacePath: state.workspaceDir }
-              : { sessionKey, action: "prepare_pr" },
+            participantPublication
+              ? { sessionKey }
+              : localPublication
+                ? { sessionKey, workspacePath: state.workspaceDir }
+                : { sessionKey, action: "prepare_pr" },
           );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
           if (localPublication) {
@@ -232,6 +282,37 @@ it.for([
           () => config,
         );
         context.resolveGatewayContext = () => context;
+        let participant: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
+        if (participantPublication) {
+          const original = await createOperatorRecoveryFixture({
+            stateDir: state.stateDir,
+            context,
+            config,
+            profileId,
+            scopes,
+            device: pairedOperator(),
+            sessionKey: "agent:main:handoff-source",
+          });
+          Object.assign(client, original.client);
+          const invitation = await resolveSessionMutationAuthorizationAsync({
+            client,
+            context,
+            method: "chat.send",
+            requestParams: { sessionKey },
+            participationRequired: true,
+          });
+          const grant = expectDefined(invitation.authorization, "participant invitation");
+          try {
+            participant = await prepareGatewayOperatorRunAuthority({
+              client,
+              context,
+              sourceAuthority: null,
+              invocationAuthority: grant.retainForRun?.(),
+            });
+          } finally {
+            grant.release?.();
+          }
+        }
         let resumedContext: string | undefined;
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           resumedContext = params.currentInboundContext?.text;
@@ -263,7 +344,11 @@ it.for([
             }
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
-            ).rejects.toThrow("operator.admin");
+            ).rejects.toThrow(
+              participantPublication
+                ? "Participating tools cannot change Gateway authority"
+                : "operator.admin",
+            );
           });
           return { payloads: [{ text: "Guest publication admitted" }], meta: { durationMs: 1 } };
         });
@@ -395,7 +480,9 @@ it.for([
               runAbort.signal,
             ),
           );
-          // Code Mode keeps the yielding call direct, as it does sessions_yield.
+          // Once the session has called it by name, Code Mode keeps the yielding call direct.
+          codeMode.catalogRef.loadsOnDemandTools = true;
+          codeMode.catalogRef.promotedToolNames = new Set(["github_publish"]);
           const surface = applyCodeModeCatalog({
             tools: [...codeMode.tools, wrapped],
             config: codeMode.config,
@@ -410,9 +497,14 @@ it.for([
           );
           const result = await tool.execute(
             "prepare",
-            localPublication
-              ? { workspacePath: state.workspaceDir, title: "Publish the task" }
-              : { action: "prepare_pr", pullRequestUrl: "https://github.com/example/repo/pull/1" },
+            participantPublication
+              ? {}
+              : localPublication
+                ? { workspacePath: state.workspaceDir, title: "Publish the task" }
+                : {
+                    action: "prepare_pr",
+                    pullRequestUrl: "https://github.com/example/repo/pull/1",
+                  },
           );
           expect(result.details).toMatchObject({
             status: "started",
@@ -501,19 +593,22 @@ it.for([
               isWebchatConnect: () => false,
             },
             () =>
-              gatewayContinuation.withOperatorToolGatewayAuthority({ scopes }, () =>
-                exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
-                  // Production callers carry the turn batch receipt and the run abort signal.
-                  withGatewayToolCallerIdentity(
-                    {
-                      ...scope,
-                      operationalRunInstance: createOperationalRunInstanceRef(runId),
-                      receiptAuthority: () => runAbort.signal.throwIfAborted(),
-                      approvalSignals: [runAbort.signal],
-                    },
-                    exercise,
+              gatewayContinuation.withOperatorToolGatewayAuthority(
+                { scopes, operatorRunAuthority: participant?.authority },
+                () =>
+                  exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
+                    // Production callers carry the turn batch receipt and the run abort signal.
+                    withGatewayToolCallerIdentity(
+                      {
+                        ...scope,
+                        operatorAuthority: participant?.authority,
+                        operationalRunInstance: createOperationalRunInstanceRef(runId),
+                        receiptAuthority: () => runAbort.signal.throwIfAborted(),
+                        approvalSignals: [runAbort.signal],
+                      },
+                      exercise,
+                    ),
                   ),
-                ),
               ),
           );
         } finally {
@@ -522,6 +617,7 @@ it.for([
           receipt?.cancel();
           await Promise.allSettled([receipt?.settled]);
           clearToolSearchCatalog(codeMode.ctx);
+          participant?.release();
         }
       },
     );

@@ -275,7 +275,7 @@ describe("Talk client agent consult admission", () => {
           deviceId: "caller-device",
           scopes: ["operator.admin"],
         });
-        const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
+        const authority = resolveTalkAgentConsultAuthority(client);
         const handle = createEmbeddedRunHandle({
           runId: "run-talk",
           guarded: true,

@@ -84,7 +84,6 @@ extensions/ollama/index.test.ts
 extensions/ollama/index.ts
 extensions/ollama/src/stream-runtime.test.ts
 extensions/ollama/src/stream.runtime.ts
-extensions/openai/image-generation-provider.ts
 extensions/openai/openai-provider.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
@@ -110,7 +109,6 @@ extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/web/src/app.ts
-extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
 extensions/slack/src/channel.ts

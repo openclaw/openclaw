@@ -25,6 +25,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -159,12 +160,7 @@ try {
     const inspector = new Session();
     let allocatedBytes: number | undefined;
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const cpu = process.threadCpuUsage();
     const started = performance.now();

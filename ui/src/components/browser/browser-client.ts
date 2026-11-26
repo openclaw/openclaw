@@ -373,13 +373,24 @@ export async function requestBrowserScreencast(
   return wsPath;
 }
 
-export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+function hasBrowserErrorCode(error: unknown, code: string): boolean {
   const record = asRecord(error);
   const details = asRecord(record?.details);
   return (
-    details?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+    details?.code === code ||
+    asRecord(details?.body)?.code === code ||
+    asRecord(record?.body)?.code === code
+  );
+}
+
+export function isBrowserCapabilityUnsupportedError(error: unknown): boolean {
+  return hasBrowserErrorCode(error, "BROWSER_CAPABILITY_UNSUPPORTED");
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  return (
+    hasBrowserErrorCode(error, "SCREENCAST_UNSUPPORTED") ||
+    isBrowserCapabilityUnsupportedError(error)
   );
 }
 

@@ -20,15 +20,15 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
-import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
+import { createChatViewFrame, type ChatProps } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
+import { ChatTranscript, type ChatTranscriptInput } from "./chat-view-transcript.tsx";
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
@@ -47,12 +47,11 @@ import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-ima
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import "../../components/resizable-divider.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
-import "../../components/resizable-divider.ts";
-import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import { TemplateSetupComposer } from "./template-setup-composer.tsx";
 
@@ -73,70 +72,14 @@ const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggest
   export: "ChatTaskSuggestionTray",
 });
 
-type ChatViewInput = {
+type ChatViewInput = ChatTranscriptInput & {
   questions: ComposerQuestions;
-  props: ChatProps;
-  frame: ChatViewFrame;
   showComposerSessionCards: boolean;
   presented: boolean;
   application?: ApplicationContext;
-  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
   getScrollToLatestElement: () => HTMLButtonElement | null;
 };
-
-// Must match the fixed height of .chat-pending-inputs--history.
-const SAVED_INPUT_HISTORY_HEIGHT_PX = 44;
-
-function ChatTranscript(input: ChatViewInput) {
-  const savedInputNavigation = <ChatSavedInputNavigation {...input} />;
-  const hasSavedInputNavigation = () =>
-    input.frame.pendingInputs &&
-    (input.frame.pendingInputs.page.nextBefore !== undefined ||
-      input.frame.pendingInputs.before !== undefined);
-  return (
-    <ChatThread
-      props={input.frame.threadProps}
-      transcript={input.props.transcript}
-      bindViewport={input.bindTranscriptViewport}
-      historySupplement={
-        hasSavedInputNavigation()
-          ? {
-              content: savedInputNavigation,
-              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
-            }
-          : undefined
-      }
-    />
-  );
-}
-
-function ChatSavedInputNavigation(input: ChatViewInput) {
-  const pendingInputs = () => input.frame.pendingInputs;
-  const pendingButton = (page: "earlier" | "latest") => (
-    <button
-      class="btn btn--sm"
-      type="button"
-      disabled={pendingInputs()?.loading}
-      onClick={() => {
-        if (input.props.historyState) {
-          void loadChatPendingInputs(
-            input.props.historyState,
-            page === "earlier" ? pendingInputs()?.page.nextBefore : undefined,
-          );
-        }
-      }}
-    >
-      {t(`chat.pendingInputs.${page}`)}
-    </button>
-  );
-  return (
-    <div class="chat-pending-inputs chat-pending-inputs--history">
-      <Show when={pendingInputs()?.page.nextBefore !== undefined}>{pendingButton("earlier")}</Show>
-      <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
-    </div>
-  );
-}
 
 function ChatFooterContent(
   input: ChatViewInput & {
@@ -204,12 +147,13 @@ function ChatFooterContent(
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
+            onClose={input.props.onCloseSessionSuggestion}
+            liveResolutions={input.props.sessionSuggestionLiveResolutions}
+            messages={input.props.messages}
             busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
             archived={input.props.sessionSuggestionsArchived === true}
             canResolve={input.props.canResolveSessionSuggestions === true}
-            onResolve={(suggestion, resolution) =>
-              input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-            }
+            onResolve={input.props.onResolveSessionSuggestion}
           />
         </ChatLazyBoundary>
       </Show>
@@ -653,7 +597,16 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                           type="button"
                           inert={!input.props.showNewMessages}
                           aria-hidden={!input.props.showNewMessages ? "true" : "false"}
-                          onClick={() => input.props.onScrollToBottom?.({ smooth: true })}
+                          onClick={(event) => {
+                            const transcript = getTranscriptElement();
+                            if (
+                              transcript &&
+                              transcript.ownerDocument.activeElement === event.currentTarget
+                            ) {
+                              transcript.focus({ preventScroll: true });
+                            }
+                            input.props.onScrollToBottom?.({ smooth: true });
+                          }}
                           aria-label={t("chat.actions.scrollToLatest")}
                         >
                           <Icon name="arrowDown" />

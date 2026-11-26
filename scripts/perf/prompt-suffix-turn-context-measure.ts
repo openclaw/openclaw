@@ -30,6 +30,7 @@ import {
   buildSubagentStandingInstructions,
 } from "../../src/agents/subagents/spawn/subagent-system-prompt.js";
 import { buildAgentSystemPrompt } from "../../src/agents/system-prompt.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [selection, mode, count = "2000"] = process.argv.slice(2);
 const iterations = Number(count);
@@ -134,12 +135,7 @@ async function measure(arm: "base" | "candidate", pair: number) {
     changed = updates = restarts = encodedChars = 0;
     globalThis.gc?.();
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const gc = new GCProfiler();
     gc.start();

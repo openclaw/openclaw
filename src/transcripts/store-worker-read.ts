@@ -76,9 +76,9 @@ export const transcriptReadOperations = {
     (db, { exportKey }) => readTranscriptExportPathOwners(db, exportKey),
   ),
   "transcripts.summarySnapshot": readTranscript<"transcripts.summarySnapshot">(
-    (db, { session, maxUtterances }) =>
+    (db, { session, maxUtterances, minimumNextSequence }) =>
       runSqliteReadSnapshotSync(db, () =>
-        readTranscriptSummarySnapshot(db, session, maxUtterances),
+        readTranscriptSummarySnapshot(db, session, maxUtterances, minimumNextSequence),
       ),
   ),
   "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">(

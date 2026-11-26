@@ -18,10 +18,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  hasReleaseUpdateOwner,
-  isNodeOnlyUpdateInstallation,
-} from "../../update/installation-identity.js";
+import { isNodeOnlyUpdateInstallation } from "../../update/installation-identity.js";
+import { hasReleaseUpdateOwner } from "../../update/store.js";
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
@@ -53,7 +51,7 @@ import { GatewayServiceUpdateOwnershipError } from "./update-command-service-pla
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 
 /** Keep release-client refusals read-only before delegation to the Gateway. */
-export async function assertReleaseUpdateAdmission(
+async function assertReleaseUpdateAdmission(
   params: Parameters<typeof assertGlobalUpdateOwner>[0] &
     Pick<UpdateAdmissionReportParams, "opts" | "controlPlaneUpdateSentinelMeta">,
 ): Promise<void> {

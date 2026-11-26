@@ -63,7 +63,8 @@ const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
 // The next agent request re-admits Bob's saved source after device revocation.
-const CONTINUATION_REVOKED = "Restart recovery could not admit this input. Start a new user turn.";
+const CONTINUATION_REVOKED =
+  "I did not start this request. The sign-in it was started with is no longer valid. Reconnect to the Gateway, then send your message again.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";
@@ -587,21 +588,14 @@ it.for(["allowed", "revoked"] as const)(
       ).toEqual([result.runId, result.runId]);
       expect(gatewayCalls).toHaveBeenCalled();
       if (targetEntry?.sessionId) {
-        // History keeps terminal refusals; a refused replay is cancelled, never left queued.
+        // Refused replays never stage input; successful replays leave no pending work.
         expect(
           await listSessionPendingInputs({
             agentId: "main",
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toMatchObject(
-          revoked
-            ? {
-                items: [{ runId: result.runId, state: "cancelled", endCause: "revoked" }],
-                total: 1,
-              }
-            : { items: [], total: 0 },
-        );
+        ).toMatchObject({ items: [], total: 0 });
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });
