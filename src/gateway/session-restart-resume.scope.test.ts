@@ -69,16 +69,15 @@ async function crashSession(
       sessionKey: target.sessionKey,
       event: { ...event, runId, sessionId: target.sessionId },
     });
+    if (event.data.phase === "start" && agentHarnessId === "antigravity-native") {
+      await patchSessionEntryCore(target, () => ({
+        nativeRestartRecovery: { runId, state: "running" },
+      }));
+    }
   }
   expect(loadExactSessionEntry(target)?.entry.lifecycleRestartScope).toBe(
     run === "none" ? undefined : written,
   );
-  if (agentHarnessId === "antigravity-native") {
-    await patchSessionEntryCore(target, () => ({
-      nativeRestartRecovery: { runId, state: "running" },
-    }));
-    expect(loadExactSessionEntry(target)?.entry.nativeRestartRecovery?.runId).toBe(runId);
-  }
   const queued = await stageSessionPendingInput(target, {
     runId: `${name}-queued`,
     message: {
@@ -112,13 +111,13 @@ function observeAdmission() {
   return { admission, dispatch };
 }
 
-it("holds an interrupted native Antigravity turn and its previously accepted FIFO input", () =>
+it.for(["chat", "ended"] as const)("recovers the Antigravity queue after a $0 run", (run) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot(cfg);
     const scope = "native-unknown-outcome";
     const { target, inputId } = await crashSession(
       "native-unknown",
-      "chat",
+      run,
       scope,
       "antigravity-native",
     );
@@ -132,15 +131,16 @@ it("holds an interrupted native Antigravity turn and its previously accepted FIF
         signal: new AbortController().signal,
         log: { warn() {} },
       });
-      const queued = await readSessionPendingInput(target, inputId);
-      expect({
-        resumeAdmitted: admission.mock.calls.length !== 0,
-        queuedState: queued?.state,
-      }).toEqual({
-        resumeAdmitted: false,
-        queuedState: "queued",
-      });
+      expect(admission).not.toHaveBeenCalled();
       expect(dispatch).not.toHaveBeenCalled();
+      if (run === "ended") {
+        const entry = loadExactSessionEntry(target)?.entry;
+        expect(entry?.status).toBe("done");
+        expect(entry?.nativeRestartRecovery).toBeUndefined();
+        expect((await readSessionPendingInput(target, inputId))?.state).toBe("cancelled");
+        return;
+      }
+      expect((await readSessionPendingInput(target, inputId))?.state).toBe("queued");
       expect(loadExactSessionEntry(target)?.entry).toMatchObject({
         sessionId: target.sessionId,
         nativeRestartRecovery: { state: "held", runId: "native-unknown-run" },
@@ -161,7 +161,8 @@ it("holds an interrupted native Antigravity turn and its previously accepted FIF
       admission.mockRestore();
       vi.unstubAllEnvs();
     }
-  }));
+  }),
+);
 
 // Crash recovery (no graceful marker) compares the scope the interrupted run started under.
 // Queued input of a session whose work is out of scope, or that has no scope evidence while a
