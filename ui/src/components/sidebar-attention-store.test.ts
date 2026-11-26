@@ -10,6 +10,7 @@ import { client as mockClient, createGatewayHarness } from "../app/overlays-acce
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItemResult,
@@ -27,6 +28,7 @@ import {
 import {
   createStore,
   cronPage,
+  eventJob,
   inventoryRequest,
   startAuthenticatedStore,
   type CompactCronPage,
@@ -625,6 +627,112 @@ describe("sidebar attention source publication", () => {
     expectCalls(request, 2);
     expectCalls(request, 1, ["models.authStatus"]);
   });
+
+  it("reads scoped failure membership without sorting display rows for each table page", async () => {
+    const names = vi.fn();
+    const jobs = Array.from({ length: 201 }, (_, index) => {
+      const id = `job-${index}`;
+      const job = cronPage(id, index === 200 ? "error" : "ok").jobs[0]!;
+      return Object.defineProperty(job, "name", {
+        get() {
+          names();
+          return id;
+        },
+      });
+    });
+    const offsets: number[] = [];
+    const request = inventoryRequest((params) => {
+      const offset = isRecord(params) ? Number(params.offset) : 0;
+      offsets.push(offset);
+      return {
+        jobs: jobs.slice(offset, offset + 200),
+        snapshotRevision: "membership",
+        total: jobs.length,
+        limit: 200,
+        offset,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 200 : null,
+      };
+    });
+    store = startAuthenticatedStore(request).attention;
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+    expect(offsets).toEqual([0, 200]);
+    expect(names).not.toHaveBeenCalled();
+  });
+
+  it.each([{ job: null }, { job: {} }])(
+    "keeps the last failure and retries if a later page contains a malformed job ($job)",
+    async ({ job }) => {
+      vi.useFakeTimers();
+      const offsets: number[] = [];
+      const request = inventoryRequest((params) => {
+        const offset = isRecord(params) ? Number(params.offset) : 0;
+        offsets.push(offset);
+        if (offsets.length === 1) {
+          return cronPage("previous");
+        }
+        const page = cronPage("healthy", "ok");
+        if (offsets.length === 2) {
+          return { ...page, total: 2, hasMore: true, nextOffset: 1 };
+        }
+        if (offset === 1) {
+          return { ...page, jobs: [job], total: 2, offset };
+        }
+        return page;
+      });
+      const harness = startAuthenticatedStore(request);
+      store = harness.attention;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.hasFailedAutomation).toBe(true);
+
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
+      expect(offsets).toEqual([0, 0, 1]);
+      expect(store.hasFailedAutomation).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(offsets).toEqual([0, 0, 1, 0]);
+      expect(store.hasFailedAutomation).toBe(false);
+    },
+  );
+
+  it.each(["malformed", "rejected"] as const)(
+    "applies live failures after a %s superseded request",
+    async (response) => {
+      vi.useFakeTimers();
+      const previous = pending<unknown>(cronPage());
+      let reads = 0;
+      const request = inventoryRequest(() =>
+        ++reads === 1 ? previous.promise : cronPage("incident", "ok"),
+      );
+      const harness = startAuthenticatedStore(request);
+      store = harness.attention;
+      const result = Promise.allSettled([
+        readCronInventory(harness.gateway.snapshot.client!, { compact: true }),
+      ]);
+      expectCalls(request, 1);
+      harness.emitEvent("cron.inventory.changed", {});
+      if (response === "malformed") {
+        previous.resolve({ ...cronPage("obsolete"), jobs: [null] });
+      } else {
+        previous.reject(new Error("inventory unavailable"));
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      if (response === "malformed") {
+        expect(await result).toMatchObject([
+          { status: "fulfilled", value: { jobs: [{ id: "incident" }] } },
+        ]);
+      } else {
+        expect(await result).toMatchObject([{ status: "rejected" }]);
+      }
+      expectCalls(request, 2);
+      expect(store.hasFailedAutomation).toBe(false);
+      const job = eventJob();
+      harness.emitEvent("cron", { action: "finished", jobId: job.id, job });
+      expect(store.hasFailedAutomation).toBe(true);
+      expectCalls(request, 2);
+    },
+  );
 
   it("keeps the indicator while a replacement inventory is only partially loaded", async () => {
     const remaining = deferred<CompactCronPage>();
