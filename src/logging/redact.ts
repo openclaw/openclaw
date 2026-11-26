@@ -14,6 +14,12 @@ import {
   type RedactionEdit,
 } from "./redact-edit-composition.js";
 import {
+  isPublicShareIdPath,
+  isShellReferenceToKey,
+  shouldRedactStructuredPrimitiveField,
+  shouldRedactStructuredStringField,
+} from "./redact-field-policy.js";
+import {
   redactJsonRecord,
   type RedactionMessage,
   type RedactionCapture,
@@ -41,15 +47,11 @@ import {
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 import {
-  AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
   createBackendRedactPatterns,
   DEFAULT_REDACT_PATTERNS,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
-  PAYMENT_CREDENTIAL_ENV_KEYS,
-  PAYMENT_CREDENTIAL_JSON_KEYS,
-  PAYMENT_CREDENTIAL_QUERY_KEYS,
   VENDOR_TOKEN_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
@@ -61,7 +63,8 @@ import {
   createRedactPrefilter,
 } from "./redact-prefilter.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
-import { shouldRedactStructuredAuthorizationCode } from "./structured-authorization-code.js";
+
+export { isSensitiveFieldKey } from "./redact-field-policy.js";
 
 type RedactSensitiveMode = "off" | "tools";
 type LoggingConfig = OpenClawConfig["logging"];
@@ -115,11 +118,6 @@ const URL_QUERY_PAIR_RE = new RegExp(
 );
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
-const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
-  "i",
-);
-const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -135,10 +133,6 @@ const BENIGN_APP_PASSWORD_WORDS = new Set([
   "slug",
   "test",
 ]);
-const STRUCTURED_SECRET_ENV_FIELD_RE = new RegExp(
-  String.raw`^(?:(?:[A-Z0-9]+[_-])+(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)|API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})$`,
-  "i",
-);
 
 type RedactOptions = {
   mode?: RedactSensitiveMode;
@@ -470,18 +464,6 @@ function redactFormBody(text: string, onEdits?: PreparationEditSink): string {
   return redactFormBodyLine(text, onEdits);
 }
 
-function isShellReferenceToKey(key: string, value: string): boolean {
-  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
-    return false;
-  }
-  const bare = value.match(/^\$([A-Z_][A-Z0-9_]*)$/);
-  if (bare) {
-    return bare[1] === key;
-  }
-  const braced = value.match(/^\$\{([A-Z_][A-Z0-9_]*)(?::[-=?+])?\}$/);
-  return braced?.[1] === key;
-}
-
 function maskSecretFieldValue(key: string, value: string): string {
   const expansion = value.match(/^\$\{([A-Z_][A-Z0-9_]*):[-=?+][^{}]+\}(?![\s\S])/);
   if (expansion && expansion[1] === key) {
@@ -703,18 +685,6 @@ export function redactToolPayloadTextWithConfig(
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }
 
-export function isSensitiveFieldKey(key: string): boolean {
-  return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
-}
-
-function isPublicShareIdPath(path: readonly string[]): boolean {
-  if (path.at(-1)?.toLowerCase() !== "id") {
-    return false;
-  }
-  const parentKey = path.at(-2)?.toLowerCase().replaceAll("-", "").replaceAll("_", "");
-  return parentKey === "publicshare";
-}
-
 function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
@@ -760,15 +730,6 @@ export function redactSensitiveFieldValue(
   options?: RedactOptions,
 ): string {
   return redactSensitiveFieldValueWithOptions(key, value, options ?? resolveToolPayloadRedaction());
-}
-
-function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
-  const normalizedKey = key.toLowerCase();
-  return (
-    isPublicShareIdPath(path) ||
-    shouldRedactStructuredAuthorizationCode(normalizedKey, path) ||
-    isSensitiveFieldKey(key)
-  );
 }
 
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
@@ -851,25 +812,6 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
 
 export function redactSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
-}
-
-function preservesStructuredReference(key: string, value: string): boolean {
-  return (
-    (key.toLowerCase() === "session" && STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(value)) ||
-    isShellReferenceToKey(key, value)
-  );
-}
-
-function shouldRedactStructuredStringField(
-  key: string,
-  value: string,
-  path: readonly string[],
-  objectPath: boolean,
-): boolean {
-  return (
-    shouldRedactStructuredAuthorizationCode(key.toLowerCase(), path, value, objectPath) ||
-    (isSensitiveFieldKey(key) && !preservesStructuredReference(key, value))
-  );
 }
 
 function classifyLogFieldProtection(
