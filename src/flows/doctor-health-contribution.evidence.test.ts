@@ -122,7 +122,10 @@ describe("Doctor health contribution repair evidence", () => {
   });
 });
 
-it("keeps an owner-classified recoverable migration advisory nonblocking through completion", async () => {
+it.each([
+  "Preserved an unreadable legacy pairing source.",
+  `Could not move audit source /${"long-segment/".repeat(60)}: denied.`,
+])("keeps owner-classified advisory nonblocking through completion: %s", async (warning) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const evidence = createExternallyManagedDoctorRepairEvidence();
     const receipt = {
@@ -134,7 +137,7 @@ it("keeps an owner-classified recoverable migration advisory nonblocking through
       reversibility: "checkpoint-required",
       outcome: "warning",
       changes: [],
-      warnings: ["Preserved an unreadable legacy pairing source."],
+      warnings: [warning],
     } as const;
     const ctx = createDoctorHealthFlowContext({
       cfg: {},

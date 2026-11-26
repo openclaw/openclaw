@@ -126,7 +126,7 @@ export function createDoctorCompletedResult(
   pluginWarnings: string[],
 ): UpdatePostInstallDoctorResult {
   const maintenanceWarnings = maintenance?.warnings ?? [];
-  const warnings = normalizeUpdatePostInstallDoctorWarnings([
+  const rawWarnings = [
     ...pluginWarnings,
     ...(ctx.configResult.warnings ?? []),
     ...maintenanceWarnings,
@@ -138,11 +138,12 @@ export function createDoctorCompletedResult(
         : [],
     ),
     ...(ctx.postInstallDoctorResult?.warnings ?? []),
-  ]);
+  ];
   ctx.repairEvidence?.summarize([
-    ...warnings.filter((warning) => !maintenanceWarnings.includes(warning)),
+    ...rawWarnings.filter((warning) => !maintenanceWarnings.includes(warning)),
     ...(ctx.updateWarnings ?? []),
   ]);
+  const warnings = normalizeUpdatePostInstallDoctorWarnings(rawWarnings);
   return {
     ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
     ...(warnings.length ? { warnings } : {}),

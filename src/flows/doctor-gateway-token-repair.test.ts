@@ -231,6 +231,10 @@ it("preserves deployment-owned Gateway credentials during externally managed rep
   await run();
   expect(await readToken(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
   expect(backups()).toEqual([]);
+  expectNote("deployment source");
+  expect(ctx.healthFindings).toContainEqual(
+    expect.objectContaining({ fixHint: expect.stringContaining("deployment source") }),
+  );
   expect(remaining).toHaveBeenCalledWith("core/doctor/gateway-auth", [
     expect.stringContaining(tokenRef.id),
   ]);

@@ -386,7 +386,11 @@ describe("doctor session transcript repair", () => {
     runPostSessionPluginDoctorStateRepairs
       .mockImplementationOnce(async () => {
         mutations += 1;
-        return { changes: ["repaired frozen plugin action"], warnings: [] };
+        return {
+          changes: ["repaired frozen plugin action"],
+          warnings: ["Retained a dreaming cron row."],
+          warningDisposition: "recoverable",
+        };
       })
       .mockResolvedValueOnce({ changes: [], warnings: [] });
     const receipts: unknown[] = [];
@@ -394,9 +398,13 @@ describe("doctor session transcript repair", () => {
       expect(mutations).toBe(1);
       receipts.push(receipt);
     };
+    const onWarnings = vi.fn();
+    const onChanges = vi.fn();
     const params = {
       env: fixtureEnv(),
       postSessionPluginMigration: preparedPostSessionPluginMigration,
+      onWarnings,
+      onChanges,
       onStepReceipt: recordReceipt,
     };
 
@@ -411,7 +419,8 @@ describe("doctor session transcript repair", () => {
     });
     expect(first).toMatchObject({
       id: "plugin-doctor-post-session-state",
-      outcome: "completed",
+      outcome: "warning",
+      warnings: ["Retained a dreaming cron row."],
       changes: ["repaired frozen plugin action"],
     });
     expect(replay).toMatchObject({
@@ -420,6 +429,8 @@ describe("doctor session transcript repair", () => {
       changes: [],
     });
     expect(receipts).toEqual([first, replay]);
+    expect(onWarnings).not.toHaveBeenCalled();
+    expect(onChanges).not.toHaveBeenCalled();
   });
 
   it.each([
