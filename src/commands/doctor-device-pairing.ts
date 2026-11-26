@@ -277,10 +277,11 @@ function describeLocalDeviceAuthReadFailure(subject: string, error: unknown): He
 
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
+  env: NodeJS.ProcessEnv,
 ): Promise<HealthFinding[]> {
   let identity: DeviceIdentity | null;
   try {
-    identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
+    identity = await loadDeviceIdentityIfPresentAsync({ env });
   } catch (error) {
     return [describeLocalDeviceAuthReadFailure("the local device identity", error)];
   }
@@ -291,7 +292,7 @@ async function collectLocalDeviceAuthFindings(
   try {
     localTokens = await loadDeviceAuthTokens({
       deviceId: identity.deviceId,
-      env: process.env,
+      env,
     });
   } catch (error) {
     return [describeLocalDeviceAuthReadFailure("the local device auth token inventory", error)];
@@ -378,17 +379,18 @@ export async function collectDevicePairingHealthFindings(params: {
   healthOk?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<HealthFinding[]> {
+  const env = params.env ?? process.env;
   const legacyStoreFindings = await collectLegacyPairingStoreFindings(params.cfg);
   const { detectLegacyDeviceAuth } = await import("../infra/state-migrations.device-auth.js");
-  // Retired device auth uses the source env; pairing/token reads keep lint's active state view.
+  // Pairing records can use lint's snapshot, but local credentials are bound to their source DB.
   // Report this debt even without a reachable remote Gateway or local identity.
-  const deviceAuth = detectLegacyDeviceAuth({ stateDir: resolveStateDir(params.env) });
+  const deviceAuth = detectLegacyDeviceAuth({ stateDir: resolveStateDir(env) });
   if (deviceAuth.sourcePresent) {
     try {
       // A consumed import remains on disk; local owner admission proves its durable claim.
-      await loadDeviceIdentityIfPresentAsync({ env: params.env ?? process.env });
+      await loadDeviceIdentityIfPresentAsync({ env });
     } catch {
-      const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
+      const fixCommand = formatCliCommand("openclaw doctor --fix", env);
       const fixHint = `Stop the Gateway and run ${fixCommand} to finish local credential migration or repair.`;
       legacyStoreFindings.push({
         checkId: DEVICE_PAIRING_CHECK_ID,
@@ -413,6 +415,6 @@ export async function collectDevicePairingHealthFindings(params: {
     ...legacyStoreFindings,
     ...collectPendingPairingFindings(snapshot),
     ...collectPairedRecordFindings(snapshot),
-    ...(await collectLocalDeviceAuthFindings(snapshot)),
+    ...(await collectLocalDeviceAuthFindings(snapshot, env)),
   ];
 }

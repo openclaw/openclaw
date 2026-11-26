@@ -89,6 +89,7 @@ const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
+const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const HEARTBEAT_SOURCE_CHECK_IDS = new Set([
   "core/doctor/heartbeat-cadence-migration",
   "core/doctor/heartbeat-scratch-migration",
@@ -505,7 +506,9 @@ async function executeDoctorLint(
             return inspectPrivate(detect);
           }
           // Source-bound loaders must keep the launch selectors of their retained read owner.
-          return check.id === AUTH_PROFILE_CHECK_ID || HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
+          return check.id === AUTH_PROFILE_CHECK_ID ||
+            check.id === GATEWAY_HEALTH_CHECK_ID ||
+            HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
             ? checkCtx.runWithSourceState(detect)
             : detect();
         },

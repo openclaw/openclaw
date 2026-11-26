@@ -5,7 +5,6 @@ import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import {
@@ -93,8 +92,6 @@ async function prepareReadOnlyPluginStateSnapshot(
   let cleanup: () => Promise<boolean>;
   let privateRoot: string;
   let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
-  let preparedClientCreds: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
-  const sourceClientCredentialPath = resolveClientCredentialStorePath(sourceEnv);
   try {
     if (fs.existsSync(sourceDatabasePath)) {
       prepared =
@@ -116,14 +113,7 @@ async function prepareReadOnlyPluginStateSnapshot(
         }
       };
     }
-    if (fs.existsSync(sourceClientCredentialPath)) {
-      preparedClientCreds = await prepareSqliteReadOnlyLocation(sourceClientCredentialPath, {
-        preserveSourceArtifacts: true,
-        shared: false,
-      });
-    }
   } catch (error) {
-    await preparedClientCreds?.cleanupAsync().catch(() => false);
     throw new DoctorLintStateSnapshotError(error);
   }
   const privateStateDir = path.join(privateRoot, "openclaw-state");
@@ -162,10 +152,7 @@ async function prepareReadOnlyPluginStateSnapshot(
           retirementErrors.map((error) => scrubDoctorErrorMessage(error)).join("; "),
         );
       }
-      if (
-        !(await cleanup()) ||
-        (preparedClientCreds && !(await preparedClientCreds.cleanupAsync()))
-      ) {
+      if (!(await cleanup())) {
         const message = "Temporary doctor lint state snapshot cleanup did not complete.";
         if (!cleanupWarnings) {
           throw new Error(message);
@@ -182,16 +169,6 @@ async function prepareReadOnlyPluginStateSnapshot(
         const sourcePath = `${prepared.location}${suffix}`;
         if (fs.existsSync(sourcePath)) {
           fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
-        }
-      }
-    }
-    if (preparedClientCreds) {
-      const privateClientCredentialPath = resolveClientCredentialStorePath(privateEnv);
-      fs.mkdirSync(path.dirname(privateClientCredentialPath), { recursive: true, mode: 0o700 });
-      for (const suffix of ["", "-journal", "-shm", "-wal"]) {
-        const sourcePath = `${preparedClientCreds.location}${suffix}`;
-        if (fs.existsSync(sourcePath)) {
-          fs.renameSync(sourcePath, `${privateClientCredentialPath}${suffix}`);
         }
       }
     }
