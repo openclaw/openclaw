@@ -30,7 +30,10 @@ beforeEach(() => {
   setRuntimeConfigSnapshot({});
   stableCronManagementDeclaration.clear();
 });
-afterEach(clearRuntimeConfigSnapshot);
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  stableCronManagementDeclaration.clear();
+});
 
 async function withAdminTool(
   origin: "unknown" | "channel-owner",
@@ -274,8 +277,10 @@ describe("cron next_check action", () => {
 it("keeps a session's granted Automations declaration on its ungranted turns", async () => {
   const sessionKey = "agent:main:control-ui";
   const grantedRunId = "declaration-granted-run";
-  const granted = await withCronManagementCaller(grantedRunId, async () =>
-    createCronTool({ runId: grantedRunId, agentSessionKey: sessionKey }),
+  const granted = await withCronManagementCaller(
+    grantedRunId,
+    async () => createCronTool({ runId: grantedRunId, agentSessionKey: sessionKey }),
+    "channel-owner",
   );
   const internal = createCronTool({
     runId: "declaration-internal-run",
@@ -321,4 +326,22 @@ it("keeps a session's wider declaration on management-only continuations", async
     ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
     expect(gateway).not.toHaveBeenCalled();
   });
+});
+
+it("does not carry a management-only declaration to ungranted turns", async () => {
+  const sessionKey = "agent:main:only-declaration";
+  const continuation = await withCronManagementCaller("declaration-only-first-run", async () =>
+    createCronTool({ runId: "declaration-only-first-run", agentSessionKey: sessionKey }),
+  );
+  const internal = createCronTool({
+    runId: "declaration-after-only-run",
+    agentSessionKey: sessionKey,
+  });
+  const ordinary = createCronTool({
+    runId: "declaration-ordinary-run",
+    agentSessionKey: "agent:main:ordinary-declaration",
+  });
+  expect(continuation.description).not.toBe(ordinary.description);
+  expect(internal.parameters).toEqual(ordinary.parameters);
+  expect(internal.description).toBe(ordinary.description);
 });

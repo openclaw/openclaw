@@ -12,14 +12,15 @@ export type CronManagementDeclaration = "only" | "also";
  * Only an admitted operator turn binds the cron management grant, so completion
  * and other internal turns would otherwise publish a narrower Automations schema
  * and a native runtime would replace its thread for a changed tool catalog.
- * Turns without a grant reuse the session's last granted declaration, and a
- * management-only continuation keeps a wider declaration the session already
- * holds. Execution still reads only the current turn's grant, so this never
- * widens access: arguments the current turn may not use are refused exactly as
- * before.
+ * A session that received the full ("also") declaration keeps it on its
+ * ungranted turns and on management-only continuations. Only that declaration
+ * is remembered: it contains every action an ungranted or management-only turn
+ * declares, so the remembered surface is never narrower than what the turn may
+ * do. Execution still reads only the current turn's grant, so this never widens
+ * access: arguments the current turn may not use are refused exactly as before.
  */
 export function createStableCronManagementDeclaration() {
-  const declarations = new Map<string, CronManagementDeclaration>();
+  const fullDeclarations = new Set<string>();
   return {
     resolve(
       sessionKey: string | undefined,
@@ -29,19 +30,18 @@ export function createStableCronManagementDeclaration() {
       if (!key) {
         return current;
       }
-      if (current) {
-        const declared = current === "only" && declarations.get(key) === "also" ? "also" : current;
-        declarations.delete(key);
-        declarations.set(key, declared);
-        if (declarations.size > MAX_REMEMBERED_SESSIONS) {
-          declarations.delete(declarations.keys().next().value!);
+      if (current === "also" || fullDeclarations.has(key)) {
+        fullDeclarations.delete(key);
+        fullDeclarations.add(key);
+        if (fullDeclarations.size > MAX_REMEMBERED_SESSIONS) {
+          fullDeclarations.delete(fullDeclarations.values().next().value!);
         }
-        return declared;
+        return "also";
       }
-      return declarations.get(key);
+      return current;
     },
     clear() {
-      declarations.clear();
+      fullDeclarations.clear();
     },
   };
 }

@@ -9,7 +9,7 @@ describe("stable cron management declaration", () => {
     expect(stable.resolve("agent:main:main", undefined)).toBe("also");
     expect(stable.resolve("agent:main:other", undefined)).toBeUndefined();
     expect(stable.resolve("agent:main:other", "only")).toBe("only");
-    expect(stable.resolve("agent:main:other", undefined)).toBe("only");
+    expect(stable.resolve("agent:main:other", undefined)).toBeUndefined();
   });
 
   it("keeps a wider declaration through management-only continuations", () => {
