@@ -13,7 +13,6 @@ import {
   isUncaughtExceptionHandled,
 } from "../infra/unhandled-rejections.js";
 import { defaultRuntime, restoreRuntimeTerminalState } from "../runtime.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
@@ -21,7 +20,7 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
-import { getCliFailureContext } from "./failure-context.js";
+import { getCliFailureContext, installProcessFailureListener } from "./failure-context.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -46,14 +45,7 @@ export function installCliUncaughtExceptionHandler(argv?: string[]): void {
   if (context && argv) {
     context.argv = argv;
   }
-  // Both executable entrypoints and embedded calls share one process policy.
-  const listener = resolveGlobalSingleton(
-    Symbol.for("openclaw.cliUncaughtExceptionListener"),
-    () => (error: Error) => handleCliUncaughtException(error),
-  );
-  if (!process.listeners("uncaughtException").includes(listener)) {
-    process.on("uncaughtException", listener);
-  }
+  installProcessFailureListener("uncaughtException", handleCliUncaughtException);
 }
 
 export function handleCliUncaughtException(
