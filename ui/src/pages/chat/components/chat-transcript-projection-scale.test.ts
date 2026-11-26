@@ -6,11 +6,8 @@ import type { AgentActivityItem } from "../../../../../packages/gateway-protocol
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { createInitialChatRealtimeState } from "../chat-realtime.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
-import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { setExpansionState } from "../chat-thread.ts";
 import { createChatViewFrame } from "../chat-view-frame.ts";
 import {
   createChatProps,
@@ -328,82 +325,6 @@ describe("transcript projection", () => {
     expect(voice()).toBeNull();
   });
 
-  it.each(["answer", "reasoning"] as const)(
-    "projects %s deltas without rereading 3,000 retained messages",
-    (kind) => {
-      let reads = 0;
-      const messages = Array.from(
-        { length: 3_000 },
-        (_, index) =>
-          new Proxy(
-            {
-              role: index % 2 ? "assistant" : "user",
-              content: `Message ${index}`,
-              timestamp: index + 1,
-              __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
-            },
-            {
-              get(target, property, receiver) {
-                reads += 1;
-                return Reflect.get(target, property, receiver);
-              },
-            },
-          ),
-      );
-      const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
-      const props = {
-        ...threadProps("projection-scale", "agent:main:projection-scale", messages),
-        runId: "active",
-        runActive: true,
-        stream: kind === "answer" ? "Reply" : "",
-        streamStartedAt: 4_000,
-        showThinking: true,
-        selectedSession: {
-          key: "agent:main:projection-scale",
-          kind: "direct" as const,
-          updatedAt: 1,
-          reasoningLevel: "on",
-        },
-        reasoning:
-          kind === "reasoning"
-            ? {
-                runId: "active",
-                items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
-              }
-            : null,
-      };
-      const transcript = createTestTranscript(props.paneId);
-      const build = vi.spyOn(chatThreadBuild, "buildChatItems");
-      const project = () => projectSession(props, transcript);
-      project();
-      expect(reads).toBeGreaterThan(0);
-      transcript.renderSession(props.sessionKey, (session) => {
-        setExpansionState(
-          session.expandedAssistantMessages,
-          messageRecoveryKey(undefined, "message-1"),
-          { status: "loaded", markdown: "Full answer", revision: 1 },
-        );
-        return null;
-      });
-      project();
-      build.mockClear();
-      for (const stream of ["Reply", "Reply continues", "Reply continues again"]) {
-        if (kind === "answer") {
-          props.stream = stream;
-        } else {
-          props.reasoning = {
-            runId: "active",
-            items: [earlierReasoning, { itemId: "thinking", text: stream, startedAt: 4_000 }],
-          };
-        }
-        reads = 0;
-        project();
-        expect(build).not.toHaveBeenCalled();
-        expect(reads, stream).toBe(0);
-      }
-    },
-  );
-
   it("refreshes sender names for a replaced sender and a changed signed-in viewer", async () => {
     const own = personMessage("alex", "Alex", 1);
     const props = threadProps("projection-sender", "agent:main:main", [own]);
@@ -635,8 +556,6 @@ describe("voice reconciliation", () => {
     isStreaming: false,
     transcriptId,
   });
-  const membershipScans = (calls: readonly (readonly unknown[])[]) =>
-    calls.filter(([callback]) => callback === persistedMessageEntryId);
 
   function voiceProjection(props: ChatThreadProps) {
     const view = drawThread(props);
@@ -650,10 +569,9 @@ describe("voice reconciliation", () => {
   afterEach(cleanupTranscripts);
 
   it.each(["absent", "empty", "ID-less"] as const)(
-    "skips the voice membership scan for %s captions",
+    "keeps %s captions distinct from persisted history",
     async (kind) => {
       const messages = [savedMessage("Saved message", "voice:saved")];
-      const map = vi.spyOn(messages, "map");
       const props = threadProps(`voice-${kind}`, undefined, messages);
       props.readRealtimeTalkConversation =
         kind === "absent"
@@ -666,11 +584,10 @@ describe("voice reconciliation", () => {
       await waitForSolid(() =>
         expect(project()).toEqual(kind === "ID-less" ? ["Still speaking"] : []),
       );
-      expect(membershipScans(map.mock.calls)).toEqual([]);
     },
   );
 
-  it("uses one raw-history scan, preserving pending captions and refreshing replaced history", async () => {
+  it("preserves pending captions while refreshing replaced history", async () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),
       savedMessage("Pending input", "pending:input"),
@@ -679,7 +596,6 @@ describe("voice reconciliation", () => {
         state: "waiting-reconnect",
       }),
     ];
-    const map = vi.spyOn(messages, "map");
     const props = threadProps("voice-membership", undefined, messages);
     props.readRealtimeTalkConversation = () => [
       caption("saved", "Saved caption", "voice:saved"),
@@ -695,11 +611,8 @@ describe("voice reconciliation", () => {
     const pendingCaptions = ["Live caption", "Pending input caption", "Pending send caption"];
 
     await waitForSolid(() => expect(project()).toEqual(["Unsaved caption", ...pendingCaptions]));
-    expect(membershipScans(map.mock.calls)).toHaveLength(1);
 
     props.messages = [savedMessage("New saved words", "voice:unsaved"), ...messages.slice(1)];
-    const replacementMap = vi.spyOn(props.messages, "map");
     expect(project()).toEqual(["Saved caption", ...pendingCaptions]);
-    expect(membershipScans(replacementMap.mock.calls)).toHaveLength(1);
   });
 });

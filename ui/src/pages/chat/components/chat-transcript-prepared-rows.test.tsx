@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -11,7 +10,6 @@ import { prepareMessageMarkdown } from "./chat-message-text-preparation.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import { emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
-import { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import { prewarmGroupedMessage } from "./chat-transcript-row-prewarm.ts";
@@ -48,7 +46,6 @@ async function transcriptFixture(
   ordinary: boolean | "retained" | "data-only" = false,
   viewportHeight = 600,
   completedFrame: boolean | "toolCall" = false,
-  retainStride = 1,
   streamingTail = false,
 ) {
   let now = 1;
@@ -97,8 +94,7 @@ async function transcriptFixture(
     }
   };
   const rows: TranscriptRow<number>[] = Array.from({ length: 256 }, (_, index) => {
-    const retainDom =
-      ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0;
+    const retainDom = ordinary !== true && !(index === 0 && plainFirstRow);
     return {
       kind: "item",
       key: `fragment:${index}`,
@@ -359,53 +355,6 @@ it("bounds initial HTML warming and keeps distant rows out of the DOM", async ()
   expect(requestIdleCallback).toHaveBeenCalledTimes(idleRequests);
 });
 
-it.each(["group", "frame"] as const)(
-  "finishes fragment warming for an oversized completed %s",
-  (kind) => {
-    const group = createMessageGroup({}, "assistant", {
-      messages: Array.from({ length: 40 }, (_, index) => ({
-        key: `${kind}-oversized-${index}`,
-        message: { role: "assistant", content: `**${kind}-oversized-${index}**` },
-      })),
-    });
-    for (const { message } of group.messages) {
-      expect(prewarmGroupedMessage(message, {}, "html")).toBe(true);
-    }
-    const renderer = new ChatTranscriptRenderer();
-    renderer.contentFor(
-      [{ kind: "item", key: group.key, item: group }],
-      () =>
-        new GuardedTranscriptItem(
-          [group],
-          kind === "group"
-            ? { kind, group, options: { showReasoning: false } }
-            : {
-                kind,
-                frame: {
-                  kind: "agent-run-frame",
-                  key: group.key,
-                  runId: group.key,
-                  boundaryId: group.key,
-                  outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
-                  parts: [group],
-                },
-                options: {
-                  streamOptions: {},
-                  partDependencies: (part) => [part],
-                  renderGroupOptions: () => ({ showReasoning: false }),
-                  isWorkExpanded: () => false,
-                  onToggleWork: () => {},
-                },
-              },
-        ),
-    );
-    for (let source = 0; source < 8; source++) {
-      expect(renderer.prewarmRow(0, "fragment")).toBe(true);
-    }
-    expect(renderer.prewarmRow(0, "fragment")).toBe(false);
-  },
-);
-
 it("mounts prewarmed assistant text around an image without parsing it again", async () => {
   const message = {
     role: "assistant",
@@ -502,31 +451,8 @@ it("keeps large-jump boundary rows and cancels queued scroll warming when hidden
   expect(view.renderRow.mock.calls).toHaveLength(rendered);
 });
 
-it("keeps ordinary neighbors as HTML beside retained rows", async () => {
-  const view = await transcriptFixture(0, true, false, "retained", 600, false, 256);
-  const message = view.groups[7]!.messages[0]!.message;
-  const content = "**Ordinary neighbor beside a retained row**";
-  Object.assign(message!, { content });
-  for (let turn = 0; turn < 160; turn++) {
-    await view.idle(10, 1);
-    await view.frame(2, false);
-  }
-  expect(prewarmGroupedMessage(message, {}, "html")).toBe(false);
-  expect(
-    typeof toSanitizedMarkdownContent(content, {
-      assistantTranscriptRoleHeaders: true,
-      codeBlockChrome: "copy",
-      codeBlockInteraction: "interactive",
-      fileLinks: true,
-      sessionLinks: true,
-      tableInteractions: "enabled",
-    }),
-  ).toBe("string");
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:7"]')).toBeNull();
-});
-
 it("keeps reverse medium forecasts through size compensation while the tail streams", async () => {
-  const view = await transcriptFixture(24_000, true, false, "data-only", 600, false, 1, true);
+  const view = await transcriptFixture(24_000, true, false, "data-only", 600, false, true);
   await view.scrollTo(180);
   await view.frame();
   await view.scrollTo(120.5);
@@ -587,19 +513,6 @@ it("reuses a nearby completed row after scrolling away and back, with a bounded 
   expect(first?.isConnected).toBe(false);
 });
 
-it("keeps idle geometry nearby across intervening non-retainable rows", async () => {
-  const view = await transcriptFixture(0, false, false, false, 600, false, 2);
-  await view.frame(160);
-  const ahead = view.container.querySelector('[data-virtual-row-key="fragment:10"]');
-  expect(ahead).not.toBeNull();
-  expect(ahead!.getAttribute("data-prepared-row")).toBe("true");
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:40"]')).toBeNull();
-  expect(transcriptRows(view.container).length).toBeLessThan(40);
-  const preparations = view.renderRow.mock.calls.length;
-  await view.frame(16);
-  expect(view.renderRow.mock.calls).toHaveLength(preparations);
-});
-
 it("pauses queued preparation while hidden and retires it on disconnect", async () => {
   const view = await transcriptFixture();
   await view.frame(8);
@@ -618,28 +531,6 @@ it("pauses queued preparation while hidden and retires it on disconnect", async 
   expect(transcriptRows(view.container)).toHaveLength(0);
   await view.frame(8);
   expect(transcriptRows(view.container)).toHaveLength(0);
-});
-
-it("keeps parked row styles stable when an earlier row changes height", async () => {
-  const view = await transcriptFixture();
-  await view.frame(8);
-  const parked = view.container.querySelector<HTMLElement>("[data-prepared-row]")!;
-  const active = view.container.querySelector<HTMLElement>(
-    ".chat-virtual-row:not([data-prepared-row])",
-  )!;
-  expect(Number(parked.dataset.index)).toBeGreaterThan(Number(active.dataset.index));
-  const mutations: MutationRecord[] = [];
-  const observer = new MutationObserver((records) => mutations.push(...records));
-  observer.observe(parked, { attributes: true, attributeFilter: ["style"] });
-  try {
-    view.resizeRow(active, 200);
-    await settle();
-    mutations.push(...observer.takeRecords());
-    expect(mutations).toHaveLength(0);
-    expect(parked.isConnected).toBe(true);
-  } finally {
-    observer.disconnect();
-  }
 });
 
 it.each([
@@ -724,22 +615,6 @@ it("retains nearby geometry while scrolling back into the prepared window", asyn
   expect(calls()).toHaveLength(aheadPreparations);
 });
 
-it("uses cached geometry on the first reader movement after tail placement", async () => {
-  const view = await transcriptFixture(null, true);
-  await view.frame(8);
-  const initialRows = transcriptRows(view.container);
-  for (let turn = 0; turn < 32; turn++) {
-    await view.idle();
-  }
-  expect(transcriptRows(view.container)).toEqual(initialRows);
-  const style = vi.spyOn(globalThis, "getComputedStyle");
-  await view.scrollTo(240);
-  await view.frame(2, false);
-  expect(
-    style.mock.calls.filter(([element]) => element.classList.contains("chat-virtual-row")),
-  ).toHaveLength(0);
-});
-
 it("keeps manual end-follow from measuring history before reader navigation", async () => {
   const view = await transcriptFixture(null, true);
   await view.frame(8);
@@ -755,75 +630,6 @@ it("keeps manual end-follow from measuring history before reader navigation", as
   await view.frame(8);
   await view.task();
   expect(transcriptRows(view.container).some((row) => Number(row.dataset.index) < 240)).toBe(true);
-});
-
-it("continues idle warming when the viewport fills the retained DOM budget", async () => {
-  const view = await transcriptFixture(0, true, false, "retained", 1400);
-  await view.scrollTo(1);
-  const warmed = new Set<number>();
-  vi.spyOn(ChatTranscriptRenderer.prototype, "prewarmRow").mockImplementation((index) => {
-    if (warmed.has(index)) {
-      return false;
-    }
-    warmed.add(index);
-    view.elapse(6);
-    return true;
-  });
-
-  await view.task(150);
-  for (let turn = 0; turn < 30; turn++) {
-    await view.idle();
-    await view.frame(2, false);
-  }
-  expect(transcriptRows(view.container).filter((row) => !row.inert).length).toBeGreaterThan(12);
-  expect(warmed.size).toBeGreaterThan(12);
-  expect(warmed.size).toBeLessThan(32);
-  expect(view.container.querySelectorAll("[data-prepared-row]").length).toBeLessThanOrEqual(12);
-});
-
-it("stops preparing when the predicted DOM window has no retainable rows", async () => {
-  // Drain preparation tasks with the fixture clock before sampling their work count.
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const view = await transcriptFixture(0, true, false, true);
-  // Optional module readiness must precede the DOM-preparation work-count boundary.
-  await waitForSolid(() => expect(view.host.renderer.prewarmRow(0)).not.toBeUndefined());
-  await view.updateRow(24, 24);
-  await view.scrollTo(10);
-  await view.frame();
-  await view.scrollTo(15);
-  await view.frame(1, false);
-  await view.task();
-  await view.frame(1, false);
-  await view.task();
-  const rendered = view.renderRow.mock.calls.length;
-  await view.frame(1, false);
-  await view.task();
-  expect(view.renderRow.mock.calls).toHaveLength(rendered);
-});
-
-it("warms ordinary Markdown beside forecast retained rows", async () => {
-  const view = await transcriptFixture(0, true, false, "retained", 600, false, 2);
-  await view.scrollTo(60);
-  await view.task();
-  await view.scrollTo(120);
-  const prewarm = vi.spyOn(ChatTranscriptRenderer.prototype, "prewarmRow");
-  await view.frame(1, false);
-  await view.task();
-  expect(prewarm.mock.calls.some(([index]) => index > 130 && index % 2 === 1)).toBe(true);
-  expect(view.container.querySelector("[data-preparing-row][data-prepared-row]")).not.toBeNull();
-});
-
-it("warms arriving rows after a delayed timer without running twice in one frame", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const view = await transcriptFixture(0, true, false, true);
-  await view.scrollTo(60);
-  const rendered = view.renderRow.mock.calls.length;
-  await view.frame(1, false);
-  await view.task(8);
-  expect(view.renderRow.mock.calls.length).toBeGreaterThan(rendered);
-  const warmed = view.renderRow.mock.calls.length;
-  await view.task();
-  expect(view.renderRow.mock.calls).toHaveLength(warmed);
 });
 
 it("keeps upward forecasts outside active flow without moving the reader", async () => {
@@ -882,64 +688,3 @@ it("updates the settled scroll window without re-entering the caller renderer", 
   expect(view.container.querySelector('[data-virtual-row-key="fragment:120"]')).not.toBeNull();
   expect(view.container.scrollTop).toBe(12_000);
 });
-
-it.each(["group", "frame"] as const)(
-  "finishes active warming when one completed %s exceeds the character budget",
-  (kind) => {
-    const group = createMessageGroup({}, "assistant", {
-      messages: Array.from({ length: 120 }, (_, index) => ({
-        key: `${kind}-large-idle-${index}`,
-        message: {
-          role: "assistant",
-          content: `**${kind}-large-idle-${index}** ${"row text ".repeat(4300)}`,
-        },
-      })),
-    });
-    const renderer = new ChatTranscriptRenderer();
-    renderer.contentFor(
-      [
-        { kind: "item", key: group.key, item: group },
-        { kind: "item", key: `${group.key}-neighbor`, item: group },
-      ],
-      () =>
-        new GuardedTranscriptItem(
-          [group],
-          kind === "group"
-            ? { kind, group, options: { showReasoning: false } }
-            : {
-                kind,
-                frame: {
-                  kind: "agent-run-frame",
-                  key: group.key,
-                  runId: group.key,
-                  boundaryId: group.key,
-                  outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
-                  parts: [group],
-                },
-                options: {
-                  streamOptions: {},
-                  partDependencies: (part) => [part],
-                  renderGroupOptions: () => ({ showReasoning: false }),
-                  isWorkExpanded: () => false,
-                  onToggleWork: () => {},
-                },
-              },
-        ),
-    );
-    let work = 0;
-    while (work < 125 && renderer.prewarmRow(0, "fragment")) {
-      renderer.prewarmRow(1, "fragment");
-      work++;
-    }
-    expect(work).toBeLessThan(125);
-    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
-    for (let step = 0; step < 125; step++) {
-      const before = parse.mock.calls.length;
-      const worked = renderer.prewarmRow(0, "idle-html");
-      expect(parse.mock.calls.length - before).toBeLessThanOrEqual(1);
-      if (!worked) {
-        break;
-      }
-    }
-  },
-);

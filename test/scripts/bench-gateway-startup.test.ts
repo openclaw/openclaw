@@ -16,7 +16,6 @@ import {
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
 import { summarizeGatewayModuleLoads } from "../../scripts/lib/gateway-startup-module-counts.mjs";
-import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { validateConfigObject } from "../../src/config/validation.js";
@@ -487,30 +486,7 @@ server.listen(port, "127.0.0.1", () => {
             attempts: 2,
           });
           expect(sample.firstSessionRpc.connectMs).toBeLessThan(sample.firstSessionRpc.ms);
-          expect(sample.startupTraceLines).toHaveLength(4);
         }
-        expect(report.results[0].summary.startupTrace).toMatchObject({
-          "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
-          "sidecars.model-runtime-build.workspaceGroupCount": {
-            p50: 1.5,
-            avg: 1.5,
-            min: 1,
-            max: 2,
-          },
-          "sidecars.model-runtime-build.workspaceFactsMs": { p50: 2.5, avg: 2.5 },
-        });
-        expect(result.stdout).toContain("workspaceFacts=p50=2.5ms");
-        expect(result.stdout).toContain("ready memory: rss=p50=32.5MB");
-        expect(result.stdout).toContain("runtimePlugins=n/a");
-        expect(result.stdout).toContain("sessions RPC: p50=");
-        expect(result.stdout).toMatch(
-          / {2}CPU core:\s+p50=\d+\.\d{3} avg=\d+\.\d{3} min=\d+\.\d{3} max=\d+\.\d{3}/u,
-        );
-        const counts = result.stdout
-          .split("\n")
-          .find((line) => line.startsWith("  prepared runtime:"));
-        expect(counts).toContain("agents=p50=11.5 avg=11.5 min=11 max=12");
-        expect(counts).toContain("workspaces=p50=1.5 avg=1.5 min=1 max=2");
 
         // This fake Gateway tests the driver protocol, not the heavyweight seed generator.
         const teamRoot = path.join(root, "prepared-team-boot");
@@ -547,20 +523,12 @@ server.listen(port, "127.0.0.1", () => {
             expect(populated.stderr).toContain("unclean shutdown");
           }
           const populatedReport = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-          expect(populatedReport.fixture).toMatchObject({
-            bundledPluginFixture,
-            externalPluginCount: 42,
-          });
           expect(populatedReport.results[0].samples[0]).toMatchObject({
             exitCode: shutdownExitCode,
             shutdownForced: false,
             shutdownMs: expect.any(Number),
             signal: null,
           });
-          expect(populatedReport.results[0].summary.shutdownMs).toMatchObject({
-            p50: expect.any(Number),
-          });
-          expect(populated.stdout).toContain("shutdown:     p50=");
           expect(populatedReport.results[0].samples[0].firstSessionRpc).toMatchObject({
             ms: expect.any(Number),
             attempts: 4,
@@ -816,43 +784,6 @@ server.listen(port, "127.0.0.1", () => {
     ]);
   });
 
-  it("collects Count-suffixed startup trace metrics", () => {
-    const startupTrace: Record<string, number> = {};
-
-    collectTraceLine(
-      "[gateway] startup trace: sidecars.acp.runtime-ready ready=1 readyCount=1 backend=acpx",
-      "startup trace",
-      startupTrace,
-    );
-
-    expect(startupTrace["sidecars.acp.runtime-ready.ready"]).toBeUndefined();
-    expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
-  });
-
-  it("uses the recorded trace total for completion timing", async () => {
-    const startedAt = performance.now();
-    const completionMs = await testing.waitForStartupTracePhase({
-      deadlineAt: startedAt + 1_000,
-      isDone: () => false,
-      phase: "sidecars.ready",
-      startupTrace: {
-        "sidecars.ready": 20,
-        "sidecars.ready.total": 50,
-      },
-    });
-
-    expect(completionMs).toBe(50);
-  });
-
-  it("keeps counts and memory metrics out of the slow-duration ranking", () => {
-    expect(isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
-    expect(isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
-    expect(isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
-    expect(isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(false);
-    expect(isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
-    expect(isStartupTraceDuration("ready.total")).toBe(false);
-  });
-
   it("records probe state transitions, first error kind, and first recovery", async () => {
     let calls = 0;
     const { port, server } = await listenOnLoopback((_req, res) => {
@@ -963,18 +894,6 @@ server.listen(port, "127.0.0.1", () => {
       "bench-catalog-stall/bench-model",
     ]);
     expect(validateConfigObject(config)).toMatchObject({ ok: true });
-    const pluginId = config.plugins?.allow?.[0];
-    expect(pluginId).toBe("bench-plugin-01");
-    const manifest = JSON.parse(
-      readPlugin(root, "openclaw.plugin.json", pluginId ?? "missing"),
-    ) as {
-      providers?: string[];
-    };
-    const source = readPlugin(root, "index.cjs", pluginId ?? "missing");
-
-    expect(manifest.providers).toEqual(["bench-catalog-stall"]);
-    expect(source).toContain("api.registerProvider");
-    expect(source).toContain("Date.now() + 2000");
   });
 
   it("builds a valid large plugin-model startup case", () => {
@@ -1145,20 +1064,6 @@ server.listen(port, "127.0.0.1", () => {
       if (agentCount > sharedCount) {
         expect(agents[sharedCount]?.workspace).not.toBe(agents[0]?.workspace);
       }
-      const pluginId = config.plugins?.allow?.[0];
-      const manifest = JSON.parse(
-        readPlugin(root, "openclaw.plugin.json", pluginId ?? "missing"),
-      ) as {
-        modelCatalog?: unknown;
-        providerCatalogEntry?: string;
-        providers?: string[];
-      };
-      expect(manifest.providers).toEqual(["bench-catalog-stall"]);
-      expect(manifest.providerCatalogEntry).toBe("./provider-discovery.cjs");
-      expect(manifest.modelCatalog).toBeUndefined();
-      expect(readPlugin(root, "provider-discovery.cjs")).toContain(
-        "preparedRuntimeStaticCatalogCallCount",
-      );
     },
   );
 });

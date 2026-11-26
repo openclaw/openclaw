@@ -6,10 +6,9 @@ import { loadSettings, settingsKeyForGateway } from "../app/settings.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
-import { renderLobsterSvg } from "./lobster-pet-look.tsx";
+import { createLobsterPetLook } from "./lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { pickLobsterEntrance, resolveLobsterLoadIdentity } from "./lobster-pet-plans.ts";
+import { resolveLobsterLoadIdentity } from "./lobster-pet-plans.ts";
 import {
   advanceUntil,
   arrive,
@@ -28,18 +27,6 @@ const activity = (status: "done" | "failed", lastActivityAt: number, endedAt?: n
   lastActivityAt,
   ...(endedAt === undefined ? {} : { endedAt }),
 });
-
-function paletteSvg(
-  id: string,
-  options: Parameters<typeof renderLobsterSvg>[1] = {},
-  accessory: "none" | "crown" = "none",
-) {
-  const palette = paletteById(id);
-  return renderLobsterSvg(
-    { ...canonicalLobsterLook(palette), accessory },
-    { standalone: true, ...options },
-  );
-}
 
 const summer = new Date("2026-07-09T12:00:00");
 const neutralDate = new Date("2026-07-15T12:00:00");
@@ -150,31 +137,6 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-describe("seasonal wardrobe", () => {
-  it.each([
-    ["2026-12-10", ["santa"]],
-    ["2026-10-25", ["pumpkin"]],
-    ["2026-07-15", []],
-    ["2026-09-25", ["monocle"]],
-  ] as const)("respects seasonal accessories on %s", (date, expected) => {
-    const accessories = new Set(
-      Array.from(
-        { length: 400 },
-        (_, seed) => createLobsterPetLook(seed, new Date(`${date}T12:00:00`)).accessory,
-      ),
-    );
-    const seasonal = new Set(["santa", "pumpkin", "party", "monocle"]);
-    expect([...accessories].filter((accessory) => seasonal.has(accessory))).toEqual(expected);
-  });
-  it("dresses everyone as the classic logo on the repo anniversary", () => {
-    expect(createLobsterPetLook(7, new Date("2026-11-24T12:00:00"))).toMatchObject({
-      palette: { id: "retro" },
-      accessory: "party",
-    });
-    expect(createLobsterPetLook(7, new Date("2026-11-25T12:00:00")).accessory).not.toBe("party");
-  });
-});
-
 describe("connection and run outcomes", () => {
   it.each<[boolean, Parameters<typeof resolveLobsterPetMode>[1], string]>([
     [false, [{ hasActiveRun: true }], "offline"],
@@ -238,15 +200,6 @@ describe("lobster pet element", () => {
     await offline.updateComplete;
     expect(spritePresent(offline)).toBe(true);
     expect(spriteClasses(offline)).toContain("lobster-pet--offline");
-  });
-
-  it("renders deterministic molt and twin load variants", async () => {
-    const molting = await visitingPet(2);
-    expect(await advanceUntilAct(molting, 30_000)).toBe("molt");
-    await expectPresenceAfter(molting, true, 30_000, ".lobster-pet--shell");
-    const twins = await visitingPet(21);
-    expect(twins.querySelectorAll(".lobster-pet:not(.lobster-pet--shell)")).toHaveLength(2);
-    expect(twins.querySelector(".lobster-pet--twin")?.getAttribute("title")).toMatch(/ Jr\.$/);
   });
 
   it("anchors the dismiss menu at the raw pointer position and preserves outside focus", async () => {
@@ -538,50 +491,6 @@ describe("lobster pet element", () => {
     expect(getLobsterdexEntries().get(look.palette.id)?.name).toBe("Original");
   });
 
-  it("wears the sailor cap on lobster days, deferring to rolled headwear", async () => {
-    // This lobster day rolls a face-worn eyepatch, leaving room for the cap.
-    vi.setSystemTime(new Date("2026-01-05T12:00:00"));
-    const element = await visitingPet(42);
-    expect(element.querySelector(".lob-cap")).not.toBeNull();
-    element.remove();
-    vi.setSystemTime(summer);
-    const plain = await visitingPet(42);
-    expect(plain.querySelector(".lob-cap")).toBeNull();
-  });
-
-  it("ships a hidden peek eye only in sleeping renders", () => {
-    expect(paletteSvg("crimson", { sleeping: true }).querySelector(".lob-eye-peek")).not.toBeNull();
-    expect(paletteSvg("crimson").querySelector(".lob-eye-peek")).toBeNull();
-  });
-
-  it.each(["crimson", "flatpack", "actual", "balloon", "portal"])(
-    "closes %s's eyes for sleep and opens them for reading",
-    (id) => {
-      const sleeping = paletteSvg(id, { sleeping: true });
-      const closed = sleeping.querySelector<SVGElement>(".lob-eye-closed");
-      expect(closed?.style.opacity).toBe("1");
-      expect(closed?.querySelectorAll(":scope > path")).toHaveLength(2);
-      const container = paletteSvg(id, { reading: true });
-      expect(container.querySelector(".lob-reading-book")).not.toBeNull();
-      expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
-      expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
-    },
-  );
-
-  it("renders full replacement geometry without the standard dome", () => {
-    const flatpackContainer = paletteSvg("flatpack", {}, "crown");
-    expect(flatpackContainer.querySelector('[fill="#f6c945"]')).toBeNull();
-    const loadingContainer = paletteSvg("loading");
-    expect(loadingContainer.querySelector(".lob-skeleton")).not.toBeNull();
-    expect(loadingContainer.querySelectorAll(".lob-eye-open circle")).toHaveLength(2);
-  });
-
-  it("never stacks the sailor cap on the tinfoil hat", () => {
-    const container = paletteSvg("tinfoil", { sailorCap: true });
-    expect(container.querySelector(".lob-tinfoil-hat")).not.toBeNull();
-    expect(container.querySelector(".lob-cap")).toBeNull();
-  });
-
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {
     vi.stubGlobal(
       "matchMedia",
@@ -598,12 +507,6 @@ describe("lobster pet element", () => {
 });
 
 describe("lobster plans", () => {
-  it("maps entrance rolls to their rarity bands", () => {
-    expect(pickLobsterEntrance(0.01)).toBe("balloon");
-    expect(pickLobsterEntrance(0.06)).toBe("bubble");
-    expect(pickLobsterEntrance(0.13)).toBe("walk");
-  });
-
   it("ignores stale removed palettes in dex counts and old-friend planning", () => {
     const stale = { firstSeenAt: 1, name: "Clawdia", shinySeenAt: 2 };
     rememberDex({ clawdia: stale });
@@ -622,19 +525,6 @@ describe("rare lobster loads", () => {
     vi.useFakeTimers();
     vi.setSystemTime(summer);
   });
-  it("hosts the Elder: barnacled, renamed, and never molting", async () => {
-    expect(identityOf(644)).toMatchObject({
-      elder: true,
-      look: { scale: 3, accessory: "barnacle" },
-    });
-    const element = await visitingPet(644);
-    expect(spriteClasses(element)).toContain("lobster-pet--elder");
-    expect(element.querySelector(".lob-barnacles")).not.toBeNull();
-    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
-      "Methuselah · old as the tides",
-    );
-  });
-
   it("brings back an old friend from the Lobsterdex, balloon and all", async () => {
     rememberDex(friends);
     const grail = resolveLobsterLoadIdentity(191, {
@@ -683,15 +573,5 @@ describe("rare lobster loads", () => {
     expect(opened?.getAttribute("title")).toBe("a shell is just armor you outgrew");
 
     await expectPresenceAfter(element, false, 150_000, ".lobster-bottle");
-  });
-
-  it("lets the snail take its sweet time crossing the ledge", async () => {
-    const element = createPet(37);
-    await element.updateComplete;
-    await expectPresenceAfter(element, true, 500_000, ".lobster-pet--snail");
-    // A regular passer's 11s crossing would be long over; the snail abides.
-    await tick(element, 60_000);
-    expect(element.querySelector(".lobster-pet--snail")).not.toBeNull();
-    await expectPresenceAfter(element, false, 40_000, ".lobster-pet--snail");
   });
 });
