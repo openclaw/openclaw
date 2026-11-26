@@ -139,7 +139,7 @@ or blank, it keeps the base TTS voice.
     providers: {
       "tts-local-cli": {
         command: "say",
-        args: ["-o", "{{OutputPath}}", "{{Text}}"],
+        args: ["-o", "{{OutputPath}}", "--data-format=LEI16@22050", "{{Text}}"],
         outputFormat: "wav",
         timeoutMs: 120000,
       },
