@@ -13,7 +13,6 @@ import {
   redactClaudeCliHistoryMessage,
   resolveClaudeCliSessionFilePathAsync,
 } from "./cli-session-history.claude.js";
-import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const YIELD_BYTES = 256 * 1024;
 const OVERSIZED_JSONL_LINE_CHARS = 1024 * 1024;
@@ -175,8 +174,10 @@ export async function visitClaudeCliSessionMessages(
         toolNames,
         { reseedMode: "recover", reseedState },
       );
-      if (parsedMessage && typeof turnExternalId === "string") {
-        parsedMessage = attachOpenClawTranscriptMeta(parsedMessage, { turnExternalId }) as Message;
+      // Parsing built this row's metadata; the history merge strips the anchor.
+      const meta = asOptionalRecord(parsedMessage?.["__openclaw"]);
+      if (meta && typeof turnExternalId === "string") {
+        meta.turnExternalId = turnExternalId;
       }
     } catch {
       // Ignore malformed external history entries.
