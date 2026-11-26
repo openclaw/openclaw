@@ -549,13 +549,9 @@ struct ChatProTab: View {
 
     private func exportTranscript() {
         guard let viewModel else { return }
-        let title = viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName
-        let filename = ChatTranscriptExporter.filename(
-            sessionTitle: title,
-            sessionKey: viewModel.sessionKey)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
-        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+        let fileURL = directory.appendingPathComponent(viewModel.transcriptExportFilename, isDirectory: false)
 
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -127,10 +127,15 @@ public enum ChatTranscriptExporter {
 }
 
 extension OpenClawChatViewModel {
+    private var transcriptExportTitle: String? { self.currentSessionEntry()?.displayName }
+
+    public var transcriptExportFilename: String {
+        ChatTranscriptExporter.filename(sessionTitle: self.transcriptExportTitle, sessionKey: self.sessionKey)
+    }
+
     public func exportTranscriptMarkdown() -> String {
-        let title = self.sessions.first { $0.key == self.sessionKey }?.displayName
-        return ChatTranscriptExporter.markdown(
-            sessionTitle: title,
+        ChatTranscriptExporter.markdown(
+            sessionTitle: self.transcriptExportTitle,
             sessionKey: self.sessionKey,
             messages: self.messages)
     }
