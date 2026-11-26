@@ -426,7 +426,9 @@ Supported implicit mention facts are channel-specific:
 | Quote of the bot      | LINE, Signal, WhatsApp, Zalo personal            |
 | Bot joined the thread | Mattermost, Slack, Tlon                          |
 
-Signal quote activation is disabled by default and requires [an account opt-in](/channels/signal#access-control-dms--groups). For the other producers, each fact defaults to enabled. Among bundled channels, LINE, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag. Set it to `false` to stop that fact from satisfying mention gating. LINE reads these flags from the shared `channels.defaults.implicitMentions` block. Native explicit mentions remain available. The other bundled producers listed above always count their supported facts as mentions. A flag has no effect on channels that do not produce that fact.
+Signal quote activation is disabled by default and requires [an account opt-in](/channels/signal#access-control-dms--groups).
+
+For the other channels, each fact defaults to enabled when the channel produces it. Among bundled channels, LINE, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag; set it to `false` to stop that fact from bypassing mention gating. LINE reads it from the shared `channels.defaults.implicitMentions` block only; it does not accept a channel- or account-scoped `implicitMentions` block of its own. Native explicit mentions remain unaffected. The other bundled producers listed above do not currently read `implicitMentions`, so their facts always count as mentions and the flag cannot turn them off. A flag also has no effect on channels that do not produce that fact.
 
 ```json5
 {

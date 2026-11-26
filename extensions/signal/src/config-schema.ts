@@ -45,11 +45,11 @@ const signalChannelConfigUiHints = {
   "accounts.*.reactionAllowlist.*": { presentation: "phone-number" },
   "implicitMentions.quotedBot": {
     label: "Activate on Signal Quote Replies",
-    help: "Allow quote replies to the default Signal account to count as mentions (off by default).",
+    help: "Count replies quoting a confirmed OpenClaw send in the same Signal group as mentions for the default account (off by default).",
   },
   "accounts.*.implicitMentions.quotedBot": {
     label: "Activate on Signal Quote Replies",
-    help: "Allow quote replies to this Signal account to count as mentions (off by default).",
+    help: "Count replies quoting a confirmed OpenClaw send in the same Signal group as mentions for this account (off by default).",
   },
   transport: {
     label: "Signal Transport",

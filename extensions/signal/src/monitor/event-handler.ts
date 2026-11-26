@@ -960,17 +960,18 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         : undefined;
     const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
-    const { canDetectMention, effectiveWasMentioned, shouldSkip } = resolveSignalMentionDecision({
-      cfg,
-      account: deps,
-      agentId: route.agentId,
-      groupId,
-      rawMessage,
-      messageText,
-      dataMessage,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
-    });
+    const { canDetectMention, effectiveWasMentioned, shouldSkip } =
+      await resolveSignalMentionDecision({
+        cfg,
+        account: deps,
+        agentId: route.agentId,
+        groupId,
+        rawMessage,
+        messageText,
+        dataMessage,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized,
+      });
     const attachments = dataMessage.attachments ?? [];
     const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
       const contentType = attachment?.contentType ?? undefined;

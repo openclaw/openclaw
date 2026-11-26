@@ -45,6 +45,7 @@ export type SignalDataMessage = {
     groupName?: string | null;
   } | null;
   quote?: {
+    id?: number | null;
     text?: string | null;
     mentions?: Array<SignalMention> | null;
     author?: string | null;

@@ -6,8 +6,10 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccountConfig } from "../accounts.js";
+import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import type {
   SignalDataMessage,
   SignalEventHandlerDeps,
@@ -64,7 +66,7 @@ function normalizeAccountPhone(account?: string | null) {
   return trimmed ? normalizeE164(trimmed) : undefined;
 }
 
-export function resolveSignalMentionDecision(params: {
+export async function resolveSignalMentionDecision(params: {
   cfg: OpenClawConfig;
   account: Pick<SignalEventHandlerDeps, "account" | "accountUuid" | "accountId">;
   agentId: string;
@@ -94,7 +96,26 @@ export function resolveSignalMentionDecision(params: {
   const legacyQuoteAuthor = quote?.author?.trim();
   const quotePhone =
     quote?.authorNumber ?? (legacyQuoteAuthor?.startsWith("+") ? legacyQuoteAuthor : undefined);
-  const quotesBot = isGroup && matchesBot(quote?.authorUuid, quotePhone);
+  const quoteId = asPositiveSafeInteger(quote?.id);
+  let quotesBot = false;
+  if (
+    groupId &&
+    quoteId !== undefined &&
+    matchesBot(quote?.authorUuid ?? legacyQuoteAuthor, quotePhone) &&
+    cfg.channels?.defaults?.implicitMentions?.quotedBot !== false &&
+    resolveSignalAccountConfig(cfg, account.accountId).implicitMentions?.quotedBot === true
+  ) {
+    const quoted = await resolveSignalReplyContextWithPersistence({
+      accountId: account.accountId,
+      to: `group:${groupId}`,
+      replyToId: String(quoteId),
+    });
+    // An inbound or older reply context can have the bot's account identity too.
+    quotesBot =
+      quoted?.author !== undefined &&
+      quoted.sentByOpenClaw === true &&
+      matchesBot(quoted.author, quoted.author.startsWith("+") ? quoted.author : undefined);
+  }
   const canDetectMention = mentionRegexes.length > 0 || Boolean(botUuid || botPhone);
   const { effectiveWasMentioned, shouldSkip } = resolveInboundMentionDecision({
     facts: {
@@ -117,14 +138,6 @@ export function resolveSignalMentionDecision(params: {
           accountId: account.accountId,
           configuredGroupDefaultsToNoMention: true,
         }),
-      implicitMentions: quotesBot
-        ? {
-            quotedBot:
-              cfg.channels?.defaults?.implicitMentions?.quotedBot !== false &&
-              resolveSignalAccountConfig(cfg, account.accountId).implicitMentions?.quotedBot ===
-                true,
-          }
-        : undefined,
       allowTextCommands: true,
       hasControlCommand: params.hasControlCommand,
       commandAuthorized: params.commandAuthorized,
