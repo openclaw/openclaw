@@ -620,7 +620,10 @@ export function Talk(props: TalkViewProps) {
           {readinessRows()}
         </SettingsSection>
         {props.agentSettings}
-        <SettingsSection title={t("talkPage.chimesSection.title")}>
+        <SettingsSection
+          title={t("talkPage.chimesSection.title")}
+          description={t("talkPage.chimesSection.description")}
+        >
           <div class="settings-row">
             <div
               style={{ display: "flex", "flex-wrap": "wrap", gap: "var(--space-4)" }}

@@ -443,6 +443,7 @@ const enSettings = {
     },
     chimesSection: {
       title: "Status chimes",
+      description: "Saved for this browser",
     },
     chimeStart: "Listening",
     chimeEnd: "Call end",
