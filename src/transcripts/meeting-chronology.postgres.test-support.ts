@@ -189,7 +189,7 @@ if (parentPort) {
     };
     const speakers =
       queryTranscriptReadEntries(postgresDb, { limit: 20 }).entries.find(
-        (entry) => entry.session.sessionId === speakerSession.sessionId,
+        (entry) => entry.sessionId === speakerSession.sessionId,
       )?.participants ?? [];
     assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
     port.postMessage({

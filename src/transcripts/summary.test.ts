@@ -113,7 +113,7 @@ it("attributes notes to the same account across nicknames and separates namesake
   ]);
   expect(summary.transcript).toEqual(summary.actionItems);
   expect(renderTranscriptsMarkdown(summary)).not.toContain("account-");
-  expect(rows[2].speaker?.label).toBe("New nickname");
+  expect(rows[2]?.speaker?.label).toBe("New nickname");
 });
 
 it("keeps literal numbered nicknames distinct from generated names", () => {
