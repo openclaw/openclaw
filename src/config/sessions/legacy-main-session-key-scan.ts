@@ -42,6 +42,20 @@ export function inspectSessionStorePath(pathname: string): "missing" | "present"
   return "present";
 }
 
+/** Keep the cause before the location: support redaction consumes a pathname's suffix. */
+export function unreadableStoreError(
+  action: "inspect" | "read",
+  agentId: string,
+  storePath: string,
+  error: unknown,
+): Error {
+  const reason = String(error).replaceAll(storePath, "[redacted-path]");
+  return new Error(
+    `cannot ${action} legacy session store for agent ${agentId}: ${reason}; store ${storePath}`,
+    { cause: error },
+  );
+}
+
 export function resolveMissingPhysicalPath(pathname: string): string {
   const prefix = resolvePathPrefixSync(path.resolve(pathname));
   return path.join(prefix.existingPath, ...prefix.unresolvedSegments);

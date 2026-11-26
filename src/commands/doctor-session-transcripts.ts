@@ -367,7 +367,8 @@ export async function noteSessionTranscriptHealth(options?: {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
       recordPostSessionRefusal({
         code: "blocked-by-session-repair-failure",
-        message: `Post-session plugin repair was blocked because prerequisite session repair failed: ${String(error)}`,
+        // The refusal code names the blocked repair; public facts keep 200 characters, so lead with the cause.
+        message: `Prerequisite session repair failed: ${String(error)}`,
       });
       throw error;
     }

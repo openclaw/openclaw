@@ -262,7 +262,7 @@ describe("legacy main session migration", () => {
     expect(outcomeKinds(unreadableResult)).toContain("store-unreadable");
     expect(unreadableResult.warnings.join("\n")).toContain(unreadablePath);
     await expect(migrate(unreadable, "doctor-fix")).rejects.toThrow(
-      `cannot read legacy session store ${unreadablePath}`,
+      /^cannot read legacy session store for agent ops: .*ENOENT.*; store .*sessions\.sqlite$/u,
     );
   });
 });
