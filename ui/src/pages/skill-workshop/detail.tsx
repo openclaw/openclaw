@@ -440,17 +440,19 @@ function FileContent(props: { reads: WorkshopReads }) {
     <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
       <Errored fallback={(error) => <LoadState error={error()} />}>
         <Show when={props.reads.viewer()}>
-          {(viewer) =>
-            viewer().target.filePath.endsWith(".md") ? (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={viewer().result.content}
-                options={{ mode: "document" }}
-              />
-            ) : (
-              <pre class="sw-file">{viewer().result.content}</pre>
-            )
-          }
+          {(viewer) => (
+            <>
+              {viewer().target.filePath.endsWith(".md") ? (
+                <MarkdownHtml
+                  class="sw-markdown chat-text"
+                  markdown={viewer().result.content}
+                  options={{ mode: "document" }}
+                />
+              ) : (
+                <pre class="sw-file">{viewer().result.content}</pre>
+              )}
+            </>
+          )}
         </Show>
       </Errored>
     </Loading>
