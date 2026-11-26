@@ -1,6 +1,12 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { LockPayload } from "./gateway-lock-payload.js";
 
+export function isTransientStateSchemaOwner(
+  holder: Pick<LockPayload, "role" | "stateOwnerKind"> | undefined,
+): boolean {
+  return holder?.role === "sqlite-maintenance" && holder.stateOwnerKind === "schema";
+}
+
 const GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE =
   "OpenClaw state process owner is no longer current";
 
@@ -31,12 +37,21 @@ export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
         public override readonly cause?: unknown,
         public readonly holderDetail?: string,
         /** Recorded holder identity: diagnostic evidence for waiting, never ownership authority. */
-        public readonly holder?: Pick<LockPayload, "pid" | "role">,
+        public readonly holder?: Pick<LockPayload, "pid" | "role" | "stateOwnerKind">,
       ) {
         super(
           `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
         );
         this.name = "GatewayStateOwnerContentionError";
+      }
+
+      transientSchemaRetry(
+        remainingMs: number,
+        pollIntervalMs: number,
+      ): false | { delayMs: number } {
+        return remainingMs > 0 && isTransientStateSchemaOwner(this.holder)
+          ? { delayMs: Math.min(pollIntervalMs, remainingMs) }
+          : false;
       }
     },
 );

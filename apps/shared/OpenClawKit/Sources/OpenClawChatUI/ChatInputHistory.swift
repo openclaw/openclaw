@@ -9,6 +9,7 @@ struct ChatInputHistory: Equatable, Sendable {
     private(set) var entries: [String] = []
     private(set) var cursor: Int?
     private(set) var stashedDraft: String?
+    private var stashedDraftRevision: UInt64?
     private var hasSeededTranscript = false
     private var transcriptSnapshot: [String] = []
     private var pendingTranscriptEchoes: [String] = []
@@ -17,11 +18,10 @@ struct ChatInputHistory: Equatable, Sendable {
         self.cursor != nil
     }
 
-    mutating func record(_ input: String, transcriptEcho: String? = nil) {
-        let recall = self.recallMarker()
+    mutating func record(_ input: String, transcriptEcho: String? = nil, submittedRevision: UInt64? = nil) {
         let text = Self.normalized(input)
         if !text.isEmpty, self.entries.first != text {
-            self.entries.insert(text, at: 0)
+            self.prepend(text)
             self.enforceLimit()
         }
         if let transcriptEcho {
@@ -29,6 +29,11 @@ struct ChatInputHistory: Equatable, Sendable {
             if !echo.isEmpty, echo != text, self.transcriptSnapshot.contains(echo) {
                 if let index = self.entries.firstIndex(of: echo) {
                     self.entries.remove(at: index)
+                    if self.cursor == index {
+                        self.resetNavigation()
+                    } else if let cursor, cursor > index {
+                        self.cursor = cursor - 1
+                    }
                 }
             } else if !echo.isEmpty,
                       !self.transcriptSnapshot.contains(echo),
@@ -40,16 +45,12 @@ struct ChatInputHistory: Equatable, Sendable {
                 }
             }
         }
-        if let recall {
-            // The accepted send retired this text. If the user recalled during
-            // the pending await, the stash holds the already-sent draft;
-            // Escape/Down must not resurrect it into a duplicate send.
-            if let stash = self.stashedDraft, Self.normalized(stash) == text {
-                self.stashedDraft = ""
-            }
-            self.restoreRecall(recall)
-        } else {
-            self.resetNavigation()
+        // An edit can bring the draft back to the submitted text before recall starts.
+        if let stash = self.stashedDraft,
+           self.stashedDraftRevision == submittedRevision,
+           Self.normalized(stash) == text
+        {
+            self.stashedDraft = ""
         }
     }
 
@@ -65,7 +66,6 @@ struct ChatInputHistory: Equatable, Sendable {
             transcript.append(text)
         }
 
-        let recall = self.recallMarker()
         let delta = self.hasSeededTranscript
             ? Self.transcriptDelta(previous: self.transcriptSnapshot, current: transcript)
             : TranscriptDelta(older: transcript, newer: [])
@@ -78,24 +78,18 @@ struct ChatInputHistory: Equatable, Sendable {
             // A newer transcript addition that already exists in history is a
             // restore after transient rollback (cache vs live pagination) or a
             // resend; move it to the front instead of duplicating the entry.
-            if let existing = self.entries.firstIndex(of: entry) {
-                self.entries.remove(at: existing)
-            }
-            self.entries.insert(entry, at: 0)
+            self.prepend(entry, movingFrom: self.entries.firstIndex(of: entry))
         }
         self.enforceLimit()
         self.transcriptSnapshot = transcript
         self.hasSeededTranscript = true
-
-        if let recall {
-            self.restoreRecall(recall)
-        }
     }
 
-    mutating func previous(draft: String) -> String? {
+    mutating func previous(draft: String, revision: UInt64? = nil) -> String? {
         guard !self.entries.isEmpty else { return nil }
         if self.cursor == nil {
             self.stashedDraft = draft
+            self.stashedDraftRevision = revision
             self.cursor = 0
             return self.entries[0]
         }
@@ -132,45 +126,33 @@ struct ChatInputHistory: Equatable, Sendable {
     mutating func resetNavigation() {
         self.cursor = nil
         self.stashedDraft = nil
+        self.stashedDraftRevision = nil
+    }
+
+    private mutating func prepend(_ entry: String, movingFrom index: Int? = nil) {
+        // Only entries ahead of the moved entry shift. An older page appended
+        // at the tail leaves every existing occurrence at its original index.
+        if let cursor, cursor <= (index ?? self.entries.endIndex) {
+            self.cursor = cursor == index ? 0 : cursor + 1
+        }
+        if let index {
+            self.entries.remove(at: index)
+        }
+        self.entries.insert(entry, at: 0)
     }
 
     private mutating func enforceLimit() {
-        // Accepted tradeoff: if the actively recalled entry is the evicted
-        // oldest one, restoreRecall resets navigation and the stashed draft is
-        // dropped. Guarding that corner is not worth extra recall state.
         if self.entries.count > Self.limit {
             self.entries.removeLast(self.entries.count - Self.limit)
+            if let cursor, !self.entries.indices.contains(cursor) {
+                self.resetNavigation()
+            }
         }
-    }
-
-    private struct RecallMarker {
-        let value: String
-        let occurrence: Int
     }
 
     private struct TranscriptDelta {
         let older: [String]
         let newer: [String]
-    }
-
-    private func recallMarker() -> RecallMarker? {
-        guard let cursor, self.entries.indices.contains(cursor) else { return nil }
-        let value = self.entries[cursor]
-        // Count occurrences from the oldest end: accepted sends prepend at the
-        // newest end, so newest-relative occurrence numbers would silently
-        // re-point the cursor at a different duplicate after a late accept.
-        let occurrence = self.entries[cursor...].filter { $0 == value }.count
-        return RecallMarker(value: value, occurrence: occurrence)
-    }
-
-    private mutating func restoreRecall(_ marker: RecallMarker) {
-        let entries = self.entries
-        self.cursor = entries.indices.reversed().lazy
-            .filter { entries[$0] == marker.value }
-            .dropFirst(marker.occurrence - 1).first
-        if self.cursor == nil {
-            self.resetNavigation()
-        }
     }
 
     private mutating func removePendingEchoes(from entries: [String]) -> [String] {
@@ -269,7 +251,7 @@ extension OpenClawChatViewModel {
     func recallPreviousInput(caretOnFirstLine: Bool) -> Bool {
         self.recallInput { history in
             guard history.isRecalling || caretOnFirstLine || self.input.isEmpty else { return nil }
-            return history.previous(draft: self.input)
+            return history.previous(draft: self.input, revision: self.composerRevision(for: self.sessionKey))
         }
     }
 
@@ -298,7 +280,8 @@ extension OpenClawChatViewModel {
     {
         self.inputHistoriesBySession[sessionKey, default: ChatInputHistory()].record(
             input,
-            transcriptEcho: transcriptEcho)
+            transcriptEcho: transcriptEcho,
+            submittedRevision: submittedRevision)
         if let submittedRevision, self.savedDraftRevisionsBySession[sessionKey] == submittedRevision {
             self.draftsBySession.removeValue(forKey: sessionKey)
             self.savedDraftRevisionsBySession.removeValue(forKey: sessionKey)

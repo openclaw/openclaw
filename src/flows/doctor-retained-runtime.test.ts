@@ -66,6 +66,28 @@ function projection(suffix: string, root = parent): string {
   return createDoctorRuntimeProjection(root, packageRoot, suffix);
 }
 
+const shippedRetainedRoot = () => path.join(parent, "pnpm/global/5/previous/node_modules/openclaw");
+
+/** A runtime as updaters through 2026.11.10 leave it: no owner.json, its file list and native gate. */
+function shippedRuntime(suffix: string): string {
+  const directory = path.join(parent, `openclaw-update-runtime-${suffix}`);
+  // The installation that retained it is gone: pnpm installs each update into a new directory.
+  const retainedRoot = shippedRetainedRoot();
+  const projected = projectedPath(directory, retainedRoot);
+  fs.mkdirSync(path.join(projected, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projected, "package.json"),
+    '{"name":"openclaw","version":"2026.11.9"}',
+  );
+  fs.writeFileSync(path.join(projected, "dist/index.js"), "export {};");
+  fs.writeFileSync(
+    path.join(directory, "retained-files.json"),
+    JSON.stringify(["package.json", "dist/index.js"].map((file) => path.join(retainedRoot, file))),
+  );
+  fs.writeFileSync(path.join(directory, "update-native-gate.mjs"), "await main();");
+  return directory;
+}
+
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
   const env = {
     HOME: parent,
@@ -233,10 +255,12 @@ it.each(["system helper", "foreign Node runtime"])(
 );
 
 it.each([
-  ["Gateway", ["openclaw-gateway"], true],
-  ["title-erased CLI that may be its updater", ["openclaw"], false],
-] as const)("Doctor with a live %s", async (_name, argv, reclaimed) => {
-  const runtime = projection("Gate01");
+  ["Gateway", "current", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", "current", ["openclaw"], false],
+  ["Gateway", "shipped", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", "shipped", ["openclaw"], false],
+] as const)("Doctor with a live %s (%s runtime)", async (_name, kind, argv, reclaimed) => {
+  const runtime = kind === "current" ? projection("Gate01") : shippedRuntime("Gate02");
   const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
     "../infra/openclaw-process-census.js",
   );
@@ -322,8 +346,79 @@ it("Doctor preserves unmarked directories and symbolic-link targets", async () =
   const output = await runDoctor(true);
   expect(fs.readFileSync(path.join(foreign, "operator-data"), "utf8")).toBe("preserve");
   expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-  expect(output).toContain("no recognized runtime marker");
+  expect(output).toContain(`Runtime retained at ${foreign}: ${notAnUpdaterRuntime}`);
   expect(output).toContain("directory ownership is unknown");
+});
+
+const notAnUpdaterRuntime =
+  "it does not match a runtime an OpenClaw updater created, so it is kept";
+
+it.each([
+  ["the installation moved", () => {}],
+  [
+    "an operator file sits beside it",
+    (directory: string) => fs.writeFileSync(path.join(directory, "notes.txt"), "preserve"),
+  ],
+  [
+    "its file list names another package",
+    (directory: string) =>
+      fs.writeFileSync(
+        path.join(directory, "retained-files.json"),
+        JSON.stringify([
+          path.join(parent, "pnpm/global/5/previous/node_modules/other/package.json"),
+        ]),
+      ),
+  ],
+  [
+    "its file list leaves the tree",
+    (directory: string) =>
+      fs.writeFileSync(
+        path.join(directory, "retained-files.json"),
+        JSON.stringify([`${parent}/pnpm/../../package.json`]),
+      ),
+  ],
+  [
+    "its tree is a symbolic link",
+    (directory: string) => {
+      const outside = path.join(parent, "outside-tree");
+      fs.renameSync(path.join(directory, "tree"), outside);
+      fs.symlinkSync(
+        outside,
+        path.join(directory, "tree"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    },
+  ],
+])("Doctor and a shipped updater's runtime when %s", async (condition, alter) => {
+  const directory = shippedRuntime("Ship01");
+  alter(directory);
+  // Read through tree/, so a symbolic link's target counts too.
+  const retained = () =>
+    fs.readFileSync(
+      projectedPath(directory, path.join(shippedRetainedRoot(), "package.json")),
+      "utf8",
+    );
+  const preview = await runDoctor(false);
+  expect(retained()).toContain("openclaw");
+  mocks.note.mockClear();
+  const output = await runDoctor(true);
+  if (condition === "the installation moved") {
+    expect(preview).toContain(`Runtime retained at ${directory}: run \`openclaw doctor --fix\``);
+    expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
+    expect(fs.existsSync(directory)).toBe(false);
+    return;
+  }
+  expect(output).toContain(`Runtime retained at ${directory}: ${notAnUpdaterRuntime}`);
+  expect(output).not.toContain("Removed abandoned updater runtime");
+  expect(fs.readdirSync(directory).toSorted()).toEqual(
+    [
+      "retained-files.json",
+      "tree",
+      "update-native-gate.mjs",
+      ...(condition === "an operator file sits beside it" ? ["notes.txt"] : []),
+    ].toSorted(),
+  );
+  expect(retained()).toContain("openclaw");
 });
 
 it("Doctor warns instead of resolving service TMP against the shell cwd", async () => {
@@ -395,7 +490,7 @@ it.each(["abandoned", "symlink", "bounded"])(
         ? `Removed abandoned updater runtime: ${directory}`
         : condition === "bounded"
           ? "exceeds the bounded lookup"
-          : "no recognized runtime marker",
+          : notAnUpdaterRuntime,
     );
   },
 );

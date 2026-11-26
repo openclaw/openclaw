@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -99,7 +100,7 @@ it.each([false, true])(
     }),
 );
 
-it("loads lazy owners from their scoped generation, never a same-id root callback", () =>
+it("prepares installed middleware for the run and keeps same-id callbacks scoped", () =>
   fixture(async (root) => {
     const rootPlugin = middlewarePlugin(root, "root");
     const processRoot = loadPluginRegistryHandle({
@@ -110,16 +111,11 @@ it("loads lazy owners from their scoped generation, never a same-id root callbac
     setActivePluginRegistry(processRoot);
     const plugin = middlewarePlugin(root, "scoped");
     const config = pluginFixtureConfig(plugin, { enabled: true });
-    const registry = loadPluginRegistryHandle({
+    const registry = loadAgentRuntimePluginRegistryHandle({
       config,
-      onlyPluginIds: [plugin.id],
-      loadModules: false,
-      throwOnLoadError: true,
+      basePluginIds: [],
     });
-    expect(registry.agentToolResultMiddlewares).toEqual([]);
-    expect(registry.agentToolResultMiddlewareOwners.map(({ pluginId }) => pluginId)).toEqual([
-      plugin.id,
-    ]);
+    expect(registry.agentToolResultMiddlewares).toHaveLength(1);
     // An admitted generation retains its prepared config even if the process has another one.
     setRuntimeConfigSnapshot({ plugins: { enabled: false } });
     await withPluginRuntimeRegistryScope(registry, async () => {
