@@ -1,11 +1,10 @@
 import { lazy, Show } from "solid-js";
 import type { createComposerCorrectionBindings } from "./chat-composer-correction-bindings.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
 import { ComposerCorrectionRecovery } from "./composer-correction-recovery.tsx";
 
-const ComposerCorrectionControls = lazy(() => import("./composer-correction-review.tsx"), {
-  export: "ComposerCorrectionControls",
-});
+// Policy controls stay available without loading the recording review surface.
 const ComposerCorrectionReview = lazy(() => import("./composer-correction-review.tsx"), {
   export: "ComposerCorrectionReview",
 });
@@ -17,9 +16,7 @@ export function ChatComposerCorrections(props: {
   return (
     <>
       <Show when={props.showControls}>
-        <ChatLazyBoundary>
-          <ComposerCorrectionControls {...props.context.correctionControls} />
-        </ChatLazyBoundary>
+        <ComposerCorrectionControls {...props.context.correctionControls} />
       </Show>
       <Show when={props.context.correctionReview}>
         {(review) => (

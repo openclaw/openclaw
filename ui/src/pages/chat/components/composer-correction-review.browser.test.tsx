@@ -3,9 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
 import { ComposerCorrectionRecovery } from "./composer-correction-recovery.tsx";
 import {
-  ComposerCorrectionControls,
   ComposerCorrectionReview,
   type ComposerCorrectionReviewProps,
 } from "./composer-correction-review.tsx";
