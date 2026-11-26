@@ -338,21 +338,21 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     expect(explicit).toEqual(omitted);
   });
 
-  it("composes the small profile with bounded workspace identity", async () => {
-    const workspace = await makeWorkspace("small-profile-workspace", {
+  it("composes the compact profile with bounded workspace identity", async () => {
+    const workspace = await makeWorkspace("compact-profile-workspace", {
       "AGENTS.md": "a".repeat(12_000),
       "SOUL.md": "Helpful and concise",
       "IDENTITY.md": "Name: Bob\nEmoji: 🦞",
       "USER.md": "User: Onur",
     });
     const agentProfile = resolveAgentProfile({
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+      config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
     });
 
     const result = await prepareEmbeddedAttemptBootstrap({
       attempt: {
-        sessionId: "session-small",
-        sessionKey: "agent:main:session-small",
+        sessionId: "session-compact",
+        sessionKey: "agent:main:session-compact",
         trigger: "user",
         isCanonicalWorkspace: true,
         config: { agents: { defaults: { workspace } } },
