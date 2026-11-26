@@ -73,6 +73,19 @@ export type ChatNativeRecoveryNotice = { key: string; onResume?: () => Promise<v
 function NativeRecoveryNotice(props: { onResume?: () => Promise<void> }) {
   const [pending, setPending] = createSignal(false);
   let resuming = false;
+  const resume = async () => {
+    if (resuming || !props.onResume) {
+      return;
+    }
+    resuming = true;
+    setPending(true);
+    try {
+      await props.onResume();
+    } finally {
+      resuming = false;
+      setPending(false);
+    }
+  };
   return (
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-native-recovery"
@@ -90,19 +103,7 @@ function NativeRecoveryNotice(props: { onResume?: () => Promise<void> }) {
           type="button"
           class="btn btn--sm"
           disabled={pending()}
-          onClick={async () => {
-            if (resuming || !props.onResume) {
-              return;
-            }
-            resuming = true;
-            setPending(true);
-            try {
-              await props.onResume();
-            } finally {
-              resuming = false;
-              setPending(false);
-            }
-          }}
+          onClick={() => void resume()}
         >
           {t(pending() ? "chat.nativeRecovery.resuming" : "chat.nativeRecovery.resume")}
         </button>

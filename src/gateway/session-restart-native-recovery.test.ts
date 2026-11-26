@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -75,11 +76,9 @@ it.for([false, true])(
         .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
         .mockImplementation(async (method, params, options) => {
           expect(method).toBe("chat.send");
-          observed.push([
-            params?.idempotencyKey,
-            options.client?.internal?.operatorRunAuthority?.profileId,
-          ]);
-          if (params?.idempotencyKey === "original-a") {
+          const run = asOptionalRecord(params)?.idempotencyKey;
+          observed.push([run, options.client?.internal?.operatorRunAuthority?.profileId]);
+          if (run === "original-a") {
             entered.resolve();
             await continueFirst.promise;
           }

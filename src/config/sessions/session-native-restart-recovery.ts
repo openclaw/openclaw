@@ -124,7 +124,11 @@ export async function canReleaseNativeRestartQueue(
   }
   const receipt = current.nativeRestartRecovery;
   if (receipt?.state === "held") {
-    throw resolveSessionWorkStartBlock(scope.sessionKey, current);
+    const blocked = resolveSessionWorkStartBlock(scope.sessionKey, current);
+    if (blocked) {
+      throw blocked;
+    }
+    return false;
   }
   return (
     replayOwned ||
