@@ -634,12 +634,16 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         }
         for (const id of resolving) {
           resolvingIds.push(moduleId(id));
-          if (resolvingIds.length === 2) break;
+          if (resolvingIds.length === 2) {
+            break;
+          }
         }
         if (fetching) {
           for (const [id, promise] of fetching) {
             fetchingIds.push([moduleId(id), cronImportDiagnosticId(promise)]);
-            if (fetchingIds.length === 2) break;
+            if (fetchingIds.length === 2) {
+              break;
+            }
           }
         }
         importDiagnostics.push({
@@ -656,7 +660,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     };
     const emitImportDiagnostics = () => {
       try {
-        if (!importDiagnostics.length) return;
+        if (!importDiagnostics.length) {
+          return;
+        }
         const line = `[cron-import-boundary] ${JSON.stringify({
           pid: process.pid,
           file: testFiles,
@@ -666,7 +672,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
           ),
           snapshots: importDiagnostics,
         })}`;
-        if (Buffer.byteLength(line, "utf8") < 2_048) nativeConsoleMethods.error(line);
+        if (Buffer.byteLength(line, "utf8") < 2_048) {
+          nativeConsoleMethods.error(line);
+        }
       } catch {
         // Reporting is observational; preserve every existing failure and cleanup call.
       }
@@ -823,7 +831,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
         ["evaluated modules", () => resetEvaluatedModules(modules, executions, testFiles)],
       ] as const) {
-        if (phase === "module mocks") captureImportDiagnostics("before-reset");
+        if (phase === "module mocks") {
+          captureImportDiagnostics("before-reset");
+        }
         clean(phase, run);
       }
     }
