@@ -22,7 +22,9 @@ import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { formatCliCommand } from "./command-format.js";
+import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -204,10 +206,25 @@ export function registerPairingCli(program: Command) {
       const approvedAccountId =
         accountId || normalizeStringifiedOptionalString(approved.entry?.meta?.accountId);
       try {
+        // The notice is sent from this process, so resolve the channel's SecretRefs (a store-held
+        // bot token) first, as `openclaw message send` does.
+        const config = await captureRuntimeConfigAsyncReader()();
+        const secretTargets = getScopedChannelsCommandSecretTargets({
+          config,
+          channel,
+          accountId: approvedAccountId,
+        });
+        const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+          config,
+          commandName: "pairing approve",
+          targetIds: secretTargets.targetIds,
+          ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
+          runtime: defaultRuntime,
+        });
         await notifyPairingApproved({
           channelId: channel,
           id: approved.id,
-          cfg: await captureRuntimeConfigAsyncReader()(),
+          cfg: effectiveConfig,
           ...(approvedAccountId ? { accountId: approvedAccountId } : {}),
           ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
         });
