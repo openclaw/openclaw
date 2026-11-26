@@ -2,7 +2,7 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import {
-  formatPromptCacheHitRate as formatCacheHitRate,
+  formatPromptCacheHitRate,
   promptCacheHitRate,
 } from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
@@ -250,7 +250,7 @@ export function ChatComposerContextPanel(
                   : column === "output"
                     ? formatStat(context().output)
                     : column === "cache"
-                      ? formatCacheHitRate(runCacheHitRate())
+                      ? formatPromptCacheHitRate(runCacheHitRate())
                       : context().cost === null
                         ? "—"
                         : formatContextCost(context().cost!)}
@@ -277,7 +277,7 @@ export function ChatComposerContextPanel(
                         : column === "output"
                           ? bound(formatStat(total().output))
                           : column === "cache"
-                            ? formatCacheHitRate(total().cacheHitRate)
+                            ? formatPromptCacheHitRate(total().cacheHitRate)
                             : total().unpriced
                               ? t("chat.composer.contextUsage.unpriced")
                               : bound(formatContextCost(total().usd))}

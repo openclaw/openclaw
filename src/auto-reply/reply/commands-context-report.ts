@@ -150,11 +150,10 @@ export function formatContextBudget(params: {
   // Same rules as the Control UI: an unfinished or partly unpriced total is a lower bound,
   // and usage without any price is never shown as $0.
   const partial = total ? total.staleSince !== undefined || total.missingCostEntries > 0 : false;
+  const totalRate = total && total.staleSince === undefined ? promptCacheHitRate(total) : null;
   const sessionTotal = total
     ? [
-        total.staleSince === undefined && promptCacheHitRate(total) !== null
-          ? `${formatPromptCacheHitRate(promptCacheHitRate(total))} cache`
-          : null,
+        totalRate === null ? null : `${formatPromptCacheHitRate(totalRate)} cache`,
         total.totalCost === 0 && total.missingCostEntries > 0
           ? "unpriced"
           : `${partial ? "≥ " : ""}${formatUsd(total.totalCost)}`,
