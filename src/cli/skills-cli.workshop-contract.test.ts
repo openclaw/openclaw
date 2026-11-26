@@ -249,9 +249,12 @@ afterEach(() => {
 });
 
 describe("openclaw skills workshop persisted CLI contract", () => {
-  it.each(["text", "json"] as const)(
-    "lists, reads and filters changes through the real dispatcher (%s)",
-    async (format) => {
+  it.each([
+    ["text", "500"],
+    ["json", "501"],
+  ] as const)(
+    "lists, reads and filters changes through the real dispatcher (%s, --limit %s)",
+    async (format, limit) => {
       await fixture(async (state, config) => {
         const lock = await claimState("gateway");
         transport.call.mockImplementation(({ method, params }) =>
@@ -287,9 +290,15 @@ describe("openclaw skills workshop persisted CLI contract", () => {
             "--agent",
             "writer",
             "--limit",
-            "1",
+            limit,
             ...output,
           ]);
+          expect(transport.call).toHaveBeenCalledWith(
+            expect.objectContaining({
+              method: "skills.workshop.changes",
+              params: { agentId: "writer", limit: 500 },
+            }),
+          );
           if (format === "json") {
             expect(JSON.parse(changes)).toMatchObject({
               changes: [

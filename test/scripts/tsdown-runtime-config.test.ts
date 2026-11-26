@@ -185,6 +185,22 @@ describe("tsdown config", () => {
     );
   });
 
+  it("builds the two broker attachments together outside the shared Gateway graph", async () => {
+    const sqlite = "infra/sqlite-readonly-native-resource";
+    const plugin = "plugins/plugin-capture-native-resource";
+    const graph = runtimeGraph(sqlite);
+    expect(graph).toBe(runtimeGraph(plugin));
+    expect(Object.keys(entrySources(graph)).toSorted()).toEqual([sqlite, plugin]);
+    expect(graph.outputOptions).toMatchObject({
+      codeSplitting: true,
+      chunkFileNames: "native-resource-private/[name]-[hash].mjs",
+    });
+    expect(graph.minify).toEqual(runtimeGraph("plugins/runtime/index").minify);
+    const plugins = await resolvePluginNames(graph.plugins);
+    expect(plugins).toContain("openclaw:compact-module-labels");
+    expect(plugins).not.toContain("openclaw:runtime-dependency-ownership");
+  });
+
   it.each([
     "plugins/plugin-generation-preparation.worker",
     "infra/sqlite-readonly-location.worker",
