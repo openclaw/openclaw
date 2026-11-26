@@ -92,7 +92,7 @@ export function filterPinnedSessionChildrenByOwner(
   const rows = filterTreeByOwner(pin.children, ownerId);
   return withOwnerFilteredChildren(
     pin,
-    rows.map((row) => (row.isChild ? row : { ...row, isChild: true })),
+    rows.map((row) => (row.isChild ? row : Object.assign({}, row, { isChild: true }))),
   );
 }
 

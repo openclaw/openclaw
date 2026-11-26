@@ -222,7 +222,7 @@ it.each([false, true])(
     ];
     const { sidebar } = await mountRoster(
       undefined,
-      rows.map((row) => ({ ...row, kind: "direct", agentId: "main" })),
+      rows.map((row) => Object.assign({}, row, { kind: "direct" as const, agentId: "main" })),
     );
     sidebar.sessionKey = parent;
     sidebar.activeRouteId = "chat";
