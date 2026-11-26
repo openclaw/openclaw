@@ -6681,6 +6681,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
+  it("prepares the Android SDK and Gradle Java before CodeQL builds", () => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    const { steps } = job;
+    const toolchain = expectDefined(
+      steps.find((step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain"),
+      "Android CodeQL toolchain",
+    );
+    const initialize = requiredWorkflowStep(steps, "Initialize CodeQL");
+    const build = requiredWorkflowStep(steps, "Build Android for CodeQL");
+    expect(steps.indexOf(toolchain)).toBeLessThan(steps.indexOf(initialize));
+    expect(steps.indexOf(toolchain)).toBeLessThan(steps.indexOf(build));
+    expect(build.env?.JAVA_HOME).toBe(`\${{ steps.${toolchain.id}.outputs.gradle-java-home }}`);
+  });
+
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
     const networkConfig = readFileSync(
