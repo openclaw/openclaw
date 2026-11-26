@@ -12,10 +12,11 @@ import {
   profileMcpRequesterScope,
   readWebchatMcpRequester,
 } from "../../agent-bundle-mcp-webchat-requester.js";
+import { filterToolsByAgentProfile } from "../../agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../../agent-profiles/model-size-class.js";
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
-import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { participationAllowsTool, participationToolPolicy } from "../../participation-ceiling.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -58,7 +59,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     effectiveToolsAllow,
     inheritedToolAllowlist,
     additionalInheritedToolNamesRef,
-    localModelLeanPreserveToolNames,
+    agentProfile,
+    agentProfilePreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
     toolsRaw,
@@ -263,15 +265,17 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       coreTools: typeof toolsRaw,
       recordQuarantine: RuntimeToolSchemaQuarantineRecorder,
     ) => {
-      const projectedTools = filterLocalModelLeanTools({
+      const profileFilteredTools = filterToolsByAgentProfile({
         tools: [...coreTools, ...normalizedBundledTools].map((tool) =>
           wrapToolWithAbortSignal(tool, params.preparedToolBase.toolAbortSignal),
         ),
         config: params.attempt.config,
         agentId: params.setup.sessionAgentId,
-        preserveToolNames: localModelLeanPreserveToolNames,
+        modelSizeClass: resolveProfileModelSizeClass(params.attempt.model),
+        resolvedProfile: agentProfile,
+        preserveToolNames: agentProfilePreserveToolNames,
       });
-      const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      const schemaProjection = filterRuntimeCompatibleTools(profileFilteredTools);
       // Listed tools this turn refuses are never delegated or captured as authority.
       const executable = schemaProjection.tools.filter(isAgentToolExecutionAvailable);
       // Cron is constructed before bundled tools; capture only the executable
@@ -295,7 +299,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       }
       recordQuarantine({
         diagnostics: schemaProjection.diagnostics,
-        tools: projectedTools,
+        tools: profileFilteredTools,
         runId: params.attempt.runId,
         agentId: params.setup.sessionAgentId,
         sessionKey: params.attempt.sessionKey,

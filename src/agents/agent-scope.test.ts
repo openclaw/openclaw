@@ -94,6 +94,15 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("preserves an explicit per-agent profile selector", () => {
+    const cfg = agentConfig({
+      defaults: { agentProfileId: "openclaw/base" },
+      entries: { main: { agentProfileId: "auto" } },
+    });
+
+    expect(resolveAgentConfig(cfg, "main")?.agentProfileId).toBe("auto");
+  });
+
   it.each([
     ["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"],
     [modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]), "openai/gpt-5.4"],

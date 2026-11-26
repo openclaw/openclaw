@@ -1,11 +1,13 @@
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
+import type { ResolvedAgentProfile } from "./agent-profiles.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -79,6 +81,10 @@ export type OpenClawCodingToolsOptions = {
   modelParams?: Record<string, unknown>;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
+  /** Trusted total-parameter size class used for Agent Profile selection. */
+  modelSizeClass?: ModelSizeClass;
+  /** Run-scoped Agent Profile selected for this model. */
+  resolvedAgentProfile?: ResolvedAgentProfile;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
   suppressManagedWebSearch?: boolean;
   /** Compatibility no-op; tool selection does not use model auth mode. */

@@ -27,6 +27,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { expectText } from "../../../test-utils/text-assertions.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as referencePaths from "../../docs-path.js";
@@ -173,9 +174,7 @@ async function preparePermissionPrompt({
       toolSurface?.runtimeToolAllowlist ?? attempt.toolsAllow,
     );
     return toolSurface
-      ? toolSurface
-          .compactTools(allowedTools, { localModelLeanApplied: true })
-          .promptToolPolicy.apply()
+      ? toolSurface.compactTools(allowedTools).promptToolPolicy.apply()
       : { tools: allowedTools, callableToolNames: allowedTools.map(({ name }) => name) };
   };
   const projected = projectTools(tools);
@@ -183,6 +182,7 @@ async function preparePermissionPrompt({
   const capabilityToolNames = new Set(projected.callableToolNames);
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
+    agentProfile: resolveAgentProfile({}),
     activeContextEngine: undefined,
     bootstrap: createEmptyPromptBootstrap(),
     capabilityToolNames,

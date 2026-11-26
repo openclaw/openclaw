@@ -78,6 +78,10 @@ export async function buildAgentsApiInstructions(
   // Preparation failure must remain retryable before a native session is bound.
   const workspace = await prepareAgentWorkspaceContext({
     scope: "full",
+    modelProvider: params.provider,
+    modelId: params.modelId,
+    modelSizeClass: params.model?.modelSizeClass,
+    modelParameterCount: params.model?.parameterCount,
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,

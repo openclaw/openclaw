@@ -104,7 +104,6 @@ const started = {
   agentId: "main",
   messageProvider: "webchat",
   messageChannel: "webchat",
-  localModelLean: false,
   toolCount: 40,
   clientToolCount: 0,
 };

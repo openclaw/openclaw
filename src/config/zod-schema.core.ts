@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import { ENV_SECRET_REF_ID_RE, SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
-import { MODEL_APIS } from "./model-config-vocabulary.js";
+import { MODEL_APIS, MODEL_SIZE_CLASSES } from "./model-config-vocabulary.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import { AgentRuntimePolicySchema } from "./zod-schema.agent-entry-base.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
@@ -249,6 +249,8 @@ const ModelDefinitionSchema = z.strictObject({
   /** Provider-facing model id. */
   id: z.string().min(1),
   name: z.string().min(1),
+  /** Trusted total-parameter size class used for Agent Profile selection. */
+  modelSizeClass: z.enum(MODEL_SIZE_CLASSES).optional(),
   /** Optional API adapter override for this model. */
   api: ModelApiSchema.optional(),
   /** Optional base URL override for this model. */

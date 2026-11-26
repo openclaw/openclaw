@@ -1,5 +1,6 @@
 import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
@@ -15,6 +16,7 @@ export type ProviderRuntimeModel = Omit<Model, "compat"> & {
   contextTokens?: number;
   /** Unknown-model estimate, replaceable only by accepted same-route account metadata. */
   contextWindowSource?: "synthetic";
+  modelSizeClass?: ModelSizeClass;
   /** Host-resolved provenance for the top-level wire output cap. */
   maxTokensSource?: "configured" | "discovered";
   params?: Record<string, unknown>;

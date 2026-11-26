@@ -173,6 +173,10 @@ export async function runAcpHarnessAttempt(params: {
     ).messages;
     const bootstrap = !lastRequestId
       ? await resolveBootstrapContextForRun({
+          modelProvider: input.provider,
+          modelId: input.modelId,
+          modelSizeClass: input.model?.modelSizeClass,
+          modelParameterCount: input.model?.parameterCount,
           workspaceDir: input.workspaceDir,
           config: input.config,
           sessionKey,

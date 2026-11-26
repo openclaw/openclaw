@@ -12,9 +12,11 @@ export type { ModelCompatConfig } from "./zod-schema.model-compat.js";
 
 export {
   MODEL_APIS,
+  MODEL_SIZE_CLASSES,
   MODEL_THINKING_FORMATS,
   isModelThinkingFormat,
   type ModelApi,
+  type ModelSizeClass,
   type SupportedThinkingFormat,
 } from "./model-config-vocabulary.js";
 

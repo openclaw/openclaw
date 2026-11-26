@@ -20,6 +20,7 @@ type LlamaServerModelWire = Record<string, unknown> & {
   meta?: {
     n_ctx?: unknown;
     n_ctx_train?: unknown;
+    n_params?: unknown;
   };
   status?: {
     value?: unknown;
@@ -128,10 +129,13 @@ export function mapLlamaServerModel(
   const contextTokens =
     runtimeContextWindow ?? (nativeContextWindow === undefined ? contextWindow : undefined);
   const compat = buildCompat(props, useRuntimeDefaults);
+  // llama-server reports the loaded model's total parameter count in /v1/models meta.n_params.
+  const parameterCount = asPositiveSafeInteger(row.meta?.n_params);
   return {
     config: {
       id,
       name: id,
+      ...(parameterCount !== undefined ? { parameterCount } : {}),
       reasoning: compat.supportsReasoningEffort === true,
       input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },

@@ -1,4 +1,10 @@
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
+import type { ResolvedAgentProfile } from "../../agent-profiles.js";
+import {
+  prepareAgentProfileWorkspaceContext,
+  type AgentProfileWorkspaceContextReport,
+  type WorkspaceContextSourceFile,
+} from "../../agent-profiles/workspace-context.js";
 import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
   hasCompletedBootstrapTurn,
@@ -33,6 +39,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   > & {
     prepStages?: Pick<EmbeddedAttemptSetup["prepStages"], "mark">;
   };
+  agentProfile: ResolvedAgentProfile;
   hasReadTool: boolean;
   isRawModelRun: boolean;
 }) {
@@ -118,16 +125,32 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     (await hasCompletedBootstrapTurnForAttempt());
   const shouldSkipBootstrapInjection =
     effectiveContextInjectionMode === "never" || isContinuationTurn;
-  let hookAdjustedBootstrapFiles: WorkspaceBootstrapFile[] = [];
+  let hookAdjustedBootstrapFiles: WorkspaceContextSourceFile[] = [];
+  let typedBootstrapFiles: WorkspaceBootstrapFile[] = [];
   let resolvedContextFiles: EmbeddedContextFile[] = [];
+  let workspaceContextReport: AgentProfileWorkspaceContextReport | undefined;
   if (!shouldSkipBootstrapInjection) {
-    hookAdjustedBootstrapFiles =
-      preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles());
-    resolvedContextFiles = buildBootstrapContextForFiles(hookAdjustedBootstrapFiles, {
+    typedBootstrapFiles = preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles());
+    hookAdjustedBootstrapFiles = typedBootstrapFiles;
+    const profileContext = await prepareAgentProfileWorkspaceContext({
+      resolvedProfile: params.agentProfile,
+      bootstrapFiles: typedBootstrapFiles,
       config: attempt.config,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
     });
+    if (profileContext) {
+      workspaceContextReport = profileContext.report;
+      hookAdjustedBootstrapFiles = profileContext.sourceFiles;
+      typedBootstrapFiles = profileContext.bootstrapFiles;
+      resolvedContextFiles = profileContext.contextFiles;
+    } else {
+      resolvedContextFiles = buildBootstrapContextForFiles(typedBootstrapFiles, {
+        config: attempt.config,
+        agentId: params.setup.sessionAgentId,
+        warn: bootstrapWarn,
+      });
+    }
   }
   // Check both workspace layers after loading: an unreadable file must be retried next turn.
   const shouldRecordCompletedBootstrapTurn =
@@ -135,7 +158,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode !== "lightweight" &&
     bootstrapContextRunKind !== "cron" &&
     deliversCompleteWorkspaceContext &&
-    !hookAdjustedBootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
+    !typedBootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
     (bootstrapMode === "full" || effectiveContextInjectionMode === "continuation-skip");
   params.setup.prepStages?.mark("bootstrap-context");
   const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
@@ -178,6 +201,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapCompleted: bootstrapRouting.bootstrapCompleted,
     contextFiles,
     bootstrapInjectionStats,
+    ...(workspaceContextReport ? { workspaceContextReport } : {}),
     shouldRecordCompletedBootstrapTurn,
     workspaceNotes,
   };

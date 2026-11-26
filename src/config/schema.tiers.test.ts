@@ -29,7 +29,6 @@ describe("config schema tiers", () => {
     expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
     expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
     expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
-    expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
   });
 
   it.each([

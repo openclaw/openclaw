@@ -120,7 +120,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const {
     codeModeControlsEnabledForRun,
     computerContextEpoch,
-    localModelLeanEnabled,
+    agentProfile,
     replaySafetyOptions,
     toolSearchCatalogRef,
     toolSearchRuntimeConfig,
@@ -615,7 +615,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         agentId: sessionAgentId,
         messageProvider: attempt.messageProvider,
         messageChannel: attempt.messageChannel,
-        localModelLean: localModelLeanEnabled,
+        agentProfileId: agentProfile.profile.id,
+        agentProfileSelectionSource: agentProfile.selectionSource,
         toolCount: effectiveToolCount,
         clientToolCount,
       });
