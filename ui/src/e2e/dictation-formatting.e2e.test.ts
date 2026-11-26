@@ -18,6 +18,7 @@ const microphoneWav = process.env.OPENCLAW_DICTATION_FORMATTING_MICROPHONE_WAV;
 // Set this flag when exercising the same capture against the unmodified base build.
 const baselineOnly = process.env.OPENCLAW_DICTATION_FORMATTING_BASELINE === "1";
 const speech = "Shopping list bullet milk next item eggs next item rice";
+const desktopMicrophone = { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } };
 const suite = createControlUiE2eSuite({
   name: "Dictation formatting synthetic STT product proof",
   browserLaunchOptions: {
@@ -248,108 +249,96 @@ async function open(
 
 suite.define(() => {
   it("keeps Preserve mode raw without sending", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
-      async ({ page }) => {
-        const fixture = await open(page);
-        await fixture.start();
-        await fixture.finish(speech, false);
-        await capture(
-          page,
-          baselineOnly ? "before-preserve" : "current-preserve-compatibility",
-          fixture.shell,
-          fixture.textarea,
-        );
-        await fixture.noSend();
-      },
-    ));
+    suite.withPage(desktopMicrophone, async ({ page }) => {
+      const fixture = await open(page);
+      await fixture.start();
+      await fixture.finish(speech, false);
+      await capture(
+        page,
+        baselineOnly ? "before-preserve" : "current-preserve-compatibility",
+        fixture.shell,
+        fixture.textarea,
+      );
+      await fixture.noSend();
+    }));
 
   if (baselineOnly) {
     return;
   }
 
   it("keeps Alice's recipient identity through Keep original and native Undo without sending", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
-      async ({ page }) => {
-        const fixture = await open(page, { explicit: true, recipient: true });
-        await fixture.textarea.click();
-        await page.keyboard.type("@Ali");
-        await page
-          .getByRole("listbox", { name: "Mention a person" })
-          .getByRole("option", { name: "Alice" })
-          .click();
-        const editor = fixture.shell.locator('[data-composer-editor="true"]');
-        const chip = editor.locator('.chat-composer-mention[data-profile-id="alice"]');
-        const before = "@Alice ";
-        expect(await fixture.textarea.inputValue()).toBe(before);
-        await chip.waitFor();
-        await editor.press("End");
-        await fixture.start();
-        await fixture.finish(speech);
-        const panel = review(page);
-        await button(panel, "Keep original").click();
-        await expect.poll(() => fixture.textarea.inputValue()).toBe(before + speech);
-        await chip.waitFor();
-        await capture(page, "after-recipient-retained", fixture.shell, chip);
-        await editor.press("ControlOrMeta+z");
-        await expect.poll(() => fixture.textarea.inputValue()).toBe(before);
-        await chip.waitFor();
-        await fixture.noSend();
-      },
-    ));
+    suite.withPage(desktopMicrophone, async ({ page }) => {
+      const fixture = await open(page, { explicit: true, recipient: true });
+      await fixture.textarea.click();
+      await page.keyboard.type("@Ali");
+      await page
+        .getByRole("listbox", { name: "Mention a person" })
+        .getByRole("option", { name: "Alice" })
+        .click();
+      const editor = fixture.shell.locator('[data-composer-editor="true"]');
+      const chip = editor.locator('.chat-composer-mention[data-profile-id="alice"]');
+      const before = "@Alice ";
+      expect(await fixture.textarea.inputValue()).toBe(before);
+      await chip.waitFor();
+      await editor.press("End");
+      await fixture.start();
+      await fixture.finish(speech);
+      const panel = review(page);
+      await button(panel, "Keep original").click();
+      await expect.poll(() => fixture.textarea.inputValue()).toBe(before + speech);
+      await chip.waitFor();
+      await capture(page, "after-recipient-retained", fixture.shell, chip);
+      await editor.press("ControlOrMeta+z");
+      await expect.poll(() => fixture.textarea.inputValue()).toBe(before);
+      await chip.waitFor();
+      await fixture.noSend();
+    }));
 
   it("finishes an explicit Side chat recording with Enter without submitting the question", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
-      async ({ page }) => {
-        await page.clock.install({ time: new Date("2026-11-25T12:00:00Z") });
-        const fixture = await open(page, { explicit: true, rail: true });
-        await fixture.textarea.fill("Keep this question");
-        await fixture.start();
-        await pauseVirtualClock(page);
-        await fixture.emit(speech);
-        await fixture.textarea.press("Enter");
-        await fixture.gateway.waitForRequest("talk.session.close");
-        await fixture.textarea.press("Enter");
-        await fixture.noSend();
-        await fixture.emit(speech, true);
-        await fixture.close();
-        await review(page).waitFor();
-        expect(await fixture.textarea.inputValue()).toBe("Keep this question");
-        await capture(
-          page,
-          "after-rail-keyboard-review",
-          fixture.shell,
-          review(page).getByRole("status"),
-        );
-        await fixture.noSend();
-      },
-    ));
+    suite.withPage(desktopMicrophone, async ({ page }) => {
+      await page.clock.install({ time: new Date("2026-11-25T12:00:00Z") });
+      const fixture = await open(page, { explicit: true, rail: true });
+      await fixture.textarea.fill("Keep this question");
+      await fixture.start();
+      await pauseVirtualClock(page);
+      await fixture.emit(speech);
+      await fixture.textarea.press("Enter");
+      await fixture.gateway.waitForRequest("talk.session.close");
+      await fixture.textarea.press("Enter");
+      await fixture.noSend();
+      await fixture.emit(speech, true);
+      await fixture.close();
+      await review(page).waitFor();
+      expect(await fixture.textarea.inputValue()).toBe("Keep this question");
+      await capture(
+        page,
+        "after-rail-keyboard-review",
+        fixture.shell,
+        review(page).getByRole("status"),
+      );
+      await fixture.noSend();
+    }));
 
   it("cancels final transcript processing from its visible control and ignores late text", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
-      async ({ page }) => {
-        await page.clock.install({ time: new Date("2026-11-25T12:00:00Z") });
-        const fixture = await open(page, { explicit: true });
-        await fixture.start();
-        await pauseVirtualClock(page);
-        await fixture.emit(speech);
-        await button(page, "Finish and review").click();
-        await fixture.gateway.waitForRequest("talk.session.close");
-        const cancel = button(page, "Cancel dictation");
-        await cancel.waitFor();
-        await capture(page, "after-finalizing-cancellable", fixture.shell, cancel);
-        await cancel.click();
-        await cancel.waitFor({ state: "detached" });
-        await fixture.emit(speech, true);
-        await fixture.close();
-        expect(await review(page).count()).toBe(0);
-        expect(await fixture.textarea.inputValue()).toBe("");
-        await fixture.noSend();
-      },
-    ));
+    suite.withPage(desktopMicrophone, async ({ page }) => {
+      await page.clock.install({ time: new Date("2026-11-25T12:00:00Z") });
+      const fixture = await open(page, { explicit: true });
+      await fixture.start();
+      await pauseVirtualClock(page);
+      await fixture.emit(speech);
+      await button(page, "Finish and review").click();
+      await fixture.gateway.waitForRequest("talk.session.close");
+      const cancel = button(page, "Cancel dictation");
+      await cancel.waitFor();
+      await capture(page, "after-finalizing-cancellable", fixture.shell, cancel);
+      await cancel.click();
+      await cancel.waitFor({ state: "detached" });
+      await fixture.emit(speech, true);
+      await fixture.close();
+      expect(await review(page).count()).toBe(0);
+      expect(await fixture.textarea.inputValue()).toBe("");
+      await fixture.noSend();
+    }));
 
   it("can finish an Explicit recording when the status chunk fails to load", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
@@ -443,59 +432,56 @@ suite.define(() => {
     ));
 
   it("blocks New Session submission during finalization, then reviews and undoes paragraphs", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
-      async ({ page }) => {
-        const fixture = await open(page, { route: "new", explicit: true });
-        const draft = "Keep this draft until review";
-        await fixture.textarea.fill(draft);
-        const start = button(fixture.shell, "Start session");
-        await expect.poll(() => start.isEnabled()).toBe(true);
-        await fixture.textarea.selectText();
-        await fixture.start();
-        const text = "Opening paragraph new paragraph closing paragraph";
-        await fixture.emit(text);
-        await button(page, "Finish and review").click();
-        await fixture.gateway.waitForRequest("talk.session.close");
-        await fixture.textarea.press("Enter");
-        await fixture.noSend();
-        expect(await fixture.textarea.inputValue()).toBe(draft);
-        expect(await start.isDisabled()).toBe(true);
-        await fixture.emit(text, true);
-        await fixture.close();
-        const panel = review(page);
-        expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
-          text,
-        );
-        await capture(page, "after-needs-review", fixture.shell, panel.getByRole("checkbox"));
-        await panel.getByRole("checkbox").focus();
-        await page.keyboard.press("Space");
-        await button(panel, "Interpret selected commands").focus();
-        await page.keyboard.press("Enter");
-        await expect
-          .poll(() => panel.getByRole("region", { name: "Semantic preview" }).locator("p").count())
-          .toBe(2);
-        expect(
-          await panel
-            .getByRole("combobox", { name: "Preview format" })
-            .evaluate((element) => document.activeElement === element),
-        ).toBe(true);
-        await capture(
-          page,
-          "after-confirmed-paragraphs",
-          fixture.shell,
-          panel.getByRole("region", { name: "Semantic preview" }),
-        );
-        await button(panel, "Use formatted text").click();
-        await expect
-          .poll(() => fixture.textarea.inputValue())
-          .toBe("Opening paragraph\n\nclosing paragraph");
-        await fixture.textarea.focus();
-        await page.keyboard.press("ControlOrMeta+z");
-        await expect.poll(() => fixture.textarea.inputValue()).toBe(draft);
-        await fixture.noSend();
-      },
-    ));
+    suite.withPage(desktopMicrophone, async ({ page }) => {
+      const fixture = await open(page, { route: "new", explicit: true });
+      const draft = "Keep this draft until review";
+      await fixture.textarea.fill(draft);
+      const start = button(fixture.shell, "Start session");
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await fixture.textarea.selectText();
+      await fixture.start();
+      const text = "Opening paragraph new paragraph closing paragraph";
+      await fixture.emit(text);
+      await button(page, "Finish and review").click();
+      await fixture.gateway.waitForRequest("talk.session.close");
+      await fixture.textarea.press("Enter");
+      await fixture.noSend();
+      expect(await fixture.textarea.inputValue()).toBe(draft);
+      expect(await start.isDisabled()).toBe(true);
+      await fixture.emit(text, true);
+      await fixture.close();
+      const panel = review(page);
+      expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
+        text,
+      );
+      await capture(page, "after-needs-review", fixture.shell, panel.getByRole("checkbox"));
+      await panel.getByRole("checkbox").focus();
+      await page.keyboard.press("Space");
+      await button(panel, "Interpret selected commands").focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => panel.getByRole("region", { name: "Semantic preview" }).locator("p").count())
+        .toBe(2);
+      expect(
+        await panel
+          .getByRole("combobox", { name: "Preview format" })
+          .evaluate((element) => document.activeElement === element),
+      ).toBe(true);
+      await capture(
+        page,
+        "after-confirmed-paragraphs",
+        fixture.shell,
+        panel.getByRole("region", { name: "Semantic preview" }),
+      );
+      await button(panel, "Use formatted text").click();
+      await expect
+        .poll(() => fixture.textarea.inputValue())
+        .toBe("Opening paragraph\n\nclosing paragraph");
+      await fixture.textarea.focus();
+      await page.keyboard.press("ControlOrMeta+z");
+      await expect.poll(() => fixture.textarea.inputValue()).toBe(draft);
+      await fixture.noSend();
+    }));
 
   it.each(["stale", "incomplete", "unknown"] as const)(
     "keeps %s recovery usable without retrying or sending",
