@@ -58,9 +58,29 @@ async function write<Key extends UsageOperation>(
   assertCurrent: () => void,
   type: Key,
   input: AgentDatabaseOperations[Key]["input"],
-): Promise<AgentDatabaseOperations[Key]["output"]> {
+): Promise<AgentDatabaseOperations[Key]["output"]>;
+async function write<Key extends UsageOperation>(
+  options: OpenClawAgentDatabaseOptions,
+  assertCurrent: () => void,
+  type: Key,
+  input: AgentDatabaseOperations[Key]["input"],
+  mode: { existingOnly: true },
+): Promise<AgentDatabaseOperations[Key]["output"] | undefined>;
+async function write<Key extends UsageOperation>(
+  options: OpenClawAgentDatabaseOptions,
+  assertCurrent: () => void,
+  type: Key,
+  input: AgentDatabaseOperations[Key]["input"],
+  mode: { existingOnly?: boolean } = {},
+): Promise<AgentDatabaseOperations[Key]["output"] | undefined> {
   assertCurrent();
-  const captured = captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit").then(
+  // Maintenance writes must never materialize a database that no longer exists, so an
+  // existing-only write captures without the inherited creation authority.
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(
+    options,
+    {},
+    mode.existingOnly ? undefined : "inherit",
+  ).then(
     (execution) => ok(execution),
     (error: unknown) => err<never, unknown>(error),
   );
@@ -72,11 +92,17 @@ async function write<Key extends UsageOperation>(
         throw acquired.error;
       }
       const execution = acquired.value;
-      await execution.prepare(source);
+      if (!mode.existingOnly) {
+        await execution.prepare(source);
+      }
       const result = await execution.runExisting(source, async (worker) => ({
         value: await worker.execute({ type, input }),
       }));
       if (!result) {
+        if (mode.existingOnly) {
+          // No existing store to prune; the registry row stays for its owner to retire.
+          return undefined;
+        }
         throw new Error("Tool usage database disappeared before write");
       }
       return result.value;
@@ -258,6 +284,7 @@ export async function pruneRegisteredAgentToolUsage(input: {
       input.assertCurrent,
       "toolUsage.prune",
       { now: input.now },
+      { existingOnly: true },
     );
   }
 }

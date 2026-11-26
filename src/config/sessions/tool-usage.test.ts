@@ -345,3 +345,37 @@ it("keeps reset ahead of a later flush while its execution capture is pending", 
     }
   });
 });
+
+it("prunes registered agent databases without recreating a missing store", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { existsSync } = await import("node:fs");
+    const { registerOpenClawAgentDatabase, listOpenClawRegisteredAgentDatabases } =
+      await import("../../state/openclaw-agent-db-registry.js");
+    const { resolveOpenClawAgentSqlitePath } =
+      await import("../../state/openclaw-agent-db.paths.js");
+    // A retired agent removed by hand leaves a registry row whose store is gone.
+    const missing = resolveOpenClawAgentSqlitePath({ agentId: "stale", env });
+    registerOpenClawAgentDatabase({ agentId: "stale", path: missing, env });
+    // A live store seeded with aged usage proves retention still prunes existing rows.
+    const live = { agentId: "main", env, now };
+    await seedAgentToolUsageRunForTest(live);
+    await flushAgentToolUsage({
+      ...live,
+      generation: (await readAgentToolUsageStatus(live)).generation,
+      startedAt: now,
+      now,
+      rows: [{ toolId, score: 1, updatedAt: now }],
+    });
+    expect(existsSync(missing)).toBe(false);
+    await pruneRegisteredAgentToolUsage({ env, now: now + 96 * day, assertCurrent: () => {} });
+    // Retention must not materialize a store the operator removed on purpose.
+    expect(existsSync(missing)).toBe(false);
+    // The missing row stays registered; the live store's expired usage is pruned.
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env, includeIncompatibleSchemaVersions: true }).some(
+        (entry) => entry.path === missing,
+      ),
+    ).toBe(true);
+    expect((await readAgentToolUsageStatus({ ...live, now: now + 96 * day })).rows).toEqual([]);
+  });
+});

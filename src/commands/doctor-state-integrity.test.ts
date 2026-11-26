@@ -283,6 +283,9 @@ describe("doctor state integrity", () => {
       );
       expect(text).toContain(`without a matching agents.${roster} entry`);
       expect(text).toContain(`Restore the missing agents.${roster} entries`);
+      // Directory removal alone leaves the agent-database registration behind.
+      expect(text).toContain("openclaw agents delete <id> --force");
+      expect(text).toContain("Deleting the directory alone leaves its agent-database registration");
       expect(text).toContain(
         "config-driven routing, identity, and model selection will ignore them",
       );
