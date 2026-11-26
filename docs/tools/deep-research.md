@@ -89,9 +89,9 @@ existing plugin LLM policy. Recovery does not restore unrecorded session-specifi
 model or auth-profile overrides.
 `requiredAuthMode: "oauth"` instead selects the host's `direct-provider` route and
 requires OAuth through the existing auth owner; it never silently falls back to an
-API key. This feature does not implement a
-Codex research RPC or a private ChatGPT OAuth client. Codex API-key, Codex OAuth,
-and ChatGPT plan-usage/token-sharing qualification are separate.
+API key. This feature does not implement a Codex research RPC or a private ChatGPT
+OAuth client. Codex API-key, Codex OAuth, and ChatGPT plan-usage/token-sharing
+qualification are separate.
 
 ## Start and inspect research
 
@@ -116,8 +116,7 @@ Keep the returned `jobId`. Subsequent calls use
 `{ "action": "status" | "result" | "resume" | "cancel", "jobId": "..." }`.
 `{ "action": "capabilities" }` reports the default portable route
 (`portable.runtime: "isolated-agent-runtime"`) and the explicitly activated managed
-adapter. Explicit `requiredAuthMode: "oauth"` requests use the direct-provider
-route described above; availability is not a live entitlement check.
+adapter; availability is not a live entitlement check.
 
 A repeated start with the same key returns the existing job without resubmitting.
 Changing the request under that key is rejected. Results are returned as tool
