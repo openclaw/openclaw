@@ -40,8 +40,9 @@ struct ConnectionSettingsView: View {
             mode: self.state.connectionMode,
             state: ControlChannel.shared.state,
             readinessFailure: self.gatewayManager.lastFailureReason)
+        let credentialHelp = local?.credentialHelpPlacement(healthFailure: self.healthStore.degradedSummary)
         Form {
-            self.statusSection(local: local)
+            self.statusSection(local: local, showsCredentialHelp: credentialHelp == .connectionStatus)
             if MacOpenClawIDFeature.isEnabled, let presentation = self.openClawID.presentation(state: self.state) {
                 OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
             }
@@ -61,7 +62,8 @@ struct ConnectionSettingsView: View {
             case .unconfigured:
                 EmptyView()
             case .local:
-                self.localGatewaySection(local: local)
+                self.localGatewaySection(
+                    credentialIssue: credentialHelp == .healthCheck ? local?.credentialIssue : nil)
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused,
@@ -72,7 +74,9 @@ struct ConnectionSettingsView: View {
                 self.nearbyGatewaysSection
             }
 
-            self.dashboardSettingsSection
+            if local?.offersDashboardSettings != false {
+                self.dashboardSettingsSection
+            }
         }
         .formStyle(.grouped)
         .onAppear { self.updateActiveWork(active: self.isActive) }
@@ -108,7 +112,10 @@ struct ConnectionSettingsView: View {
 
     // MARK: - Status
 
-    private func statusSection(local: LocalGatewayConnectionPresentation?) -> some View {
+    private func statusSection(
+        local: LocalGatewayConnectionPresentation?,
+        showsCredentialHelp: Bool) -> some View
+    {
         Section {
             HStack(spacing: 12) {
                 Image(systemName: self.connectionStatusIcon)
@@ -128,10 +135,9 @@ struct ConnectionSettingsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Link(destination: issue.helpURL) {
-                            Text(LocalGatewayConnectionPresentation.credentialHelpTitle)
+                        if showsCredentialHelp {
+                            self.credentialHelpLink(issue)
                         }
-                        .environment(\.openURL, AppActivation.shared.openURLAction)
                     }
                 }
 
@@ -145,6 +151,13 @@ struct ConnectionSettingsView: View {
             }
             .padding(.vertical, 4)
         }
+    }
+
+    private func credentialHelpLink(_ issue: LocalGatewayConnectionPresentation.CredentialIssue) -> some View {
+        Link(destination: issue.helpURL) {
+            Text(LocalGatewayConnectionPresentation.credentialHelpTitle)
+        }
+        .environment(\.openURL, AppActivation.shared.openURLAction)
     }
 
     private var latencyText: String? {
@@ -244,7 +257,7 @@ struct ConnectionSettingsView: View {
 
     // MARK: - Local
 
-    private func localGatewaySection(local: LocalGatewayConnectionPresentation?) -> some View {
+    private func localGatewaySection(credentialIssue: LocalGatewayConnectionPresentation.CredentialIssue?) -> some View {
         Section {
             if !self.isNixMode {
                 switch self.gatewayManager.installation {
@@ -263,7 +276,7 @@ struct ConnectionSettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            self.healthRow(local: local)
+            self.healthRow(credentialIssue: credentialIssue)
         } header: {
             Text("Local Gateway")
         } footer: {
@@ -432,28 +445,32 @@ private enum RemoteStatus: Equatable {
 }
 
 extension ConnectionSettingsView {
-    private func healthRow(local: LocalGatewayConnectionPresentation?) -> some View {
-        let duplicatesCredentialIssue = local?.duplicatesCredentialIssue(self.healthStore.degradedSummary) == true
-        return LabeledContent {
-            HStack(spacing: 8) {
-                Button("Retry now") {
-                    Task { await HealthStore.shared.refresh(onDemand: true) }
+    private func healthRow(credentialIssue: LocalGatewayConnectionPresentation.CredentialIssue?) -> some View {
+        LabeledContent {
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    Button("Retry now") {
+                        Task { await HealthStore.shared.refresh(onDemand: true) }
+                    }
+                    .disabled(self.healthStore.isRefreshing)
+                    Button("Open logs") { self.revealLogs() }
                 }
-                .disabled(self.healthStore.isRefreshing)
-                Button("Open logs") { self.revealLogs() }
+                if let credentialIssue {
+                    self.credentialHelpLink(credentialIssue)
+                }
             }
         } label: {
             HStack(spacing: 8) {
                 Circle()
                     .fill(self.healthStore.state.tint)
                     .frame(width: 8, height: 8)
-                if duplicatesCredentialIssue, !self.healthStore.isRefreshing {
-                    Text("Health check failed")
+                if credentialIssue != nil, !self.healthStore.isRefreshing {
+                    Text("Health check could not connect to the local Gateway.")
                 } else {
                     Text(self.healthStore.summaryLine)
                 }
             }
-            if !duplicatesCredentialIssue, let detail = self.healthStore.detailLine {
+            if credentialIssue == nil, let detail = self.healthStore.detailLine {
                 Text(detail)
             }
         }

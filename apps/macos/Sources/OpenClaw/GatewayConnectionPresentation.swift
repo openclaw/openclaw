@@ -50,10 +50,16 @@ struct LocalGatewayConnectionPresentation {
         let helpURL: URL
     }
 
+    enum CredentialHelpPlacement: Equatable {
+        case connectionStatus
+        case healthCheck
+    }
+
     let credentialIssue: CredentialIssue?
     let readinessFailure: String?
 
     var hasFailure: Bool { self.credentialIssue != nil || self.readinessFailure != nil }
+    var offersDashboardSettings: Bool { self.credentialIssue == nil }
 
     init?(mode: AppState.ConnectionMode, state: ControlChannel.ConnectionState, readinessFailure: String?) {
         guard mode == .local else { return nil }
@@ -70,6 +76,11 @@ struct LocalGatewayConnectionPresentation {
         // Health requests use the same control channel and can report the same failure verbatim.
         guard let reason else { return false }
         return reason == self.credentialIssue?.message
+    }
+
+    func credentialHelpPlacement(healthFailure: String?) -> CredentialHelpPlacement? {
+        guard self.credentialIssue != nil else { return nil }
+        return self.duplicatesCredentialIssue(healthFailure) ? .healthCheck : .connectionStatus
     }
 }
 

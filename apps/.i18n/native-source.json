@@ -1761,7 +1761,7 @@
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.fc6bac9b712ef16d","source":"Change connection…"},
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.32ceaa114c831b56","source":"Gateway"},
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.cabe82e76ecfcd53","source":"Gateway location"},
-    {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.c14baee4e336c546","source":"Health check failed"},
+    {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.6247dd0438bf8ce6","source":"Health check could not connect to the local Gateway."},
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.165cff2c14c85662","source":"Independently managed Gateway"},
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.f454890b0dc22cfd","source":"Local (this Mac)"},
     {"path":"apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift","kind":"ui-call","surface":"apple","id":"native.apple.24c7f883271947df","source":"Local Gateway"},

@@ -17,6 +17,10 @@ struct LocalGatewayConnectionPresentationTests {
             "https://github.com/openclaw/openclaw/issues/141413")
         #expect(presentation.duplicatesCredentialIssue(credentialMessage))
         #expect(!presentation.duplicatesCredentialIssue("Channel probe timed out"))
+        #expect(!presentation.offersDashboardSettings)
+        #expect(presentation.credentialHelpPlacement(healthFailure: credentialMessage) == .healthCheck)
+        #expect(presentation.credentialHelpPlacement(healthFailure: "Channel probe timed out") == .connectionStatus)
+        #expect(presentation.credentialHelpPlacement(healthFailure: nil) == .connectionStatus)
     }
 
     @Test func `an ownership rejection remains a readiness failure without credential help`() throws {
@@ -28,5 +32,17 @@ struct LocalGatewayConnectionPresentationTests {
 
         #expect(presentation.readinessFailure == conflict)
         #expect(presentation.credentialIssue == nil)
+        #expect(presentation.offersDashboardSettings)
+        #expect(presentation.credentialHelpPlacement(healthFailure: conflict) == nil)
+    }
+
+    @Test(arguments: [AppState.ConnectionMode.remote, .unconfigured])
+    func `a nonlocal route does not inherit the local credential action policy`(mode: AppState.ConnectionMode) {
+        let presentation = LocalGatewayConnectionPresentation(
+            mode: mode,
+            state: .degraded(ControlChannel.storedGatewayTokenMessage),
+            readinessFailure: nil)
+
+        #expect(presentation == nil)
     }
 }
