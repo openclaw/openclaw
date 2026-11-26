@@ -185,7 +185,7 @@ export type ProviderAppGuidedSetup = {
 };
 
 /** Context passed to an auth method's `revoke` hook for one saved sign-in. */
-export type ProviderAuthRevokeContext = {
+type ProviderAuthRevokeContext = {
   profileId: string;
   credential: OAuthCredential;
   config: OpenClawConfig;
