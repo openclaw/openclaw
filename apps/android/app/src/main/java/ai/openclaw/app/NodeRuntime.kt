@@ -8607,14 +8607,18 @@ class NodeRuntime internal constructor(
     devices
       .mapObjects { obj ->
         val deviceId = obj.nonBlankString("deviceId") ?: return@mapObjects null
+        val tokenRevocations =
+          (obj["tokens"] as? JsonArray).mapObjects { token ->
+            if (token.nonBlankString("role") == null) null else token.long("revokedAtMs") != null
+          }
         GatewayPairedDeviceSummary(
           deviceId = deviceId,
           displayName = obj.nonBlankString("displayName"),
           remoteIp = obj.nonBlankString("remoteIp"),
           roles = parseDeviceRoles(obj),
           scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
-          tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
-          approvedAtMs = obj.long("approvedAtMs"),
+          tokenCount = tokenRevocations.size,
+          activeTokenCount = tokenRevocations.count { revoked -> !revoked },
         )
       }
 
@@ -8623,18 +8627,6 @@ class NodeRuntime internal constructor(
     if (roles.isNotEmpty()) return roles
     return listOfNotNull(device.nonBlankString("role"))
   }
-
-  private fun parseDeviceTokens(tokens: JsonArray?): List<GatewayDeviceTokenSummary> =
-    tokens
-      .mapObjects { obj ->
-        val role = obj.nonBlankString("role") ?: return@mapObjects null
-        GatewayDeviceTokenSummary(
-          role = role,
-          scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
-          revoked = obj.long("revokedAtMs") != null,
-          updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
-        )
-      }
 
   private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
     val order = parseGatewayStringArray(root?.get("channelOrder") as? JsonArray)
@@ -9089,15 +9081,8 @@ data class GatewayPairedDeviceSummary(
   val remoteIp: String?,
   val roles: List<String>,
   val scopes: List<String>,
-  val tokens: List<GatewayDeviceTokenSummary>,
-  val approvedAtMs: Long?,
-)
-
-data class GatewayDeviceTokenSummary(
-  val role: String,
-  val scopes: List<String>,
-  val revoked: Boolean,
-  val updatedAtMs: Long?,
+  val tokenCount: Int,
+  val activeTokenCount: Int,
 )
 
 data class GatewayChannelsSummary(
