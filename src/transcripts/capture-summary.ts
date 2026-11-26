@@ -295,8 +295,9 @@ export async function createTranscriptSummaryUpdates(
           const snapshot = await params.store.readSummarySnapshot(
             params.session,
             params.config.maxUtterances,
+            owner.lastSequence + 1,
           );
-          if (!snapshot || snapshot.nextSequence <= owner.lastSequence) {
+          if (!snapshot) {
             return;
           }
           attemptedSequence = snapshot.nextSequence;

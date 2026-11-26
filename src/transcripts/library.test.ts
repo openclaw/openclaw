@@ -759,6 +759,17 @@ describe("transcript library SQLite query budgets", () => {
       expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
     },
   );
+  it("skips covered live summary inputs and reads the next append", async () => {
+    const { store, database, target } = await captured("live-checkpoint", [{ text: "Opening" }]);
+    const reads = observeArchiveReads(store, database());
+
+    expect(await store.readSummarySnapshot(target, 1, 2)).toBeUndefined();
+    expect(reads.filter((read) => read.executions > 0).map((read) => read.rows)).toEqual([0]);
+
+    await store.appendUtteranceForSession(target, { text: "Follow-up" });
+    expect((await store.readSummarySnapshot(target, 1, 2))?.nextSequence).toBe(2);
+  });
+
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {
