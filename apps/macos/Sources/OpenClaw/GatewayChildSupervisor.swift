@@ -75,8 +75,18 @@ final class GatewayChildSupervisor {
                 String(localized: "Check that the log path is a writable file or can be created in its folder.")
             }
             let retry = String(localized: "Then quit and reopen OpenClaw to retry.")
-            return "Could not \(self.operation.rawValue) \(self.path): \(self.underlyingError.localizedDescription)\n" +
-                "\(recovery) \(retry)"
+            let code = GatewayChildSupervisor.startupSystemErrorCode(for: self.underlyingError).map { " (\($0))" } ?? ""
+            return "Could not \(self.operation.rawValue) \(self.path): \(self.underlyingError.localizedDescription)" +
+                "\(code)\n\(recovery) \(retry)"
+        }
+    }
+
+    nonisolated static func startupSystemErrorCode(for error: any Error) -> String? {
+        let cause = error as NSError
+        return switch cause.domain {
+        case NSPOSIXErrorDomain: "POSIX \(cause.code)"
+        case NSCocoaErrorDomain: "Cocoa \(cause.code)"
+        default: nil
         }
     }
 

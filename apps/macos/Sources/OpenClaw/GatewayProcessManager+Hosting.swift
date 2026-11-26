@@ -369,12 +369,8 @@ extension GatewayProcessManager {
             self.appendLog("[gateway] \(message)\n")
 
             // Both persistent sinks receive the same rendered text. Do not pass paths or error descriptions.
-            let cause = (logSetup?.underlyingError ?? error) as NSError
-            let code = switch cause.domain {
-            case NSPOSIXErrorDomain: "POSIX \(cause.code)"
-            case NSCocoaErrorDomain: "Cocoa \(cause.code)"
-            default: "unclassified error"
-            }
+            let code = GatewayChildSupervisor.startupSystemErrorCode(for: logSetup?.underlyingError ?? error)
+                ?? "unclassified error"
             let step = logSetup?.operation.rawValue ?? stage.label
             self.logger.error("gateway child launch failed: could not \(step, privacy: .public) (\(code, privacy: .public))")
         }
