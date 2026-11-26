@@ -11,7 +11,12 @@ import {
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -123,6 +128,8 @@ it.each(["allowed", "session changed", "selected Bob"] as const)(
           ? { ...bobOrigin, delegatedCreatorProfileId: source.authority.profileId }
           : origin;
       const fullReply = "Synthetic peer result ".repeat(400) + "PEER_END";
+      const parentRegistry = createEmptyPluginRegistry();
+      let retainedParentRegistry: boolean | undefined;
       const peerWaiting = createDeferredCore();
       const releasePeer = createDeferredCore();
       const returned = createDeferredCore();
@@ -140,6 +147,8 @@ it.each(["allowed", "session changed", "selected Bob"] as const)(
         request: Parameters<AgentToolGatewayRequestCaller>[0],
       ) => {
         if (request.method === "agent.wait") {
+          retainedParentRegistry =
+            getPluginRuntimeGatewayRequestScope()?.pluginRegistry === parentRegistry;
           peerWaiting.resolve();
           await releasePeer.promise;
           return {
@@ -285,11 +294,13 @@ it.each(["allowed", "session changed", "selected Bob"] as const)(
                             requesterAgentId: "main",
                           },
                         });
-                        await startSessionsSendReplyFlow({
-                          ...replyContext,
-                          skip: false,
-                          runId: "synthetic-peer-run",
-                        });
+                        await withPluginRuntimeRegistryScope(parentRegistry, () =>
+                          startSessionsSendReplyFlow({
+                            ...replyContext,
+                            skip: false,
+                            runId: "synthetic-peer-run",
+                          }),
+                        );
                         await peerWaiting.promise;
                       } finally {
                         accepted.close();
@@ -312,6 +323,7 @@ it.each(["allowed", "session changed", "selected Bob"] as const)(
         }
         releasePeer.resolve();
         await returned.promise;
+        expect(retainedParentRegistry).toBe(false);
         if (boundary === "session changed") {
           expect(effects).toEqual([]);
           return;

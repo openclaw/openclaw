@@ -9,6 +9,7 @@ import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-u
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -204,7 +205,7 @@ export function startSessionsSendReplyFlow(
     return runWithGatewayDetachedWorkContinuation(
       () =>
         runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-          runWithoutOwnedSessionTranscriptWrites(run),
+          runOutsidePluginRuntimeGenerationScope(() => runWithoutOwnedSessionTranscriptWrites(run)),
         ),
       "session:a2a-send",
     );
