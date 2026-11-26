@@ -11,7 +11,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { createRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
+import { createLiveRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -53,7 +53,7 @@ import {
   recordUnreachableYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import { buildGatewayRestartResumeText } from "./session-restart-resume-prompt.js";
 import {
   selectLiveRestartResumeSessions,
   type SessionIdentity,
@@ -148,10 +148,10 @@ async function persistRunningSessions(
               sessionKey,
               entry: {
                 ...entry,
-                resumeAfterRestart: createRestartResumeMarker({
+                resumeAfterRestart: createLiveRestartResumeMarker(entry, {
+                  sourceRunId: session.sourceRunId,
                   ...(directChat ? { directChat: true } : {}),
-                  operatorSource:
-                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
+                  operatorSource: session.operatorSource,
                 }),
               },
             });
@@ -535,10 +535,11 @@ async function resumeRestartStore(
             const receipt = withPluginRuntimeGatewayContextResolver(
               context.resolveGatewayContext,
               () =>
-                enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
+                enqueueSessionEventForHost(buildGatewayRestartResumeText(marker.sourceRunId), {
                   agentId,
                   sessionKey,
                   source: "restart",
+                  sourceRunId: marker.sourceRunId,
                   expectedTarget: captured,
                   abortSignal: signal,
                 }),
