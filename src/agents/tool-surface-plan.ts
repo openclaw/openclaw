@@ -3,7 +3,7 @@ import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyAgentProfileToolSearchDefaults,
-  hasCompactToolProfile,
+  hasReducedToolProfile,
   resolveAgentProfile,
   type ResolvedAgentProfile,
 } from "./agent-profiles.js";
@@ -124,7 +124,7 @@ export function prepareAgentToolSurfacePresentation(
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
     // Wire name kept for gateway and worker version skew; a rename needs a dual read first.
-    toolSearchDirectoryLean: hasCompactToolProfile(
+    toolSearchDirectoryLean: hasReducedToolProfile(
       params.resolvedProfile ??
         resolveAgentProfile({
           config: params.config,

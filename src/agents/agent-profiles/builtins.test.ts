@@ -37,6 +37,7 @@ describe("built-in Agent Profile resources", () => {
       expect(fresh.BUILT_IN_AGENT_PROFILES.map((profile) => profile.id)).toEqual([
         "openclaw/base",
         "openclaw/small",
+        "openclaw/compact",
       ]);
     } finally {
       vi.doUnmock("agentprofiles");
@@ -48,7 +49,7 @@ describe("built-in Agent Profile resources", () => {
     for (const profile of BUILT_IN_AGENT_PROFILES) {
       expect(profile.resource.spec.common).toEqual({});
     }
-    const extension = resolveOpenClawAgentProfileExtension([builtIn("openclaw/small")]);
+    const extension = resolveOpenClawAgentProfileExtension([builtIn("openclaw/compact")]);
     const workspaceContext = extension?.prompt?.workspaceContext;
 
     expect(extension?.toolProfile).toBe("compact");
@@ -56,5 +57,11 @@ describe("built-in Agent Profile resources", () => {
     for (const section of Object.values(workspaceContext?.sections ?? {})) {
       expect(section.maxChars).toBeLessThanOrEqual(workspaceContext?.totalMaxChars ?? 0);
     }
+  });
+
+  it("migrates Lean exactly: openclaw/small is the lean tool profile with no prompt limits", () => {
+    expect(resolveOpenClawAgentProfileExtension([builtIn("openclaw/small")])).toEqual({
+      toolProfile: "lean",
+    });
   });
 });

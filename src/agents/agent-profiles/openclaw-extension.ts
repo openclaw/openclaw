@@ -28,7 +28,7 @@ const workspaceContextSchema = z
 
 const openClawAgentProfileExtensionSchema = z
   .object({
-    toolProfile: z.literal("compact").optional(),
+    toolProfile: z.enum(["lean", "compact"]).optional(),
     prompt: z
       .object({
         workspaceContext: workspaceContextSchema.optional(),
@@ -42,7 +42,7 @@ export type OpenClawWorkspaceContextSection = z.infer<typeof workspaceContextSec
 export type OpenClawWorkspaceContext = z.infer<typeof workspaceContextSchema>;
 
 export type OpenClawAgentProfileExtension = {
-  toolProfile?: "compact";
+  toolProfile?: "lean" | "compact";
   prompt?: {
     workspaceContext?: OpenClawWorkspaceContext;
   };

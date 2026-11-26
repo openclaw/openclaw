@@ -17,7 +17,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import { hasCompactToolProfile, type ResolvedAgentProfile } from "../../agent-profiles.js";
+import { hasReducedToolProfile, type ResolvedAgentProfile } from "../../agent-profiles.js";
 import { isHostSystemTurn } from "../../agent-tools.turn-authority.js";
 import {
   buildBootstrapPromptWarningNotice,
@@ -201,7 +201,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             },
             {
               contextTokenBudget: attempt.contextTokenBudget,
-              toolSearchDirectoryCompact: hasCompactToolProfile(params.agentProfile),
+              toolSearchDirectoryCompact: hasReducedToolProfile(params.agentProfile),
               usageRanking: params.getUsageRanking?.(),
             },
           )

@@ -199,7 +199,7 @@ describe("Agent Profile workspace context", () => {
     });
   });
 
-  it("truncates the stock IDENTITY.md template under openclaw/small instead of failing the turn", async () => {
+  it("truncates the stock IDENTITY.md template under openclaw/compact instead of failing the turn", async () => {
     const dir = await workspace();
     const stockIdentity = [
       "# IDENTITY.md - Who Am I?",
@@ -233,7 +233,7 @@ describe("Agent Profile workspace context", () => {
 
     const result = await prepareAgentProfileWorkspaceContext({
       resolvedProfile: resolveAgentProfile({
-        config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+        config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
       }),
       bootstrapFiles: [
         source(dir, "AGENTS.md", "agent instructions"),
@@ -250,7 +250,7 @@ describe("Agent Profile workspace context", () => {
     );
   });
 
-  it("injects a 7,203-char AGENTS.md whole under openclaw/small, sentinel at 55% included", async () => {
+  it("injects a 7,203-char AGENTS.md whole under openclaw/compact, sentinel at 55% included", async () => {
     const dir = await workspace();
     const sentinel = "LAB-GREETING-SENTINEL: TANGERINE WAVE";
     const total = 7_203;
@@ -262,7 +262,7 @@ describe("Agent Profile workspace context", () => {
 
     const result = await prepareAgentProfileWorkspaceContext({
       resolvedProfile: resolveAgentProfile({
-        config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+        config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
       }),
       bootstrapFiles: [source(dir, "AGENTS.md", agents)],
     });

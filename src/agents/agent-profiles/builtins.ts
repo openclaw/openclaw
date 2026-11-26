@@ -26,10 +26,24 @@ export const BUILT_IN_AGENT_PROFILES: readonly BuiltInAgentProfile[] = [
     metadata: { namespace: "openclaw", name: "base" },
     spec: { common: {} },
   }),
+  // openclaw/small is the exact migration of experimental.localModelLean: the Lean tool
+  // profile and nothing else. Stricter or smaller choices belong in a separate profile.
   defineBuiltInAgentProfile("openclaw/small", {
     apiVersion: "agentprofiles.io/v1",
     kind: "AgentProfile",
     metadata: { namespace: "openclaw", name: "small" },
+    extends: "openclaw/base",
+    spec: {
+      common: {},
+      "openclaw.ai": { toolProfile: "lean" },
+    },
+  }),
+  // openclaw/compact is an opt-in step past Lean: bounded workspace context, and the
+  // scheduler stays so a small model does not fake reminders through a shell command.
+  defineBuiltInAgentProfile("openclaw/compact", {
+    apiVersion: "agentprofiles.io/v1",
+    kind: "AgentProfile",
+    metadata: { namespace: "openclaw", name: "compact" },
     extends: "openclaw/base",
     spec: {
       common: {},

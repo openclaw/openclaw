@@ -439,9 +439,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     ).toEqual(["read", "browser"]);
   });
 
-  it("keeps the automations tool on the harness surface of the small profile", () => {
+  it("keeps the automations tool on the harness surface of the compact profile", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      agents: { defaults: { agentProfileId: "openclaw/compact" } },
       tools: { toolSearch: { enabled: false } },
     };
     const runtime = createRuntime(config);

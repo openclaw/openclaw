@@ -1,4 +1,4 @@
-const AGENT_PROFILE_IDS = ["openclaw/base", "openclaw/small"] as const;
+const AGENT_PROFILE_IDS = ["openclaw/base", "openclaw/small", "openclaw/compact"] as const;
 
 export const AGENT_PROFILE_SELECTORS = AGENT_PROFILE_IDS;
 

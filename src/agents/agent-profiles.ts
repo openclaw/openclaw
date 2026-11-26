@@ -5,6 +5,7 @@ import { resolveAgentProfile, type ResolvedAgentProfile } from "./agent-profiles
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { resolveAgentProfile };
 export type { ResolvedAgentProfile };
@@ -18,6 +19,12 @@ const COMPACT_TOOL_DENY_NAMES = new Set([
   "tts",
   "video_generate",
 ]);
+// openclaw/small is the exact local-model Lean surface, which also removes automations.
+const LEAN_TOOL_DENY_NAMES = new Set([...COMPACT_TOOL_DENY_NAMES, AUTOMATIONS_TOOL_NAME]);
+const TOOL_PROFILE_DENY_NAMES = {
+  lean: LEAN_TOOL_DENY_NAMES,
+  compact: COMPACT_TOOL_DENY_NAMES,
+} as const;
 const COMPACT_TOOL_SEARCH_DEFAULTS = {
   enabled: true,
   mode: "tools",
@@ -25,9 +32,14 @@ const COMPACT_TOOL_SEARCH_DEFAULTS = {
   maxSearchLimit: 10,
 } as const;
 
-/** True when the resolved profile selects the compact tool surface. */
-export function hasCompactToolProfile(resolved: ResolvedAgentProfile): boolean {
-  return resolved.profile.spec["openclaw.ai"]?.toolProfile === "compact";
+/** The reduced tool profile the resolved profile selects, if any. */
+function resolveToolProfile(resolved: ResolvedAgentProfile) {
+  return resolved.profile.spec["openclaw.ai"]?.toolProfile;
+}
+
+/** True when the resolved profile selects a reduced tool surface (lean or compact). */
+export function hasReducedToolProfile(resolved: ResolvedAgentProfile): boolean {
+  return resolveToolProfile(resolved) !== undefined;
 }
 
 function resolvePreservedToolNames(names?: Iterable<string>) {
@@ -61,15 +73,16 @@ export function filterToolsByAgentProfile<T extends Pick<AnyAgentTool, "name">>(
   preserveToolNames?: Iterable<string>;
 }): T[] {
   const resolved = params.resolvedProfile ?? resolveAgentProfile(params);
-  if (!hasCompactToolProfile(resolved)) {
+  const toolProfile = resolveToolProfile(resolved);
+  if (!toolProfile) {
     return params.tools;
   }
+  const denyNames = TOOL_PROFILE_DENY_NAMES[toolProfile];
   const preservedToolNames = resolvePreservedToolNames(params.preserveToolNames);
   return params.tools.filter((tool) => {
     const normalizedName = normalizeToolPolicyName(tool.name);
     return (
-      matchesAnyGlobPattern(normalizedName, preservedToolNames) ||
-      !COMPACT_TOOL_DENY_NAMES.has(normalizedName)
+      matchesAnyGlobPattern(normalizedName, preservedToolNames) || !denyNames.has(normalizedName)
     );
   });
 }
@@ -84,7 +97,7 @@ export function applyAgentProfileToolSearchDefaults(params: {
     return params.config;
   }
   const resolved = params.resolvedProfile ?? resolveAgentProfile(params);
-  if (!hasCompactToolProfile(resolved)) {
+  if (!hasReducedToolProfile(resolved)) {
     return params.config;
   }
   if (params.config.tools?.toolSearch !== undefined) {

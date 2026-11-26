@@ -34,13 +34,16 @@ describe("Agent Profile selection", () => {
     }
   });
 
-  it("chains the small profile from the base profile", () => {
-    const config: OpenClawConfig = { agents: { defaults: { agentProfileId: "openclaw/small" } } };
-    const resolved = resolveAgentProfile({ config });
+  it.each(["openclaw/small", "openclaw/compact"] as const)(
+    "chains %s from the base profile",
+    (agentProfileId) => {
+      const config: OpenClawConfig = { agents: { defaults: { agentProfileId } } };
+      const resolved = resolveAgentProfile({ config });
 
-    expect(resolved.profile.ancestry).toEqual(["openclaw/base", "openclaw/small"]);
-    expect(resolved.selectionSource).toBe("defaults-explicit");
-  });
+      expect(resolved.profile.ancestry).toEqual(["openclaw/base", agentProfileId]);
+      expect(resolved.selectionSource).toBe("defaults-explicit");
+    },
+  );
 
   it("uses an explicit default profile", () => {
     const config: OpenClawConfig = {
@@ -68,25 +71,25 @@ describe("Agent Profile selection", () => {
   });
 });
 
-describe("small profile tool behavior", () => {
-  const smallConfig: OpenClawConfig = {
-    agents: { defaults: { agentProfileId: "openclaw/small" } },
+describe("compact profile tool behavior", () => {
+  const compactConfig: OpenClawConfig = {
+    agents: { defaults: { agentProfileId: "openclaw/compact" } },
   };
 
   it("filters heavyweight tools but keeps the scheduler", () => {
     expect(
       filterToolsByAgentProfile({
         tools: tools(heavyTools),
-        config: smallConfig,
+        config: compactConfig,
       }).map((tool) => tool.name),
     ).toEqual(["read", "cron", "exec"]);
   });
 
-  it("keeps the automations tool on the small surface without any preserve list", () => {
+  it("keeps the automations tool on the compact surface without any preserve list", () => {
     expect(
       filterToolsByAgentProfile({
         tools: tools(["read", AUTOMATIONS_TOOL_NAME, "browser", "exec"]),
-        config: smallConfig,
+        config: compactConfig,
       }).map((tool) => tool.name),
     ).toEqual(["read", AUTOMATIONS_TOOL_NAME, "exec"]);
   });
@@ -98,7 +101,7 @@ describe("small profile tool behavior", () => {
     const names = (preserve?: string[]) =>
       filterToolsByAgentProfile({
         tools: tools(["read", "message", AUTOMATIONS_TOOL_NAME]),
-        config: smallConfig,
+        config: compactConfig,
         preserveToolNames: preserve,
       }).map((tool) => tool.name);
 
@@ -110,7 +113,7 @@ describe("small profile tool behavior", () => {
     expect(
       filterToolsByAgentProfile({
         tools: tools(heavyTools),
-        config: smallConfig,
+        config: compactConfig,
         preserveToolNames: ["browser", "cron", "group:messaging", "group:media", "pdf"],
       }).map((tool) => tool.name),
     ).toEqual(heavyTools);
@@ -124,7 +127,7 @@ describe("small profile tool behavior", () => {
     expect(
       filterToolsByAgentProfile({
         tools: tools(["read", "message", "exec"]),
-        config: smallConfig,
+        config: compactConfig,
         preserveToolNames,
       }).map((tool) => tool.name),
     ).toEqual(["read", "message", "exec"]);
@@ -134,7 +137,7 @@ describe("small profile tool behavior", () => {
     expect(
       filterToolsByAgentProfile({
         tools: tools(["read", "browser", "image_generate"]),
-        config: smallConfig,
+        config: compactConfig,
         preserveToolNames: ["image_*", "*"],
       }).map((tool) => tool.name),
     ).toEqual(["read", "image_generate"]);
@@ -154,10 +157,10 @@ describe("small profile tool behavior", () => {
   });
 });
 
-describe("small profile Tool Search defaults", () => {
+describe("compact profile Tool Search defaults", () => {
   it("enables bounded Tool Search when unset", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      agents: { defaults: { agentProfileId: "openclaw/compact" } },
     };
 
     expect(applyAgentProfileToolSearchDefaults({ config })?.tools?.toolSearch).toEqual({
@@ -170,7 +173,7 @@ describe("small profile Tool Search defaults", () => {
 
   it("preserves explicit Tool Search configuration", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      agents: { defaults: { agentProfileId: "openclaw/compact" } },
       tools: { toolSearch: { enabled: false, mode: "directory" } },
     };
 

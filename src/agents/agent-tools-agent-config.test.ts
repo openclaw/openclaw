@@ -152,7 +152,7 @@ describe("Agent-specific tool filtering", () => {
 
   it("uses the configured default agent profile on legacy session keys", () => {
     expectConfiguredTools(
-      agentConfig({ local: { agentProfileId: "openclaw/small" } }),
+      agentConfig({ local: { agentProfileId: "openclaw/compact" } }),
       ["read", "automations"],
       ["browser", "message"],
       {

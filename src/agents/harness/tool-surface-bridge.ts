@@ -3,7 +3,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   filterToolsByAgentProfile,
-  hasCompactToolProfile,
+  hasReducedToolProfile,
   resolveAgentProfile,
   resolveAgentProfilePreserveToolNames,
 } from "../agent-profiles.js";
@@ -153,7 +153,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
           runtimeToolAllowlist,
           scheduledToolPolicy: params.scheduledToolPolicy,
         }).policy.explicitToolOverrideAllowlist;
-  const agentProfileFiltersTools = hasCompactToolProfile(agentProfile);
+  const agentProfileFiltersTools = hasReducedToolProfile(agentProfile);
   let runtimeAgentProfilePreserveToolNames: string[] | undefined;
   const preserveAgentProfileTools = () =>
     agentProfileFiltersTools
