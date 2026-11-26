@@ -1,4 +1,7 @@
-import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
+import type {
+  PluginSourceCustodyFork,
+  PluginSourceCustodyTransfer,
+} from "./plugin-generation-source-lookup.js";
 import type { PluginSourceSnapshotFacts } from "./plugin-generation-source.types.js";
 import type { PluginModuleCapture } from "./plugin-package-metadata-capture.js";
 
@@ -24,6 +27,7 @@ export type PluginGenerationArtifact = {
   /** Nonblocking copy through the same capture owner; custody and forks stay synchronous. */
   captureRecoverySourceAsync?: () => Promise<PluginSourceCustodyFork["source"]>;
   retainSourceCustody: () => PluginSourceCustodyFork;
+  describeSourceCustody?: () => PluginSourceCustodyTransfer;
   sourceForCaptured: (file: string) => string | undefined;
   moduleFacts: (importer: string) => Readonly<PluginModuleCapture> | undefined;
   moduleRoot: (filename: string) => string | undefined;
