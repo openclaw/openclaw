@@ -54,15 +54,11 @@ describe("owned dictation refinement", () => {
     await Promise.resolve();
     expect(h.owner.review).toMatchObject({
       rawText: source.text,
-      candidateText: source.text,
       status: "ready",
       reason: "semantic-unavailable",
-      canAccept: false,
       canUseRaw: true,
       canRetry: false,
-      removals: [],
     });
-    expect(h.owner.accept()).toBe(false);
     h.owner.retry(policy);
     expect(h.owner.review?.status).toBe("ready");
     expect(h.writes).toEqual([]);
@@ -77,7 +73,6 @@ describe("owned dictation refinement", () => {
     h.prepare();
     expect(h.owner.chooseRaw()).toBe(true);
     await Promise.resolve();
-    expect(h.owner.accept()).toBe(false);
     expect(h.owner.chooseRaw()).toBe(false);
     expect(h.writes).toEqual([`Existing draft ${source.text}`]);
     expect(h.owner.review).toBeNull();
@@ -96,7 +91,6 @@ describe("owned dictation refinement", () => {
       h.edit(previous);
       await Promise.resolve();
       const writes = h.writes.length;
-      expect(h.owner.accept()).toBe(false);
       expect(h.owner.chooseRaw()).toBe(false);
       expect(h.writes).toHaveLength(writes);
       expect(h.owner.review?.rawText).toBe(source.text);
@@ -112,7 +106,6 @@ describe("owned dictation refinement", () => {
     h.owner.retry(policy);
     await Promise.resolve();
     expect(h.writes).toEqual([]);
-    expect(h.owner.accept()).toBe(false);
     expect(h.owner.review).toMatchObject({ reason: "semantic-unavailable", canRetry: false });
     expect(h.owner.chooseRaw()).toBe(true);
     expect(h.writes).toEqual([`My replacement ${source.text}`]);
@@ -124,14 +117,13 @@ describe("owned dictation refinement", () => {
     h.owner.cancel();
     await Promise.resolve();
     expect(h.owner.blocksCapture).toBe(false);
-    expect(h.owner.accept()).toBe(false);
     expect(h.writes).toEqual([]);
     expect(h.owner.chooseRaw()).toBe(true);
     expect(h.writes).toEqual([`Existing draft ${source.text}`]);
   });
 
   it.each(["before result", "after result"])(
-    "hides revoked source and rejects both choices %s",
+    "hides revoked source and rejects insertion %s",
     async (when) => {
       const h = fixture();
       h.prepare();
@@ -143,15 +135,11 @@ describe("owned dictation refinement", () => {
       expect(h.owner.review).toMatchObject({
         status: "unavailable",
         rawText: "",
-        candidateText: "",
-        removals: [],
         reason: undefined,
-        canAccept: false,
         canUseRaw: false,
         canRetry: false,
       });
       await Promise.resolve();
-      expect(h.owner.accept()).toBe(false);
       expect(h.owner.chooseRaw()).toBe(false);
       expect(h.writes).toHaveLength(writes);
     },
@@ -163,11 +151,9 @@ describe("owned dictation refinement", () => {
     h.prepare({ ...source, revision: 2, text: "I I need the invoice" });
     await Promise.resolve();
     expect(h.owner.review).toMatchObject({
-      candidateText: "I I need the invoice",
+      rawText: "I I need the invoice",
       reason: "semantic-unavailable",
-      canAccept: false,
     });
-    expect(h.owner.accept()).toBe(false);
     expect(h.owner.chooseRaw()).toBe(true);
     expect(h.writes).toEqual(["Existing draft I I need the invoice"]);
   });
@@ -178,7 +164,6 @@ describe("owned dictation refinement", () => {
     await Promise.resolve();
     expect(h.owner.review).toMatchObject({
       status: "failed",
-      canAccept: false,
       canUseRaw: true,
       canRetry: false,
     });
@@ -187,7 +172,6 @@ describe("owned dictation refinement", () => {
     await Promise.resolve();
     expect(h.owner.review).toMatchObject({
       status: "failed",
-      canAccept: false,
       canUseRaw: true,
       canRetry: true,
     });
@@ -211,11 +195,9 @@ describe("owned dictation refinement", () => {
     expect(h.owner.review).toMatchObject({
       status: "unavailable",
       rawText: "",
-      candidateText: "",
       canUseRaw: false,
       canRetry: false,
     });
-    expect(h.owner.accept()).toBe(false);
     expect(h.owner.chooseRaw()).toBe(false);
     expect(h.writes).toEqual([]);
     h.owner.cancel();
@@ -241,11 +223,9 @@ describe("owned dictation refinement", () => {
       });
       h.owner.prepare(source, policy, { ...h.binding, publish }, h.binding.readDraft());
       await Promise.resolve();
-      expect(h.owner.accept()).toBe(false);
       expect(publish).not.toHaveBeenCalled();
       expect(h.owner.chooseRaw()).toBe(false);
-      expect(h.owner.review).toMatchObject({ status: "failed", canAccept: false });
-      expect(h.owner.accept()).toBe(false);
+      expect(h.owner.review).toMatchObject({ status: "failed" });
       expect(publish).toHaveBeenCalledTimes(1);
       if (outcome === "uncertain") {
         expect(h.owner.chooseRaw()).toBe(false);

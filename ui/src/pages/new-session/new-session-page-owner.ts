@@ -64,6 +64,9 @@ export class NewSessionPageOwner {
   };
   submit(background = false): Promise<void> {
     const active = this.dictation.dictation;
+    if (active?.finishingCleanup) {
+      return Promise.resolve();
+    }
     if (active?.active && active.requiresCleanupReview) {
       if (active.finalizing) {
         return Promise.resolve();

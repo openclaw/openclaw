@@ -10,10 +10,10 @@ import { ComposerDictationStatus } from "./components/chat-voice-activity.tsx";
 import { DirectDictationView } from "./components/direct-dictation-view.tsx";
 import { placeComposerDictation } from "./composer-dictation-session.ts";
 import type * as ComposerDictationModule from "./composer-dictation.ts";
-import type { DictationDraftReceipt, DictationDraftSnapshot } from "./dictation-refinement.ts";
+import type { DictationDraftSnapshot } from "./dictation-refinement.ts";
 
 type DictationHarnessOptions = {
-  onCommit: (transcript: string, late?: true) => DictationDraftReceipt | false | void;
+  onCommit: (transcript: string, late?: true) => false | void;
   readDraft?: () => DictationDraftSnapshot | undefined;
   prepareSession?: () => Promise<string | undefined>;
 };
@@ -316,90 +316,6 @@ describe("DirectDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  function receiptFixture(maxLength = -1) {
-    const target = document.createElement("textarea");
-    if (maxLength >= 0) {
-      target.maxLength = maxLength;
-    }
-    target.value = "before same after same";
-    target.setSelectionRange(7, 11);
-    document.body.append(target);
-    const textarea = createDirectDictationTextarea(() => target);
-    const f = fixture({ textarea });
-    const presentation = f.control.prepare("agent-a");
-    presentation.voice.onDirectDictationStart();
-    const receipt = dictationHarness.options?.onCommit("clean", true);
-    onTestFinished(() => {
-      f.control.dispose();
-      target.remove();
-    });
-    return {
-      ...f,
-      target,
-      textarea,
-      receipt: expectDefined(receipt || undefined, "insertion receipt"),
-    };
-  }
-
-  it("restores only the selected insertion using its original placement", () => {
-    const f = receiptFixture();
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.receipt.isCurrent()).toBe(true);
-    expect(f.receipt.restore("um same")).toBe(true);
-    expect(f.target.value).toBe("before um same after same");
-    expect(f.onMessage.mock.calls.map(([message]) => message)).toEqual([
-      "before clean after same",
-      "before um same after same",
-    ]);
-    expect(f.receipt.restore("another value")).toBe(false);
-  });
-
-  it("retires restoration after an edit and native undo return to the same text", () => {
-    const f = receiptFixture();
-    const applied = f.textarea.readDraft();
-    f.target.value = "changed";
-    f.target.dispatchEvent(new Event("input"));
-    f.target.value = "before clean after same";
-    f.target.dispatchEvent(new Event("input"));
-    expect(f.textarea.readDraft()?.revision).toBeGreaterThan(applied?.revision ?? 0);
-    expect(f.receipt.restore("um same")).toBe(false);
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.onMessage).toHaveBeenCalledOnce();
-  });
-
-  it.each(["scope", "submit", "dispose"])("retires receipts at the %s boundary", (boundary) => {
-    const f = receiptFixture();
-    if (boundary === "scope") {
-      f.control.prepare("agent-b");
-      f.control.prepare("agent-a");
-    } else if (boundary === "submit") {
-      f.control.prepare("agent-a").onSubmit();
-    } else {
-      f.control.dispose();
-    }
-    expect(f.receipt.restore("um same")).toBe(false);
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.onMessage).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the accepted draft when the original insertion would exceed its limit", () => {
-    const f = receiptFixture();
-    f.target.maxLength = f.target.value.length;
-    expect(f.receipt.restore("um same")).toBe(false);
-    expect(f.receipt.isCurrent()).toBe(false);
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.onMessage).toHaveBeenCalledOnce();
-  });
-
-  it("refuses to clip the original when the limit was already set before insertion", () => {
-    const f = receiptFixture(23);
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.receipt.restore("um same")).toBe(false);
-    expect(f.receipt.isCurrent()).toBe(false);
-    expect(f.target.value).toBe("before clean after same");
-    expect(f.onMessage).toHaveBeenCalledExactlyOnceWith("before clean after same");
-  });
-
   it("refuses an oversized conservative insertion before writing and accepts the exact limit", () => {
     const target = document.createElement("textarea");
     target.value = "prefix";
@@ -420,7 +336,7 @@ describe("DirectDictationControl", () => {
     expect(textarea.readDraft()?.revision).toBe(revision);
     expect(f.onMessage).not.toHaveBeenCalled();
     target.maxLength = 10;
-    expect(dictationHarness.options?.onCommit("fit", true)).toBeTruthy();
+    dictationHarness.options?.onCommit("fit", true);
     expect(target.value).toBe("prefix fit");
     expect(f.onMessage).toHaveBeenCalledExactlyOnceWith("prefix fit");
   });

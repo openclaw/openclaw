@@ -49,7 +49,7 @@ export type CleanupResult = {
   readonly raw: string;
   readonly candidate: string;
   readonly removals: readonly CleanupRemoval[];
-  readonly status: "unchanged" | "refined" | "retained" | "rejected";
+  readonly status: "unchanged" | "retained" | "rejected";
   readonly reason?: CleanupReason;
   readonly sourceMap: readonly CleanupSourceMap[];
 };

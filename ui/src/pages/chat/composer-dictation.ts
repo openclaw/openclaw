@@ -16,7 +16,6 @@ import type {
 } from "./composer-dictation-session.ts";
 import type {
   DictationCleanupReview,
-  DictationDraftReceipt,
   DictationDraftSnapshot,
   DictationRefinement,
 } from "./dictation-refinement.ts";
@@ -41,11 +40,7 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (
-    text: string,
-    late?: true,
-    preservePreview?: true,
-  ) => DictationDraftReceipt | false | void;
+  onCommit: (text: string, late?: true, preservePreview?: true) => false | void;
   readDraft?: () => DictationDraftSnapshot | undefined;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
@@ -116,8 +111,12 @@ export class ComposerDictationOwner extends EventTarget {
     return this.refinement?.review ?? null;
   }
 
+  get finishingCleanup(): boolean {
+    return this.pendingCleanup !== null;
+  }
+
   get awaitingCleanup(): boolean {
-    return Boolean(this.pendingCleanup || this.refinement?.blocksCapture);
+    return this.finishingCleanup || this.refinement?.blocksCapture === true;
   }
 
   get requiresCleanupReview(): boolean {
@@ -132,7 +131,7 @@ export class ComposerDictationOwner extends EventTarget {
     const normalized = normalizeDictationCleanupPolicy({ version: 1, ...policy });
     patchSettings({ dictationCleanup: normalized });
     if (normalized.mode === "off") {
-      // Turning cleanup off cannot publish a previously prepared candidate.
+      // Turning cleanup off does not insert previously reviewed text.
       if (this.cleanupCapture) {
         this.cleanupCapture.policy = normalized;
       }
@@ -144,18 +143,10 @@ export class ComposerDictationOwner extends EventTarget {
 
   chooseCleanupRaw(): boolean {
     const chosen = this.refinement?.chooseRaw() === true;
-    if (chosen || this.refinement?.review?.applied) {
+    if (chosen || this.refinement?.review?.publicationUncertain) {
       this.retireCleanupCapture();
     }
     return chosen;
-  }
-
-  acceptCleanup(): boolean {
-    const accepted = this.refinement?.accept() === true;
-    if (accepted || this.refinement?.review?.applied) {
-      this.retireCleanupCapture();
-    }
-    return accepted;
   }
 
   retryCleanup(): void {
@@ -172,9 +163,9 @@ export class ComposerDictationOwner extends EventTarget {
       this.pendingCleanup.cancelled = true;
       this.pendingCleanup = null;
       this.commits?.retire();
+      this.releasePlayback();
+      this.pendingCommitsChanged();
     }
-    this.releasePlayback();
-    this.pendingCommitsChanged();
   }
 
   get locksComposer(): boolean {
@@ -536,11 +527,10 @@ export class ComposerDictationOwner extends EventTarget {
     }
     this.setPhase("stopping");
     this.session = null;
-    this.setPhase("idle");
     const cleanup = this.cleanupCapture;
     this.cleanupCapture = null;
     // Capture the unlocked draft before waiting for final STT. Later typing must
-    // not be replaced by either a refined candidate or an original-text choice.
+    // not be replaced by an original-text choice.
     const draft = this.options.readDraft?.();
     const scope = this.scope;
     const client = this.options.client;
@@ -559,6 +549,7 @@ export class ComposerDictationOwner extends EventTarget {
     };
     // Register ownership before observers can choose original text synchronously.
     this.pendingCleanup = options.commit ? cleanup : null;
+    this.setPhase("idle");
     if (cleanup && session.transcriptSnapshot()) {
       this.refinement!.prepare(
         session.cleanupSource(session.transcriptSnapshot()),

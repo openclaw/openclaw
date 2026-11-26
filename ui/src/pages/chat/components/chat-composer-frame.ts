@@ -267,6 +267,7 @@ export function createChatComposerContext(
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
+    state.dictation?.finishingCleanup !== true &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected ||
@@ -311,7 +312,7 @@ export function createChatComposerContext(
       return false;
     }
     if (state.dictation?.cleanupReview || state.dictation?.awaitingCleanup) {
-      // Submission retires the unsent-draft restoration receipt before dispatch.
+      // Submission retires any unaccepted dictation review before dispatch.
       state.dictation.dismissCleanup();
     }
     state.composerComposing = false;

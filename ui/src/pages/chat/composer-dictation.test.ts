@@ -302,101 +302,92 @@ describe("ComposerDictationOwner", () => {
       "uncertain write",
       "auth change",
       "destination change",
-    ])(
-      "keeps the real session delivery boundary owned after %s",
-      async (choice) => {
-        let value = "Existing draft";
-        let revision = 0;
-        const original = "um I I need the invoice";
-        const publish = vi.fn((text: string) => {
-          if (choice === "uncertain write") {
-            throw new Error("Draft owner failed after an uncertain write");
-          }
-          value += ` ${text}`;
-          revision += 1;
-        });
-        const { controller, target, options } = createHarness({
-          readDraft: () => ({ value, revision }),
-          onCommit: publish,
-        });
-        await startHold(target);
-        transcript(original);
-        if (choice === "auth change") {
-          Object.defineProperty(options.client, "auth", { value: { scopes: ["operator.read"] } });
-        }
-        const finished = controller.finishActive();
-        expect(controller.locksComposer).toBe(false);
-        expect(publish).not.toHaveBeenCalled();
-        await waitForFast(() => expectClosed());
+    ])("keeps the real session delivery boundary owned after %s", async (choice) => {
+      let value = "Existing draft";
+      let revision = 0;
+      const original = "um I I need the invoice";
+      const publish = vi.fn((text: string) => {
         if (choice === "uncertain write") {
+          throw new Error("Draft owner failed after an uncertain write");
+        }
+        value += ` ${text}`;
+        revision += 1;
+      });
+      const { controller, target, options } = createHarness({
+        readDraft: () => ({ value, revision }),
+        onCommit: publish,
+      });
+      await startHold(target);
+      transcript(original);
+      if (choice === "auth change") {
+        Object.defineProperty(options.client, "auth", { value: { scopes: ["operator.read"] } });
+      }
+      const finished = controller.finishActive();
+      expect(controller.locksComposer).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      await waitForFast(() => expectClosed());
+      if (choice === "uncertain write") {
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(controller.cleanupReview?.publicationUncertain).toBe(true);
+      } else if (choice === "raw") {
+        expect(controller.chooseCleanupRaw()).toBe(true);
+      } else if (choice === "edit") {
+        value = "User replacement";
+        revision += 1;
+      } else if (choice === "cancel") {
+        controller.cancel();
+      } else if (choice === "disable") {
+        controller.setCleanupPolicy({ mode: "off", locale: null });
+      } else if (choice === "destination change") {
+        controller.update({ ...options, draftKey: "replacement" });
+      }
+      emit({ type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      if (choice === "unavailable semantics") {
+        expect(controller.cleanupReview).toMatchObject({
+          status: "ready",
+          rawText: original,
+          reason: "semantic-unavailable",
+          canUseRaw: true,
+          canRetry: false,
+        });
+        expect(publish).not.toHaveBeenCalled();
+        controller.retryCleanup();
+        expect(controller.cleanupReview?.status).toBe("ready");
+        expect(controller.chooseCleanupRaw()).toBe(true);
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+        expect(controller.cleanupReview).toBeNull();
+      } else if (choice === "raw") {
+        expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+        expect(controller.cleanupReview).toBeNull();
+      } else if (choice === "uncertain write") {
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(controller.cleanupReview?.publicationUncertain).toBe(true);
+        expect(controller.cleanupReview?.canRetry).toBe(false);
+        expect(publish).toHaveBeenCalledTimes(1);
+      } else {
+        expect(publish).not.toHaveBeenCalled();
+        if (choice === "auth change" || choice === "destination change") {
           expect(controller.chooseCleanupRaw()).toBe(false);
-          expect(controller.cleanupReview?.publicationUncertain).toBe(true);
-        } else if (choice === "raw") {
-          expect(controller.chooseCleanupRaw()).toBe(true);
+          expect(controller.cleanupReview?.rawText ?? "").toBe("");
         } else if (choice === "edit") {
-          value = "User replacement";
-          revision += 1;
-        } else if (choice === "cancel") {
-          controller.cancel();
-        } else if (choice === "disable") {
-          controller.setCleanupPolicy({ mode: "off", locale: null });
-        } else if (choice === "destination change") {
-          controller.update({ ...options, draftKey: "replacement" });
-        }
-        emit({ type: "close", reason: "completed" });
-        await expect(finished).resolves.toBe(false);
-        await vi.advanceTimersByTimeAsync(0);
-        if (choice === "unavailable semantics") {
-          expect(controller.cleanupReview).toMatchObject({
-            status: "ready",
-            rawText: original,
-            candidateText: original,
-            reason: "semantic-unavailable",
-            removals: [],
-            canAccept: false,
-            canUseRaw: true,
-            canRetry: false,
-          });
-          expect(publish).not.toHaveBeenCalled();
-          expect(controller.acceptCleanup()).toBe(false);
-          controller.retryCleanup();
-          expect(controller.cleanupReview?.status).toBe("ready");
-          expect(controller.chooseCleanupRaw()).toBe(true);
           expect(controller.chooseCleanupRaw()).toBe(false);
-          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
-          expect(controller.cleanupReview).toBeNull();
-        } else if (choice === "raw") {
-          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
-          expect(controller.cleanupReview).toBeNull();
-        } else if (choice === "uncertain write") {
-          expect(controller.acceptCleanup()).toBe(false);
-          expect(controller.chooseCleanupRaw()).toBe(false);
-          expect(controller.cleanupReview?.publicationUncertain).toBe(true);
-          expect(controller.cleanupReview?.canRetry).toBe(false);
-          expect(publish).toHaveBeenCalledTimes(1);
+          expect(value).toBe("User replacement");
+          expect(controller.cleanupReview?.rawText).toBe(original);
         } else {
-          expect(controller.acceptCleanup()).toBe(false);
-          expect(publish).not.toHaveBeenCalled();
-          if (choice === "auth change" || choice === "destination change") {
-            expect(controller.chooseCleanupRaw()).toBe(false);
-            expect(controller.cleanupReview?.rawText ?? "").toBe("");
-          } else if (choice === "edit") {
-            expect(controller.chooseCleanupRaw()).toBe(false);
-            expect(value).toBe("User replacement");
-            expect(controller.cleanupReview?.rawText).toBe(original);
-          } else {
-            expect(controller.chooseCleanupRaw()).toBe(true);
-            expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
-          }
+          expect(controller.chooseCleanupRaw()).toBe(true);
+          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
         }
-        expect(
-          request.mock.calls.filter(([method]) => method === "talk.session.create"),
-        ).toHaveLength(1);
-        expect(
-          request.mock.calls.some(([method]) => method === "chat.send" || method === "tts.speak"),
-        ).toBe(false);
-      },
-    );
+      }
+      expect(
+        request.mock.calls.filter(([method]) => method === "talk.session.create"),
+      ).toHaveLength(1);
+      expect(
+        request.mock.calls.some(([method]) => method === "chat.send" || method === "tts.speak"),
+      ).toBe(false);
+    });
   });
 
   it.each(["cancel", "restart", "draft switch"])(

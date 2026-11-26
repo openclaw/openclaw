@@ -17,7 +17,6 @@ const enChatDictation = {
         "Off keeps the recognizer’s text. It cannot restore words the recognizer already omitted.",
       cleanupPending: "Preparing original text…",
       cleanupReady: "Choose the original text. Nothing has been sent.",
-      cleanupApplied: "Text is in the unsent draft. You can still restore the original.",
       cleanupFailed: "Review could not finish. The original text is still available.",
       cleanupSemanticUnavailable:
         "Cleanup is unavailable. The original recognized text is unchanged.",
@@ -26,13 +25,7 @@ const enChatDictation = {
       cleanupUnavailable:
         "This recording is no longer available for this draft. Record again to continue.",
       cleanupOriginal: "Original recognized text",
-      cleanupCandidate: "Cleaned draft",
-      cleanupRemovals: "Suggested removals",
-      cleanupHesitation: "Hesitation",
-      cleanupRestart: "Exact restart",
       cleanupUseOriginal: "Use original",
-      cleanupRestoreOriginal: "Restore original",
-      cleanupUseCandidate: "Use cleaned draft",
       cleanupRetry: "Review again",
       cleanupDismiss: "Dismiss review",
       cleanupCopy: "Copy original text",

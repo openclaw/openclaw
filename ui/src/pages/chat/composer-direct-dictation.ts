@@ -6,7 +6,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
-import type { DictationDraftReceipt, DictationDraftSnapshot } from "./dictation-refinement.ts";
+import type { DictationDraftSnapshot } from "./dictation-refinement.ts";
 
 type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
 type PlaceTranscript = ComposerDictationOwner["placeTranscript"];
@@ -31,7 +31,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       revision += 1;
       if (target) {
         stopInput = listen(target, "input", () => {
-          // Each edit retires receipts even when native Undo returns to the same value.
+          // Each edit retires the review’s draft snapshot even when native Undo returns to the same value.
           revision += 1;
           observedValue = target.value;
           for (const subscriber of subscribers) {
@@ -106,7 +106,6 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       transcript: string,
       late?: true,
       preservePreview?: true,
-      onReceipt?: (receipt: DictationDraftReceipt) => void,
       enforceLimit?: true,
     ): string | null {
       const target = current();
@@ -134,36 +133,6 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         return null;
       }
       apply(target, insertion);
-      const appliedRevision = revision;
-      let available = true;
-      const isCurrent = () => {
-        if (!available || revision !== appliedRevision || !target.isConnected) {
-          return false;
-        }
-        const draft = readDraft();
-        return (
-          observed === target &&
-          draft?.revision === appliedRevision &&
-          draft.value === insertion.value
-        );
-      };
-      onReceipt?.({
-        isCurrent,
-        restore(text) {
-          if (!isCurrent()) {
-            return false;
-          }
-          available = false;
-          // Recompute only this insertion from its original selection and source draft.
-          const restored = place(text, captured, { ...live, maxLength: -1 }, late, preservePreview);
-          if (!restored || (target.maxLength >= 0 && restored.value.length > target.maxLength)) {
-            return false;
-          }
-          capturedSelection = restored.captured;
-          apply(target, restored);
-          return true;
-        },
-      });
       return insertion.value;
     },
   };
@@ -240,7 +209,7 @@ export class DirectDictationControl extends EventTarget {
     return this.session ?? undefined;
   }
 
-  /** Sending retires review receipts before any async submission can reuse this draft. */
+  /** Sending retires the review before any async submission can reuse this draft. */
   dismissCleanup(): void {
     this.options.textarea.invalidateDraft?.();
     this.session?.dismissCleanup();
@@ -277,11 +246,7 @@ export class DirectDictationControl extends EventTarget {
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
       readDraft: () => (ownsDraft() ? this.options.textarea.readDraft?.() : undefined),
-      onCommit: (
-        transcript: string,
-        late?: true,
-        preservePreview?: true,
-      ): DictationDraftReceipt | false | void => {
+      onCommit: (transcript: string, late?: true, preservePreview?: true): false | void => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
@@ -289,49 +254,17 @@ export class DirectDictationControl extends EventTarget {
         }
         const reviewing =
           this.session?.requiresCleanupReview || Boolean(this.session?.cleanupReview);
-        let receipt: DictationDraftReceipt | undefined;
         const next = this.options.textarea.insertTranscript(
           this.place,
           transcript,
           late,
           preservePreview,
-          (inserted) => {
-            receipt = inserted;
-          },
           reviewing ? true : undefined,
         );
         if (next === null) {
           return reviewing ? false : undefined;
         }
         this.options.onMessage(next);
-        if (!receipt) {
-          return;
-        }
-        const inserted = receipt;
-        const isCurrent = () =>
-          ownsDraft() &&
-          this.options.canCommit() &&
-          this.options.isConnected() &&
-          this.options.getClient() === client &&
-          inserted.isCurrent();
-        return {
-          isCurrent,
-          restore: (text: string) => {
-            if (!isCurrent()) {
-              return false;
-            }
-            if (!inserted.restore(text)) {
-              this.changed();
-              return false;
-            }
-            const draft = this.options.textarea.readDraft();
-            if (!draft) {
-              return false;
-            }
-            this.options.onMessage(draft.value);
-            return true;
-          },
-        } satisfies DictationDraftReceipt;
       },
       onError: (message: string) => {
         if (ownsDraft()) {
@@ -373,7 +306,7 @@ export class DirectDictationControl extends EventTarget {
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
       },
       onSubmit: () => {
-        if (ownsDraft() && this.options.canCommit()) {
+        if (ownsDraft() && this.options.canCommit() && !dictation.finishingCleanup) {
           this.dismissCleanup();
           this.options.onSubmit();
         }

@@ -84,8 +84,10 @@ existing Off path keeps its recognized-text behavior.
 
 Conservative keeps one pending review. Resolve it, cancel the pending
 dictation, or dismiss the review before starting another capture. Closing the
-dialog keeps that review pending. Off retains the existing ordered queue for
-stopped recordings.
+dialog keeps that review pending. Sending is blocked while a Conservative
+recording is finalizing so a second send action cannot drop the pending review.
+Once finalization settles, explicitly sending a separate draft retires any
+unaccepted review. Off retains the existing ordered queue for stopped recordings.
 
 Use Tab and Shift+Tab to move through the policy, original text and actions.
 Enter activates a focused button. Escape belongs to the dialog and returns
@@ -150,23 +152,6 @@ broader issue.
 source-preservation cases. The former semantic-removal labels and expected
 deletions are withdrawn. These fixtures cover exact retained text; they are
 not independent human annotation or proof of semantic precision.
-
-In an execution environment permitted by the repository testing policy, the
-maintained local resource check is:
-
-`node --expose-gc --import ./scripts/tsx.mjs scripts/bench-dictation-cleanup.mts`
-
-It reports source preservation, the exactly 2,000-character workload identity,
-interleaved Off and Conservative timings, and repeated-session memory samples.
-Both paths must preserve the complete source and report zero removals. It
-makes no precision claim because no semantic classifications occur.
-
-Off is a control in the same revision, not a pre-feature measurement. The
-cold sample measures the first preparation call after import in a fresh Node
-process; warm samples follow warmup. Neither measures microphone acquisition,
-recognition, browser rendering or model work. The 25 ms p95 and retained-heap
-checks remain proposed local resource limits, not accepted launch gates or
-measurements of a future semantic model.
 
 Real Gateway/provider/microphone behavior across all three composers, actual
 keyboard and screen-reader outcomes, served production assets, and the

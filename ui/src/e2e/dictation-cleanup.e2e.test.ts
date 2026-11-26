@@ -1,15 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import {
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 // Real Chromium and the shipped UI, with synthetic capture and Gateway transcripts.
@@ -29,11 +24,7 @@ const expectDraft = async (textarea: Locator, value: string) => {
   await expect.poll(() => textarea.inputValue()).toBe(value);
 };
 
-async function openFixture(
-  page: Page,
-  route: "chat" | "new" = "chat",
-  mode: "light" | "dark" = "dark",
-) {
+async function openFixture(page: Page, route: "chat" | "new" = "chat") {
   const gateway = await installMockGateway(page, {
     deferredMethods: ["talk.session.create"],
     historyMessages: [TALK_READY_HISTORY_MESSAGE],
@@ -43,11 +34,6 @@ async function openFixture(
         }
       : {}),
     methodResponses: {
-      "config.get": configSnapshot(
-        { ui: { prefs: { theme: "claw", themeMode: mode } } },
-        `dictation-cleanup-${mode}`,
-        true,
-      ),
       "talk.catalog": {
         transcription: { ready: true, providers: [] },
         realtime: { providers: [] },
@@ -70,11 +56,10 @@ async function openFixture(
     route === "new" ? ".new-session-page__message" : ".agent-chat__composer-combobox textarea",
   );
   await textarea.waitFor();
-  await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(mode);
   return {
     gateway,
     textarea,
-    finishRecording: async () => {
+    finishRecording: async (whileFinalizing?: () => Promise<void>) => {
       if (route === "new") {
         await button(page, "Dictate").click();
       } else {
@@ -92,6 +77,7 @@ async function openFixture(
       });
       await button(page, "Stop and keep text").click();
       await gateway.waitForRequest("talk.session.close");
+      await whileFinalizing?.();
       await gateway.emitGatewayEvent("talk.event", {
         transcriptionSessionId: sessionId,
         type: "transcript",
@@ -127,54 +113,6 @@ async function enableCleanup(page: Page) {
   await page.keyboard.press("Escape");
   await dialog(page).waitFor({ state: "detached" });
   await expect.poll(() => focused(trigger)).toBe(true);
-}
-
-async function captureProof(
-  page: Page,
-  name: string,
-  surface: Locator,
-  target: Locator,
-  label: string,
-) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, [target], {
-    animations: "disabled",
-    elements: [target],
-    scrollTo: target,
-  });
-  const viewport = page.viewportSize()!;
-  const scale = await page.evaluate(() => window.devicePixelRatio);
-  const annotated = await rasterizeProofAnnotations(suite.browser, {
-    viewport,
-    scale,
-    image: frame.png,
-    annotations: [
-      {
-        kind: "outline",
-        rect: frame.elements[0]!.bounds,
-        text: label,
-        labelAt: { x: 16, y: 16 },
-        color: "#DA8A3C",
-      },
-    ],
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  await writeFile(path.join(suite.artifactDir, `${name}.annotated.png`), annotated);
-  await writeFile(
-    path.join(suite.artifactDir, `${name}.json`),
-    JSON.stringify(
-      {
-        name,
-        label,
-        browser: suite.browser.version(),
-        viewport,
-        scale,
-        evidence: "Current implementation with synthetic capture and Gateway transcripts",
-        baseline: "Current Off control is not a pre-feature checkout screenshot",
-      },
-      null,
-      2,
-    ),
-  );
 }
 
 async function tabToOriginalChoice(page: Page) {
@@ -227,68 +165,6 @@ suite.define(() => {
       expect(await page.getByLabel("Cleanup mode", { exact: true }).inputValue()).toBe("off");
     }));
 
-  it.each([
-    { mode: "dark", size: "desktop", width: 1440, height: 1000 },
-    { mode: "light", size: "desktop", width: 1440, height: 1000 },
-    { mode: "dark", size: "narrow", width: 390, height: 844 },
-    { mode: "light", size: "narrow", width: 390, height: 844 },
-  ] as const)(
-    "keeps original text available without semantic cleanup in $mode at $size width",
-    ({ mode, size, width, height }) =>
-      suite.withPage(
-        {
-          permissions: ["microphone"],
-          colorScheme: mode,
-          reducedMotion: "reduce",
-          viewport: { width, height },
-        },
-        async ({ page }) => {
-          const { gateway, textarea, finishRecording } = await openFixture(page, "chat", mode);
-          const name = `${mode}-${size}`;
-          await captureProof(
-            page,
-            `current-off-${name}`,
-            page.locator(".agent-chat__composer-shell"),
-            button(page, "Dictation cleanup"),
-            "Cleanup is Off by default",
-          );
-          await enableCleanup(page);
-          await finishRecording();
-          await openCleanupByKeyboard(page, true);
-          const original = page.getByLabel("Original recognized text", { exact: true });
-          await expectDraft(original, raw);
-          expect(await page.getByLabel("Cleaned draft", { exact: true }).count()).toBe(0);
-          expect(await button(page, "Use cleaned draft").isDisabled()).toBe(true);
-          expect(await button(page, "Review again").count()).toBe(0);
-          await expect
-            .poll(() => dialog(page).getByRole("status").textContent())
-            .toBe("Cleanup is unavailable. The original recognized text is unchanged.");
-          expect(await original.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
-            true,
-          );
-          expect(await dialog(page).getByRole("status").getAttribute("aria-live")).toBe("polite");
-          await captureProof(
-            page,
-            `current-review-text-${name}`,
-            dialog(page),
-            original,
-            "The original text remains unchanged",
-          );
-          await captureProof(
-            page,
-            `current-review-actions-${name}`,
-            dialog(page),
-            button(page, "Use original"),
-            "Explicit choice adds only to the draft",
-          );
-          await tabToOriginalChoice(page);
-          await dialog(page).waitFor({ state: "detached" });
-          await expectDraft(textarea, raw);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        },
-      ),
-  );
-
   it("lets a ready review own Escape and keeps the original recoverable", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, finishRecording } = await openFixture(page);
@@ -306,7 +182,14 @@ suite.define(() => {
       await expect
         .poll(() => dialog(page).getByRole("status").textContent())
         .toBe("Cleanup is unavailable. The original recognized text is unchanged.");
-      await expectDraft(page.getByLabel("Original recognized text", { exact: true }), raw);
+      const original = page.getByLabel("Original recognized text", { exact: true });
+      await expectDraft(original, raw);
+      expect(await original.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
+        true,
+      );
+      expect(await dialog(page).getByRole("status").getAttribute("aria-live")).toBe("polite");
+      expect(await button(page, "Use cleaned draft").count()).toBe(0);
+      expect(await button(page, "Review again").count()).toBe(0);
       await tabToOriginalChoice(page);
       await dialog(page).waitFor({ state: "detached" });
       await expectDraft(textarea, raw);
@@ -318,7 +201,14 @@ suite.define(() => {
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, finishRecording } = await openFixture(page, "new");
       await enableCleanup(page);
-      await finishRecording();
+      const previousDraft = "Existing unsent draft";
+      await textarea.fill(previousDraft);
+      await finishRecording(async () => {
+        await textarea.press("Enter");
+        await expectDraft(textarea, previousDraft);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      });
       await openCleanupByKeyboard(page, true);
       await page.keyboard.press("Escape");
       await dialog(page).waitFor({ state: "detached" });
@@ -327,7 +217,7 @@ suite.define(() => {
       await openCleanupByKeyboard(page, true);
       await expectDraft(page.getByLabel("Original recognized text", { exact: true }), raw);
       expect(await button(page, "Use original").isDisabled()).toBe(true);
-      expect(await button(page, "Use cleaned draft").isDisabled()).toBe(true);
+      expect(await button(page, "Use cleaned draft").count()).toBe(0);
       expect(await button(page, "Copy original text").isEnabled()).toBe(true);
       await button(page, "Dismiss review").click();
       await expectDraft(textarea, edited);

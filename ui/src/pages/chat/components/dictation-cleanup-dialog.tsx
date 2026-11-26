@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
 import { ModalDialog } from "../../../components/modal-dialog.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
@@ -27,11 +27,8 @@ export function DictationCleanupDialog(props: {
     if (current.publicationUncertain) {
       return "chat.dictation.cleanupUncertain";
     }
-    if (!current.canUseRaw && !current.canAccept) {
+    if (!current.canUseRaw) {
       return "chat.dictation.cleanupManualRecovery";
-    }
-    if (current.applied) {
-      return "chat.dictation.cleanupApplied";
     }
     if (current.reason === "semantic-unavailable") {
       return "chat.dictation.cleanupSemanticUnavailable";
@@ -87,30 +84,6 @@ export function DictationCleanupDialog(props: {
                     text={current().rawText}
                     idleLabel={t("chat.dictation.cleanupCopy")}
                   />
-                  <Show when={current().status === "ready" && current().removals.length > 0}>
-                    <label class="field">
-                      <span>{t("chat.dictation.cleanupCandidate")}</span>
-                      <textarea readonly rows="4" value={current().candidateText} />
-                    </label>
-                    <h3>{t("chat.dictation.cleanupRemovals")}</h3>
-                    <ul class="dictation-cleanup__removals">
-                      <For each={current().removals}>
-                        {(removal) => (
-                          <li>
-                            <span>
-                              {t(
-                                removal.category === "hesitation"
-                                  ? "chat.dictation.cleanupHesitation"
-                                  : "chat.dictation.cleanupRestart",
-                              )}
-                            </span>
-                            {": "}
-                            <q>{current().rawText.slice(removal.start, removal.end)}</q>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </Show>
                 </Show>
                 <p class="muted">{t("chat.dictation.cleanupReviewHint")}</p>
               </>
@@ -143,7 +116,7 @@ export function DictationCleanupDialog(props: {
             </Show>
             <button
               type="button"
-              class="btn"
+              class="btn primary"
               disabled={!review()?.canUseRaw}
               onClick={() => {
                 props.readDictation()?.chooseCleanupRaw();
@@ -152,24 +125,7 @@ export function DictationCleanupDialog(props: {
                 }
               }}
             >
-              {t(
-                review()?.applied
-                  ? "chat.dictation.cleanupRestoreOriginal"
-                  : "chat.dictation.cleanupUseOriginal",
-              )}
-            </button>
-            <button
-              type="button"
-              class="btn primary"
-              disabled={!review()?.canAccept}
-              onClick={() => {
-                props.readDictation()?.acceptCleanup();
-                if (!props.readDictation()?.cleanupReview) {
-                  props.onClose();
-                }
-              }}
-            >
-              {t("chat.dictation.cleanupUseCandidate")}
+              {t("chat.dictation.cleanupUseOriginal")}
             </button>
           </Show>
         </openclaw-modal-actions>

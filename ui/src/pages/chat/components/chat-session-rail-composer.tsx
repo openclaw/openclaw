@@ -142,6 +142,9 @@ export function SessionRailComposer(props: {
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
+    if (active?.finishingCleanup) {
+      return;
+    }
     if (!active?.active) {
       dictationControl.dismissCleanup();
       props.submit();

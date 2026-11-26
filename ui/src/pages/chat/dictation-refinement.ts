@@ -3,28 +3,17 @@ import {
   refineDictation,
   isCleanupSourceBounded,
   type CleanupReason,
-  type CleanupRemoval,
   type CleanupResult,
   type DictationCleanupSource,
 } from "./dictation-cleanup.ts";
-
-/** A receipt can replace only the unchanged, unsent insertion that created it. */
-export type DictationDraftReceipt = {
-  isCurrent: () => boolean;
-  restore: (text: string) => boolean;
-};
 
 export type DictationDraftSnapshot = { revision: number; value: string };
 
 export type DictationCleanupReview = {
   rawText: string;
-  candidateText: string;
-  removals: readonly CleanupRemoval[];
   reason?: CleanupReason;
   status: "pending" | "ready" | "failed" | "unavailable";
-  applied: boolean;
   publicationUncertain: boolean;
-  canAccept: boolean;
   canUseRaw: boolean;
   canRetry: boolean;
 };
@@ -33,7 +22,7 @@ type DraftBinding = {
   /** Reuses the capture owner's connection, mode and draft scope. */
   isCurrent: () => boolean;
   readDraft: () => DictationDraftSnapshot | undefined;
-  publish: (text: string) => DictationDraftReceipt | false | void;
+  publish: (text: string) => false | void;
 };
 
 type Preparation = {
@@ -43,8 +32,7 @@ type Preparation = {
   draft: DictationDraftSnapshot | undefined;
   status: DictationCleanupReview["status"];
   result: CleanupResult | null;
-  receipt: DictationDraftReceipt | null;
-  applied: boolean;
+  writeAttempted: boolean;
   cancelled: boolean;
   generation: number;
 };
@@ -60,7 +48,9 @@ export class DictationRefinement {
   constructor(private readonly changed: () => void) {}
 
   get blocksCapture(): boolean {
-    return Boolean(this.preparation && !this.preparation.applied && !this.preparation.cancelled);
+    return Boolean(
+      this.preparation && !this.preparation.writeAttempted && !this.preparation.cancelled,
+    );
   }
 
   get review(): DictationCleanupReview | null {
@@ -70,31 +60,20 @@ export class DictationRefinement {
     }
     const authorized = preparation.binding.isCurrent();
     const unedited = authorized && this.matchesDraft(preparation);
-    const restorable = authorized && preparation.receipt?.isCurrent() === true;
     return {
       rawText: authorized ? preparation.source.text : "",
-      candidateText: authorized ? (preparation.result?.candidate ?? preparation.source.text) : "",
-      removals: authorized ? (preparation.result?.removals ?? []) : [],
       reason: authorized ? preparation.result?.reason : undefined,
       status:
         !authorized || preparation.status === "unavailable"
           ? "unavailable"
-          : !unedited && !preparation.applied
+          : !unedited && !preparation.writeAttempted
             ? "failed"
             : preparation.status,
-      applied: preparation.applied,
-      publicationUncertain: preparation.applied && preparation.status === "failed",
-      canAccept:
-        unedited &&
-        !preparation.applied &&
-        preparation.status === "ready" &&
-        preparation.result?.status === "refined",
-      canUseRaw: preparation.applied
-        ? restorable
-        : unedited && preparation.status !== "unavailable",
+      publicationUncertain: preparation.writeAttempted && preparation.status === "failed",
+      canUseRaw: unedited && !preparation.writeAttempted && preparation.status !== "unavailable",
       canRetry:
         authorized &&
-        !preparation.applied &&
+        !preparation.writeAttempted &&
         preparation.source.isFinal &&
         preparation.result?.reason !== "semantic-unavailable",
     };
@@ -116,8 +95,7 @@ export class DictationRefinement {
       draft,
       status: bounded ? "pending" : "unavailable",
       result: null,
-      receipt: null,
-      applied: false,
+      writeAttempted: false,
       cancelled: false,
       generation: ++this.generation,
     };
@@ -148,39 +126,16 @@ export class DictationRefinement {
     if (!preparation || !this.review?.canUseRaw) {
       return false;
     }
-    // Retire the candidate before calling an external draft owner: callbacks can
+    // Retire deferred validation before calling the draft owner: callbacks can
     // synchronously trigger rendering, edits, cancellation, or another choice.
     preparation.generation = ++this.generation;
-    let restored: boolean;
-    try {
-      restored = preparation.applied
-        ? preparation.receipt?.restore(preparation.source.text) === true
-        : this.publish(preparation, preparation.source.text);
-    } catch {
-      preparation.receipt = null;
-      preparation.status = "failed";
-      this.changed();
-      return false;
-    }
-    if (restored && this.preparation === preparation) {
-      this.dismiss();
-    }
-    return restored;
+    return this.publish(preparation);
   }
 
-  accept(): boolean {
-    const preparation = this.preparation;
-    if (!preparation || !this.review?.canAccept || !preparation.result) {
-      return false;
-    }
-    preparation.generation = ++this.generation;
-    return this.publish(preparation, preparation.result.candidate);
-  }
-
-  /** Cancel computation and future automatic publication, retaining eligible text for review. */
+  /** Cancel validation while retaining eligible text for review. */
   cancel(): void {
     const preparation = this.preparation;
-    if (!preparation || preparation.applied) {
+    if (!preparation || preparation.writeAttempted) {
       return;
     }
     preparation.generation = ++this.generation;
@@ -192,7 +147,7 @@ export class DictationRefinement {
     this.changed();
   }
 
-  /** Scope loss/disposal releases source text as well as candidate and receipt. */
+  /** Scope loss/disposal releases the recognized source. */
   dismiss(): void {
     this.generation += 1;
     this.preparation = null;
@@ -212,8 +167,7 @@ export class DictationRefinement {
   private run(preparation: Preparation): void {
     const generation = preparation.generation;
     this.changed();
-    // A single deferred local stage gives raw choice and cancel the same generation
-    // boundary as future optional handlers, without a provider request per feature.
+    // Let the review render before validating source ranges.
     queueMicrotask(() => {
       if (this.preparation !== preparation || preparation.generation !== generation) {
         return;
@@ -259,9 +213,9 @@ export class DictationRefinement {
     });
   }
 
-  private publish(preparation: Preparation, text: string): boolean {
+  private publish(preparation: Preparation): boolean {
     if (
-      preparation.applied ||
+      preparation.writeAttempted ||
       !preparation.binding.isCurrent() ||
       !this.matchesDraft(preparation)
     ) {
@@ -269,17 +223,17 @@ export class DictationRefinement {
     }
     // The synchronous owner records the attempted write before invoking its
     // adapter. An exception is not permission to replay an uncertain write.
-    preparation.applied = true;
-    preparation.receipt = null;
+    preparation.writeAttempted = true;
     try {
-      const receipt = preparation.binding.publish(text);
-      if (receipt === false) {
-        preparation.applied = false;
+      if (preparation.binding.publish(preparation.source.text) === false) {
+        preparation.writeAttempted = false;
         preparation.status = "failed";
         preparation.result = null;
         return false;
       }
-      preparation.receipt = receipt ?? null;
+      if (this.preparation === preparation) {
+        this.preparation = null;
+      }
       return true;
     } catch {
       // An uncertain attempted write is never retried or represented as success.
