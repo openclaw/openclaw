@@ -60,3 +60,26 @@ it("edits an unlisted realtime provider with a populated catalog", async () => {
     "acme-next",
   );
 });
+
+it("keeps empty Custom command arguments when the editor is committed", async () => {
+  const { page, runtimeConfig } = createTalkMutationHarness();
+  const args = ["--voice", "", "--text", "{{Text}}"];
+  page.configObject = {
+    talk: {
+      realtime: { mode: "stt-tts" },
+      provider: "tts-local-cli",
+      providers: { "tts-local-cli": { args } },
+    },
+  };
+  const editor = () =>
+    page.querySelector<HTMLTextAreaElement>('textarea[aria-label="Arguments (one per line)"]');
+  await waitForSolid(() => expect(editor()?.value).toBe(args.join("\n")));
+  editor()!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+  editor()!.value = "--voice\n\n--text\nHello\n";
+  editor()!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+    ["talk", "providers", "tts-local-cli", "args"],
+    ["--voice", "", "--text", "Hello", ""],
+  );
+});

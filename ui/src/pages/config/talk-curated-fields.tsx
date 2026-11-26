@@ -248,13 +248,16 @@ function CommandFields(props: FieldsProps) {
             rows={3}
             ref={liveValue(args)}
             onChange={(event) => {
-              const lines = event.currentTarget.value.split("\n").filter((line) => line !== "");
-              const path = ["talk", "providers", CUSTOM_COMMAND_PROVIDER, "args"];
-              if (lines.length === 0) {
-                runtimeConfig.removeFormValue(path);
-              } else {
-                runtimeConfig.patchForm(path, lines);
+              const value = event.currentTarget.value;
+              if (value === args().replace(/\r\n?/g, "\n")) {
+                return;
               }
+              // A cleared editor means no arguments; otherwise keep every line,
+              // including a final blank line. Textareas do not append a newline.
+              runtimeConfig.patchForm(
+                ["talk", "providers", CUSTOM_COMMAND_PROVIDER, "args"],
+                value === "" ? [] : value.split("\n"),
+              );
             }}
           />
         }
