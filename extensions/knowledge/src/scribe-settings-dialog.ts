@@ -10,7 +10,7 @@ import {
   show,
 } from "./scribe-dialog.js";
 import { slackFields } from "./scribe-slack-fields.js";
-import { updateScribe } from "./scribes-actions.js";
+import { needsUpgrade, updateScribe } from "./scribes-actions.js";
 import {
   defaultOptions,
   runPrompt,
@@ -127,6 +127,14 @@ export function settingsValue(
     updateScribe(host, snapshot, job, agentId, {
       runMessage: runPrompt(scribeSetup(scribe.id, "ongoing", next, job.schedule.tz)),
     });
+  // A turn-created automation is replaced only through Upgrade, which says what changes; a
+  // settings save would replace it without that confirmation.
+  if (needsUpgrade(snapshot)) {
+    value.append(
+      el("span", "Upgrade the automation to change its settings here", "knowledge-muted"),
+    );
+    return value;
+  }
   if (options) {
     value.append(el("span", settingsSummary(options) ?? ""));
     const change = button(

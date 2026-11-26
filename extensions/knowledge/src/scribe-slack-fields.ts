@@ -12,8 +12,8 @@ const SLACK_SINCE: readonly SlackSince[] = ["7d", "30d", "today"];
 
 /**
  * "How often", "Which conversations" and "Starting from" for the Slack scribe. The user token
- * choice starts from `initial` (off by default), and is disabled when the Slack account is known
- * to have no user token.
+ * choice starts from `initial` (off by default), and can't be turned on when the Slack account is
+ * known to have no user token.
  */
 export function slackFields(
   detection: ScribeDetection,
@@ -78,7 +78,8 @@ export function slackFields(
       tokens?.user === false
         ? "No Slack user token is configured for the Slack account."
         : "Uses the Slack user token configured for the Slack account, which can read more than the bot.",
-      tokens?.user === false,
+      // Without a user token it can't be turned on, but a saved opt-in can still be turned off.
+      tokens?.user === false && !state.userToken,
       toggle("userToken"),
       state.userToken,
     ),

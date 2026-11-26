@@ -993,3 +993,20 @@ it("offers a reset instead of settings for a run message edited by hand", async 
     settingsUpdate(conversationsRun("active")),
   ]);
 });
+
+it("asks for the upgrade before changing a turn-created scribe's settings", async () => {
+  const { render, ui, calls } = fixture({
+    sessions: conversationsSession,
+    jobs: [
+      { ...conversationsJob(conversationsRun("active")), scheduledToolPolicy: { mode: "account" } },
+    ],
+  });
+  ui.s.scribe = "conversations";
+  const view = await render();
+  expect(view.textContent).toContain("SettingsUpgrade the automation to change its settings here");
+  expect(view.querySelector('button[aria-label="Change settings"]')).toBeNull();
+  expect(view.querySelector('button[aria-label="Reset run message"]')).toBeNull();
+  expect(calls.some(([method]) => method === "cron.update" || method === "cron.remove")).toBe(
+    false,
+  );
+});
