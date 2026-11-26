@@ -32,7 +32,7 @@ import {
   prepareProjectedSessionSharing,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { respondError } from "./response.js";
 import {
@@ -184,7 +184,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
   "session.suggestions.list": defineValidatedGatewayHandler(
     "session.suggestions.list",
     validateSessionSuggestionsListParams,
-    async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
+    async ({ params, respond, client, context, signal }) => {
       const cfg = context.getRuntimeConfig();
       const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
       if (!requested.ok) {
@@ -202,11 +202,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         },
         () => {
           signal?.throwIfAborted();
-          if (
-            client?.invalidated ||
-            client?.connectionSignal?.aborted ||
-            hasCurrentClientAuthority?.() === false
-          ) {
+          if (client?.connectionSignal?.aborted) {
             throw new SessionMutationFactsUnavailableError();
           }
         },
@@ -218,14 +214,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       }
       let selected: ReturnType<typeof readCollaborationTarget> = null;
       const readCurrent = () => {
-        if (
-          signal?.aborted ||
-          client?.invalidated ||
-          client?.connectionSignal?.aborted ||
-          hasCurrentClientAuthority?.() === false ||
-          gatewayClientSessionCreator(client)?.id !== identity?.id
-        ) {
-          respondError(respond, ErrorCodes.FORBIDDEN, "suggestion reader authority changed");
+        if (signal?.aborted || client?.connectionSignal?.aborted) {
+          respondError(
+            respond,
+            ErrorCodes.FORBIDDEN,
+            "suggestion read was stopped; retry the request",
+          );
           return null;
         }
         const target = readCollaborationTarget(projection, query, actorFacts);
@@ -244,6 +238,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         const sharing = prepareProjectedSessionSharing({
           cfg: policy,
           client,
+          memberAccess: (value, id) =>
+            actorFacts
+              ? actorFacts.readCurrent().memberAccess[id]
+              : projection.memberAccess(value.storePath, value.storeKey, id),
           isMember: (value, id) =>
             actorFacts
               ? actorFacts.readCurrent().membership.has(id)
@@ -407,16 +405,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             const captureResponse: RespondFn = (...args) => {
               response = args;
             };
-            const label = suggestion.authorLabel ?? suggestion.authorId;
+            // The approver sends the turn through ordinary chat entry; the author is display credit.
             const chatClient: GatewayClient = {
               ...client,
               internal: {
                 ...client.internal,
-                syntheticClient: true,
-                senderAttribution: {
+                suggestedBy: {
                   id: suggestion.authorId,
-                  identity: { type: "profile", id: suggestion.authorId },
-                  name: `Suggested by ${label}`,
+                  ...(suggestion.authorLabel ? { name: suggestion.authorLabel } : {}),
                 },
               },
             };
@@ -469,6 +465,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
                 authorization.authorization,
                 assertAdmittedCurrent,
                 assertRequestCurrent,
+                assertAdmittedCurrent,
               );
               if (chatAuthorization) {
                 chatAuthorization = retainForwardedSessionMutationAuthorization(
@@ -501,7 +498,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               };
             }
             try {
-              await handleChatSend({
+              await handleDirectExternalChatSend({
                 req: { ...req, method: "chat.send", params: chatParams },
                 params: chatParams,
                 client: chatClient,

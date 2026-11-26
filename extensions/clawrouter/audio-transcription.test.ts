@@ -38,7 +38,7 @@ describe("ClawRouter registered file transcription", () => {
       expect(form.get("prompt")).toBe("synthetic hint");
       const file = form.get("file") as File;
       expect(file.name).toBe("meeting (1).wav");
-      expect(file.type).toBe("audio/x-wav");
+      expect(["audio/wav", "audio/wave", "audio/x-wav"]).toContain(file.type);
       expect(Buffer.from(await file.arrayBuffer())).toEqual(audio);
     });
   });

@@ -215,7 +215,7 @@ it("prefers configured owners over stale registrations", async () => {
   expectMigrated(databasePath, "new");
 });
 
-it("prunes missing and archived registrations", async () => {
+it("preserves missing registrations while pruning archived registrations", async () => {
   const missingPath = path.join(stateDir, "agents", "missing", "agent", "openclaw-agent.sqlite");
   const archivedPath = path.join(stateDir, "imports", "archived", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(archivedPath), { recursive: true });
@@ -232,12 +232,12 @@ it("prunes missing and archived registrations", async () => {
     { agent_id: "missing" },
   ]);
   const result = await migrateLegacyMediaPersistence({ env });
-  expect(result.changes).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("Removed missing agent database registry entry"),
-      expect.stringContaining("Removed archived or transient agent database registry entry"),
-    ]),
-  );
+  expect(result.changes).toEqual([
+    `Removed archived or transient agent database registry entry ${archivedPath}.`,
+  ]);
   expect(result.warnings).toContain(`Skipped missing registered agent database ${missingPath}.`);
-  expect(registrations(true)).toEqual([]);
+  expect(registrations(true)).toEqual([
+    expect.objectContaining({ agentId: "missing", path: missingPath }),
+  ]);
+  expect(fs.existsSync(missingPath)).toBe(false);
 });

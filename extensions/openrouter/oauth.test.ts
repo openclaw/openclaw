@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import * as oauth from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as oauthRuntime from "openclaw/plugin-sdk/provider-oauth-runtime";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -10,23 +11,24 @@ import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 
 const REDIRECT = "http://localhost:3000/openrouter-oauth/callback";
 const AUTH = "https://openrouter.ai/auth";
-const DENIED = "OpenRouter OAuth error: access_denied: Denied";
+const DENIED = "Sign-in was not allowed. Go back to the sign-in page and allow access.";
+const WRONG_ATTEMPT = "This address belongs to a different sign-in attempt.";
 const realPkce = providerAuth.generatePkceVerifierChallenge;
 const fetchImpl = vi.fn<typeof fetch>();
-const start = vi.fn<typeof oauth.startProviderOAuthLoopbackCallbackServer>();
+const wait = vi.fn<typeof oauth.waitForLocalOAuthCallback>();
 const release = vi.fn(async () => undefined);
 const redirect = (query = "state=state-1&code=AUTHCODE") => `${REDIRECT}?${query}`;
 const login = (ctx: ProviderAuthContext) => createOpenRouterOAuthAuthMethod().run(ctx);
 
 beforeEach(() => {
   fetchImpl.mockReset().mockImplementation(async () => Response.json({ key: "fixture-key" }));
-  start.mockReset();
+  wait.mockReset();
   vi.spyOn(providerAuth, "generatePkceVerifierChallenge").mockReturnValue({
     verifier: "verifier-1",
     challenge: "challenge-1",
   });
-  vi.spyOn(oauth, "generateOAuthState").mockReturnValue("state-1");
-  vi.spyOn(oauth, "startProviderOAuthLoopbackCallbackServer").mockImplementation(start);
+  vi.spyOn(oauthRuntime, "generateOAuthState").mockReturnValue("state-1");
+  vi.spyOn(oauth, "waitForLocalOAuthCallback").mockImplementation(wait);
   vi.spyOn(ssrf, "fetchWithSsrFGuard").mockImplementation(async ({ url, init, beforeRequest }) => {
     beforeRequest?.();
     return { response: await fetchImpl(url, init), finalUrl: url, release };
@@ -53,16 +55,10 @@ function context(isRemote = true, input = redirect()) {
   } as unknown as ProviderAuthContext;
   return { ctx, progress, text, note, log, openUrl };
 }
-type Callback = Awaited<ReturnType<typeof start>>;
-function local(waitForCallback: Callback["waitForCallback"]) {
+function local(callback: typeof oauth.waitForLocalOAuthCallback) {
   const fixture = context(false);
-  const close = vi.fn(async () => undefined);
-  start.mockImplementation(async () => ({
-    waitForCallback,
-    close,
-    complete: async () => undefined,
-  }));
-  return { ...fixture, close, run: () => login(fixture.ctx) };
+  wait.mockImplementation(callback);
+  return { ...fixture, run: () => login(fixture.ctx) };
 }
 function requestBody() {
   const body = fetchImpl.mock.calls[0]?.[1]?.body;
@@ -110,7 +106,7 @@ it("uses hosted authorization with real PKCE and no manual prompt or loopback", 
       },
     },
   ]);
-  for (const unused of [start, text, note, log, openUrl]) {
+  for (const unused of [wait, text, note, log, openUrl]) {
     expect(unused).not.toHaveBeenCalled();
   }
   expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/auth/keys");
@@ -139,9 +135,9 @@ it("keeps malformed manual input correctable before exchanging a credential", as
   text.mockImplementationOnce(async ({ validate }) => {
     for (const value of [
       "chrome-error://chromewebdata/",
-      "AUTHCODE",
-      "code=AUTHCODE",
       "state=other&code=AUTHCODE",
+      `${AUTH}?callback_url=${encodeURIComponent(REDIRECT)}`,
+      redirect("state=state-1&error=access_denied"),
     ]) {
       expect(validate?.(value)).toEqual(expect.any(String));
       expect(fetchImpl).not.toHaveBeenCalled();
@@ -154,18 +150,10 @@ it("keeps malformed manual input correctable before exchanging a credential", as
 
 it.each([
   [redirect(), undefined],
-  ["state=state-1&code=AUTHCODE", undefined],
-  [redirect("state=state-1&error=access_denied&error_description=Denied"), DENIED],
-  ["state=state-1&error=access_denied&error_description=Denied", DENIED],
-  [redirect("error=access_denied&error_description=Denied"), "Missing OpenRouter OAuth state"],
-  [
-    redirect("state=wrong&error=access_denied&error_description=Denied"),
-    "OpenRouter OAuth state mismatch",
-  ],
-  [redirect("code=AUTHCODE"), "Missing OpenRouter OAuth state"],
-  [redirect("state=wrong&code=AUTHCODE"), "OpenRouter OAuth state mismatch"],
-  ["AUTHCODE", "Paste the full OpenRouter redirect URL"],
-])("parses the state-bound redirect %s", async (input, error) => {
+  ["AUTHCODE", undefined],
+  [redirect("state=wrong&code=AUTHCODE"), WRONG_ATTEMPT],
+  [redirect("error=access_denied&error_description=Denied"), DENIED],
+])("checks the pasted redirect %s against the state inside callback_url", async (input, error) => {
   const result = login(context(true, input).ctx);
   if (error) {
     await expect(result).rejects.toThrow(error);
@@ -209,22 +197,26 @@ it("bounds plain-text OAuth error bodies without response.text()", async () => {
   expect(releaseLock).toHaveBeenCalledOnce();
 });
 
-it("binds the local callback before opening the browser and exchanges its accepted code", async () => {
-  const { run, close, openUrl, text } = local(async () => ({
-    type: "authorization_code",
-    code: "AUTHCODE",
-    state: "state-1",
-    parameters: new URLSearchParams({ code: "AUTHCODE", state: "state-1" }),
-  }));
+it("exchanges the local callback code and keeps listening after a refusal", async () => {
+  const { run, openUrl, text, progress } = local(async (params) => {
+    // Core keeps the listener open after a refusal and reports it as progress.
+    params.onProgress?.(DENIED, "consent_denied");
+    return { code: "AUTHCODE", state: "state-1" };
+  });
   await run();
-  expect(start).toHaveBeenCalledWith(
-    expect.objectContaining({ expectedState: "state-1", redirectUrl: REDIRECT }),
+  expect(wait).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedState: "state-1",
+      port: 3000,
+      callbackPath: "/openrouter-oauth/callback",
+      redirectUri: REDIRECT,
+      onProgress: expect.any(Function),
+    }),
   );
-  expect(start.mock.invocationCallOrder[0]).toBeLessThan(openUrl.mock.invocationCallOrder[0]!);
+  expect(progress.update).toHaveBeenCalledWith(DENIED, "consent_denied");
   const { url, callback } = authUrl(openUrl.mock.calls[0]![0]);
   expect(callback.searchParams.get("state")).toBe("state-1");
   expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
-  expect(close).toHaveBeenCalledOnce();
   expect(text).not.toHaveBeenCalled();
   expect(requestBody()).toEqual({
     code: "AUTHCODE",
@@ -233,58 +225,29 @@ it("binds the local callback before opening the browser and exchanges its accept
   });
 });
 
-it("closes a state-bound provider denial without exchanging a code", async () => {
-  const { run, close, text } = local(async () => ({
-    type: "oauth_error",
-    error: "access_denied",
-    errorDescription: "Denied",
-  }));
-  await expect(run()).rejects.toThrow(DENIED);
-  expect(start).toHaveBeenCalledWith(expect.objectContaining({ expectedState: "state-1" }));
-  expect(close).toHaveBeenCalledOnce();
-  expect(fetchImpl).not.toHaveBeenCalled();
-  expect(text).not.toHaveBeenCalled();
-});
-
-it.each(["progress", "log"] as const)(
-  "closes the callback when %s reporting throws",
-  async (reporter) => {
-    const wait = vi.fn();
-    const { progress, log, close, run } = local(wait);
-    const fail = () => {
-      throw new Error("reporter failed");
-    };
-    if (reporter === "progress") {
-      progress.update.mockImplementation(fail);
-    } else {
-      log.mockImplementation(fail);
-    }
-    await expect(run()).rejects.toThrow("reporter failed");
-    expect(wait).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-  },
-);
-
-it("falls back to a pasted redirect when the local listener cannot start", async () => {
-  start.mockRejectedValue(new Error("listen EADDRINUSE"));
-  const { ctx, openUrl, text } = context(false);
-  await expect(login(ctx)).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
+it.each([
+  [
+    Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
+    ["The sign-in callback could not start because its port is in use.", "callback_port_busy"],
+  ],
+  [
+    new Error("OAuth callback timeout"),
+    ["OAuth callback not detected; waiting for redirect URL..."],
+  ],
+])("falls back to a pasted redirect after %s", async (failure, update) => {
+  const { run, openUrl, text, progress } = local(async () => {
+    throw failure;
+  });
+  await expect(run()).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
+  expect(progress.update).toHaveBeenCalledWith(...update);
+  if (update[1]) {
+    // A busy port is said once the paste prompt is open, so setup apps show it beside it.
+    expect(progress.update.mock.invocationCallOrder.at(-2)).toBeGreaterThan(
+      text.mock.invocationCallOrder[0]!,
+    );
+  }
   expect(openUrl).toHaveBeenCalledOnce();
   expect(text).toHaveBeenCalledWith(
     expect.objectContaining({ message: "Paste the OpenRouter redirect URL" }),
   );
-});
-
-it("closes a failed callback before falling back to a pasted redirect", async () => {
-  const { run, text, close } = local(async () => {
-    throw new Error("OAuth callback timeout");
-  });
-  text.mockImplementationOnce(async () => {
-    expect(close).toHaveBeenCalledOnce();
-    return redirect();
-  });
-  await expect(run()).resolves.toMatchObject({
-    profiles: [{ credential: { key: "fixture-key" } }],
-  });
-  expect(close).toHaveBeenCalledOnce();
 });

@@ -1,4 +1,5 @@
 export { GatewayControlUiIngressError } from "../plugins/gateway-ingress.types.js";
+export { captureGatewayIngressPersonPrincipal } from "../gateway/remote-ingress-principal-admission.js";
 export type {
   GatewayControlUiIngressErrorCode,
   GatewayControlUiIngressFactoryV2,
@@ -10,6 +11,7 @@ export type {
   GatewayIngressMessage,
   GatewayIngressPrincipal,
   GatewayIngressPrincipalOptionsV1,
+  GatewayIngressPrincipalRecovery,
   GatewayIngressPrincipalBindingV1,
   GatewayIngressRequestOptionsV1,
   GatewayIngressSocketV1,

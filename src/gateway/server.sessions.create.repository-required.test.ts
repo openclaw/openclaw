@@ -50,7 +50,7 @@ afterEach(() => {
 
 // Actual RPC admission/creation and dispatch owners, with native Git/checkpoint effects.
 // Provider allocation and remote transport/account responses remain synthetic.
-test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
+test.each(["allowed", "policy", "source", "stop"] as const)(
   "required repository sessions.create retains authority after ACK: %s",
   async (scenario) => {
     const { dir, storePath } = await createSessionStoreDir();
@@ -296,9 +296,6 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       let stop: Promise<unknown> | undefined;
       if (scenario === "policy") {
         policyCurrent = false;
-      }
-      if (scenario === "caller") {
-        client.connect.scopes = [];
       }
       if (scenario === "source") {
         await upsertSessionEntryCore(

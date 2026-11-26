@@ -12,6 +12,8 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import { guardRunWorkspaceOwnership } from "./run.workspace-ownership.test-support.js";
 
+// Runs need a configured model; this matches the mocked DEFAULT_PROVIDER/DEFAULT_MODEL.
+const TEST_MODEL = { primary: "anthropic/test-model" };
 let sharedRunEmbeddedAgent: Promise<TestRunEmbeddedAgent> | undefined;
 let sharedSessionState: Promise<OpenClawTestState> | undefined;
 let sessionSequence = 0;
@@ -21,7 +23,7 @@ export async function createFreshRunIntegrationState(label: string) {
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   const state = await createOpenClawTestState({ label });
   const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-  setRuntimeConfigSnapshot({});
+  setRuntimeConfigSnapshot({ agents: { defaults: { model: TEST_MODEL } } });
   return state;
 }
 
@@ -32,7 +34,7 @@ export function loadSharedRunIntegrationHarness(): Promise<TestRunEmbeddedAgent>
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "shared-run-warmup" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir } },
+        agents: { defaults: { workspace: state.workspaceDir, model: TEST_MODEL } },
         session: { store: path.join(state.agentDir(), "openclaw-agent.sqlite") },
       };
       const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
@@ -81,7 +83,7 @@ export async function createSharedRunIntegrationSession() {
     storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
   };
   const config: OpenClawConfig = {
-    agents: { defaults: { workspace: workspaceDir } },
+    agents: { defaults: { workspace: workspaceDir, model: TEST_MODEL } },
     session: { store: sessionTarget.storePath },
   };
   setRuntimeConfigSnapshot(config);

@@ -10,10 +10,8 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -48,7 +46,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export async function appendCompletedToolWork(
+async function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
   beforeNested?: () => void | Promise<void>,
@@ -90,7 +88,7 @@ export async function appendCompletedToolWork(
   await original.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 4 });
 }
 
-export async function appendOversizedCacheSnapshot(manager: SessionManager) {
+async function appendOversizedCacheSnapshot(manager: SessionManager) {
   const state = createToolResultPromptProjectionState();
   state.frozen.add("prior-result");
   state.sourceHashByKey.set("prior-result", "synthetic-source");
@@ -254,7 +252,7 @@ export async function withInterruptedTurn(
         );
       });
     }
-    previous.finishPendingInput!("interrupted");
+    previous.releasePendingInput!();
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
@@ -335,7 +333,6 @@ export async function withInterruptedTurn(
             effectiveCwd: state.workspaceDir,
             effectiveWorkspace: state.workspaceDir,
             onSessionManagerCreated: onCreated ?? (() => {}),
-            replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
             runAbortSignal: extra?.runAbortSignal ?? runAbortController.signal,
             sessionAgentId: target.agentId,
@@ -344,7 +341,7 @@ export async function withInterruptedTurn(
           }),
       });
     } finally {
-      recorder.finishPendingInput!("interrupted");
+      recorder.finishPendingInput!("interrupted", "failed");
       await lifecycle.dispose();
       await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);

@@ -19,6 +19,7 @@ import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 const now = 1_800_000_000_000;
@@ -50,10 +51,10 @@ async function recoveryStore(jobs: CronJob[]) {
     storePath,
     storeKey,
     context,
-    recover: () =>
+    recover: (liveReceiptIds?: string[]) =>
       executeOpenClawStateWorker(context, {
         type: "cron.recoverRuns",
-        input: { storeKey, nowMs: now + 1_000 },
+        input: { storeKey, nowMs: now + 1_000, liveReceiptIds },
       }),
     request: (
       entry: CronJob,
@@ -87,6 +88,10 @@ async function recoveryStore(jobs: CronJob[]) {
         { storeKey },
       ).entries;
     },
+    receiptStatus: (receiptId: string) =>
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receiptId),
   };
 }
 
@@ -162,7 +167,9 @@ describe("worker-owned startup recovery", () => {
   it("keeps recovered rows resident and observes a later in-process write", async () => {
     const entry = job("resident-recovery");
     const store = await recoveryStore([entry]);
-    await activateManual(store, entry);
+    const receipt = await activateManual(store, entry);
+    // A cron reload's replacement leaves a run its predecessor still holds alone.
+    expect((await store.recover([receipt.receiptId])).interruptedRuns).toEqual([]);
     const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
     await ensureLoaded(state);
     await recoverCronRuns(state);
@@ -307,11 +314,9 @@ describe("worker-owned startup recovery", () => {
           { jobId: entry.id, runId: "removed-manual-run" },
         ]);
       }
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-          .get(receipt.receiptId),
-      ).toMatchObject({ status: recorded ? "ok" : "interrupted" });
+      expect(store.receiptStatus(receipt.receiptId)).toMatchObject({
+        status: recorded ? "ok" : "interrupted",
+      });
       await store.recover();
       expect(await store.history()).toHaveLength(1);
     },
@@ -336,13 +341,50 @@ describe("worker-owned startup recovery", () => {
       expect(outcome.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
       expect(outcome.notifications).toEqual([]);
       expect(await store.history()).toEqual(before);
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-          .get(receipt.receiptId),
-      ).toMatchObject({ status: "error" });
+      expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "error" });
     },
   );
+
+  it("settles a recorded timeout receipt after restart without recording the outcome twice", async () => {
+    const entry = job("recorded-pending-timeout");
+    const store = await recoveryStore([entry]);
+    const receipt = await activateManual(store, entry);
+    await executeOpenClawStateWorker(store.context, {
+      type: "cron.finalizeRuns",
+      input: {
+        storeKey: store.storeKey,
+        snapshot: {
+          nowMs: now + 500,
+          outcomes: [
+            authorCronRunCompletion(entry, {
+              jobId: entry.id,
+              job: entry,
+              runReceipt: receipt,
+              executionPending: true,
+              status: "error" as const,
+              error: "cron: job execution timed out",
+              errorReason: "timeout" as const,
+              startedAt: now,
+              endedAt: now + 500,
+            }),
+          ],
+        },
+      },
+    });
+    const beforeJob = (await loadCronStore(store.storePath)).jobs[0];
+    const beforeHistory = await store.history();
+    expect(beforeHistory).toHaveLength(1);
+    // The owner keeps the receipt until its timed-out execution settles.
+    await store.recover([receipt.receiptId]);
+    expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "running" });
+    const result = await store.recover();
+    expect(result.interruptedRuns).toEqual([]);
+    expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);
+    expect(await store.history()).toEqual(beforeHistory);
+    expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "error" });
+    await store.recover();
+    expect(await store.history()).toEqual(beforeHistory);
+  });
 
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {

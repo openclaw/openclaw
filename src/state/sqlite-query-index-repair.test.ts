@@ -63,6 +63,20 @@ const cases = [
     compatibility: AGENT_SCHEMA_COMPATIBILITY,
     indexes: [
       {
+        name: "idx_agent_session_input_completions_session_key",
+        table: "session_input_completions",
+        primaryKey: "session_id",
+        query:
+          "SELECT session_id AS id FROM session_input_completions WHERE session_key IN ('agent:main:a', 'agent:main:b') ORDER BY session_id",
+      },
+      {
+        name: "idx_agent_conversation_deliveries_source_session",
+        table: "conversation_deliveries",
+        primaryKey: "operation_id",
+        query:
+          "SELECT operation_id AS id FROM conversation_deliveries WHERE source_session_key IN ('agent:main:a', 'agent:main:b') ORDER BY operation_id",
+      },
+      {
         name: "idx_agent_session_nodes_entry_not_valid",
         table: "session_nodes",
         primaryKey: "session_key",
@@ -104,6 +118,17 @@ const cases = [
       db.exec(`
         UPDATE session_nodes SET entry_valid = -1 WHERE session_key != 'agent:main:c';
         UPDATE session_nodes SET entry_valid = 1 WHERE session_key = 'agent:main:c';
+        INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+          SELECT current_session_id, session_key, 1, 1 FROM session_nodes;
+        INSERT INTO session_input_completions
+          (session_key, session_id, idempotency_key, run_id, request_hash, outcome_json, succeeded, completed_at)
+          SELECT session_key, current_session_id, 'input', 'run', 'hash', '{"ok":true}', 1, 1 FROM session_nodes;
+        INSERT INTO conversations
+          (conversation_id, channel, account_id, kind, peer_id, delivery_target, created_at, updated_at)
+          VALUES ('conversation', 'test', 'test', 'direct', 'peer', 'target', 1, 1);
+        INSERT INTO conversation_deliveries
+          (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at)
+          SELECT current_session_id, 'turn', 'conversation', session_key, 'hash', 'created', 1, 1 FROM session_nodes;
       `);
     },
   },
@@ -205,6 +230,69 @@ it.each(["fresh", "missing", "drifted"] as const)(
     }
   },
 );
+
+it("keeps legacy reads and writes safe while deletion avoids unrelated completion and delivery scans", () => {
+  const testCase = cases[1];
+  const { database } = createFixture(testCase);
+  const pathname = database.path;
+  const previousSchema = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+    /CREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;/gu,
+    "",
+  );
+  closeDatabases();
+  using older = new DatabaseSync(pathname);
+  older.exec("PRAGMA foreign_keys=ON");
+  assertSqliteSchemaContains(older, pathname, previousSchema, AGENT_SCHEMA_COMPATIBILITY);
+  const version = older.prepare("PRAGMA user_version").get();
+  const metadata = rows(older, "SELECT * FROM schema_meta");
+  older.exec(`
+    UPDATE session_input_completions SET outcome_json = '{"older":true}' WHERE session_id='b';
+    UPDATE conversation_deliveries SET source_session_key='agent:main:b' WHERE operation_id='b';
+    INSERT INTO cache_entries (scope, key, value_json, updated_at)
+      VALUES ('conversation-progress', 'a', '{}', 1), ('conversation-progress', 'b', '{}', 1);
+  `);
+  const deletes: Array<readonly [string, string]> = [
+    ["session_input_completions", "DELETE FROM session_nodes WHERE session_key='agent:main:a'"],
+    [
+      "conversation_deliveries",
+      "DELETE FROM cache_entries WHERE scope='conversation-progress' AND key IN (SELECT operation_id FROM conversation_deliveries WHERE source_session_key='agent:main:a')",
+    ],
+    [
+      "conversation_deliveries",
+      "DELETE FROM conversation_deliveries WHERE source_session_key='agent:main:a'",
+    ],
+  ];
+  for (const [table, query] of deletes) {
+    const plan = rows(older, `EXPLAIN QUERY PLAN ${query}`);
+    expect(plan).not.toContainEqual(expect.objectContaining({ detail: `SCAN ${table}` }));
+    expect(plan).toContainEqual(
+      expect.objectContaining({
+        detail: expect.stringMatching(
+          new RegExp(`SEARCH ${table} USING (?:COVERING )?INDEX idx_agent_`),
+        ),
+      }),
+    );
+    older.exec(query);
+  }
+  expect(
+    rows(
+      older,
+      "SELECT session_id, outcome_json FROM session_input_completions ORDER BY session_id",
+    ),
+  ).toEqual([
+    { session_id: "b", outcome_json: '{"older":true}' },
+    { session_id: "c", outcome_json: '{"ok":true}' },
+  ]);
+  expect(
+    rows(older, "SELECT operation_id FROM conversation_deliveries ORDER BY operation_id"),
+  ).toEqual([{ operation_id: "b" }, { operation_id: "c" }]);
+  expect(rows(older, "SELECT key FROM cache_entries WHERE scope='conversation-progress'")).toEqual([
+    { key: "b" },
+  ]);
+  expect(older.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(older.prepare("PRAGMA user_version").get()).toEqual(version);
+  expect(rows(older, "SELECT * FROM schema_meta")).toEqual(metadata);
+});
 
 it.each(cases)(
   "admits $role readers on either side of the additive index upgrade",

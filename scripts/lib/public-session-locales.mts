@@ -9,6 +9,7 @@ import {
   prepareControlUiCatalogSource,
 } from "./control-ui-i18n-catalog-values.ts";
 import { flattenTranslations } from "./control-ui-i18n-sync-plan.ts";
+import { exactIdFilter } from "./rolldown-id-filter.mts";
 
 const namespace = "publicReader.";
 
@@ -53,18 +54,21 @@ export function createPublicSessionLocalesPlugin(
   const runtimePath = path.resolve(rootDir, "src/gateway/control-ui-public-session-locales.ts");
   return {
     name: "openclaw:public-session-locales",
-    transform(_code, id) {
-      if (path.normalize(id) !== runtimePath) {
-        return undefined;
-      }
-      const locales = loadPublicSessionLocales(rootDir, (file) => {
-        recordInput?.(file);
-        this.addWatchFile(file);
-      });
-      return {
-        code: "export const PUBLIC_SESSION_LOCALES = " + JSON.stringify(locales) + ";",
-        map: null,
-      };
+    transform: {
+      filter: exactIdFilter(runtimePath),
+      handler(_code, id) {
+        if (path.normalize(id) !== runtimePath) {
+          return undefined;
+        }
+        const locales = loadPublicSessionLocales(rootDir, (file) => {
+          recordInput?.(file);
+          this.addWatchFile(file);
+        });
+        return {
+          code: "export const PUBLIC_SESSION_LOCALES = " + JSON.stringify(locales) + ";",
+          map: null,
+        };
+      },
     },
   };
 }

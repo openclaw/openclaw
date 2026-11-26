@@ -23,7 +23,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
@@ -35,28 +35,12 @@ import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import { signalTurnClaimRelease } from "./placement-turn-wait.js";
 import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
-
-type TurnClaimReleaseWaiter = (error?: Error) => void;
-
-const turnClaimReleaseWaiters = resolveGlobalMap<string, Map<string, Set<TurnClaimReleaseWaiter>>>(
-  Symbol.for("openclaw.turnClaimReleaseWaiters"),
-  (waitersByPath) => {
-    const error = new Error("Gateway lifecycle ended while waiting for turn claim release");
-    for (const bySession of waitersByPath.values()) {
-      for (const waiters of bySession.values()) {
-        for (const reject of waiters) {
-          reject(error);
-        }
-      }
-    }
-    waitersByPath.clear();
-  },
-);
 
 const workerTurnClaimClosedHandlers = resolveGlobalMap<
   string,
@@ -192,7 +176,7 @@ export async function bindWorkerTurnOwner(
   const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   if (!path || !runAuthority) {
     scope?.release();
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+    throw new Error(`Session ${claim.sessionId} run ended. Start a new turn.`);
   }
   let claimAuthority: PlacementTurnClaimAuthority | undefined;
   const approvalLifetime = new AbortController();
@@ -208,11 +192,10 @@ export async function bindWorkerTurnOwner(
         prepared.identity.agentId !== sessionTarget.agentId ||
         prepared.identity.sessionKey !== sessionTarget.sessionKey
       ) {
-        throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+        throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
       }
     };
     assertRunActive();
-    operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
     delegatedAuthority = claimAgentRunApprovalAuthority(runAuthority, [approvalLifetime.signal]);
   } catch (error) {
@@ -225,7 +208,7 @@ export async function bindWorkerTurnOwner(
   claim = authority.claim;
   const owners = workerTurnOwners.get(path) ?? new Map();
   const refuseOwner: () => never = () => {
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+    throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
   };
   const delegatedSource = captureAgentRunDelegatedSourceAssertion(delegatedAuthority, refuseOwner);
   if (!delegatedSource) {
@@ -245,7 +228,7 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
+    [delegatedSource.assertCurrent, assertRunActive],
     (assertSources) => {
       assertSources();
       assertOwnerCurrent();
@@ -535,7 +518,7 @@ export async function admitWorkerTurnInput(
   }
   const assertCurrent = () => {
     if (!validate()) {
-      throw new Error("Worker turn admission authority changed");
+      throw new Error("Worker turn placement changed during admission. Start a new turn.");
     }
     runtime.assertActive();
   };
@@ -620,10 +603,10 @@ export function runWorkerTurnAdmissionContinuation<T>(
 }
 
 /** Host-owned preparation runs at append time, after any awaited transcript admission. */
-export function prepareWorkerTurnTranscriptMessage(
+export function prepareWorkerTurnTranscriptMessage<T extends AssistantHistoryMessage>(
   identity: WorkerConnectionIdentity,
-  message: AssistantMessage,
-): AssistantMessage {
+  message: T,
+): T {
   return (
     resolveWorkerTurnRuntime(identity)?.prepareAssistantTranscriptMessage?.(
       message,
@@ -634,54 +617,6 @@ export function prepareWorkerTurnTranscriptMessage(
 
 export function attachWorkerTurnExecutionIdentityStore(store: object, path: string): void {
   Object.defineProperty(store, WORKER_TURN_EXECUTION_IDENTITY_PATH, { value: path });
-}
-
-export function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
-  let bySession = turnClaimReleaseWaiters.get(path);
-  if (!bySession) {
-    bySession = new Map();
-    turnClaimReleaseWaiters.set(path, bySession);
-  }
-  let waiters = bySession.get(sessionId);
-  if (!waiters) {
-    waiters = new Set();
-    bySession.set(sessionId, waiters);
-  }
-  return waiters;
-}
-
-function signalTurnClaimRelease(path: string, sessionId: string): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  bySession.delete(sessionId);
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-  for (const resolve of waiters) {
-    resolve();
-  }
-}
-
-export function removeTurnClaimReleaseWaiter(
-  path: string,
-  sessionId: string,
-  waiter: TurnClaimReleaseWaiter,
-): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  waiters.delete(waiter);
-  if (waiters.size === 0) {
-    bySession.delete(sessionId);
-  }
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
 }
 
 export function registerWorkerTurnClaimClosedHandler(
@@ -747,11 +682,5 @@ export function deferWorkerTurnClaimClosed(
 ): void {
   if (!deferSqlitePostCommitPublication(db, prepareWorkerTurnClaimClosed(path, claim))) {
     throw new Error("Worker turn closure requires its owning transaction");
-  }
-}
-
-export function deferTurnClaimRelease(db: EngineConnection, path: string, sessionId: string): void {
-  if (!deferSqlitePostCommitPublication(db, () => signalTurnClaimRelease(path, sessionId))) {
-    throw new Error("Worker turn release requires its owning transaction");
   }
 }

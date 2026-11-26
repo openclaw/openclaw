@@ -68,6 +68,8 @@ export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySch
 export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
   /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
+  /** Provider/model exec ceiling (`tools.byProvider` only); tightens, never loosens. */
+  exec?: { mode?: ExecToolConfig["mode"] };
 };
 
 export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;

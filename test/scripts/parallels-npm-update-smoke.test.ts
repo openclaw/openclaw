@@ -814,6 +814,51 @@ it.each([
   },
 );
 
+it.each([60_000, 100_000])(
+  "preserves the CLI deadline after %ims of Windows setup",
+  async (setupMs) => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let launches = 0;
+    const f = windowsFixture({
+      input: () => {
+        now += setupMs;
+      },
+      launch: () => {
+        launches++;
+        return commandResult("started\n");
+      },
+      poll: (command) => {
+        if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+          now += 20_000;
+          const markers = extractWindowsBackgroundControlMarkers(command);
+          return commandResult(`${markers.exitPrefix}0\n${markers.done}\n`);
+        }
+        now += 2_400_000;
+        return commandResult("done\n");
+      },
+    });
+    try {
+      const result = f.run("windows full CLI deadline", {
+        commandTimeoutMs: 2_460_000,
+        timeoutMs: 2_670_000,
+      });
+      if (setupMs === 60_000) {
+        await expect(result).resolves.toBeUndefined();
+        expect(launches).toBe(1);
+        expect(f.commands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
+      } else {
+        await expect(result).rejects.toThrow(
+          "setup left insufficient time for the command deadline",
+        );
+        expect(launches).toBe(0);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
+
 it("drains a completed Windows job when setup exhausts the active budget", async () => {
   let now = 1_000;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);

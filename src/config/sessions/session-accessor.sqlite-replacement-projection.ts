@@ -8,7 +8,6 @@ import {
 } from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -26,6 +25,10 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runPreparedSqliteSessionWrite } from "./session-accessor.sqlite-prepared-write.js";
+import type {
+  ReplacementProjectionOptions,
+  ReplacementProjectionParams,
+} from "./session-accessor.sqlite-replacement-projection.types.js";
 import {
   readSessionEntryReplacementState,
   type SessionEntryReplacementState,
@@ -34,7 +37,6 @@ import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sql
 import type {
   SqliteSessionEntryReplacement,
   SessionEntryReplacementCommit,
-  SessionEntryWorkerLifecycle,
 } from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
@@ -51,7 +53,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionEntryCommitContext,
-  SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
 import {
@@ -59,50 +60,22 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { composeSessionSourceAssertion } from "./session-source-authority.js";
-import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
-export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
+export type SessionEntryCanonicalReplacement = SqliteSessionEntryReplacement & {
   previousSessionKeys: readonly string[];
 };
 
-type ReplacementProjectionOptions = {
-  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
-  onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
-  retainedExecution?: OpenClawAgentDatabaseExecution;
-  assertCommitAllowed?: () => void;
-  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
-  ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
-  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
-  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
-  checkPendingArchiveRecovery?: boolean;
-  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
-  env?: NodeJS.ProcessEnv;
-  activeSessionKey?: string;
-  agentId?: string;
-  consumePendingReset?: boolean;
-  requireWriteSuccess?: boolean;
-  sessionKeys?: readonly string[];
-  includeSessionWindowOwner?: string;
-  includeLabelOwners?: string;
-  skipMaintenance?: boolean;
-  storePath: string;
-};
-
-type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions & {
-  afterCommitted?: (result: T, context: SessionEntryCommitContext) => Promise<void>;
-  update: (
-    entries: SessionEntryReplacementSnapshot[],
-  ) =>
-    | Promise<{ result: T; replacements?: Iterable<TReplacement> }>
-    | { result: T; replacements?: Iterable<TReplacement> };
-};
-
 type CreationProjection = {
+  certifyNotCommitted?: true;
   scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
   sessionKey: string;
   creationSnapshot: SessionCreationSnapshot & { databaseIdentity: string };
@@ -129,6 +102,9 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
         memory.authority,
       )
     : [];
+  if (params.includeArchiveUndoMarkers) {
+    throw new Error("Archive Undo is unavailable for memory-only sessions.");
+  }
   const prepared = new Map(snapshots.map(({ sessionKey, entry }) => [sessionKey, entry]));
   const windowOwner =
     params.includeSessionWindowOwner &&
@@ -193,6 +169,10 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
     ];
   });
   const commit = async (assertSourceCurrent?: () => void) => {
+    const source = await prepareSessionSourceEffect(
+      composeSessionSourceAssertion([params.assertCommitAllowed, assertSourceCurrent]),
+    );
+    await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
     const config = params.skipMaintenance === false ? resolveMaintenanceConfig() : undefined;
     const preservation =
       config && config.mode !== "warn"
@@ -219,9 +199,14 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
           },
           {
             ...memory.authority,
+            workspaceEvidence: [
+              ...(memory.authority.workspaceEvidence ?? []),
+              ...(source.workspaceEvidence ?? []),
+            ],
+            readCustody: [...(memory.authority.readCustody ?? []), ...(source.readCustody ?? [])],
             assertCurrent() {
               memory.authority.assertCurrent();
-              assertSourceCurrent?.();
+              source.assertCurrent();
               preservation?.capture();
             },
           },
@@ -315,7 +300,15 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     async (preparedScope) => {
       creation?.onWriterAdmitted?.();
       if (creation) {
-        params.assertCommitAllowed?.();
+        // This owner has not dispatched a writer yet. A failed final guard is
+        // affirmative nonexecution evidence, even after diagnostic admission.
+        try {
+          params.assertCommitAllowed?.();
+        } catch (error) {
+          throw creation.certifyNotCommitted
+            ? new SessionEntryCreationNotCommittedError(error)
+            : error;
+        }
       }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
@@ -324,6 +317,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       };
       const useWorker =
         creation !== undefined ||
+        params.memberSourceRoleImport !== undefined ||
         (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
@@ -356,6 +350,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     projection: "replacement",
                     replacementSelection: {
                       fieldPatch: params.fieldPatch,
+                      includeArchiveUndoMarkers: params.includeArchiveUndoMarkers,
                       sessionKeys: params.sessionKeys,
                       includeSessionWindowOwner: params.includeSessionWindowOwner,
                       includeLabelOwners: params.includeLabelOwners,
@@ -371,6 +366,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                       params.assertCommitAllowed?.();
                     },
                     params.retainedExecution,
+                    params.followRegistration,
                   );
                   result = await read();
                 }
@@ -379,13 +375,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 }
                 return result.replacement;
               },
-              // Label owners can expand a keyed selection beyond the foreground read budget.
-              params.sessionKeys &&
-                params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
-                  MAX_SESSION_ROW_FACTS_KEYS &&
-                params.includeLabelOwners === undefined
-                ? projectionLane
-                : maintenanceLane,
+              sessionStoreLane,
             )
           : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;
@@ -502,6 +492,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              memberSourceRoleImport: params.memberSourceRoleImport,
+              creationOperation: params.creationOperation,
               fieldPatch: params.fieldPatch,
               expectedRows,
               labelOwnerKeys,
@@ -647,6 +639,7 @@ export async function applySessionEntryCreationReplacement(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   consumePendingReset?: boolean;
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
@@ -662,6 +655,7 @@ export async function applySessionEntryExactReplacements<T>(params: {
 }): Promise<T> {
   return await applySqliteSessionEntryReplacementProjection(params, (replacements) =>
     [...(replacements ?? [])].map(({ entry, sessionKey }) => ({
+      archiveUndo: { kind: "invalidate" },
       entry,
       sessionKey,
     })),
@@ -682,12 +676,18 @@ export async function applySessionEntryCanonicalReplacements<T>(
         : {}),
     },
     (replacements) =>
-      [...(replacements ?? [])].map((replacement) => ({
-        entry: replacement.entry,
-        previousSessionKeys: uniqueStrings(
-          replacement.previousSessionKeys.map((key) => key.trim()).filter(Boolean),
-        ),
-        sessionKey: replacement.sessionKey.trim(),
-      })),
+      [...(replacements ?? [])].map((replacement) => {
+        const normalized: SessionEntryCanonicalReplacement = {
+          entry: replacement.entry,
+          previousSessionKeys: uniqueStrings(
+            replacement.previousSessionKeys.map((key) => key.trim()).filter(Boolean),
+          ),
+          sessionKey: replacement.sessionKey.trim(),
+        };
+        if (replacement.archiveUndo) {
+          normalized.archiveUndo = replacement.archiveUndo;
+        }
+        return normalized;
+      }),
   );
 }

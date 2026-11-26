@@ -31,6 +31,7 @@ export function canonicalParallelBatchHistory() {
         {
           itemId: "tool:call-read",
           toolCallId: "call-read",
+          name: "read",
           kind: "tool",
           phase: "end",
           status: "completed",
@@ -39,6 +40,7 @@ export function canonicalParallelBatchHistory() {
         {
           itemId: "tool:call-patch",
           toolCallId: "call-patch",
+          name: "apply_patch",
           kind: "tool",
           phase: "end",
           status: "completed",

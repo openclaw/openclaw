@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { assertTemplatesLabsEnabled, TemplatesLabsDisabledError } from "../templates/labs-gate.js";
+import { assertTemplatesEnabled, TemplatesDisabledError } from "../templates/availability.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import type { PluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
@@ -176,7 +176,7 @@ describe("plugin lifecycle CLI transport", () => {
     mocks.call.mockReturnValue(reply.promise);
     let labsEnabled = true;
     const commitGuard = vi.fn(() =>
-      assertTemplatesLabsEnabled({
+      assertTemplatesEnabled({
         gateway: { controlUi: { experimental: { templates: labsEnabled } } },
       }),
     );
@@ -188,7 +188,7 @@ describe("plugin lifecycle CLI transport", () => {
     labsEnabled = false;
     reply.resolve({ runtime: runtimeReceipt });
 
-    await expect(result).rejects.toBeInstanceOf(TemplatesLabsDisabledError);
+    await expect(result).rejects.toBeInstanceOf(TemplatesDisabledError);
     expect(commitGuard).toHaveBeenCalledOnce();
   });
 

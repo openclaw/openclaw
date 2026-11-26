@@ -96,9 +96,10 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
       typeof retry.attempts === "number" &&
       Number.isSafeInteger(retry.attempts) &&
       retry.attempts > 0 &&
-      typeof retry.retryAt === "number" &&
-      Number.isSafeInteger(retry.retryAt) &&
-      retry.retryAt >= 0
+      (retry.retryAt === null ||
+        (typeof retry.retryAt === "number" &&
+          Number.isSafeInteger(retry.retryAt) &&
+          retry.retryAt >= 0))
     ) {
       record.gcRetry = {
         stage: retry.stage,
@@ -106,12 +107,18 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
         attempts: retry.attempts,
         retryAt: retry.retryAt,
       };
+      record.cleanup = {
+        state: retry.retryAt === null ? "preserved" : "retrying",
+        reason: protection.reason,
+        attempts: retry.attempts,
+        nextAttemptAt: retry.retryAt,
+      };
     }
   }
   return record;
 }
 
-/** Registry mutations invalidate a retained decision without rewriting its derived column. */
+/** Checkout/owner mutations invalidate deferrals; recording the failed outcome must not. */
 export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
   return JSON.stringify([
     record.path,
@@ -125,7 +132,6 @@ export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
     record.lastActiveAt,
     record.removedAt,
     record.snapshotRef,
-    record.runEndCleanup,
   ]);
 }
 

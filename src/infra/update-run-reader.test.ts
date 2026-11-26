@@ -2,17 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
+import { readUpdateRunAdmissionCommand } from "./update-run-admission.read.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,
@@ -26,7 +27,7 @@ import {
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
@@ -62,13 +63,6 @@ function snapshotDatabaseFiles(filename: string) {
     }),
   };
 }
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-});
 
 describe("update run history reads", () => {
   it("keeps reads non-creating and adds the table on first write without changing the older schema", async () => {
@@ -116,6 +110,13 @@ describe("update run history reads", () => {
 
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
     expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
+    const transactions = vi.spyOn(initial.db, "exec");
+    const result = readUpdateRunAdmissionCommand(initial.db, {
+      type: "updateRuns.reconciliationCandidates",
+      input: { excludeRunId: runId },
+    });
+    expect(result).toEqual({ type: "updateRuns.reconciliationCandidates", candidates: [] });
+    expect(transactions).not.toHaveBeenCalled();
     closeOpenClawStateDatabaseForTest();
     const olderReader = new DatabaseSync(filename);
     try {
@@ -185,7 +186,7 @@ describe("update run history reads", () => {
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
                 : reader === "status"
-                  ? await getUpdateRunStatusAsync(options)
+                  ? await withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options))
                   : findActiveUpdateRun(options);
       expect(result).toEqual(
         reader === "status"
@@ -252,10 +253,14 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       for (const read of [
         () => getUpdateRunAsync(created.runId, options),
         () => listUpdateRunsAsync({}, options),
-        () => getUpdateRunStatusAsync(options),
+        () => withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options)),
       ]) {
         await expect(read()).rejects.toThrow(
           "Asynchronous shared-state reads cannot run inside a native transaction",

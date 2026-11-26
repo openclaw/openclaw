@@ -141,6 +141,13 @@ function buildTargetParams(target: SignalTarget) {
   return { username: [target.username] };
 }
 
+// signal-cli answers a media send only after the upload finishes, so the default 10 s RPC deadline
+// reports a failure for a send that still completes (and a retry would deliver it twice). Allow the
+// largest permitted attachment to upload at a conservative 256 KiB/s on top of a 30 s base.
+function resolveSignalMediaSendTimeoutMs(maxBytes: number): number {
+  return 30_000 + Math.ceil(maxBytes / (256 * 1024)) * 1000;
+}
+
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -230,7 +237,9 @@ export async function sendMessageSignal(
       : undefined;
   const sendOpts = {
     baseUrl,
-    timeoutMs: opts.timeoutMs,
+    timeoutMs:
+      opts.timeoutMs ??
+      (attachments?.length ? resolveSignalMediaSendTimeoutMs(maxBytes) : undefined),
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
     assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,

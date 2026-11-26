@@ -12,6 +12,8 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createChatErrorState, type ChatErrorState } from "./chat-error-state.ts";
+import { retireChatHistoryRead } from "./chat-history-state.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
@@ -19,6 +21,27 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type RequestHandlers = Record<string, unknown>;
+
+export function registerChatHostCleanup(host: ChatHost, disposeEffects?: () => void): void {
+  onTestFinished(async () => {
+    // Retire the actual host before abort callbacks or lazy history continuations
+    // can reach another fixture's storage. Clients and sessions may be shared.
+    host.connected = false;
+    host.connectionEpoch += 1;
+    try {
+      disposeEffects?.();
+    } finally {
+      retireChatHistoryRead(host);
+      await vi.dynamicImportSettled();
+    }
+  });
+}
+
+export const historyBudget = {
+  limit: 80,
+  maxBytes: 256 * 1024,
+  toolResultMaxChars: 2_000,
+};
 
 export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
   return createGatewayRequestMock((method: string, params?: unknown) => {
@@ -160,20 +183,21 @@ export function createImmediateCommandHost(
   return host as ChatHost;
 }
 
-type TestChatHost = ChatHost & {
-  selectedChatSessionIncognito: boolean;
-  basePath: string;
-  resourceBasePath: string;
-  chatAvatarUrl: string | null;
-  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
-  chatAvatarReason?: string | null;
-  chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
-  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  sessionsError?: string | null;
-  sessionsArchivedFilter?: "active" | "archived" | "all";
-  password?: string;
-  pendingSettingsPatches?: Record<string, Promise<boolean>>;
-};
+type TestChatHost = ChatHost &
+  ChatErrorState & {
+    selectedChatSessionIncognito: boolean;
+    basePath: string;
+    resourceBasePath: string;
+    chatAvatarUrl: string | null;
+    chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+    chatAvatarReason?: string | null;
+    chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
+    chatModelSwitchPromises?: Record<string, Promise<boolean>>;
+    sessionsError?: string | null;
+    sessionsArchivedFilter?: "active" | "archived" | "all";
+    password?: string;
+    pendingSettingsPatches?: Record<string, Promise<boolean>>;
+  };
 
 function createPendingSettingsSessionCapability(
   sessions: ChatHost["sessions"],
@@ -338,11 +362,19 @@ export function makeChatHost(
   const resolvedSessions = pendingSettingsPatches
     ? createPendingSettingsSessionCapability(sessions, pendingSettingsPatches)
     : sessions;
-  const resolvedHost = { ...host, sessions: resolvedSessions } as TestChatHost;
+  // Fixture copies must retain a real page's error owner rather than overwrite it.
+  const resolvedHost = Object.assign(
+    Object.create(createChatErrorState()) as ChatErrorState,
+    host,
+    {
+      sessions: resolvedSessions,
+      readChatAgentsList: () => resolvedHost.agentsList ?? null,
+    },
+  ) as TestChatHost;
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
-  onTestFinished(() => {
+  registerChatHostCleanup(resolvedHost, () => {
     disposed = true;
     for (const cancel of pendingEffects) {
       cancel();

@@ -5,7 +5,6 @@ import { createTestSessionCapability } from "../../lib/sessions/session-capabili
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-
 const failures = {
   error: {
     value: new Error("request failed", {
@@ -73,6 +72,8 @@ it.each([
       failed: true,
     });
     expect(Object.keys(result)).toEqual(["content", "failed"]);
+    expect(result.content).toMatch(/^Couldn’t .+\. Try again\.\n\n/);
+    expect(result.content).toMatch(key.startsWith("thinking.") ? /effort/ : /^Couldn’t/);
     if (boundary === "describe") {
       expect(describe).toHaveBeenCalledOnce();
     }

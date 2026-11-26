@@ -16,7 +16,12 @@ function database() {
   return db;
 }
 
-function operation(db: DatabaseSync, namespaces: string[], maxEntries: number) {
+function operation(
+  db: DatabaseSync,
+  namespaces: string[],
+  maxEntries: number,
+  evictOldest?: number,
+) {
   const input: PluginStateOperationInput = {
     module: {
       modulePath: import.meta.filename,
@@ -25,11 +30,11 @@ function operation(db: DatabaseSync, namespaces: string[], maxEntries: number) {
       pluginId: "fixture",
     },
     exportName: "fixture",
-    stores: namespaces.map((namespace) => ({
+    stores: namespaces.map((namespace, index) => ({
       pluginId: "fixture",
       namespace,
       maxEntries,
-      overflowPolicy: "reject-new",
+      overflowPolicy: index === evictOldest ? "evict-oldest" : "reject-new",
       defaultTtlMs: undefined,
     })),
     writeStores: namespaces.map((_, index) => index),
@@ -41,6 +46,28 @@ function operation(db: DatabaseSync, namespaces: string[], maxEntries: number) {
       executePluginStateOperation({ db, path: ":memory:" }, input, (_command, tx) => run(tx)),
     );
 }
+
+it("checks companion authority and rolls back capacity eviction with its dependent row", () => {
+  using db = database();
+  const run = operation(db, ["primary", "companion"], 1, 0);
+  run((tx) => {
+    expect(() => tx.set(0, "first", 1, { evictSameKeysFrom: 2 })).toThrow(/no authority/);
+    tx.set(0, "first", 1);
+    tx.set(1, "first", 2);
+  });
+  expect(() =>
+    run((tx) => {
+      tx.set(0, "second", 3, { evictSameKeysFrom: 1 });
+      expect(tx.lookup(1, "first")).toBeUndefined();
+      throw new Error("later write failed");
+    }),
+  ).toThrow("later write failed");
+  run((tx) => {
+    expect(tx.lookup(0, "first")).toBe(1);
+    expect(tx.lookup(1, "first")).toBe(2);
+    expect(tx.lookup(0, "second")).toBeUndefined();
+  });
+});
 
 it("refuses NUL plugin keys before PostgreSQL reads or writes", () => {
   using db = new DatabaseSync(":memory:");

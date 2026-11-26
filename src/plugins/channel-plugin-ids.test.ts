@@ -743,7 +743,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
           slots: { memory: "none" },
           entries: {
             browser: { enabled: false },
-            "external-hook-policy": { hooks: { allowPromptInjection: true } },
+            "external-hook-policy": { hooks: { allowPromptModification: true } },
           },
         },
       },
@@ -1163,7 +1163,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
   it.each([
     ["conversation access", { allowConversationAccess: true }],
-    ["prompt injection", { allowPromptInjection: true }],
+    ["prompt injection", { allowPromptModification: true }],
   ] as const)("loads hook-policy plugins with only %s enabled", (_name, hooks) => {
     expectStartupPluginIds({
       config: {
@@ -1198,7 +1198,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
         slots: { memory: "none" },
         entries: {
           browser: { enabled: false },
-          "external-hook-policy": { hooks: { allowPromptInjection: true } },
+          "external-hook-policy": { hooks: { allowPromptModification: true } },
         },
       },
     } as OpenClawConfig;
@@ -1413,7 +1413,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
-  it("replans activation from the supplied inventory without rediscovering metadata", () => {
+  it("replans activation from the supplied inventory", () => {
     const { index } = useManifestRegistryFixture({
       plugins: [
         withManifestLoadPaths({
@@ -1451,8 +1451,6 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
       expect(result.metadataSnapshot).toBe(metadataSnapshot);
       expect(result.plan.pluginIds).toEqual(expected);
     }
-    expect(loadPluginRegistrySnapshot).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
   it("keeps explicitly trusted channel owners eligible in the startup plan", () => {

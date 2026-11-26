@@ -36,6 +36,7 @@ import {
 } from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
@@ -72,7 +73,7 @@ export function ChatAvatar(props: ChatAvatarProps) {
           <AgentAvatar
             elementRef={props.elementRef}
             id={props.assistant?.agentId ?? DEFAULT_AGENT_ID}
-            name={props.assistant?.name?.trim() || "Assistant"}
+            name={props.assistant?.name?.trim() || t("chat.messages.agentName")}
             avatar={props.assistant?.avatar}
             mediaReadAllowed={props.mediaReadAllowed}
             textAvatar={
@@ -343,7 +344,7 @@ export function ForwardedAvatar(props: {
         mediaReadAllowed={props.options.mediaReadAllowed}
         assistant={{
           agentId: props.agentId,
-          name: props.options.assistantName ?? "Assistant",
+          name: props.options.assistantName ?? t("chat.messages.agentName"),
           avatar: props.options.assistantAvatar ?? null,
           textAvatar: props.options.assistantTextAvatar,
         }}

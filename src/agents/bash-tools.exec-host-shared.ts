@@ -32,11 +32,12 @@ import {
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import {
   buildApprovalPendingMessage,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -306,9 +307,6 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
 
 function classifyExecApprovalWaitFailure(error: unknown) {
   // Only fixed owner errors become categories; command-bearing transport payloads stay private.
-  if (error instanceof Error && error.message === "Approval requester authority changed") {
-    return "authority-changed";
-  }
   if (error instanceof GatewayProtocolRequestTimeoutError) {
     return "gateway-timeout";
   }

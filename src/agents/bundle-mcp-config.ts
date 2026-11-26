@@ -2,7 +2,7 @@
  * Merges bundled plugin MCP servers with user-configured MCP servers for agent
  * runtimes.
  */
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -51,7 +51,7 @@ export function loadStaticBundleMcpConfig(
   };
 }
 
-export function prepareOwnedBundleMcpDataDirs(params: {
+export async function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
 }) {
@@ -62,7 +62,7 @@ export function prepareOwnedBundleMcpDataDirs(params: {
       continue;
     }
     try {
-      fs.mkdirSync(ownership.dataDir, { recursive: true });
+      await fs.mkdir(ownership.dataDir, { recursive: true });
     } catch (error) {
       delete mcpServers[serverName];
       diagnostics.push({

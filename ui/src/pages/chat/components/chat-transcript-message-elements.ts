@@ -7,8 +7,10 @@ export function createTranscriptMessageElements(
   entryRefFor: (key: string) => MessageElementRef | undefined,
 ) {
   const mounted = new Map<string, HTMLElement>();
-  let changed: (() => void) | undefined;
+  let changed: ((previous: HTMLElement | undefined) => void) | undefined;
+  let prepareLayout: (() => (() => void) | undefined) | undefined;
   return {
+    prepareInitialLayout: () => prepareLayout?.(),
     get elements(): ReadonlyMap<string, HTMLElement> {
       return mounted;
     },
@@ -29,19 +31,25 @@ export function createTranscriptMessageElements(
           mounted.delete(key);
         }
         if (previous !== current) {
-          changed?.();
+          changed?.(previous);
         }
       };
     },
-    subscribe(listener: () => void): () => void {
+    subscribe(
+      listener: (previous: HTMLElement | undefined) => void,
+      prepare?: typeof prepareLayout,
+    ): () => void {
       changed = listener;
+      prepareLayout = prepare;
       return () => {
         changed = undefined;
+        prepareLayout = undefined;
       };
     },
     dispose(): void {
       mounted.clear();
       changed = undefined;
+      prepareLayout = undefined;
     },
   };
 }

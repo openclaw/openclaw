@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
+import {
+  inspectLaunchdProcessMembershipSync,
+  inspectServiceProcessMembershipSync,
+} from "./service-process-membership.js";
 
 const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn(), coalition: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
@@ -45,6 +48,41 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+describe("launchd listener membership", () => {
+  const listenerPid = gatewayPid + 1;
+  it.each([
+    ["same job", 1203n, "inside"],
+    ["unrelated job", 1204n, "outside"],
+    ["unreadable job", null, "unknown"],
+  ] as const)("classifies a detached listener in the %s", (_label, listenerCoalition, expected) => {
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: `${listenerPid} 901 0\n${gatewayPid} 900 0\n` }
+        : { status: 0, stdout: uncontained(Number(args[1]!.slice(4))) },
+    );
+    native.coalition.mockImplementation((pid: number) => {
+      if (pid === gatewayPid) {
+        return { id: 1203n, name: "ai.openclaw.gateway" };
+      }
+      if (pid === listenerPid && listenerCoalition !== null) {
+        return {
+          id: listenerCoalition,
+          name: listenerCoalition === 1203n ? "ai.openclaw.gateway" : "unrelated",
+        };
+      }
+      throw new Error("unreadable");
+    });
+    expect(inspectLaunchdProcessMembershipSync(listenerPid, gatewayPid)).toBe(expected);
+    expect(native.coalition).not.toHaveBeenCalledWith(process.pid);
+  });
+
+  it.each([0, -1, Number.NaN, Number.MAX_SAFE_INTEGER + 1])("rejects invalid PID %s", (pid) => {
+    expect(inspectLaunchdProcessMembershipSync(pid, gatewayPid)).toBe("unknown");
+    expect(inspectLaunchdProcessMembershipSync(listenerPid, pid)).toBe("unknown");
+    expect(native.spawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("launchd process membership", () => {
   const pidRecord = uncontained(process.pid);
   const jobRecord = coalition(1203, "ai.openclaw.gateway");
@@ -69,9 +107,9 @@ describe("launchd process membership", () => {
       ),
       "inside",
     ),
-    ["neither PID has a coalition", pidRecord, uncontained(gatewayPid), "absent"],
-    ["only the caller has a coalition", jobRecord, uncontained(gatewayPid), "absent"],
-    jobCase("caller outside the known job", pidRecord, "outside"),
+    ["neither PID has a coalition", pidRecord, uncontained(gatewayPid), "unknown"],
+    ["only the caller has a coalition", jobRecord, uncontained(gatewayPid), "unknown"],
+    jobCase("caller outside the known job", pidRecord, "unknown"),
     ...[
       { label: "missing caller", stdout: `${gatewayPid} 900 0\n` },
       { label: "invalid group", stdout: `${process.pid} 0 0\n${gatewayPid} 900 0\n` },
@@ -173,6 +211,68 @@ describe("launchd process membership when launchctl denies PID domains", () => {
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
     expect(native.coalition).not.toHaveBeenCalled();
   });
+});
+
+describe("launchd process membership when launchctl omits the resource coalition header", () => {
+  // macOS 15 can answer `launchctl print pid/<pid>` successfully with a valid PID-domain
+  // record that omits the "resource coalition" section. The native coalition reader
+  // must be consulted as a fallback rather than treating the coalition as absent.
+  const omitted = uncontained;
+  const nativeRow = (id: number, name?: string) => ({ id: BigInt(id), name });
+  const observe = (caller: object | null, gateway: object | null) => {
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: groupRows(901) }
+        : { status: 0, stdout: omitted(Number(args[1]!.slice(4))) },
+    );
+    native.coalition.mockImplementation((pid: number) => {
+      const value = pid === process.pid ? caller : gateway;
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+  };
+
+  it.each([
+    [
+      "an external terminal via native coalition",
+      nativeRow(1204, "com.apple.Terminal"),
+      "outside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "the Gateway coalition via native coalition",
+      nativeRow(1203),
+      "inside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "a child of an earlier Gateway instance via native coalition",
+      nativeRow(1204, "ai.openclaw.gateway"),
+      "inside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "distinct native coalitions without job names",
+      nativeRow(1204),
+      "unknown",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    ["native reader confirms absence", null, "absent", null],
+    [
+      "native reader unavailable for the caller",
+      new Error("unavailable"),
+      "unknown",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+  ] satisfies Array<[string, object | null, string, object | null]>)(
+    "classifies %s from native coalitions when the header is omitted",
+    (_label, caller, expected, gateway) => {
+      observe(caller, gateway);
+      expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
+    },
+  );
 });
 
 describe("systemd process membership", () => {

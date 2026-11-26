@@ -8,14 +8,12 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertExistingAgentSchemaOwner,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import {
-  agentDatabaseIntegrityBeforeMutationSteps,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
 import { assertSupportedAgentMigrationSchemas } from "./openclaw-agent-db-session-migrations.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
@@ -37,16 +35,9 @@ export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   if (db.location()) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
-  yield* agentDatabaseIntegrityBeforeMutationSteps(
-    db,
-    agentId,
-    pathname,
-    undefined,
-    undefined,
-    false,
-    false,
-    options.integrityCheck,
-  );
+  yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname, {
+    integrityCheck: options.integrityCheck,
+  });
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });

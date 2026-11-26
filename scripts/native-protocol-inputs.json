@@ -10,6 +10,7 @@
     "tsconfig.json",
     "packages/gateway-protocol/package.json",
     "packages/normalization-core/package.json",
+    "packages/plugin-package-contract/src/recommended-prompts.ts",
     "scripts/native-protocol-inputs.json",
     "scripts/prepare-native-protocol.mjs",
     "src/infra/directory-walk.ts",

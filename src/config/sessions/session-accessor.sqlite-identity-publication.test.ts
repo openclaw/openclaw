@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   emitSessionIdentityMutation,
   onSessionIdentityMutation,
@@ -26,7 +27,7 @@ import {
 import { replaceSessionEntrySync as replaceEntry } from "./session-accessor.sqlite-entry.js";
 import { publishCommittedSessionIdentity as publishIdentity } from "./session-accessor.sqlite-identity.js";
 import { applySessionEntryExactReplacements as replaceBatch } from "./session-accessor.sqlite-replacement-projection.js";
-import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { prepareChatDeliveryLease } from "./session-delivery-generation.js";
 import type { InternalSessionEntry } from "./types.js";
 
 function withDatabase(run: (db: OpenClawAgentDatabase) => Promise<void>) {
@@ -43,13 +44,13 @@ it("fences a delivery generation during native writes and restores it only on ro
     writeSessionEntry(database, sessionKey, original);
     const originalRow = readRow(database, sessionKey);
     expect(originalRow).toBeDefined();
-    const generation = await prepareSessionDeliveryGeneration({
-      agentId: options.agentId,
-      storePath: database.path,
-      sessionKey,
-      sessionId: original.sessionId,
-      lifecycleRevision: original.lifecycleRevision,
-    });
+    const generation = await prepareChatDeliveryLease(
+      chatRef({
+        agentId: options.agentId,
+        storePath: database.path,
+        sessionKey,
+      }),
+    );
     const rollback = new Error("roll back staged generation");
     const commit = (entry = original, beforeCommit = (_db: OpenClawAgentDatabase) => {}) =>
       runOpenClawAgentWriteTransaction((writer) => {

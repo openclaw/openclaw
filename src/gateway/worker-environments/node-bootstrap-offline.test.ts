@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it } from "vitest";
 import {
   useNodeBootstrapArtifactFixtures,

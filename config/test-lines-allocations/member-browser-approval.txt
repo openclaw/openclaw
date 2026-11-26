@@ -1,0 +1,9 @@
+# Member-browser approval crosses canonical identity, signed admission, owner-only
+# Inbox navigation, original-deadline reload, and atomic SQLite persistence boundaries.
+# Separate ordering, bounded saturation/replay, and full-capacity restart regressions
+# prove contracts that UI mocks or pure metadata tests cannot replace.
+# Local reader regression also proves notice transport cannot gate SAS denial.
+# Review repairs add production-reader replacement/in-flight and uncertain-handoff
+# regressions, mounted-UI recovery navigation, and real predecessor-row reopen proof.
+# Lazy Inbox action coverage preserves retirement fences and recovery error ownership.
+772

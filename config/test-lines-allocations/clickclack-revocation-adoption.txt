@@ -1,2 +1,0 @@
-103
-# PostgreSQL revocation storage and fail-closed legacy SQLite adoption regressions.

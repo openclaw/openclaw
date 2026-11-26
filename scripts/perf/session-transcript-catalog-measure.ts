@@ -13,7 +13,6 @@ import { hash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -22,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptCatalogPage } from "../../src/gateway/session-transcript-catalog.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -66,22 +66,10 @@ const ownerUrl = new URL("../../src/gateway/session-transcript-catalog.ts", impo
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(sourceUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { readSessionTranscriptCatalogPage: read } =
   await import("../../src/gateway/session-transcript-catalog.js");
-assert(!values["owner-file"] || ownerLoaded, "Baseline owner substitution was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Baseline owner substitution was not loaded");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const { importSqliteSessionRowsBatch } =
   await import("../../src/config/sessions/session-accessor.sqlite-import.js");

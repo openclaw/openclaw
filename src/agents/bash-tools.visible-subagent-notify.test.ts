@@ -97,12 +97,15 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32").each([
-  ["agent:main:dashboard:borrowed", true, true],
-  ["agent:main:subagent:hidden", true, false],
-  ["agent:main:dashboard:navigation", false, false],
+  ["agent:main:dashboard:borrowed", true, true, false],
+  ["agent:main:subagent:hidden", true, false, false],
+  ["agent:main:dashboard:navigation", false, false, false],
+  ["agent:main:dashboard:visible", true, true, true],
 ] as const)(
-  "keeps a failed background exec owned by %s (child=%s, borrowed policy=%s)",
-  async (sessionKey, child, borrowedPolicy) => {
+  "keeps a failed background exec owned by %s (child=%s, borrowed policy=%s, visible spawn=%s)",
+  async (sessionKey, child, borrowedPolicy, visibleSpawn) => {
+    // Visible spawns are interactive sessions and receive exit notifications directly.
+    const notified = !child || visibleSpawn;
     const tmpDir = state.root;
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
@@ -122,7 +125,11 @@ it.skipIf(process.platform === "win32").each([
           updatedAt: Date.now(),
           delivery,
           ...(key === sessionKey
-            ? { spawnedBy: "agent:main:main", ...(spawnDepth ? { spawnDepth } : {}) }
+            ? {
+                spawnedBy: "agent:main:main",
+                ...(spawnDepth ? { spawnDepth } : {}),
+                ...(visibleSpawn ? { createdVia: "spawn" as const } : {}),
+              }
             : {}),
         },
       );
@@ -170,8 +177,8 @@ it.skipIf(process.platform === "win32").each([
     await fs.writeFile(releaseFile, "go");
     await waitForExecScope(sessionKey);
     expect(getFinishedSession(sessionId)?.exitCode).toBe(7);
-    expect(enqueueSessionEvent).toHaveBeenCalledTimes(child ? 0 : 1);
-    if (!child) {
+    expect(enqueueSessionEvent).toHaveBeenCalledTimes(notified ? 1 : 0);
+    if (notified) {
       const receipt = vi.mocked(enqueueSessionEvent).mock.results[0]!.value;
       await expect(receipt.settled).resolves.toMatchObject({
         status: "completed",

@@ -14,10 +14,11 @@ import { isWorkspaceSkillReadPath, resolveSkillReadPath } from "../workspace-ski
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
 import { prepareRemoteSkillConnections } from "./remote-skills.js";
+import { prepareSkillReadIndex } from "./skill-read-index.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
-// Completed projections are reusable only for the same persisted selection.
+// Fresh sessions rebuild eligibility before sharing an equal completed projection.
 const skillSnapshotCache = new Map<string, SkillSnapshot>();
 const pendingSkillSnapshots = new Map<
   string,
@@ -153,7 +154,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         if (source) {
           return source.filePath === skill.filePath && source.fileHost === skill.fileHost;
         }
-        const location = resolveSkillReadPath(compactPromptSkills([skill], params)[0]!);
+        const location = resolveSkillReadPath(compactPromptSkills([skill])[0]!);
         return (
           skill.fileHost === undefined &&
           !isWorkspaceSkillReadPath(location) &&
@@ -178,19 +179,20 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     });
     if (retainedSnapshot) {
       const discoverySkills = snapshot.discoverySkills ?? snapshot.resolvedSkills ?? [];
-      return {
+      const hydrated = {
         ...retainedSnapshot,
         resolvedSkills: catalog.flatMap(({ name }) =>
           discoverySkills.filter((skill) => skill.name === name),
         ),
         discoverySkills,
       };
+      prepareSkillReadIndex(hydrated);
+      return hydrated;
     }
-    return {
-      ...snapshot,
+    return Object.assign(snapshot, {
       ...(skillRoots ? { skillRoots } : {}),
       ...(librarySelections ? { librarySelections } : {}),
-    };
+    });
   };
 
   const cachedRebuild = async () => {
@@ -231,10 +233,12 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       };
       const promise = buildSnapshot(assertLiveWaiter).then((snapshot) => {
         assertLiveWaiter();
+        const sharedSnapshot =
+          cachedSnapshot && isDeepStrictEqual(cachedSnapshot, snapshot) ? cachedSnapshot : snapshot;
         // Mid-build catalog changes are picked up by the next request's revision key.
-        skillSnapshotCache.set(snapshotCacheKey, snapshot);
+        skillSnapshotCache.set(snapshotCacheKey, sharedSnapshot);
         pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
-        return snapshot;
+        return sharedSnapshot;
       });
       pending = { promise, waiters };
       pendingSkillSnapshots.set(snapshotCacheKey, pending);

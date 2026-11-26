@@ -92,6 +92,22 @@ openclaw-report-widget {
   }
 }
 
+@media (max-width: 640px) {
+  /* Tables that stay tables break only inside a word too long for its column. */
+  .board-report__table table:not(.settings-table--stacked) :is(th, td) {
+    overflow-wrap: break-word;
+  }
+
+  /* The report already insets its content; stacked rows keep only their block rhythm. */
+  .board-report__table .settings-table--stacked tbody tr {
+    padding-inline: 0;
+  }
+
+  .board-report__table .settings-table--stacked caption {
+    display: block;
+  }
+}
+
 .board-report__chart svg {
   display: block;
   width: 100%;

@@ -10,6 +10,7 @@ import {
   resolveSidebarSessionParentKey,
 } from "./app-sidebar-session-parent.ts";
 import {
+  childShowsParentWorking,
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -42,11 +43,13 @@ function summarizeChildren(
         ])
       : child.attention;
     childAttention.push(attention);
-    unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
+    // A hidden run counts only while reading its parent can acknowledge it.
+    unreadChildCount +=
+      Number(onlySubagents ? isAcknowledgeableHiddenRun(child) : child.unread) +
+      (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
     runningChildCount +=
-      Number(visuallyActive || (child.backgroundProcessCount ?? 0) > 0) +
-      (descendants?.runningChildCount ?? 0);
+      Number(childShowsParentWorking(child)) + (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents

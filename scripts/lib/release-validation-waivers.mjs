@@ -1,16 +1,198 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
+import defaultWaiverPolicy from "./release-validation-waivers.json" with { type: "json" };
 
-// Reviewed release-tooling policy, loaded from P, never the candidate checkout.
-// Add an exact version, child role, job name, and reason here to grant a waiver.
-/** @type {{ targetVersion: string, childRole: string, jobName: string, reason: string }[]} */
-export const RELEASE_VALIDATION_WAIVERS = [];
+export const RELEASE_VALIDATION_WAIVERS_PATH = "scripts/lib/release-validation-waivers.json";
+export function readReleaseValidationWaivers(readSource) {
+  return parseReleaseValidationWaivers(readSource(RELEASE_VALIDATION_WAIVERS_PATH));
+}
+
+export async function readReleaseValidationWaiversAsync(readSource) {
+  return parseReleaseValidationWaivers(await readSource(RELEASE_VALIDATION_WAIVERS_PATH));
+}
+
+export function parseReleaseValidationWaivers(source) {
+  const policy = JSON.parse(source);
+  if (
+    policy?.schema !== "openclaw.release-validation-waivers/v1" ||
+    !Array.isArray(policy.waivers) ||
+    policy.waivers.length > 512
+  ) {
+    throw new Error("Invalid release waiver policy");
+  }
+  for (const waiver of policy.waivers) {
+    if (
+      !waiver ||
+      Object.keys(waiver).some(
+        (key) =>
+          ![
+            "targetVersion",
+            "targetSha",
+            "childRole",
+            "jobName",
+            "reason",
+            "step",
+            "qualificationExemption",
+            "aggregates",
+            "cancelledStep",
+            "evidence",
+            "testFailures",
+          ].includes(key),
+      ) ||
+      !["targetVersion", "childRole", "reason"].every(
+        (key) => typeof waiver[key] === "string" && waiver[key].trim(),
+      ) ||
+      (waiver.jobName !== undefined &&
+        (typeof waiver.jobName !== "string" || !waiver.jobName.trim())) ||
+      (waiver.step !== undefined &&
+        (waiver.jobName === undefined || typeof waiver.step !== "string" || !waiver.step.trim())) ||
+      (waiver.aggregates === undefined
+        ? ["cancelledStep", "evidence", "testFailures"].some((key) => Object.hasOwn(waiver, key))
+        : waiver.jobName === undefined ||
+          waiver.step !== undefined ||
+          !Array.isArray(waiver.aggregates) ||
+          waiver.aggregates.some(
+            (entry) =>
+              !entry ||
+              typeof entry.jobName !== "string" ||
+              typeof entry.stepName !== "string" ||
+              !Array.isArray(entry.causes) ||
+              !entry.causes.every((cause) => typeof cause === "string") ||
+              (entry.exactCauses !== undefined && typeof entry.exactCauses !== "boolean") ||
+              (entry.logSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(entry.logSha256)),
+          )) ||
+      (waiver.targetSha !== undefined &&
+        (typeof waiver.targetSha !== "string" || !/^[a-f0-9]{40}$/u.test(waiver.targetSha)))
+    ) {
+      throw new Error("Invalid release waiver entry");
+    }
+  }
+  return policy.waivers;
+}
+
+// Only immutable Q data crosses the verifier boundary, never Q executable code.
+export function decodeReleaseValidationSource(payload, sourcePath) {
+  if (
+    payload?.path !== sourcePath ||
+    payload.type !== "file" ||
+    payload.encoding !== "base64" ||
+    !Number.isSafeInteger(payload.size) ||
+    payload.size < 1 ||
+    payload.size > 1024 * 1024 ||
+    typeof payload.content !== "string"
+  ) {
+    throw new Error("Invalid immutable Q waiver source");
+  }
+  const bytes = Buffer.from(payload.content, "base64");
+  const header = "blob " + bytes.length + "\0";
+  if (
+    bytes.length !== payload.size ||
+    createHash("sha1").update(header).update(bytes).digest("hex") !== payload.sha
+  ) {
+    throw new Error("Q waiver source blob mismatch");
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+const RELEASE_VALIDATION_WAIVERS = parseReleaseValidationWaivers(
+  process.env.OPENCLAW_RELEASE_WAIVERS_PATH
+    ? readFileSync(process.env.OPENCLAW_RELEASE_WAIVERS_PATH, "utf8")
+    : JSON.stringify(defaultWaiverPolicy),
+);
+
+// This is an explicit not-run disposition for a new C/Q, not reuse of the old
+// measurement. Only P may seal it into independently authenticated coverage.
+export function releaseQualificationExemptions(
+  targetVersion,
+  profile,
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
+  if (!["stable", "full"].includes(profile)) {
+    return [];
+  }
+  return waivers
+    .filter((waiver) => waiver.targetVersion === targetVersion && waiver.qualificationExemption)
+    .map((waiver) => ({
+      childRole: waiver.childRole,
+      targetVersion: waiver.targetVersion,
+      disposition: "waived-not-run",
+      reason: waiver.reason,
+      supportingEvidence: waiver.qualificationExemption,
+    }));
+}
+
+export function validateQualificationExemptions(
+  exemptions,
+  targetVersion,
+  profile,
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
+  if (
+    !isDeepStrictEqual(exemptions, releaseQualificationExemptions(targetVersion, profile, waivers))
+  ) {
+    throw new Error("Qualification exemptions differ from current release-tooling policy");
+  }
+}
+
+export function firstIncompleteReleaseStep(steps) {
+  const step = steps?.find(({ conclusion }) => !["success", "skipped"].includes(conclusion));
+  return step?.conclusion || step?.status === "in_progress" || step?.status === "queued"
+    ? step.name
+    : undefined;
+}
+
+function hasUnmatchableLegacySelectors(waiver) {
+  return (
+    waiver.aggregates !== undefined &&
+    (waiver.aggregates.length > 0 ||
+      waiver.cancelledStep !== undefined ||
+      waiver.evidence !== undefined ||
+      waiver.testFailures !== undefined)
+  );
+}
+
+export function validateAuthoredReleaseWaivers(previous, proposed) {
+  // Frozen rows retain their original meaning. Check only entries introduced by this edit.
+  const historical = previous.filter(hasUnmatchableLegacySelectors);
+  for (const waiver of proposed.filter(hasUnmatchableLegacySelectors)) {
+    const index = historical.findIndex((entry) => isDeepStrictEqual(entry, waiver));
+    if (index === -1) {
+      throw new Error(
+        `Release waiver for ${waiver.childRole} / ${waiver.jobName} uses historical selectors that cannot match. Check the approved scope and use a supported job or step selector.`,
+      );
+    }
+    historical.splice(index, 1);
+  }
+}
+
+// Omitting the queried job asks whether the whole child is waived.
+export function isWaived(
+  { targetVersion, targetSha, childRole, jobName, job },
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
+  return waivers.some(
+    (waiver) =>
+      !waiver.qualificationExemption &&
+      waiver.targetVersion === targetVersion &&
+      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
+      waiver.childRole === childRole &&
+      (waiver.jobName === undefined || waiver.jobName === jobName) &&
+      // Frozen v1 rows keep their original failure-only scope. Do not convert
+      // evidence-bound or aggregate exceptions into unconditional grants.
+      !hasUnmatchableLegacySelectors(waiver) &&
+      (waiver.aggregates === undefined ||
+        (job?.status === "completed" && job.conclusion === "failure")) &&
+      (waiver.step === undefined ||
+        (job?.status === "completed" &&
+          job.conclusion !== "success" &&
+          waiver.step === (job.firstIncompleteStep ?? firstIncompleteReleaseStep(job.steps)))),
+  );
+}
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
-const RELEASE_CHECK_ROLES = new Set([
-  "releaseChecks",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-]);
 
 export function isFailedReleaseJob(job) {
   return job.status === "completed" && !SUCCESSFUL_CONCLUSIONS.has(job.conclusion);
@@ -58,91 +240,65 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
-function aggregateCauses(waiver) {
-  if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
-    return [];
-  }
-  if (RELEASE_CHECK_ROLES.has(waiver.childRole)) {
-    let cause;
-    const aggregates = [];
-    if (waiver.jobName.startsWith("Run repo/live E2E validation / ")) {
-      cause = "live_repo_e2e_release_checks ended with failure";
-    } else if (waiver.jobName === "Run QA Lab live Telegram lane") {
-      cause = "qa_live_telegram_release_checks ended with failure";
-    } else if (
-      waiver.jobName ===
-      "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"
-    ) {
-      cause = "package_acceptance_release_checks ended with failure";
-      aggregates.push({
-        jobName: "Run package acceptance / Verify package acceptance",
-        stepName: "Verify package acceptance results",
-        causes: ["package_telegram ended with failure"],
-      });
-    }
-    if (cause) {
-      return [
-        ...aggregates,
-        {
-          jobName: "Verify release checks",
-          stepName: "Verify release check results",
-          causes: [cause],
-        },
-      ];
-    }
-  }
-  throw new Error(`Release waiver is not a live-provider/Telegram job: ${waiver.jobName}`);
-}
-
-// Raw leaf and workflow conclusions are never rewritten. The caller owns the
-// aggregate validation verdict and must also authenticate failed aggregate logs.
-export function evaluateReleaseChildPolicy({ child, targetVersion }) {
-  const waivers = RELEASE_VALIDATION_WAIVERS.filter(
-    (waiver) =>
-      waiver.targetVersion === targetVersion &&
-      waiver.childRole === child.key &&
-      child.jobs.some(
-        (job) =>
-          job.name === waiver.jobName && job.status === "completed" && job.conclusion === "failure",
-      ),
+// Evaluate the blocking inventory without rewriting raw job results.
+export function evaluateReleaseChildPolicy({
+  child,
+  targetVersion,
+  targetSha,
+  waiverPolicy = RELEASE_VALIDATION_WAIVERS,
+  requiredJobs = [],
+}) {
+  const scope = { targetVersion, targetSha, childRole: child.key };
+  const workflowWaived = isWaived(scope, waiverPolicy);
+  const jobs = new Map(child.jobs.map((job) => [job.name, job]));
+  const jobScope = (jobName) => ({ ...scope, jobName, job: jobs.get(jobName) });
+  const matching = waiverPolicy.filter((waiver) => isWaived(jobScope(waiver.jobName), [waiver]));
+  const waivers = matching
+    .filter(({ jobName }) => {
+      const job = jobs.get(jobName);
+      return (
+        jobName === undefined ||
+        job?.status !== "completed" ||
+        isFailedReleaseJob(job) ||
+        (job.conclusion === "skipped" && requiredJobs.includes(jobName))
+      );
+    })
+    // The frozen manifest recorded used exceptions, never the ledger-only aggregates field.
+    .map(({ aggregates: _aggregates, ...waiver }) => waiver);
+  const waivedJobNames = new Set(
+    [...requiredJobs, ...jobs.keys()].filter((jobName) => isWaived(jobScope(jobName), matching)),
   );
-  const aggregates = new Map();
-  for (const waiver of waivers) {
-    for (const aggregate of aggregateCauses(waiver)) {
-      const existing = aggregates.get(aggregate.jobName);
-      if (existing) {
-        existing.causes = [...new Set([...existing.causes, ...aggregate.causes])];
-      } else {
-        aggregates.set(aggregate.jobName, aggregate);
-      }
-    }
-  }
-  const waivedJobNames = new Set([
-    ...waivers.map((row) => row.jobName),
-    ...child.jobs
-      .filter(
-        (job) =>
-          aggregates.has(job.name) && job.status === "completed" && job.conclusion === "failure",
-      )
-      .map((job) => job.name),
-  ]);
   const advisoryJobs = child.jobs.filter((job) => isReleaseAdvisoryJob(child.key, job));
   // Preview failures retain their raw conclusions. Stable compatibility and the
-  // verifier must still pass; an existing tooling waiver keeps its own log checks.
+  // verifier must still pass unless explicitly waived.
   const advisoryFailureAllowed =
+    workflowWaived ||
     !advisoryJobs.some(isFailedReleaseJob) ||
-    [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every((name) =>
-      child.jobs.some(
-        (job) =>
-          job.name === name &&
-          job.status === "completed" &&
-          (job.conclusion === "success" || waivedJobNames.has(name)),
-      ),
+    [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every(
+      (name) =>
+        isWaived(jobScope(name), matching) ||
+        (jobs.get(name)?.status === "completed" && jobs.get(name)?.conclusion === "success"),
     );
   return {
     waivers,
-    aggregates: [...aggregates.values()],
+    workflowWaived,
+    waivedWorkDidNotPass: [...waivedJobNames].some((jobName) => {
+      const job = jobs.get(jobName);
+      return job
+        ? job.status !== "completed" ||
+            isFailedReleaseJob(job) ||
+            (job.conclusion === "skipped" && requiredJobs.includes(jobName))
+        : requiredJobs.includes(jobName);
+    }),
     waivedJobNames,
+    missingRequiredJobs:
+      child.status === "completed"
+        ? requiredJobs.filter(
+            (name) =>
+              !waivedJobNames.has(name) &&
+              !child.jobs.some((job) => job.name === name && job.conclusion !== "skipped"),
+          )
+        : [],
     advisoryJobs,
     advisoryFailureAllowed,
     blockingJobs: child.jobs.filter(
@@ -154,38 +310,20 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
   };
 }
 
-// Aggregates also enforce integrity and dispatch identity. A waived test must
-// not excuse a second failure in that same aggregate job.
-export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
-  for (const aggregate of policy.aggregates) {
-    const matches = jobs.filter((job) => job.name === aggregate.jobName);
-    if (matches.length !== 1 || matches[0].status !== "completed") {
-      throw new Error(`Required release aggregate is missing or incomplete: ${aggregate.jobName}`);
+if (import.meta.main) {
+  try {
+    if (process.argv.length !== 3 || process.argv[2] !== "--check-staged") {
+      throw new Error("Usage: node scripts/lib/release-validation-waivers.mjs --check-staged");
     }
-    const job = matches[0];
-    if (job.conclusion === "success") {
-      continue;
-    }
-    const failedSteps = job.steps?.filter(
-      (step) => !["success", "skipped"].includes(step.conclusion),
-    );
-    if (
-      job.conclusion !== "failure" ||
-      failedSteps?.length !== 1 ||
-      failedSteps[0].name !== aggregate.stepName
-    ) {
-      throw new Error(`Release aggregate has a non-policy failure: ${aggregate.jobName}`);
-    }
-    const log = String(await getJobLog(job.id));
-    const causes = log
-      .split(/\r?\n/u)
-      .filter((line) => !line.includes("\u001b"))
-      .flatMap((line) => {
-        const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
-        return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
-      });
-    if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
-      throw new Error(`Release aggregate has an unwaived failure: ${aggregate.jobName}`);
-    }
+    const read = (revision) =>
+      readReleaseValidationWaivers((path) =>
+        execFileSync("git", ["show", `${revision}:${path}`], { encoding: "utf8" }),
+      );
+    validateAuthoredReleaseWaivers(read("HEAD"), read(""));
+    console.log("Staged release waiver selectors are supported.");
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error("[release-waivers] FAILED (exit 1)");
+    process.exitCode = 1;
   }
 }

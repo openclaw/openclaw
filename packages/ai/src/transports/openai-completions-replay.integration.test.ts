@@ -17,7 +17,7 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
     { field: "reasoning", expected: "reasoning" },
     { field: "reasoning_text", expected: "reasoning_text" },
     { field: "reasoning_content", expected: "reasoning_content" },
-    { field: "reasoning", provider: "openai" },
+    { field: "reasoning", provider: "openai", expected: "reasoning" },
     { field: "reasoning", switchModel: true },
     { field: "reasoning", provider: "opencode-go", expected: "reasoning_content" },
   ])("replays reasoning with %j", async ({ field, required, expected, provider, switchModel }) => {

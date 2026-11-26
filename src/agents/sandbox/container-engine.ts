@@ -3,8 +3,10 @@
  */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { isSandboxKeyringQuotaError, sandboxKeyringQuotaError } from "./container-keyring.js";
@@ -14,6 +16,7 @@ export type ExecContainerRawOptions = {
   input?: Buffer | string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  prepareCurrent?: () => Promise<void>;
 };
 
 export type SandboxContainerEngine = {
@@ -23,6 +26,7 @@ export type SandboxContainerEngine = {
   globalArgs?: readonly string[];
   /** A captured transport must not follow later ambient Docker context changes. */
   baseEnv?: NodeJS.ProcessEnv;
+  stateGuard?: WorkspaceStateGuard;
 };
 
 export type SandboxContainerEngineTarget = {
@@ -46,11 +50,11 @@ export type ExecDockerRawResult = SandboxBackendCommandResult;
 
 export function buildSandboxContainerEngineArgv(engine: SandboxContainerEngine, args: string[]) {
   const argv = [engine.command, ...(engine.globalArgs ?? []), ...args];
-  // Empty global args identify a bound local Podman target; discovery and remote
+  // Explicit native mode identifies a bound local Podman target; discovery and remote
   // clients do not launch container processes on this host.
   if (
     engine.id !== "podman" ||
-    engine.globalArgs?.length !== 0 ||
+    engine.globalArgs?.[0] !== "--remote=false" ||
     process.platform !== "linux" ||
     process.getuid?.() === 0
   ) {
@@ -93,9 +97,14 @@ export async function execContainerRaw(
 ): Promise<ExecDockerRawResult> {
   let result;
   try {
+    const baseEnv = { ...(engine.baseEnv ?? process.env) };
+    stripGatewayAllocatorEnv(baseEnv);
+    if (opts?.assertCurrent) {
+      await (opts.prepareCurrent ?? engine.stateGuard?.prepareHost)?.();
+    }
     opts?.assertCurrent?.();
     result = await spawnCommand(buildSandboxContainerEngineArgv(engine, args), {
-      baseEnv: engine.baseEnv,
+      baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

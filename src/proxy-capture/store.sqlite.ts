@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -13,7 +14,6 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
 import {
   configureSqliteConnectionPragmas,
-  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -318,7 +318,7 @@ function getDebugProxyCaptureStoreImpl(
   cachedStores.set(key, { store, leases: 0 });
   // Safety net for legacy path-based stores that own their DatabaseSync;
   // shared-path stores only flip their closed flag here, never the shared DB.
-  unregisterExitClose ??= registerSqliteCacheExitClose(closeDebugProxyCaptureStore);
+  unregisterExitClose ??= registerProcessExitCleanup(closeDebugProxyCaptureStore);
   return store;
 }
 

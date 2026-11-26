@@ -7,15 +7,34 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import {
   discardPostgresNamespace,
   fingerprintPostgresDatabase,
+  pruneOrphanedPostgresCaptures,
 } from "./database-backup-core.worker.js";
 import {
   capturePostgresBackupInWorker,
   preparePostgresRestoreInWorker,
+  inspectPostgresUpgradeInWorker,
+  preflightPostgresUpgradeInWorker,
+  clonePostgresUpgradeInWorker,
+  retirePostgresUpgradeInWorker,
   type BackupTask,
   type BackupReply,
 } from "./database-backup.operations.js";
 
 serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
+  if (task.operation === "inspect-upgrade") {
+    return control.runNativeSection(() => inspectPostgresUpgradeInWorker(task.params));
+  }
+  if (task.operation === "preflight-upgrade") {
+    return control.runNativeSection(() => preflightPostgresUpgradeInWorker(task.params));
+  }
+  if (task.operation === "clone-upgrade") {
+    return control.runNativeSection(() =>
+      clonePostgresUpgradeInWorker({ ...task.params, assertCurrent: control.throwIfCancelled }),
+    );
+  }
+  if (task.operation === "retire-upgrade") {
+    return control.runNativeSection(() => retirePostgresUpgradeInWorker(task.params));
+  }
   if (task.operation === "discard") {
     return control.runNativeSection(() =>
       withDatabasePortConnection(task.params.config, async (client) => {
@@ -26,10 +45,20 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
       }),
     );
   }
-  if (task.operation === "fingerprint" || task.operation === "family") {
+  if (
+    task.operation === "fingerprint" ||
+    task.operation === "family" ||
+    task.operation === "prune"
+  ) {
     const anchor = readBackupEngine(task.params.sourcePath);
     if (anchor.engine !== "postgres") {
       throw new Error("PostgreSQL anchor disappeared.");
+    }
+    if (task.operation === "prune") {
+      const { directoryPrefix } = task.params;
+      return withDatabasePortConnection(task.params.config, (client) =>
+        pruneOrphanedPostgresCaptures(client, { storeId: anchor.storeId, directoryPrefix }),
+      );
     }
     if (task.operation === "fingerprint") {
       return withDatabasePortConnection(task.params.config, (client) =>

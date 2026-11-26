@@ -64,6 +64,12 @@ describe("jsdom native API boundary", () => {
     expect(result.stdout).toBe("00017f80ff");
   });
 
+  it("encodes high bytes and offset views as hex", () => {
+    const bytes = new Uint8Array([0, 0x7f, 0x80, 0xab, 0xff, 1, 2, 3, 4, 0x90]);
+    expect(bytes.toHex()).toBe("007f80abff0102030490");
+    expect(bytes.subarray(2).toHex()).toBe("80abff0102030490");
+  });
+
   it("keeps event identity in nested iframe windows", () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
@@ -94,11 +100,19 @@ describe("jsdom native API boundary", () => {
     form.append("label", "synthetic");
     form.append("file", file);
     const multipart = new Request("https://example.test/", { method: "POST", body: form });
-    const decoded = await multipart.formData();
-    expect(decoded.get("label")).toBe("synthetic");
-    const part = decoded.get("file");
-    expect(part).toMatchObject({ name: "report.bin", type: "application/octet-stream" });
-    expect(await new Response(part).text()).toBe("exact file bytes");
+    // Node's native multipart decoder reads the jsdom File global.
+    const boundary = multipart.headers.get("content-type")?.match(/boundary=(.+)$/u)?.[1];
+    expect(boundary).toBeTruthy();
+    expect(await multipart.text()).toBe(
+      `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="label"\r\n\r\n' +
+        "synthetic\r\n" +
+        `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="report.bin"\r\n' +
+        "Content-Type: application/octet-stream\r\n\r\n" +
+        "exact file bytes\r\n" +
+        `--${boundary}--\r\n`,
+    );
   });
 
   it("keeps the DOM FileReader and File brands paired", async () => {

@@ -48,6 +48,10 @@ import { buildLaunchAgentEnvironmentWrapper } from "../../src/daemon/launchd-env
 import { buildLaunchAgentPlist } from "../../src/daemon/launchd-plist.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
+import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
@@ -64,8 +68,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, openSync: vi.fn(actual.openSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { openSync: vi.fn(actual.openSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -241,11 +248,11 @@ function fetchFixtureMain(checkout: string, remote: string) {
 function writeFixtureGitBin(root: string, origin: string) {
   const binDir = path.join(root, "bin");
   const gitShim = path.join(binDir, "git");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = resolveGitOutsideFixtures();
   mkdirSync(binDir);
   writeFileSync(
     gitShim,
-    `#!/bin/sh\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
+    `#!/bin/sh\n${gitPathShimShellPrelude()}\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
   );
   chmodSync(gitShim, 0o755);
   return binDir;

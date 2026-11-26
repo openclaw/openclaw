@@ -1,6 +1,10 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { listClickClackAccountIds, resolveClickClackAccount } from "../accounts.js";
+import {
+  listClickClackAccountIds,
+  resolveClickClackAccountAsync,
+  resolveClickClackAccountMetadata,
+} from "../accounts.js";
 import {
   ClickClackHttpError,
   isClickClackChannelNameConflict,
@@ -22,7 +26,7 @@ import {
   type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { controlSessionUrl } from "./control-session-url.js";
-import { discussionAccounts, normalizedServerBaseUrl } from "./eligibility.js";
+import { isDiscussionAccountCurrent, normalizedServerBaseUrl } from "./eligibility.js";
 import {
   discussionCredentialFingerprint,
   discussionExternalRef,
@@ -35,6 +39,7 @@ import {
   clearClickClackDiscussionChannelRevoked,
   markClickClackDiscussionChannelIdentityRevoked,
 } from "./revoked-channel-store.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 
@@ -267,27 +272,25 @@ export async function openClickClackDiscussionBinding(
     config.session?.mainKey,
     label,
   );
-  const assertCurrentAuthority = () => {
-    // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
-    const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);
-    const currentAccount = currentAccounts.length === 1 ? currentAccounts[0] : undefined;
-    const currentEntry = runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
-    if (
-      !currentAccount ||
-      currentAccount.accountId !== account.accountId ||
-      normalizedServerBaseUrl(currentAccount) !== serverBaseUrl ||
-      currentAccount.apiEndpoint !== account.apiEndpoint ||
-      discussionCredentialFingerprint(currentAccount.token) !== credentialFingerprint ||
-      currentAccount.discussions.workspace !== account.discussions.workspace ||
-      !currentEntry?.sessionId ||
-      currentEntry.archivedAt !== undefined
-    ) {
-      throw new Error("ClickClack discussion authority changed while opening the channel");
+  const withCurrentAuthority = async <T>(
+    operation: (assertCurrent: () => NonNullable<typeof entry>) => Promise<T>,
+  ): Promise<T> => {
+    // Opening follows resets during HTTP; retain one incarnation only for each effect or commit.
+    const session = await prepareDiscussionSessionEntry(runtime, sessionKey);
+    try {
+      const assertCurrentAuthority = () => {
+        session.source();
+        const currentEntry = session.entry;
+        if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
+          throw new Error("The discussion session ended. Open the discussion again.");
+        }
+        return currentEntry;
+      };
+      assertCurrentAuthority();
+      return await operation(assertCurrentAuthority);
+    } finally {
+      session.release();
     }
-    return currentEntry;
   };
   return await params.withChannelMutationLock(async () => {
     await params.ensureBindingCapacity(sessionKey);
@@ -334,7 +337,7 @@ export async function openClickClackDiscussionBinding(
         channels,
         ownChannelId: adopted?.id,
       });
-      managedFields = {
+      const fields: NonNullable<typeof managedFields> = {
         name,
         external_managed: true,
         external_ref: externalRef,
@@ -342,6 +345,7 @@ export async function openClickClackDiscussionBinding(
         sidebar_section: section,
         display_title: displayTitle,
       };
+      managedFields = fields;
       await recordPendingDiscussionOpen({
         runtime,
         sessionKey,
@@ -356,28 +360,37 @@ export async function openClickClackDiscussionBinding(
         },
       });
       await params.ensureTimer();
-      assertCurrentAuthority();
+      if (adopted) {
+        const channelId = adopted.id;
+        await withCurrentAuthority(() => revokeChannel(channelId));
+      }
+      let attempted = false;
       try {
-        if (adopted) {
-          await revokeChannel(adopted.id);
-          assertCurrentAuthority();
-          resolved = await client.updateChannel(adopted.id, managedFields);
-        } else {
-          resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
+        resolved = await withCurrentAuthority(() => {
+          attempted = true;
+          return adopted
+            ? client.updateChannel(adopted.id, fields)
+            : client.createChannel(workspace.id, { ...fields, kind: "public" });
+        });
+        if (!adopted) {
           await revokeChannel(resolved.id);
         }
         break;
       } catch (error) {
+        // Only a dispatched mutation can have an ambiguous remote outcome.
+        if (!attempted) {
+          throw error;
+        }
         const nameConflict = isClickClackChannelNameConflict(error);
         if (nameConflict && attempt < CHANNEL_NAME_MUTATION_ATTEMPTS - 1) {
           // A failed relist leaves the pending reservation for reconciliation.
-          channels = await client.channels(workspace.id);
+          channels = await withCurrentAuthority(() => client.channels(workspace.id));
           assertManagedChannelListContract(channels);
           continue;
         }
         const definitiveNoCreate = isDefinitiveNoCreateHttpError(error);
         try {
-          const relisted = await client.channels(workspace.id);
+          const relisted = await withCurrentAuthority(() => client.channels(workspace.id));
           assertManagedChannelListContract(relisted);
           const recovered = relisted.find(
             (candidate) =>
@@ -386,8 +399,7 @@ export async function openClickClackDiscussionBinding(
           if (recovered) {
             adopted = recovered;
             await revokeChannel(recovered.id);
-            assertCurrentAuthority();
-            resolved = await client.updateChannel(recovered.id, managedFields);
+            resolved = await withCurrentAuthority(() => client.updateChannel(recovered.id, fields));
             break;
           }
           if (definitiveNoCreate) {
@@ -461,13 +473,15 @@ export async function openClickClackDiscussionBinding(
       ...(channel.display_title !== undefined ? { displayTitle: channel.display_title } : {}),
     };
     try {
-      nextBinding.sessionId = assertCurrentAuthority().sessionId;
-      const applied = await store.setIfCurrent(sessionKey, undefined, nextBinding, {
-        assertCurrent: () => {
-          if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
-            throw new Error("ClickClack discussion session changed before binding committed");
-          }
-        },
+      const applied = await withCurrentAuthority(async (assertCurrentAuthority) => {
+        nextBinding.sessionId = assertCurrentAuthority().sessionId;
+        return await store.setIfCurrent(sessionKey, undefined, nextBinding, {
+          assertCurrent: () => {
+            if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
+              throw new Error("ClickClack discussion session changed before binding committed");
+            }
+          },
+        });
       });
       if (!applied) {
         await clearPendingDiscussionOpen(generationScope);
@@ -500,14 +514,18 @@ export async function reconcilePendingDiscussionOpen(params: {
   }
   // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
   const cfg = params.runtime.config.current() as CoreConfig;
-  const account = listClickClackAccountIds(cfg)
-    .map((accountId) => resolveClickClackAccount({ cfg, accountId }))
-    .find(
-      (candidate) =>
-        candidate.configured &&
-        normalizedServerBaseUrl(candidate) === pending.serverBaseUrl &&
-        discussionCredentialFingerprint(candidate.token) === pending.credentialFingerprint,
-    );
+  const candidates = listClickClackAccountIds(cfg)
+    .map((accountId) => resolveClickClackAccountMetadata({ cfg, accountId }))
+    .filter((account) => normalizedServerBaseUrl(account) === pending.serverBaseUrl);
+  const prepared = await Promise.all(
+    candidates.map(({ accountId }) => resolveClickClackAccountAsync({ cfg, accountId })),
+  );
+  const account = prepared.find(
+    (candidate) =>
+      candidate.configured &&
+      normalizedServerBaseUrl(candidate) === pending.serverBaseUrl &&
+      discussionCredentialFingerprint(candidate.token) === pending.credentialFingerprint,
+  );
   if (!account) {
     // Without the creating credential, keep the destination quarantined until
     // an operator restores access or explicitly cleans up the pending record.
@@ -515,8 +533,13 @@ export async function reconcilePendingDiscussionOpen(params: {
   }
   const client = params.clientFactory(account);
   const entry = await readDiscussionSessionEntry(params.runtime, pending.sessionKey);
-  const activeAccounts = discussionAccounts(cfg);
-  const retryAccount = activeAccounts.length === 1 ? activeAccounts[0] : undefined;
+  const retryAccount = isDiscussionAccountCurrent(
+    // SAFETY: Runtime config has passed the registered ClickClack schema.
+    params.runtime.config.current() as CoreConfig,
+    account,
+  )
+    ? account
+    : undefined;
   if (
     params.allowRetry !== false &&
     entry?.sessionId &&

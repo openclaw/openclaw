@@ -21,6 +21,7 @@ export type SshSandboxSession = {
   host: string;
   /** Revalidate runtime authority after asynchronous upload preparation. */
   assertCurrent?: () => void;
+  prepareCurrent?: () => Promise<void>;
 };
 
 export type RunSshSandboxCommandParams = Parameters<RemoteShellSandboxSession["runCommand"]>[0] & {
@@ -149,6 +150,7 @@ function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
       env: sanitizeEnvVars(process.env).allowed,
     }),
     assertCurrent: session.assertCurrent,
+    prepareCurrent: session.prepareCurrent,
     formatFailure: buildSshFailureMessage,
   });
 }

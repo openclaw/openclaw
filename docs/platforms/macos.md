@@ -58,6 +58,12 @@ Some releases only ship CLI, evidence, or Windows assets. If the newest release
 has no macOS app asset, use the newest one that does, or build from source with
 [macOS dev setup](/platforms/mac/dev-setup).
 
+If the app reports **OpenClaw app update required**, the app's bundled runtime
+cannot read the local state schema. Choose **Open Downloads** and install a
+compatible app for your Gateway's release channel. If a compatible build is not
+available yet, keep your state and credentials intact and wait for the matching
+installer. Running Doctor with the older app's CLI cannot downgrade the schema.
+
 ## First run
 
 Install and launch **OpenClaw.app**. On a fresh installation with no saved Gateway
@@ -118,6 +124,9 @@ cookie sync, and permissions. Device voice controls appear under
 **Settings → Talk → This Mac**, and app update preferences under
 **Settings → Updates → This Mac**. These device controls appear only in the
 macOS app's embedded Dashboard, not in an ordinary browser.
+
+Choose **Navigate → Systems** to open the embedded Dashboard's machine inventory,
+including desktops and active workers.
 
 **This Mac → Capabilities → Desktop sharing** is enabled by default. It exposes
 this Mac's existing Screen Sharing service in **Systems**, independently of
@@ -231,6 +240,10 @@ owns the displayed identity and chat attribution. The native device connection
 keeps its configured transport, including SSH, and its credentials are not sent
 to the public dashboard or sign-in provider. Shared-secret Gateways without a
 personal sign-in route continue to use the shared owner profile.
+While managed Serve is starting or recovering, for example after Tailscale
+restarts, the dashboard falls back to the shared owner profile. When the Serve
+route returns, the Gateway asks connected clients to reconnect, and the
+dashboard goes back to the Serve sign-in address and your own profile.
 
 Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
@@ -252,13 +265,15 @@ first-run model setup still runs when needed.
 
 In the macOS app's embedded dashboard, clicking an external web link opens it as a **Mac tab** in the **Browser** tab of the chat side panel. On non-chat routes, it opens in the shell-level Browser dock. While Settings is open, external links open in the default browser because the Browser panel is hidden. WebKit renders Mac tabs natively, alongside **Agent browser tabs** backed by the Gateway-controlled browser. Older Control UI bundles that still send the legacy `inline` link request open the default browser; current bundles open Mac tabs through the native Browser bridge.
 
-Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
+Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Stop keeps the current page, including when the next navigation is still starting. When a page fails to load, the tab keeps the address you tried and shows the error with a **Reload** button that retries it. If a page's content keeps quitting, the tab reloads it automatically at most twice, then shows the failure and waits for **Reload**. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
+
+With the page focused in a **Mac tab**, press **⌘F** or **Ctrl+F** to find text in that page. **Return** moves to the next match, **Shift+Return** moves to the previous one, and **Escape** closes the find bar and returns focus to the page.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
 Drag the empty space beside the side-panel tabs to move the window. The full height of the header is available, and the draggable space follows tabs as they are added, removed, or resized. Tabs and header buttons keep their normal click and tab-reordering behavior.
 
-Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. If a menu overlaps the Browser pane or a modal dialog opens, the live page temporarily hides. The command palette leaves a dimmed, non-interactive image of the page behind it. Dismiss the palette to return to the same live page without reloading it.
 
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 

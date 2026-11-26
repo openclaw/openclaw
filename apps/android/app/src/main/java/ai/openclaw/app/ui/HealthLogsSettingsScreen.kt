@@ -102,7 +102,7 @@ internal fun HealthLogsSettingsScreen(
         ),
         HealthStatus(nativeString("Runs"), if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), true),
       )
-    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
+    ClawListPanel(items = healthRows, dividerColor = ClawTheme.colors.border) { row ->
       ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
     }
     SettingsRefreshControls(isConnected, logsState.refreshing, logsState.errorText, viewModel::refreshHealthLogs, label = nativeString("Refresh Logs"))

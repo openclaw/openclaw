@@ -15,8 +15,8 @@ import {
   resolveSubagentModelConfigSelectionResult,
   resolveSubagentSpawnModelFallbacksOverride,
 } from "../../../agents/agent-scope.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store-runtime.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { loadAuthProfileStoreForSecretsRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -24,12 +24,16 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../../agents/model-selection-shared.js";
+import { resolveProviderModelRouteAuthRequirement } from "../../../agents/provider-model-route-auth.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveLegacyHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { sanitizeDoctorNote } from "../emit-notes.js";
 
-type AuthStores = Map<string | undefined, ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>>;
+type AuthStores = Map<
+  string | undefined,
+  Awaited<ReturnType<typeof loadAuthProfileStoreForSecretsRuntimeAsync>>
+>;
 type ModelConsumer = { path: string; value: string; agentId?: string; consumer?: string };
 
 function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
@@ -110,25 +114,50 @@ function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
 
 type BillingRoute = {
   modelRef: string;
-  requirement: "api-key" | "subscription";
+  requirement: "api-key" | "subscription" | "native";
   profileId?: string;
+  runtime?: string;
   consumer: string;
 };
 
-function collectBillingRoutes(params: {
+type RuntimeModelAuth = ReturnType<
+  ReturnType<typeof createModelAuthAvailabilityResolver>["evaluateRuntimeModelAuth"]
+>;
+
+/** Only providers with catalog routes report `selectedRoute`; others bill by credential kind. */
+function resolveBillingRequirement(
+  auth: RuntimeModelAuth,
+): BillingRoute["requirement"] | undefined {
+  // The configured runtime decides this route even when Doctor cannot probe its credentials.
+  // Those credentials may be a subscription login or an environment key the CLI reads itself,
+  // so warnings name them as the runtime's own credentials, not as a subscription.
+  if (auth.runtimeAuth?.source === "native" && !auth.selectedProfileId) {
+    return "native";
+  }
+  if (auth.availability !== true) {
+    return undefined;
+  }
+  // The route owner classifies credential kinds, including AWS SDK credentials as metered.
+  return resolveProviderModelRouteAuthRequirement(
+    auth.selectedAuthMode,
+    auth.selectedRoute?.authRequirement,
+  );
+}
+
+async function collectBillingRoutes(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
   authStores: AuthStores;
-}): Map<string, BillingRoute> {
+}): Promise<Map<string, BillingRoute>> {
   const { cfg, env, metadataSnapshot } = params;
-  const owners = new Map<string | undefined, ReturnType<typeof prepareOwner>>();
-  const prepareOwner = (agentId: string | undefined) => {
+  const owners = new Map<string | undefined, Awaited<ReturnType<typeof prepareOwner>>>();
+  const prepareOwner = async (agentId: string | undefined) => {
     const agentDir = agentId ? resolveAgentDir(cfg, agentId, env) : undefined;
     const workspaceDir = agentId ? resolveAgentWorkspaceDir(cfg, agentId, env) : undefined;
     let authStore = params.authStores.get(agentDir);
     if (!authStore) {
-      authStore = loadAuthProfileStoreForSecretsRuntime(agentDir, {
+      authStore = await loadAuthProfileStoreForSecretsRuntimeAsync(agentDir, {
         config: cfg,
         externalCli: { mode: "none" },
       });
@@ -141,11 +170,9 @@ function collectBillingRoutes(params: {
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     };
-    const defaultProvider = resolveConfiguredModelRef({
-      ...options,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    }).provider;
+    const defaultProvider =
+      resolveConfiguredModelRef({ ...options, defaultProvider: DEFAULT_PROVIDER })?.provider ??
+      DEFAULT_PROVIDER;
     const aliasIndex = buildModelAliasIndex({ ...options, defaultProvider });
     return {
       resolve: (raw: string) =>
@@ -167,7 +194,7 @@ function collectBillingRoutes(params: {
     const agentId = consumerAgentId ?? tryResolveSoleAgentId(cfg);
     let owner = owners.get(agentId);
     if (!owner) {
-      owner = prepareOwner(agentId);
+      owner = await prepareOwner(agentId);
       owners.set(agentId, owner);
     }
     const parsed = splitTrailingAuthProfile(value);
@@ -179,35 +206,43 @@ function collectBillingRoutes(params: {
       modelId: model.model,
       pinnedProfileId: parsed.profile,
     });
-    if (auth.availability !== true || !auth.selectedRoute) {
+    const requirement = resolveBillingRequirement(auth);
+    if (!requirement) {
       continue;
     }
     routes.set(path, {
       consumer: consumer ?? path,
       modelRef: `${model.provider}/${model.model}`,
-      requirement: auth.selectedRoute.authRequirement,
+      requirement,
       profileId: auth.selectedProfileId,
+      runtime: auth.runtimeAuth?.id,
     });
   }
   return routes;
 }
 
 /** Compare resolved billing facts; missing credentials are not evidence of a route change. */
-export function collectModelBillingRouteMigrationWarnings(params: {
+export async function collectModelBillingRouteMigrationWarnings(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): string[] {
+}): Promise<string[]> {
   const authStores: AuthStores = new Map();
   const options = {
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
     authStores,
   };
-  const before = collectBillingRoutes({ ...options, cfg: params.before });
-  const after = collectBillingRoutes({ ...options, cfg: params.after });
+  const before = await collectBillingRoutes({ ...options, cfg: params.before });
+  const after = await collectBillingRoutes({ ...options, cfg: params.after });
   const describe = (route: BillingRoute) =>
-    `${route.modelRef} via ${route.requirement === "api-key" ? "metered API-key" : "subscription/OAuth"}${route.profileId ? ` profile ${route.profileId}` : ""}`;
+    `${route.modelRef} via ${
+      route.requirement === "native"
+        ? `${route.runtime ?? "runtime"} own credentials`
+        : route.requirement === "api-key"
+          ? "metered API-key"
+          : "subscription/OAuth"
+    }${route.profileId ? ` profile ${route.profileId}` : ""}`;
   const warnings: string[] = [];
   for (const [consumer, previous] of before) {
     const current = after.get(consumer);

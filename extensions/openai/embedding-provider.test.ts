@@ -356,7 +356,6 @@ describe("OpenAI embedding provider HTTP contract", () => {
     expect(server.requests[0]).toMatchObject({
       url: "/tenant/v1/embeddings?tenant=beta",
       authorization: "Bearer fixture-openai-key",
-      body: { model: "text-embedding-3-small", input: ["hello"], ...expected },
     });
     expect(server.requests[0]?.body).toEqual({
       model: "text-embedding-3-small",

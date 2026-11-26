@@ -6,6 +6,7 @@ import {
   claudeBlockStart,
   claudeBlockStop,
   claudeInputJsonDelta,
+  claudeMessageStart,
   createClaudeParser,
   createClaudeBackend,
   joinJsonlFrames,
@@ -140,20 +141,13 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(parser.getErrorText()).toContain("JSONL output exceeded");
   });
 
-  it("counts actual blank Claude frames without invoking hooks or inventing a finish frame", () => {
+  it("charges blank Claude frames without invoking hooks", () => {
     const parseJsonlEvent = vi.fn(() => null);
-    const createParser = () => createClaudeParser({ parseJsonlEvent });
-    const completeParser = createParser();
-    completeParser.push("\r\n".repeat(20_000));
-    completeParser.finish();
+    const parser = createClaudeParser({ parseJsonlEvent });
+    parser.push("\r\n".repeat(20_001));
+    parser.finish();
 
-    expect(completeParser.getErrorText()).toBeNull();
-    expect(parseJsonlEvent).not.toHaveBeenCalled();
-
-    const overflowParser = createParser();
-    overflowParser.push("\n".repeat(20_001));
-
-    expect(overflowParser.getErrorText()).toContain("exceeded 20000 lines");
+    expect(parser.getErrorText()).toBeNull();
     expect(parseJsonlEvent).not.toHaveBeenCalled();
   });
 
@@ -167,12 +161,21 @@ describe("createCliJsonlStreamingParser framing", () => {
       createLine: () => `${" ".repeat(4_300_000)}{}`,
     },
     {
-      name: "formatting inside a compacted media record",
+      name: "tool-result IDs",
+      createLine: () => JSON.stringify(toolResultFrame("i".repeat(4_300_000), [])),
+    },
+    {
+      name: "mixed tool-result and user content",
       createLine: () =>
-        JSON.stringify(imageResultFrame("padded-image", "YQ==")).replace(
-          '"message":',
-          `"message":${" ".repeat(4_300_000)}`,
-        ),
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "mixed", content: "x".repeat(4_300_000) },
+              { type: "text", text: "note" },
+            ],
+          },
+        }),
     },
   ])("charges $name against the Claude raw-output budget", ({ createLine }) => {
     const parser = createClaudeParser();
@@ -201,53 +204,48 @@ describe("createCliJsonlStreamingParser framing", () => {
     ]);
   });
 
-  it("omits the echoed tool_use_result payload MCP image tools duplicate alongside the message copy", () => {
-    const results: CliToolResultDelta[] = [];
-    const parser = createClaudeParser({
-      onToolResult: (result) => results.push(result),
-    });
-    const data = "A".repeat(600_000);
-    const screenshotLine = (index: number) =>
-      `${JSON.stringify({
-        type: "user",
-        message: {
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: `screenshot-${index}`,
-              content: [
-                { type: "text", text: "Cursor Position: (1, 2)" },
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: "image/jpeg", data },
-                },
-              ],
-            },
-          ],
-        },
-        // Claude echoes the same payload a second time outside the message.
-        tool_use_result: [
-          { type: "text", text: "Cursor Position: (1, 2)" },
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data } },
-        ],
-      })}\n`;
-
-    for (let index = 0; index < 20; index += 1) {
-      parser.push(screenshotLine(index));
-    }
-
-    expect(parser.getErrorText()).toBeNull();
-    expect(results).toHaveLength(20);
-    expect(results[0]?.result).toEqual([
-      { type: "text", text: "Cursor Position: (1, 2)" },
-      {
-        type: "image",
-        source: { type: "base64", media_type: "image/jpeg" },
-        omitted: true,
-        bytes: estimateBase64DecodedBytes(data),
-      },
-    ]);
-  });
+  it.each(["media", "text"] as const)(
+    "delivers repeated %s tool results without losing the final reply",
+    (kind) => {
+      const results: CliToolResultDelta[] = [];
+      const parser = createClaudeParser({ onToolResult: (result) => results.push(result) });
+      const data = "A".repeat(600_000);
+      const text = kind === "media" ? "Cursor Position: (1, 2)" : "x".repeat(120_000);
+      const content = [
+        { type: "text", text },
+        ...(kind === "media"
+          ? [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data } }]
+          : []),
+      ];
+      for (let index = 0; index < 40; index += 1) {
+        parser.push(
+          `${JSON.stringify(
+            toolResultFrame(`result-${index}`, content, { tool_use_result: content }),
+          )}\n`,
+        );
+      }
+      parser.push(`${JSON.stringify({ type: "result", result: "done" })}\n`);
+      parser.finish();
+      expect(parser.getErrorText()).toBeNull();
+      expect(parser.getOutput()?.text).toBe("done");
+      const expected = [
+        { type: "text", text },
+        ...(kind === "media"
+          ? [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/jpeg" },
+                omitted: true,
+                bytes: estimateBase64DecodedBytes(data),
+              },
+            ]
+          : []),
+      ];
+      expect(results.map((result) => result.result)).toEqual(
+        Array.from({ length: 40 }, () => expected),
+      );
+    },
+  );
 
   it("omits the base64 file payload Claude echoes for built-in image reads", () => {
     const parser = createClaudeParser();
@@ -307,16 +305,48 @@ describe("createCliJsonlStreamingParser framing", () => {
     const parser = createClaudeParser();
     // Built as text: JSON.stringify is itself recursive and cannot serialize this.
     const depth = 50_000;
-    const payload = JSON.stringify({
+    const nested = `${'{"nested":'.repeat(depth)}${JSON.stringify({
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "AAAA" },
-    });
-    const line = `{"type":"user","message":{"content":[]},"tool_use_result":${
-      '{"nested":'.repeat(depth) + payload + "}".repeat(depth)
-    }}`;
+    })}${"}".repeat(depth)}`;
+    const toolResult = `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deep","content":""}]},"tool_use_result":${nested}}`;
+    const assistant = `{"type":"assistant","message":{"id":"deep","content":[${nested}]}}`;
 
-    expect(() => parser.push(`${line}\n`)).not.toThrow();
+    expect(() => parser.push(`${toolResult}\n${assistant}\n`)).not.toThrow();
     expect(parser.getErrorText()).toBeNull();
+    // An assistant snapshot too deep to re-serialize keeps raw accounting.
+    parser.push(`${assistant}\n`.repeat(16));
+    expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
+  });
+
+  it("keeps the reply of a turn with thousands of small tool calls", () => {
+    // Envelope metadata as Claude Code 2.1.322 emits it; ids are synthetic.
+    const meta = { session_id: "s".repeat(36), uuid: "u".repeat(36), timestamp: "t".repeat(24) };
+    const results: string[] = [];
+    const parser = createClaudeParser({
+      onToolResult: (result) => results.push(result.toolCallId),
+    });
+    for (let call = 0; call < 4_500; call += 1) {
+      const tool = { type: "tool_use", id: `toolu_${call}`, name: "read", input: { path: "a" } };
+      const text = [{ type: "text", text: "hello" }];
+      parser.push(
+        joinJsonlFrames(
+          { type: "system", subtype: "status", status: "requesting", ...meta },
+          claudeMessageStart(`msg_${call}`),
+          claudeBlockStart({ ...tool, input: {} }, 0),
+          claudeBlockStop(0),
+          { type: "assistant", message: { id: `msg_${call}`, content: [tool] }, ...meta },
+          toolResultFrame(tool.id, text, { ...meta, tool_use_result: text }),
+          "",
+        ),
+      );
+    }
+    parser.push(joinJsonlFrames({ type: "result", subtype: "success", result: "done" }, ""));
+    parser.finish();
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(results).toHaveLength(4_500);
+    expect(parser.getOutput()?.text).toBe("done");
   });
 
   it("still enforces raw Claude line and retained-text limits", () => {
@@ -334,18 +364,30 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(growingPartialLineParser.getErrorText()).toContain("JSONL line exceeded");
 
     const oversizedTextParser = createParser();
-    for (const toolCallId of ["first", "second"]) {
+    // Assistant snapshots are retained and still spend the turn budget.
+    for (const messageId of ["first", "second"]) {
       oversizedTextParser.push(
-        `${JSON.stringify(
-          toolResultFrame(toolCallId, [{ type: "text", text: "a".repeat(4_300_000) }]),
-        )}\n`,
+        `${JSON.stringify({
+          type: "assistant",
+          message: { id: messageId, content: [{ type: "text", text: "a".repeat(4_300_000) }] },
+        })}\n`,
       );
     }
     expect(oversizedTextParser.getErrorText()).toContain("JSONL output exceeded");
 
-    const excessiveLinesParser = createParser();
-    excessiveLinesParser.push("{}\n".repeat(20_001));
-    expect(excessiveLinesParser.getErrorText()).toContain("exceeded 20000 lines");
+    // Discarded tool-result payloads, metadata, and padding over 1 KiB count as frames.
+    const discarded = "x".repeat(1_100);
+    for (const line of [
+      JSON.stringify(toolResultFrame("payload", [{ type: "text", text: discarded }])),
+      JSON.stringify(toolResultFrame("metadata", [], { extra: discarded })),
+      `${JSON.stringify(toolResultFrame("padding", []))}${" ".repeat(1_100)}`,
+    ]) {
+      const excessiveLinesParser = createParser();
+      excessiveLinesParser.push(`${line}\n`.repeat(20_000));
+      expect(excessiveLinesParser.getErrorText()).toBeNull();
+      excessiveLinesParser.push(`${line}\n`);
+      expect(excessiveLinesParser.getErrorText()).toContain("exceeded 20000 lines");
+    }
   });
 
   it.each([
@@ -390,73 +432,16 @@ describe("createCliJsonlStreamingParser framing", () => {
   });
 
   it.each([
-    {
-      name: "uses complete tool args from content_block_start when no deltas arrive",
-      frames: [
-        claudeBlockStart(
-          {
-            type: "tool_use",
-            id: "toolu_start",
-            name: "Bash",
-            input: { command: "ls -la" },
-          },
-          0,
-        ),
-        claudeBlockStop(0),
-      ],
-      expected: [
-        {
-          toolCallId: "toolu_start",
-          name: "Bash",
-          kind: "tool_use",
-          args: { command: "ls -la" },
-        },
-      ],
-    },
-    {
-      name: "keeps an explicit empty streamed input over the start snapshot",
-      frames: [
-        claudeBlockStart(
-          {
-            type: "tool_use",
-            id: "toolu_empty",
-            name: "Bash",
-            input: { command: "stale --from-start-block" },
-          },
-          0,
-        ),
-        claudeInputJsonDelta("{}", 0),
-        claudeBlockStop(0),
-      ],
-      expected: [{ toolCallId: "toolu_empty", name: "Bash", kind: "tool_use", args: {} }],
-    },
-    {
-      name: "reassembles streamed tool args from input_json_delta chunks",
-      frames: [
-        claudeBlockStart({ type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} }, 0),
-        claudeInputJsonDelta('{"command":', 0),
-        claudeInputJsonDelta(' "echo hi"}', 0),
-        claudeBlockStop(0),
-      ],
-      expected: [
-        {
-          toolCallId: "toolu_chunked",
-          name: "Bash",
-          kind: "tool_use",
-          args: { command: "echo hi" },
-        },
-      ],
-    },
-    {
-      name: "emits empty args when streamed tool args are malformed",
-      frames: [
-        claudeBlockStart({ type: "tool_use", id: "toolu_bad", name: "Bash", input: {} }, 0),
-        claudeInputJsonDelta('{"command": "ls', 0),
-        claudeBlockStop(0),
-      ],
-      expected: [{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }],
-    },
-  ])("$name", ({ frames, expected }) => {
+    ["start snapshot", { command: "ls -la" }, [], { command: "ls -la" }],
+    ["explicit empty input", { command: "stale --from-start-block" }, ["{}"], {}],
+    ["chunked input", {}, ['{"command":', ' "echo hi"}'], { command: "echo hi" }],
+    ["malformed input", {}, ['{"command": "ls'], {}],
+  ] as const)("reassembles tool arguments from %s", (_name, input, deltas, args) => {
+    const frames = [
+      claudeBlockStart({ type: "tool_use", id: "toolu_args", name: "Bash", input }, 0),
+      ...deltas.map((delta) => claudeInputJsonDelta(delta, 0)),
+      claudeBlockStop(0),
+    ];
     const starts: CliToolUseStartDelta[] = [];
     const parser = createClaudeParser({
       backend: createClaudeBackend(),
@@ -466,6 +451,6 @@ describe("createCliJsonlStreamingParser framing", () => {
     parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(starts).toEqual(expected);
+    expect(starts).toEqual([{ toolCallId: "toolu_args", name: "Bash", kind: "tool_use", args }]);
   });
 });

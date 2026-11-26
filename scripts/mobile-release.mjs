@@ -19,6 +19,17 @@ function git(root, ...args) {
   return run("git", args, root);
 }
 
+function timePreparation(label, operation) {
+  const startedAt = performance.now();
+  try {
+    return operation();
+  } finally {
+    console.log(
+      `[mobile-release] ${label}: ${Math.round(performance.now() - startedAt)}ms elapsed.`,
+    );
+  }
+}
+
 function clean(root) {
   if (git(root, "status", "--porcelain", "--untracked-files=all")) {
     throw new Error(
@@ -28,7 +39,7 @@ function clean(root) {
 }
 
 function mainSha(root) {
-  git(root, "fetch", "--no-tags", "origin", "refs/heads/main");
+  timePreparation("Fetch main", () => git(root, "fetch", "--no-tags", "origin", "refs/heads/main"));
   return git(root, "rev-parse", "FETCH_HEAD");
 }
 
@@ -256,7 +267,7 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
 }
 
 async function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
-  clean(root);
+  timePreparation("Clean checkout", () => clean(root));
   const isGithubActions = process.env.GITHUB_ACTIONS === "true";
   if (isGithubActions && process.env.GITHUB_RUN_ATTEMPT !== "1") {
     throw new Error(
@@ -393,28 +404,26 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   let completed = false;
   try {
     bridgeLocalTools(root, source, platform);
-    // Deferred TestFlight attempts need no history; notes require complete source ancestry.
-    if (git(root, "rev-parse", "--is-shallow-repository") === "true") {
-      git(root, "fetch", "--no-tags", "--filter=blob:none", "--unshallow", "origin", sourceSha);
+    if (stageExisting) {
+      run(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/mobile-release-notes.ts",
+          "generate",
+          "--platform",
+          platform,
+          "--plan",
+          planPath,
+          "--output",
+          notesPath,
+        ],
+        source,
+        { stdio: "inherit" },
+      );
+      retainSummary(notesPath);
     }
-    run(
-      process.execPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "scripts/mobile-release-notes.ts",
-        "generate",
-        "--platform",
-        platform,
-        "--plan",
-        planPath,
-        "--output",
-        notesPath,
-      ],
-      source,
-      { stdio: "inherit" },
-    );
-    retainSummary(notesPath);
     clean(source);
     if (git(source, "rev-parse", "HEAD") !== sourceSha) {
       throw new Error("Release preparation changed source identity.");
@@ -426,7 +435,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
       );
     }
     console.log(
-      `Prepared ${platform} release from main source ${sourceSha}. Saved plan and notes: ${recovery}`,
+      `Prepared ${platform} release from main source ${sourceSha}. Recovery directory: ${recovery}`,
     );
     if (stageExisting) {
       uploadedRef(root, platform, plan, planPath);
@@ -444,6 +453,9 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
         env: releaseEnvironment(platform, recovery, sourceSha),
       },
     );
+    if (!stageExisting) {
+      retainSummary(notesPath);
+    }
     const playRef = uploadedRef(root, platform, plan, planPath);
     console.log(`Verified uploaded release: ${playRef}`);
     if (firebase) {

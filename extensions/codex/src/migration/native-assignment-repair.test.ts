@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { beforeEach, expect, it, vi } from "vitest";
 import { stateMigrations } from "../../doctor-contract-api.js";
@@ -121,6 +122,53 @@ it("skips cleared bindings without warnings", async () => {
   state.expectState();
 });
 
+it.each(["current", "stale session", "stale connection"])(
+  "checks both-absent lifecycle revisions against %s identity",
+  async (mode) => {
+    getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
+    const pending = task({
+      lifecycleRevision: undefined,
+      ...(mode === "stale session" ? { sessionId: "retired-session" } : {}),
+      ...(mode === "stale connection" ? { connectionFingerprint: "0".repeat(64) } : {}),
+    });
+    const state = fixture([pending]);
+    const result = await migration.migrateLegacyState(state);
+    expect(result.warnings).toEqual([]);
+    if (mode === "current") {
+      expect(result).toEqual(unchanged);
+      expect(await migration.detectLegacyState(state)).toBeNull();
+      state.expectState();
+    } else {
+      expect(result.changes).toHaveLength(1);
+      state.expectState({ nativeSubagentAssignments: undefined });
+    }
+  },
+);
+
+it.each(["assignment", "session"])(
+  "retires assignments whose %s lacks the lifecycle revision",
+  async (side) => {
+    // #197515: a reset mints a revision for the kept session ID; native recovery
+    // can never deliver the pre-reset assignment again.
+    if (side === "session") {
+      getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
+    }
+    const stale = side === "assignment" ? task({ lifecycleRevision: undefined }) : assignment;
+    const receipt = submission("child", "stale-call");
+    const submissions = { version: 1, owner: stale.owner, receipts: [receipt] };
+    const state = fixture([stale], { nativeSubagentSubmissions: submissions });
+    expect(await migration.detectLegacyState(state)).not.toBeNull();
+    const result = await migration.migrateLegacyState(state);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    state.expectState({
+      nativeSubagentAssignments: undefined,
+      nativeSubagentSubmissions: undefined,
+    });
+    expect(await migration.migrateLegacyState(state)).toEqual(unchanged);
+  },
+);
+
 it.each(
   Object.entries({
     undecodable: () => fixture(duplicateAssignments, { binding: { ...binding, cwd: undefined } }),
@@ -128,11 +176,6 @@ it.each(
       fixture(undefined, { binding: { ...binding, authProfileId: 42 } }),
     "missing connection": () =>
       fixture(undefined, { binding: { ...binding, appServerRuntimeFingerprint: undefined } }),
-    "missing assignment lifecycle": () => fixture([task({ lifecycleRevision: undefined })]),
-    "missing session lifecycle": () => {
-      getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
-      return fixture();
-    },
     "conflicting completions": () =>
       fixture([
         { ...assignment, recordedCompletion: completion },
@@ -210,4 +253,35 @@ it("removes absent requesters but preserves task imports", async () => {
   await migration.migrateLegacyState(state);
   state.expectState({ nativeSubagentAssignments: undefined });
   expect(await migration.migrateLegacyState(state)).toEqual(unchanged);
+});
+
+it("admits event-loop work between full detection pages", async () => {
+  const state = fixture();
+  const rows = Array.from({ length: 512 }, (_, index): Row => ({
+    key: `binding:${index}`,
+    value: {},
+    valueJson: "{}",
+    createdAt: 1,
+    expiresAt: null,
+  }));
+  let advanced = false;
+  let pageReads = 0;
+  let progress: Promise<void> | undefined;
+  state.context.readPluginStateEntriesInKeyRange = (_namespace, range) => {
+    pageReads++;
+    if (!range.after) {
+      progress = nextTurn().then(() => {
+        advanced = true;
+      });
+      return rows;
+    }
+    expect(advanced).toBe(true);
+    return [];
+  };
+  try {
+    expect(await migration.detectLegacyState(state)).toBeNull();
+    expect(pageReads).toBe(2);
+  } finally {
+    await progress;
+  }
 });

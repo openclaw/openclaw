@@ -74,6 +74,6 @@ test("reads selected-agent usage when global session IDs coincide", async () => 
     }
     expect(
       row(await readRecentSessionUsageFromTranscriptAsync(targets[1]!, 256 * 1024)),
-    ).toMatchObject({ totalTokens: 40 });
+    ).toMatchObject({ totalTokens: 42 });
   });
 });

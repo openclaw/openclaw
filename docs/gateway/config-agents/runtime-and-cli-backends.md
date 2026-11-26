@@ -74,7 +74,7 @@ session, image, and parser registration.
 
 ## OpenAI GPT-5 personality
 
-The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. GPT-6 prompts do not receive either layer. Ordinary native Codex threads that use OpenClaw's base follow the same model rule; Codex's built-in personality is a separate setting that OpenClaw disables for native threads.
 
 ```json5
 {

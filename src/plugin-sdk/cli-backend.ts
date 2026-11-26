@@ -4,6 +4,7 @@ export type {
   CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendExecutionMode,
+  CliBackendInputImage,
   CliBackendJsonlUsage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,

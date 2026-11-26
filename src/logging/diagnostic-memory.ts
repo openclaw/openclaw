@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-value-snapshot.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
@@ -110,9 +111,12 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
 function publishMemorySample(memory: DiagnosticMemoryUsage, uptimeMs: number): void {
   emitDiagnosticEvent({
     type: "diagnostic.memory.sample",
-    memory: {
-      ...memory,
-      heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+    // The dispatcher reads payload fields only after finding an interested listener.
+    get memory() {
+      return freezeOwnedDiagnosticSnapshot({
+        ...memory,
+        heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+      });
     },
     uptimeMs,
   });
@@ -147,9 +151,10 @@ function pickPressure(
   heapLimitBytes: number | undefined,
   rssLimitBytes: number | undefined,
   thresholds?: DiagnosticMemoryThresholds,
+  processMemory?: { usedBytes: number; limitBytes: number },
 ): MemoryPressure | null {
   // Compare isolates to their own limits, never summed worker heaps to the main heap.
-  // Within each severity the main heap is primary, followed by workers and process RSS.
+  // Within each severity prefer heap and RSS ownership over shared allowance pressure.
   const signals: {
     reason: MemoryPressure["reason"];
     usedBytes: number;
@@ -180,6 +185,7 @@ function pickPressure(
       warning: thresholds?.rssWarningBytes,
       critical: thresholds?.rssCriticalBytes,
     },
+    ...(processMemory ? [{ reason: "process_memory_threshold" as const, ...processMemory }] : []),
   ];
   for (const [level, ratio] of [
     ["critical", CRITICAL_RATIO],
@@ -333,10 +339,26 @@ export function emitDiagnosticMemorySample(
     ? undefined
     : (options?.heapSizeLimitBytes ??
       (defaultHeapSizeLimitBytes ??= getHeapStatistics().heap_size_limit));
-  const memoryLimits = [
-    options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
-    options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
-  ].filter(isPositiveMemoryLimit);
+  const processLimitBytes = options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES;
+  const physicalMemoryBytes = options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES;
+  const memoryLimits = [processLimitBytes, physicalMemoryBytes].filter(isPositiveMemoryLimit);
+  // Node/Linux accounts for cgroup charges that RSS does not include. Unconstrained
+  // hosts and other runtimes do not provide this same remaining-allowance signal.
+  const availableMemoryBytes =
+    !isBun &&
+    process.platform === "linux" &&
+    isPositiveMemoryLimit(processLimitBytes) &&
+    isPositiveMemoryLimit(physicalMemoryBytes) &&
+    processLimitBytes < physicalMemoryBytes
+      ? process.availableMemory()
+      : undefined;
+  const processMemory =
+    availableMemoryBytes !== undefined &&
+    Number.isFinite(availableMemoryBytes) &&
+    availableMemoryBytes >= 0 &&
+    availableMemoryBytes <= processLimitBytes
+      ? { usedBytes: processLimitBytes - availableMemoryBytes, limitBytes: processLimitBytes }
+      : undefined;
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
   memory.heapSizeLimitBytes = heapLimitBytes;
@@ -346,9 +368,19 @@ export function emitDiagnosticMemorySample(
     publishMemorySample(memory, options?.uptimeMs ?? Math.round(process.uptime() * 1000));
   }
 
-  const pressure = pickPressure(memory, heapLimitBytes, rssLimitBytes, options?.thresholds);
-  if (pressure?.level === "critical") {
-    memoryPressure.publish(undefined);
+  const pressure = pickPressure(
+    memory,
+    heapLimitBytes,
+    rssLimitBytes,
+    options?.thresholds,
+    processMemory,
+  );
+  if (
+    pressure?.level === "critical" ||
+    (processMemory &&
+      processMemory.usedBytes >= Math.floor(processMemory.limitBytes * WARNING_RATIO))
+  ) {
+    memoryPressure.publish(pressure?.level === "critical");
   }
   if (
     collectDiagnostics &&

@@ -1,13 +1,17 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertRequiredWorkerDispatch,
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
+import { workerWorkspaceDurabilitySchema } from "../../plugins/worker-retention.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sessionLog } from "../session-log.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
   createPlacementFailureActions,
@@ -52,6 +56,10 @@ import type {
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import {
+  requireInheritedWorkerProfileAuthorization,
+  snapshotWorkerAllocationProfile,
+} from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
@@ -65,6 +73,37 @@ type WorkerLocalDispatchBarrier = (params: {
   signal?: AbortSignal;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
+
+function resolvePairedDeviceDispatch(request: WorkerPlacementDispatchRequest) {
+  if (request.deviceId) {
+    return request;
+  }
+  const profiles = getRuntimeConfig().cloudWorkers?.profiles;
+  const configured =
+    profiles && Object.hasOwn(profiles, request.profileId)
+      ? profiles[request.profileId]
+      : undefined;
+  const inheritedProfile =
+    request.inheritedProfile ??
+    (configured && normalizeCapabilityProviderId(configured.provider) === DEVICE_WORKER_PROVIDER_ID
+      ? {
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileSnapshot: structuredClone(snapshotWorkerAllocationProfile(configured)),
+        }
+      : undefined);
+  const settings = inheritedProfile?.profileSnapshot.settings;
+  if (
+    inheritedProfile?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
+    !isRecord(settings) ||
+    typeof settings.device !== "string" ||
+    !settings.device.trim()
+  ) {
+    return request;
+  }
+  // Internal callers also select named profiles. Keep their configured identity and
+  // inference settings while admitting the same paired-device route as explicit selection.
+  return { ...request, deviceId: settings.device.trim(), inheritedProfile };
+}
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
   WorkerPlacementReclaimOptions &
@@ -115,12 +154,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   );
 
   const dispatch = async (
-    request: WorkerPlacementDispatchRequest,
+    selection: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
     awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
+    const request = resolvePairedDeviceDispatch(selection);
     using diagnostics = startSlowRequestDiagnostics<string>(
       sessionLog,
       "slow placement dispatch",
@@ -133,7 +173,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         throw new Error("Repository dispatch was released");
       }
       signal?.throwIfAborted();
-      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
+      const config = getRuntimeConfig();
+      assertRequiredWorkerDispatch(config, request);
+      if (request.inheritedProfile?.providerId === DEVICE_WORKER_PROVIDER_ID) {
+        requireInheritedWorkerProfileAuthorization(
+          request.profileId,
+          request.inheritedProfile.providerId,
+          request.inheritedProfile.profileSnapshot.settings,
+          config.cloudWorkers?.profiles?.[request.profileId]?.provider,
+        );
+      }
     });
     assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
@@ -194,6 +243,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
       diagnostics?.mark("workspacePreparation");
       const workspace = await options.resolveWorkspace(request);
+      if (workspace.kind === "repository" && workspace.repository.diskAuthority) {
+        throw new Error(
+          "Repository disk is already authoritative; resume the original resource instead of allocating a replacement",
+        );
+      }
       if (
         workspace.kind === "device-folder" &&
         (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
@@ -221,7 +275,21 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       if (repositoryIntegration && !readNativeCredential) {
         throw new Error("Repository worker startup requires current GitHub dispatch admission");
       }
-      const imageReserve = repositoryIntegration?.preparedCapacity === "image";
+      const durability = workerWorkspaceDurabilitySchema
+        .optional()
+        .parse(
+          request.inheritedProfile
+            ? request.inheritedProfile.profileSnapshot.workspaceDurability
+            : getRuntimeConfig().cloudWorkers?.profiles?.[request.profileId]?.workspaceDurability,
+        );
+      if (
+        durability?.mode === "retained-disk" &&
+        (workspace.kind !== "repository" || request.deviceId)
+      ) {
+        throw new Error("Retained disk durability requires a managed cloud repository workspace");
+      }
+      const imageReserve =
+        durability?.mode !== "retained-disk" && repositoryIntegration?.preparedCapacity === "image";
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
@@ -244,6 +312,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                     ? {
                         repository: {
                           agentId: request.agentId,
+                          workspaceId: workspace.repository.workspaceId,
                           url: workspace.repository.url,
                           ref: workspace.repository.requestedRef ?? undefined,
                           baseCommit: workspace.repository.baseCommit ?? undefined,
@@ -260,14 +329,21 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         : undefined;
       assertCurrent();
       diagnostics?.mark("reserveClaim");
-      const prepared = preparedIntent
-        ? await startup.bindPreparedPlacement({
-            request,
-            placement,
-            intent: preparedIntent,
-            assertCurrent,
-          })
-        : undefined;
+      const prepared =
+        preparedIntent && !preparedIntent.retainedPolicy
+          ? await startup.bindPreparedPlacement({
+              request,
+              placement,
+              intent: preparedIntent,
+              assertCurrent,
+              signal,
+              markPhase: diagnostics?.mark,
+              retainCredentialCleanup,
+              onFallback: (replacement) => {
+                placement = replacement;
+              },
+            })
+          : undefined;
       assertCurrent();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
@@ -304,6 +380,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             os: request.os,
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
+            retainedPolicy: preparedIntent?.retainedPolicy,
             inheritedProfile: request.inheritedProfile,
             beforeProvision: assertCurrent,
           });
@@ -500,12 +577,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+      throw new RequiredWorkerProfileError(
+        "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+      );
+    }
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
-      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
-        throw new RequiredWorkerProfileError(
-          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
-        );
-      }
       if (!request.recoverToGateway) {
         return;
       }
@@ -530,7 +608,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
     };
     const initial = await placements.getAsync(request.sessionId);
-    authorize?.();
     beforeDrain?.();
     assertGatewayRecoverySource(initial);
     if (initial) {
@@ -545,7 +622,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     );
     return await options.runReclaimPreparation({
       ...request,
-      authorize,
+      authorize: authorize?.assertWorkerLifetime ?? authorize,
       beforeDrain: checkSource,
       pendingOperations,
       run: (reauthorize) =>
@@ -570,7 +647,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     runMoveBarrier: options.runMoveBarrier,
     dispatch,
     reclaimSource: (request, intent, authorize, onTransition) =>
-      reclaimOnce(request, intent, authorize, undefined, onTransition),
+      reclaimOnce(
+        request,
+        intent,
+        authorize?.assertWorkerLifetime ?? authorize,
+        undefined,
+        onTransition,
+      ),
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,

@@ -20,8 +20,9 @@ import {
   readLatestUpdateRun,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
-import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 
 export const installedUpdateCandidateSchema = z.object({
   version: z.string().trim().min(1).max(1024),

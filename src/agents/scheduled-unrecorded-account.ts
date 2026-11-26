@@ -15,7 +15,10 @@ export function createUnrecordedScheduledAccountRefusal(params: {
     : "a credential that is not a configured key";
   const refusal = new Error(
     `Automation has no recorded inference account. Runtime ${params.runtime} would run ${params.modelRef} with ${account}. ` +
-      `Record the account with openclaw automations edit <jobId> --model ${params.modelRef}@${params.profileId ?? "<profileId>"}, or with openclaw doctor --fix.`,
+      `Record the account with openclaw automations edit <jobId> --model ${params.modelRef}@${params.profileId ?? "<profileId>"}.` +
+      (params.runtime === "openclaw" || params.runtime === "codex"
+        ? " For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model."
+        : ""),
   );
   // Another model would only bypass the operator's account choice.
   recordModelFallbackStop(refusal);

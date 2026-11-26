@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync, StatementSync, constants as SQL } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { probeSqliteIteratorBehavior } from "../infra/sqlite-native-observer.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -100,6 +99,21 @@ it("keeps absent agent ownership separate from malformed metadata", () => {
   expect(readAgentMeta(database)).toBeNull();
 });
 
+it.each(["invalid", -1, 0, 1.5, 2, Number.MAX_VALUE])(
+  "rejects an invalid explicit agent reader floor (%s)",
+  (minReader) => {
+    using database = createMetadata("agent");
+    database.exec("ALTER TABLE schema_meta ADD COLUMN min_reader");
+    database.prepare("UPDATE schema_meta SET min_reader = ?").run(minReader);
+    expect(() => readAgentMeta(database)).toThrow(
+      expect.objectContaining({
+        name: "SqliteSchemaMismatchError",
+        message: expect.stringContaining("min_reader"),
+      }),
+    );
+  },
+);
+
 it.each(["transaction", "pinned snapshot"] as const)(
   "keeps raw ownership reads within a %s and observes foreign ownership after release",
   (snapshot) => {
@@ -135,7 +149,6 @@ it("keeps admitted ownership current through local writes, rollback, and authori
   trackSqliteSchema(database, {
     DatabaseSync,
     StatementSync,
-    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")).iteratorBehavior,
   });
   admitSqliteSchema(database);
   const read = () => readOperation(database, () => readAgentMeta(database));

@@ -17,7 +17,7 @@ const authStatus = {
 };
 const usage = { updatedAt: 1, providers: [] };
 const primaryError = "Provider access could not be refreshed. Try again.";
-const usageError = "Provider usage is unavailable; the last request failed. Refresh to retry.";
+const usageError = "Couldn’t load provider usage. Refresh to try again.";
 
 suite.define(() => {
   it.each([
@@ -47,12 +47,12 @@ suite.define(() => {
               "usage.status": usage,
             },
           });
-          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+          await page.goto(`${suite.server.baseUrl}settings/model-providers?provider=openai`);
           await waitForControlUiRoute(page, {
             pathname: "/settings/model-providers",
             routeId: "model-providers",
           });
-          const search = page.getByRole("searchbox", { name: "Search providers" });
+          const search = page.locator(".model-providers__search input");
           const filter = async (query: string, count: number) => {
             await search.fill(query);
             await expect

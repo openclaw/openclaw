@@ -244,8 +244,7 @@ export function createFaceTimeCallControl(params: {
       call.carrierHangupRetryTimer = setTimeout(() => {
         call.carrierHangupRetryTimer = undefined;
         void attemptCarrierHangup(call, reason);
-      }, 1_000);
-      call.carrierHangupRetryTimer.unref?.();
+      }, 1_000).unref();
     }
     return false;
   };

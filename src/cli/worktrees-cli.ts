@@ -18,7 +18,7 @@ import type {
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultRuntime } from "../runtime.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -49,6 +49,13 @@ function mutateWorktree<T>(
         config,
       );
     },
+  }).catch(async (error: unknown) => {
+    // An id that names no record is operator input, so its message is the human output.
+    const { WorktreeRecordNotFoundError } = await import("../agents/worktrees/errors.js");
+    if (error instanceof WorktreeRecordNotFoundError) {
+      throwExpectedCliError(error.message);
+    }
+    throw error;
   });
 }
 
@@ -59,17 +66,14 @@ async function readExactStateRequest(filename: string | undefined) {
   const { readRegularFile } = await import("../infra/fs-safe.js");
   const { exactStateRetirementSchema } =
     await import("../agents/worktrees/snapshot-exact-state-contract.js");
-  let buffer: Buffer;
   try {
     // Follow selected symlinks while refusing special files before owner admission can hang.
-    ({ buffer } = await readRegularFile({ filePath: realpathSync(filename) }));
+    const { buffer } = await readRegularFile({ filePath: realpathSync(filename) });
+    return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
   } catch (cause) {
-    throw new Error(
-      `Cannot read exact-state request ${filename}. Choose a readable regular JSON file and retry.`,
-      { cause },
-    );
+    const message = `Cannot read exact-state request ${filename}. Choose a readable regular JSON file and retry.`;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message, cause });
   }
-  return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
 }
 
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
@@ -156,7 +160,7 @@ export function registerWorktreesCli(program: Command): void {
               ? "missing (retirement candidate)"
               : record.removedAt
                 ? "restorable"
-                : "active",
+                : (record.gcProtection ?? "active"),
           })),
         }).trimEnd(),
       );
@@ -222,6 +226,12 @@ export function registerWorktreesCli(program: Command): void {
     .argument("<id>", "Managed worktree id")
     .option("--force", "Remove even if snapshot creation fails", false)
     .addOption(
+      new Option(
+        "--retry-preserved",
+        "Retry a preserved checkout after repairing its cause",
+      ).conflicts("ifLossless"),
+    )
+    .addOption(
       new Option("--if-lossless", "Remove without force only when clean and published").conflicts(
         "force",
       ),
@@ -236,7 +246,12 @@ export function registerWorktreesCli(program: Command): void {
     .action(
       async (
         id: string,
-        opts: JsonOption & { force?: boolean; ifLossless?: boolean; exactState?: string },
+        opts: JsonOption & {
+          force?: boolean;
+          ifLossless?: boolean;
+          exactState?: string;
+          retryPreserved?: boolean;
+        },
       ) => {
         const exactState = await readExactStateRequest(opts.exactState);
         const result = await mutateWorktree<
@@ -244,7 +259,13 @@ export function registerWorktreesCli(program: Command): void {
         >(
           "worktrees.remove",
           GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-          { id, force: opts.force, ifLossless: opts.ifLossless, exactState },
+          {
+            id,
+            force: opts.force,
+            ifLossless: opts.ifLossless,
+            exactState,
+            retryPreserved: opts.retryPreserved,
+          },
           async (service, guard) => {
             if (opts.ifLossless) {
               const removed = await service.removeIfLossless(id, guard);
@@ -259,9 +280,22 @@ export function registerWorktreesCli(program: Command): void {
               ...(exactState ? { exactState } : {}),
               reason: "manual-delete",
               allowSnapshotLoss: opts.force,
+              retryPreserved: opts.retryPreserved,
             });
           },
         );
+        if (result.preserved) {
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+          } else {
+            defaultRuntime.log(
+              terminalText`Preserved ${id}: ${result.preserved.reason}. After repair, retry with --retry-preserved.`,
+            );
+          }
+          const { exitCliAfterOutput } = await import("./one-shot-exit.js");
+          exitCliAfterOutput(defaultRuntime, 1);
+          return;
+        }
         if (opts.ifLossless) {
           const { removed, cleanup } = result;
           if (opts.json) {
@@ -390,7 +424,7 @@ export function registerWorktreesCli(program: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
       if (opts.job === "") {
-        throw new Error("--job must not be empty.");
+        throwExpectedCliError("--job must not be empty.");
       }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
@@ -402,7 +436,7 @@ export function registerWorktreesCli(program: Command): void {
         },
         async (service, guard, config) => {
           if (opts.job) {
-            throw new Error(
+            throwExpectedCliError(
               "Cleanup progress belongs to the running Gateway; start it before querying this job.",
             );
           }

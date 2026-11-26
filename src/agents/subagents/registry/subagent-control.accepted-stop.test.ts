@@ -367,8 +367,23 @@ it.each([
         : undefined;
     let termination: ReturnType<typeof markSubagentRunTerminated> | undefined;
     let pending: ReturnType<typeof killSubagentRunAdmin> | undefined;
+    let replacement: ReturnType<typeof registerAbort> | undefined;
     let callerAuthorized = true;
     const onResult = callback ? undefined : vi.fn(() => undefined);
+    if (mode === "replacement") {
+      const lifecycle = await import("../../../sessions/session-controller.lifecycle.js");
+      const waitForSettlement = lifecycle.waitForSessionControllerSettlement;
+      vi.spyOn(lifecycle, "waitForSessionControllerSettlement").mockImplementation(
+        (settled, timeoutMs) => {
+          const draining = waitForSettlement(settled, timeoutMs);
+          // Retire the idle fixture only after Stop selects and begins draining it.
+          if (replacement?.entry?.input.settlement.promise === settled) {
+            replacement.cleanup();
+          }
+          return draining;
+        },
+      );
+    }
     try {
       if (mode === "already terminal") {
         termination = markSubagentRunTerminated({ runId, reason: "killed" });
@@ -414,7 +429,8 @@ it.each([
       callerAuthorized = false;
       if (mode === "replacement") {
         rpcSourceTesting.deleteExpected(runId, owner);
-        registerAbort(target);
+        replacement = registerAbort(target);
+        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
       }
       releaseTail.resolve();
       await expect(pending).rejects.toThrow("Caller control revoked");
@@ -423,21 +439,16 @@ it.each([
       expect(subagentRuns.get(runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
       expect(onResult).not.toHaveBeenCalled();
       if (mode === "replacement") {
-        expect(getRpcSource(runId)?.input.abortSignal.aborted).toBe(false);
+        expect(replacement?.controller.signal.aborted).toBe(false);
       } else if (mode === "already terminal") {
         expect(owner.input.abortSignal.aborted).toBe(false);
       }
     } finally {
       releaseTail.resolve();
       admission?.release();
+      replacement?.cleanup();
       await Promise.allSettled([termination, pending, execution]);
       registration.cleanup();
-      if (mode === "replacement") {
-        const replacement = getRpcSource(runId);
-        if (replacement) {
-          retireSessionControllerInput(replacement.input);
-        }
-      }
       expectIdle();
     }
   },

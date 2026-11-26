@@ -5,7 +5,7 @@ import type { resolveUpdateCliArgv } from "./update-managed-service-handoff-comm
 import type { HandoffChild } from "./update-managed-service-handoff-control.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
-import type { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
+import type { ManagedHandoffParentStore } from "./update-managed-service-handoff-worker.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import type {
   ForegroundUpdateOrigin,
@@ -16,7 +16,7 @@ export type ManagedServiceUpdateHandoffParams = Parameters<typeof resolveUpdateC
   runId?: string;
   beforePark?: () => Promise<void>;
   /** Local original admission; never serialized to the detached helper. */
-  requesterAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+  requesterAuthority?: Readonly<{ signal?: AbortSignal }>;
   root: string;
   recoveryTimeoutMs?: number;
   restartDrainTimeoutMs: number;
@@ -47,6 +47,13 @@ export type ManagedServiceUpdateHandoffResult = {
   | { status: "joined"; handoffId?: string; message: string }
 );
 
+/**
+ * Independent custody facts, not an ordered phase enum. Claiming is local;
+ * transfer is provisional until the helper acknowledges it. Parking admits a
+ * service effect. Helper exit alone proves neither settlement nor lease release;
+ * `settled` joins the cleanup receipt with normal process close. Update success
+ * still belongs to the durable run report.
+ */
 export type ActiveManagedServiceUpdateHandoff = {
   handoffId: string;
   operatorRestartWarning?: string;
@@ -58,7 +65,7 @@ export type ActiveManagedServiceUpdateHandoff = {
   flight?: Promise<ManagedServiceUpdateHandoffResult>;
   launcher?: HandoffChild;
   closed?: Promise<void>;
-  leaseStore?: ReturnType<typeof createManagedHandoffLeaseStore>;
+  leaseStore?: ManagedHandoffParentStore;
   leaseDatabaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   launcherStartIdentity?: string | null;
   helper?: ManagedHandoffLease;

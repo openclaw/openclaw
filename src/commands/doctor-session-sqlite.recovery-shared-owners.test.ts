@@ -46,11 +46,11 @@ async function importAtCommittedOwner(
   owner: string,
   inject: () => Error | void,
 ) {
-  const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+  const snapshot = sqliteReaders.readSessionImportValidationSnapshot;
   const spy = vi
-    .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
-    .mockImplementation((target) => {
-      const result = snapshot(target);
+    .spyOn(sqliteReaders, "readSessionImportValidationSnapshot")
+    .mockImplementation((target, env) => {
+      const result = snapshot(target, env);
       if (
         target.agentId === owner &&
         result.ok &&
@@ -364,14 +364,14 @@ describe("runDoctorSessionSqlite", () => {
   );
 });
 
-function retireRecovery(
+async function retireRecovery(
   cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
   env: NodeJS.ProcessEnv,
 ) {
   closeDatabases();
   return retireSessionSqliteRecovery({
     env,
-    preview: inspectSessionSqliteRecovery({ cfg, env }),
+    preview: await inspectSessionSqliteRecovery({ cfg, env }),
     readConfig: async () => cfg,
     confirm: async () => true,
   });
