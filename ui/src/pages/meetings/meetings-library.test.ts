@@ -1,16 +1,14 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
 } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
-import { button, mount } from "./meetings-page.test-support.tsx";
+import { button, createMeetingsPageProvider, mount } from "./meetings-page.test-support.tsx";
 import { page as meetingsRoute } from "./route.tsx";
 
 afterEach(() => {
@@ -56,12 +54,7 @@ it("recovers an oversized saved query without loading all meetings while the rou
       client: createTestGatewayClient(request),
     }),
   );
-  const navigate = vi.fn<ApplicationContext["navigate"]>();
-  const provider = createSolidApplicationContextProvider({
-    basePath: "",
-    gateway,
-    navigate,
-  } as ApplicationContext);
+  const { provider, navigate } = createMeetingsPageProvider(gateway);
   const { renderSolid } = await meetingsRoute.component();
   const [search, setSearch] = createSignal<string>();
   const { container: page, unmount } = mountSolid(
