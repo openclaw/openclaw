@@ -23,6 +23,18 @@ const refusalCauses = {
     nextStep:
       "Use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
   },
+  "agent-not-in-role": {
+    why: "Your role on this Gateway does not include this agent.",
+    nextStep: "Choose an allowed agent, or ask a Gateway admin to add it to your role.",
+  },
+  "tool-policy-denies": {
+    why: "This session's current tool policy does not allow it.",
+    nextStep: "Ask a Gateway admin to change the session's tool policy, or use another session.",
+  },
+  "channel-access-ended": {
+    why: "The sender no longer has access to this channel.",
+    nextStep: "Review the channel access settings, then ask the sender to send it again.",
+  },
   "owner-removed": {
     why: "Your channel account is no longer listed as a Gateway owner.",
     nextStep:

@@ -191,6 +191,7 @@ export async function prepareNodeHostRuntime(params?: {
     : undefined;
   const workspaceOptions = {
     env,
+    filesystemIsolation: config.nodeHost?.workerRuns?.isolation === "filesystem",
     ephemeral: params?.ephemeral,
     managedIdentityTransport,
     platformTrust,
@@ -242,9 +243,7 @@ export async function prepareNodeHostRuntime(params?: {
         capacity: config.nodeHost?.workerRuns?.capacity,
         workspace: preparedWorkerWorkspace,
         containerEngine,
-        ...(config.nodeHost?.workerRuns?.containerImage
-          ? { containerImage: config.nodeHost.workerRuns.containerImage }
-          : {}),
+        containerImage: config.nodeHost?.workerRuns?.containerImage || undefined,
         onCapacityChanged: (capacity) => {
           preparedContainerCapacity = capacity;
           publishContainerCapacity?.(capacity);
@@ -339,6 +338,7 @@ export async function prepareNodeHostRuntime(params?: {
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
               executionContext,
+              filesystemIsolation: config.nodeHost?.workerRuns?.isolation === "filesystem",
               managedIdentityTransport,
               platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,

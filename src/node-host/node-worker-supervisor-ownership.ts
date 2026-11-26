@@ -250,6 +250,7 @@ export type NodeWorkerSupervisorOptions = {
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
+  filesystemIsolation?: boolean;
   /** Node-local canonical models captured before the runtime yields. */
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
@@ -329,6 +330,7 @@ export type NodeWorkerChildLifecycleOptions = {
   containerEngine?: NodeWorkerContainerEngine;
   containerLifecycle?: NodeWorkerContainerLifecycle;
   containerImage?: string;
+  filesystemIsolation?: boolean;
   starting: ReadonlyMap<string, Promise<NodeWorkerLaunchReceipt>>;
   initialize: () => Promise<void>;
   isClosed: () => boolean;

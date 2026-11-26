@@ -11,6 +11,7 @@ import {
   installDurableServiceCli,
   resolveDurableServiceCli,
 } from "./durable-service-entrypoint.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 
 const { runGlobalPackageUpdateSteps, installedCopyErrors, packageLock } = vi.hoisted(() => ({
@@ -111,16 +112,52 @@ describe("resolveDurableServiceCli", () => {
     expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
   });
 
-  it("reuses a copy that matches this version and passes the integrity checks", async () => {
-    const entrypoint = npxEntrypoint();
-    const durable = durableCopy();
-    installedCopyErrors.mockResolvedValueOnce([]);
+  it.each(["gateway", "node"] as const)(
+    "reuses the same checked %s service plan without overriding its resident owner",
+    async (service) => {
+      const entrypoint = npxEntrypoint();
+      const durable = durableCopy();
+      fs.mkdirSync(path.join(path.dirname(durable), "dist"));
+      fs.writeFileSync(path.join(path.dirname(durable), "dist", "index.js"), "");
+      installedCopyErrors.mockResolvedValueOnce([]);
+      const env = stateEnv();
+      const reused = await resolveDurableServiceCli(env, { install: false, service }, entrypoint);
+      const installed = await resolveDurableServiceCli(env, { install: true, service }, entrypoint);
+      const args = (
+        cliEntrypoint: Parameters<typeof resolveGatewayProgramArguments>[0]["cliEntrypoint"],
+      ) => {
+        const inputs = {
+          env,
+          runtime: "node" as const,
+          runtimePath: process.execPath,
+          cliEntrypoint,
+        };
+        return service === "gateway"
+          ? resolveGatewayProgramArguments({ ...inputs, port: 18789 })
+          : resolveNodeProgramArguments({ ...inputs, host: "127.0.0.1", port: 18789 });
+      };
+      const unowned = (await args(reused?.entrypoint)).programArguments;
+      expect(unowned).toEqual((await args(installed?.entrypoint)).programArguments);
+      expect(unowned).toContain(
+        service === "gateway" ? path.join(path.dirname(durable), "dist", "index.js") : durable,
+      );
 
-    await expect(
-      resolveDurableServiceCli(stateEnv(), { install: false, service: "gateway" }, entrypoint),
-    ).resolves.toEqual({ entrypoint: durable });
-    expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
-  });
+      const prefix = path.join(env.OPENCLAW_STATE_DIR, "git-install");
+      const release = path.join(prefix, "releases", "active", "openclaw");
+      const launcher = path.join(prefix, "openclaw-launcher.mjs");
+      fs.mkdirSync(release, { recursive: true });
+      fs.symlinkSync(release, path.join(prefix, "openclaw"), "junction");
+      fs.writeFileSync(launcher, "");
+      const owned = (await args(reused?.entrypoint)).programArguments;
+      if (service === "gateway") {
+        expect(owned.at(-4)).toBe(launcher);
+        expect(owned).toEqual((await args(installed?.entrypoint)).programArguments);
+      } else {
+        expect(owned).toEqual(unowned);
+      }
+      expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs npm lifecycle scripts with this Node, not an older one first on PATH", async () => {
     const env = { ...stateEnv(), PATH: path.resolve("/run/current-system/sw/bin") };

@@ -401,10 +401,14 @@ describe("shell env fallback", () => {
       }),
     ).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
     expect(api.getShellEnvAppliedKeys()).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+    expect(api.isShellEnvAppliedKey("OPENAI_API_KEY")).toBe(true);
     api.clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);
+    expect(api.isShellEnvAppliedKey("OPENAI_API_KEY")).toBe(false);
+    expect(api.isShellEnvAppliedKey("ANTHROPIC_API_KEY")).toBe(true);
     expect(api.getShellEnvAppliedKeys()).toEqual(["ANTHROPIC_API_KEY"]);
 
     expect(runShellEnvFallback({ env: successEnv })).toEqual([]);
+    expect(api.isShellEnvAppliedKey("ANTHROPIC_API_KEY")).toBe(false);
     expect(api.getShellEnvAppliedKeys()).toStrictEqual([]);
 
     exec.mockImplementation(() => {

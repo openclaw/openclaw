@@ -185,7 +185,7 @@ it.each([
     });
     await waitForSolid(() =>
       expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-        "Example API key is ready",
+        "Example API key connected",
       ),
     );
     if (delayed) {

@@ -31,6 +31,7 @@ it.each([
         endMs: Date.UTC(2026, 0, 1, 0, 10),
         title: "Reviewing the synthetic example project and its implementation notes ".repeat(4),
         summary: "Synthetic activity for timestamp layout validation.",
+        detail: "Expanded activity notes.",
       },
     ]);
     const request = vi.fn(async (method: string) =>
@@ -68,5 +69,13 @@ it.each([
     expect(title.scrollWidth).toBeGreaterThan(title.clientWidth);
     expect(getComputedStyle(title).textOverflow).toBe("ellipsis");
     expect(getComputedStyle(title).overflow).toBe("hidden");
+
+    header.click();
+    await waitForSolid(() => {
+      const detail = container.querySelector<HTMLElement>(".logbook-card__detail");
+      expect(detail?.getBoundingClientRect().left).toBe(
+        width <= 768 ? stripeRect.left : titleRect.left,
+      );
+    });
   },
 );

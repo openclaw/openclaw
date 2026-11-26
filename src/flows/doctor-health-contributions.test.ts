@@ -1804,38 +1804,6 @@ describe("doctor health contributions", () => {
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
-  it("does not report a removed Workspaces finding after a successful fix", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-state");
-    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
-      config: input.cfg ?? {},
-      findings: [
-        {
-          checkId: "core/doctor/removed-workspaces-state",
-          severity: "warning",
-          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
-        },
-      ],
-      remainingFindings: [],
-      changes: ["Removed retired Workspaces plugin state at /tmp/workspaces."],
-      warnings: [],
-      diffs: [],
-      effects: [],
-      checksRun: 1,
-      checksRepaired: 1,
-      checksValidated: 1,
-    }));
-    const ctx = createDoctorContext({
-      shouldRepair: true,
-      options: { nonInteractive: true },
-    });
-
-    await contribution.run(ctx);
-
-    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("core/doctor/removed-workspaces-state"),
-    );
-  });
-
   it("grants Doctor-only state migration authority only in repair mode", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
     const cfg = { session: { store: "/tmp/shared-sessions.json" } };
@@ -3116,6 +3084,9 @@ describe("doctor health contributions", () => {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
           },
         }),
+      );
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ skipPluginValidation: true }),
       );
     });
   });

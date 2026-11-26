@@ -27,6 +27,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
@@ -137,6 +138,26 @@ export function applyConnectionScopeCap(params: {
   return params.role === "operator"
     ? intersectOperatorScopes(params.scopes, declaredScopes)
     : params.scopes.filter((scope) => declaredScopes.includes(scope));
+}
+
+/**
+ * Caps connection scopes by the person's role. `roleCappedScopes` keeps what the role took
+ * away so a later role change that would grant more can reconnect the client.
+ */
+export function capConnectionScopesByRole(
+  effectiveScopes: string[],
+  rolePolicy: Pick<GatewayOperatorRoleDefinition, "scopes"> | undefined,
+): { scopes: string[]; roleCappedScopes?: readonly string[] } {
+  if (!rolePolicy) {
+    return { scopes: effectiveScopes };
+  }
+  const scopes = intersectOperatorScopes(effectiveScopes, rolePolicy.scopes);
+  // Capping can swap in narrower implied scopes, so compare grants rather than list lengths.
+  const capped = effectiveScopes.some(
+    (scope) =>
+      !roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: scopes }),
+  );
+  return capped ? { scopes, roleCappedScopes: Object.freeze([...effectiveScopes]) } : { scopes };
 }
 
 export function resolveEffectiveConnectionScopes(params: {

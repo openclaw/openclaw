@@ -53,17 +53,15 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
-  "src/gateway/talk/client-tool-authority.ts", // Talk caller: admin scope + `ownerAllowFrom` match
-  // Scheduled and requester-owner continuations (cron creator authority).
-  "src/agents/openclaw-plugin-tools.ts",
+  // Scheduled write: an operator-authorized job's operator-policy message action.
+  "src/channels/plugins/message-action-dispatch.ts",
+  // Recorded data read back, never decided: protocol field, transcript and lineage receipts,
+  // and the owner bit scheduled occurrence admission minted (`facts.authority.owner`).
+  "packages/gateway-protocol/src/schema/agent.ts",
   "src/agents/openclaw-tools.ts",
   "src/agents/scheduled-message-invocation.ts",
-  "src/channels/plugins/message-action-dispatch.ts", // scheduled write: the job's operator
-  "src/cron/execution-context-registry.ts",
-  "src/plugins/tool-factory-context.ts",
-  // Recorded data read back, never decided: protocol field, transcript and lineage receipts.
-  "packages/gateway-protocol/src/schema/agent.ts",
   "src/auto-reply/reply/memory-flush-prepare.ts",
+  "src/cron/execution-context-registry.ts",
   "src/gateway/session-transcript-message.ts",
   "src/plugins/memory-audience.ts",
 ]);

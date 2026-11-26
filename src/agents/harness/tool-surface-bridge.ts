@@ -53,6 +53,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     modelToolsEnabled: boolean;
     /** False when the harness cannot dispatch an unregistered catalog name directly. */
     supportsDeferredToolCalls?: boolean;
+    /** True when the runner loads an on-demand catalog tool on its first direct call by name. */
+    loadsOnDemandTools?: boolean;
     prompt?: string;
     runId?: string;
     runtimeToolAllowlist?: readonly string[];
@@ -106,6 +108,9 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   } = plan;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
+  if (toolSearchCatalogRef && params.loadsOnDemandTools === true) {
+    toolSearchCatalogRef.loadsOnDemandTools = true;
+  }
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
     forceToolNames: [
       ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_TOOL_NAMES : []),

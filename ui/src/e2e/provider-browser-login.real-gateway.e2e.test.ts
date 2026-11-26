@@ -193,7 +193,9 @@ suite.define(() => {
         await freshPage.waitForURL(freshResponse.url());
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
         await expect.poll(profile).toMatchObject(savedProfile);
-        await modal.getByRole("heading", { name: `${loginLabel} is ready`, exact: true }).waitFor();
+        await modal
+          .getByRole("heading", { name: `${loginLabel} connected`, exact: true })
+          .waitFor();
         await page
           .getByText(`${loginLabel}: Provider credentials saved.`, { exact: true })
           .waitFor();
