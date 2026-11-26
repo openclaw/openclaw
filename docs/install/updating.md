@@ -538,11 +538,22 @@ recovery, or an actionable failure. Lost ownership, named data risk, and
 unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
-Interrupted managed recovery requires a successful health RPC and the expected
-identity from the same authenticated connection; HTTP readiness alone is not
-recovery proof. Existing data-risk and process-ownership refusals still apply.
-The managed helper that starts the update must contain this change; a candidate
-installed by an older helper cannot retrofit it.
+The in-place updater bounds the migrated finalizer process even without an
+explicit `--timeout`; an explicit `--timeout` takes precedence. The default
+allowance accounts for SQLite state size and installed plugins. The waiting
+updater joins the worker's process tree before returning control to the managed
+helper. A finalizer stopped at its deadline, a killed waiting updater, and a
+killed worker all enter the same interrupted recovery that `openclaw update
+repair` runs: the helper waits for the worker's lease to settle, then either
+finishes the published candidate or keeps the previous installation, starts the
+Gateway, and verifies it. Recovery requires a successful health RPC and the
+expected version and build from the same authenticated connection; HTTP readiness
+or a recorded recovery result alone is not proof that the Gateway serves.
+Existing data-risk and process-ownership refusals still apply. The installed
+updater and its managed helper must contain these changes. A candidate installed
+by an older helper cannot retrofit its waiting parent or helper. Release-launcher
+trials have their own restart and rollback deadline and do not use the migrated
+finalizer.
 
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while

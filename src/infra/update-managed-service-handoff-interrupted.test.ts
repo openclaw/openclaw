@@ -110,6 +110,62 @@ itUnix.each([
   },
 );
 
+// The updater binds its child lease to the candidate worker; losing both must not
+// strand the helper's own claim and leave the Gateway stopped.
+itUnix.each(["killed", "exits"] as const)(
+  "recovers after SIGKILL when the candidate worker held the child lease (%s)",
+  async (candidateWorker) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate: "after",
+      candidateWorker,
+      helperExitCode: 0,
+    });
+    expect(result.log).not.toContain("lease binding was lost");
+    expect(result.state, result.log).toMatchObject({
+      restored: true,
+      healthProbed: true,
+      expectedVersion: "2.0.0",
+      postCoreRepaired: true,
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: "succeeded",
+      phase: "finished",
+      verification: { settled: true, runningVersion: "2.0.0" },
+    });
+  },
+);
+
+// A finalizer deadline leaves recovery pending for the helper; it must not leave the
+// Gateway stopped for a manual repair.
+itUnix.each([
+  { interruptedUpdate: "after", forward: true },
+  { interruptedUpdate: "prepared", forward: false },
+] as const)(
+  "recovers a finalizer stopped at its deadline at $interruptedUpdate publication",
+  async ({ interruptedUpdate, forward }) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate,
+      finalizerTimeout: true,
+      helperExitCode: forward ? 0 : 1,
+    });
+    expect(result.log).toContain("update command exited code=1 signal=null");
+    expect(result.state, result.log).toMatchObject({
+      restored: true,
+      healthProbed: true,
+      expectedVersion: forward ? "2.0.0" : "1.0.0",
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: forward ? "succeeded" : "rolled-back",
+      phase: "finished",
+      verification: { settled: true, runningVersion: forward ? "2.0.0" : "1.0.0" },
+    });
+  },
+);
+
 itUnix("recovers past an earlier false mark that post-core repair verifies", async () => {
   // Only the earlier run is marked; the interrupted run's repair records its receipt.
   const result = await runBoundary("systemd", {

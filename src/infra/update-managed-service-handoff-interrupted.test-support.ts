@@ -36,6 +36,10 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   /** An earlier run carries a false mark that post-core repair verifies. */
   olderMark?: true;
   finalizeFailure?: true;
+  /** The updater hands its child lease to a candidate worker before SIGKILL, as finalization does. */
+  candidateWorker?: "killed" | "exits";
+  /** Instead of SIGKILL, report the pending recovery a finalizer deadline leaves. */
+  finalizerTimeout?: true;
 }) {
   const olderMarkRunId = params.olderMark
     ? seedFalseDataAtRiskMark({
@@ -209,8 +213,30 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       `
       }
       ${operatorRestart}
-      process.kill(process.pid,"SIGKILL");
+      ${
+        params.candidateWorker
+          ? `
+      const { withUpdateCommandExecutorChild } = await import(${runtimeUrl});
+      await withUpdateCommandExecutorChild(fence, ${JSON.stringify(installRoot)}, async (_grant, bindChild) => {
+        const worker = require("node:child_process").spawn(process.execPath,
+          ["-e", "setTimeout(() => {}, ${params.candidateWorker === "exits" ? 1500 : 60000})"], {detached:true, stdio:"ignore"});
+        await new Promise((resolve, reject) => worker.once("spawn", resolve).once("error", reject));
+        bindChild(worker.pid, worker.spawnargs);
+        ${params.candidateWorker === "killed" ? 'process.kill(-worker.pid, "SIGKILL"); await new Promise((resolve) => worker.once("exit", resolve));' : ""}
+        process.kill(process.pid,"SIGKILL");
+      });`
+          : ""
+      }
+      ${params.finalizerTimeout ? "" : 'process.kill(process.pid,"SIGKILL");'}
     });
+    ${
+      params.finalizerTimeout
+        ? `process.stdout.write(JSON.stringify({status:"error", mode:"npm", root:${JSON.stringify(installRoot)},
+      reason:"update-activation-timeout", before:{version:"1.0.0"}, after:{version:"2.0.0"}, steps:[],
+      recovery:{serviceRestartSafe:false, reason:"update-activation-timeout"}}), () => process.exit(1));
+    return;`
+        : ""
+    }
     `
     }
     ${operatorRestart}

@@ -269,7 +269,15 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
     clearInterval(leaseWatch);
     clearTimeout(admissionDeadline);
     if (params.action !== "triage" && !bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity)) {
-      throw new Error("managed update command lease binding was lost");
+      // A killed updater can leave the candidate worker it bound still holding this run's
+      // child lease. Join that worker within the recovery budget, then reclaim the claim.
+      const deadline = Date.now() + params.recoveryTimeoutMs;
+      while (phase === "update" && hasManagedUpdateLease() && leaseStore.hasUnsettledChildren(managedUpdateLease) &&
+        Date.now() < deadline && !terminationRequested) await sleep(250);
+      if (phase !== "update" || !bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity)) {
+        throw new Error("managed update command lease binding was lost");
+      }
+      appendLog("managed update command child lease settled after the updater exited");
     }
     if (exit.error) throw exit.error;
     appendLog(

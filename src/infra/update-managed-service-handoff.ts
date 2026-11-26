@@ -16,6 +16,7 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../shared/update-outcome.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
@@ -747,7 +748,11 @@ async function collectUpdateFailureTriage() {
     // Success may change install roots; only recovery requires the original root.
     // Sentinels and diagnostic exports never authorize activation.
     const result = outputOverflow ? null : parseManagedUpdateResult(updaterOutput);
-    if ((exit.signal || !result) && shouldRecoverInterruptedUpdater()) {
+    // A finalizer stopped at its deadline leaves recovery pending for this helper, like a
+    // killed updater; the same verified recovery restores service without a manual repair.
+    const finalizerTimedOut = !exit.signal && result?.status === "error" &&
+      result.reason === ${JSON.stringify(UPDATE_ACTIVATION_TIMEOUT_REASON)} && !result.recovery?.dataAtRisk;
+    if ((exit.signal || !result || finalizerTimedOut) && shouldRecoverInterruptedUpdater()) {
       await recoverInterruptedUpdater();
       return;
     }

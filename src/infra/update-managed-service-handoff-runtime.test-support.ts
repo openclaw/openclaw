@@ -46,6 +46,8 @@ export async function prepareManagedServiceRuntimeFixture({
     | "pluginCohort"
     | "olderMark"
     | "finalizeFailure"
+    | "candidateWorker"
+    | "finalizerTimeout"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -78,6 +80,8 @@ export async function prepareManagedServiceRuntimeFixture({
           pluginCohort: options.pluginCohort,
           olderMark: options.olderMark,
           finalizeFailure: options.finalizeFailure,
+          candidateWorker: options.candidateWorker,
+          finalizerTimeout: options.finalizerTimeout,
         })
       : undefined;
   if (options?.requester) {
