@@ -219,7 +219,11 @@ audit_retained_dmg_async_frames() (
   cleanup_audit_mount() {
     local result=$?
     if [[ "$mounted" == "1" ]]; then
-      hdiutil detach "$mount_dir" >/dev/null || result=1
+      if ! hdiutil detach "$mount_dir" >/dev/null; then
+        # macOS background readers can hold the private read-only mount after the audit exits.
+        echo "WARN: Forcing detach of read-only DMG audit mount: $mount_dir" >&2
+        hdiutil detach "$mount_dir" -force >/dev/null || result=1
+      fi
     else
       # A failed attach can leave the DMG's devices attached without a mount.
       detach_disk_image "$dmg" || result=1

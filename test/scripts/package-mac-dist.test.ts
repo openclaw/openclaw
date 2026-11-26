@@ -193,7 +193,11 @@ elif name == "hdiutil":
     elif args[:2] == ["detach", "-quiet"]:
         if (root / "detach-fails").exists(): sys.exit(1)
         attached.unlink()
-    else: shutil.rmtree(pathlib.Path(args[1]) / "OpenClaw.app")
+    else:
+        busy = root / "detach-busy"
+        if busy.exists() and ("-force" not in args or busy.read_text() == "persistent"):
+            sys.exit("hdiutil: couldn't eject disk5 - Resource busy")
+        shutil.rmtree(pathlib.Path(args[1]) / "OpenClaw.app")
 elif name == "audit-async-sleep-frames.py":
     if (root / "reject-audit").exists(): sys.exit("async frame allocation is undersized")
 elif name == "notarize-mac-artifact.sh":
@@ -350,6 +354,28 @@ it.each([false, true])("cleans failed audit mounts (detach fails: %s)", (detachF
   } else {
     expect(resumed.stderr).not.toContain("still attached");
   }
+});
+
+it.each(["recoverable", "persistent"])("handles a %s busy retained DMG audit mount", (busy) => {
+  const f = makeCheckpointFixture();
+  expectSuccess(f.run("--checkpoint-only"));
+  f.write("detach-busy", busy);
+
+  const resumed = f.run("--resume-notarization");
+  if (busy === "recoverable") {
+    expectSuccess(resumed);
+    expect(readdirSync(f.file("dist")).filter((name) => name.startsWith(".notary-dmg."))).toEqual(
+      [],
+    );
+    expect(f.read("dist/OpenClaw-2026.8.2.dmg")).toBe("dmgsignedstapled");
+  } else {
+    expectFailure(resumed, "Resource busy");
+    expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+    f.expectFiles(false, "dist/OpenClaw-2026.8.2.dmg");
+  }
+  expect(f.json("dist/macos-notarization-recovery/manifest.json").completed).toBe(
+    busy === "recoverable",
+  );
 });
 
 function distributionSeed(arch: string) {
