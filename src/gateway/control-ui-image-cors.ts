@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDirectIngressPublishedPort } from "./ingress-attribution.js";
 
 function resolveControlUiImageCorsOrigin(
   req: IncomingMessage,
   cfg: OpenClawConfig,
+  publishedPort?: number,
 ): string | undefined {
   const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
   if (!rawOrigin) {
@@ -20,7 +22,10 @@ function resolveControlUiImageCorsOrigin(
   } catch {
     return undefined;
   }
-  const allowed = resolveControlUiAllowedOrigins(cfg);
+  const allowed = resolveControlUiAllowedOrigins(
+    cfg,
+    resolveDirectIngressPublishedPort(req, publishedPort),
+  );
   return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
     ? origin
     : undefined;
@@ -30,12 +35,13 @@ export function setControlUiImageCorsHeaders(
   req: IncomingMessage,
   res: ServerResponse,
   cfg: OpenClawConfig,
+  publishedPort?: number,
 ): boolean {
   res.setHeader("Vary", "Origin, Authorization, Cookie");
   if (!req.headers.origin) {
     return true;
   }
-  const origin = resolveControlUiImageCorsOrigin(req, cfg);
+  const origin = resolveControlUiImageCorsOrigin(req, cfg, publishedPort);
   if (!origin) {
     // Re-evaluation must retire a grant removed during asynchronous auth work.
     res.removeHeader("Access-Control-Allow-Origin");

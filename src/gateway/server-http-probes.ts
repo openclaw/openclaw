@@ -56,6 +56,7 @@ export async function handleGatewayProbeRequest(
   rateLimiter?: AuthRateLimiter,
   getReadiness?: PreparedReadinessChecker,
   getStartup?: StartupChecker,
+  publishedPort?: number,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
   if (status === "namespace" || status === "outside") {
@@ -96,7 +97,7 @@ export async function handleGatewayProbeRequest(
           trustedProxies,
           allowRealIpFallback,
           rateLimiter,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req, undefined, publishedPort),
         })
       ).ok;
     }

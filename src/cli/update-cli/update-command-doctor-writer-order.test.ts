@@ -78,7 +78,10 @@ vi.mock("../../daemon/service-audit.js", async (original) => ({
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.plan,
 }));
-vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
+vi.mock("../../infra/container-environment.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/container-environment.js")>()),
+  isContainerEnvironment: () => false,
+}));
 vi.mock("../../process/exec.js", async (original) => {
   const actual = await original<typeof import("../../process/exec.js")>();
   return {

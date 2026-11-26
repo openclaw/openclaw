@@ -174,8 +174,8 @@ export async function handleUserProfileAvatarHttpRequest(
     return false;
   }
   const method = req.method;
-  const cfg = opts.cfg ?? getRuntimeConfig();
-  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg);
+  const cfg = opts.cfg ?? opts.getRuntimeConfig?.() ?? getRuntimeConfig();
+  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg, opts.publishedPort);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });

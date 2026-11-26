@@ -13,7 +13,6 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { resolveGatewayAuth } from "./auth.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -31,7 +30,7 @@ import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-sta
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
-import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
+import { assertGatewayCandidateSecurityConfig } from "./server-runtime-config.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { startWorkerHumanPresence } from "./server/client-human-presence.js";
@@ -152,6 +151,7 @@ export async function finishGatewayStartup(params: {
       bootId: params.bootId,
       preauthConnectionBudget: runtime.preauthConnectionBudget,
       port,
+      publishedPort: opts.publishedPort,
       gatewayHost: bindHost ?? undefined,
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
@@ -442,20 +442,16 @@ export async function finishGatewayStartup(params: {
     .catch((error: unknown) => log.warn(`openclaw-id: start failed: ${String(error)}`));
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
-  const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
-    assertGatewayRuntimeSecurityConfig({
+  const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>
+    assertGatewayCandidateSecurityConfig({
       cfg,
+      publishedPort: opts.publishedPort,
       port,
       bindHost,
       controlUiEnabled: opts.controlUiEnabled ?? cfg.gateway?.controlUi?.enabled ?? true,
       tailscaleMode: runtime.tailscaleMode,
-      resolvedAuth: resolveGatewayAuth({
-        authConfig: cfg.gateway?.auth,
-        tailscaleMode: runtime.tailscaleMode,
-        env,
-      }),
+      env,
     });
-  };
   const tlsRenewal = startGatewayTlsRenewal({
     scheduler: runtime.scheduler,
     runtime: gatewayTls,
@@ -566,9 +562,8 @@ export async function finishGatewayStartup(params: {
     onCronRestart: () => {
       cronStartState.handled = true;
     },
-    prepareTerminalConfig: (plan, nextConfig) => {
-      terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
-    },
+    prepareTerminalConfig: (plan, nextConfig) =>
+      terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway }),
     reconcileRuntimePolicy: async (nextConfig, phase) => {
       terminalSessions.closeDisallowedAgents((agentId) => terminalLaunchPolicy.resolve(agentId).ok);
       if (phase !== "committed") {
@@ -642,9 +637,9 @@ export async function finishGatewayStartup(params: {
   if (lifecycle.closePreludeStarted) {
     return { startupSettled: postAttachHandles.startupSettled };
   }
-  await promoteConfigSnapshotToLastKnownGood(configSnapshot).catch((err: unknown) => {
-    log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
-  });
+  await promoteConfigSnapshotToLastKnownGood(configSnapshot).catch((err: unknown) =>
+    log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`),
+  );
   if (!minimalTestGateway) {
     const gatewayRuntimeServices = await import("./server-runtime-services.js");
     gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({

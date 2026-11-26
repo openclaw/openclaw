@@ -5,13 +5,28 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 /** An authored list overrides the advertised origin, including an empty list. */
 export function resolveControlUiAllowedOrigins(
   config: Pick<OpenClawConfig, "gateway"> | undefined,
+  publishedPort?: number,
 ): string[] {
   const configured = config?.gateway?.controlUi?.allowedOrigins;
   if (configured !== undefined) {
     return configured;
   }
   const origin = resolveGatewayPublicOrigin(config);
-  return origin ? [origin] : [];
+  const origins = origin ? [origin] : [];
+  // Deployment metadata is supplied only by runtime callers, never config writers.
+  // Ambient proxy identity may authorize requests only from its configured browser origin.
+  if (publishedPort === undefined || config?.gateway?.auth?.mode === "trusted-proxy") {
+    return origins;
+  }
+  if (!Number.isInteger(publishedPort) || publishedPort < 1 || publishedPort > 65535) {
+    throw new Error("Published Gateway port must be an integer between 1 and 65535.");
+  }
+  return [
+    ...new Set([
+      ...origins,
+      ...buildDefaultControlUiAllowedOrigins({ port: publishedPort, bind: "loopback" }),
+    ]),
+  ];
 }
 
 /** Non-loopback gateway bind modes that require explicit Control UI allowed origins. */
@@ -36,7 +51,8 @@ export function hasConfiguredControlUiAllowedOrigins(params: {
       : params.allowedOrigins;
   return (
     Array.isArray(allowedOrigins) &&
-    allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
+    (allowedOrigins.length === 0 ||
+      allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0))
   );
 }
 
@@ -50,13 +66,12 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   bind: unknown;
   customBindHost?: string;
 }): string[] {
-  const origins = new Set<string>([
-    `http://localhost:${params.port}`,
-    `http://127.0.0.1:${params.port}`,
-  ]);
+  const formatOrigin = (host: string) =>
+    params.port === 80 ? `http://${host}` : `http://${host}:${params.port}`;
+  const origins = new Set<string>([formatOrigin("localhost"), formatOrigin("127.0.0.1")]);
   const customBindHost = params.customBindHost?.trim();
   if (params.bind === "custom" && customBindHost) {
-    origins.add(`http://${customBindHost}:${params.port}`);
+    origins.add(formatOrigin(customBindHost));
   }
   return [...origins];
 }

@@ -154,7 +154,7 @@ For boot persistence on SSH/headless hosts, enable lingering for your current us
 sudo loginctl enable-linger "$(whoami)"
 ```
 
-The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service.
+The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service. If you customize the Gateway `PublishPort` directly with a current image, add `--published-port <host-port>` to its `Exec` command; that explicit argument overrides generated launch metadata.
 
 <Note>
 Keep the generated `--bind lan`. Bind modes `loopback` and `tailnet` select host interfaces and don't work as intended inside a container network namespace: a container has no Tailscale interface, and `tailnet` silently falls back to loopback-only, so published ports cannot reach the gateway even though startup logs report ready. Scope exposure with the Quadlet's published ports instead; if you need a raw address, use `gateway.bind: "custom"` with `gateway.customBindHost: "0.0.0.0"`.
@@ -167,7 +167,46 @@ Keep the generated `--bind lan`. Bind modes `loopback` and `tailnet` select host
 - **Token file:** `~/.openclaw/.env`
 - **Launch helper:** `./scripts/run-openclaw-podman.sh`
 
-The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
+The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement.
+
+Container launch supplies the published Gateway port automatically. When
+`gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
+and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
+Trusted-proxy authentication retains its configured origin policy and does not
+inherit those direct-container loopback grants. Managed Tailscale Serve/Funnel
+and relayed ingress likewise retain their own origin policy.
+The manual launcher supplies those loopback defaults only when the publish host
+is `127.0.0.1` or the IPv4 wildcard `0.0.0.0`. For a specific non-loopback
+`OPENCLAW_PODMAN_PUBLISH_HOST`, configure the browser origin explicitly.
+Changing the public origin updates the inherited origin without saving a copy
+in the allowlist. With a current image, an explicit list, including `[]`, remains authoritative and
+is not changed by setup or launch; include any desired browser origins yourself.
+Previously saved lists, including entries written by older setup versions,
+remain authoritative. If browser access fails after changing the published
+port or public origin, update `gateway.controlUi.allowedOrigins` to include
+the origins you intend to allow. To use the current public origin and mapped
+localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
+field from your configuration; setting it to `[]` disables those defaults.
+Before replacing a container, setup and the manual launcher warn when a saved
+loopback list does not include the selected mapped port; the list stays unchanged.
+
+Setup checks the selected image before changing saved configuration or replacing
+the Gateway. Images with the existing `gateway --port` command remain supported;
+setup reports when an older image lacks runtime mapped-port defaults. For those
+images only, setup retains its legacy seed for an omitted origin policy with no
+public origin. Setup never infers or rewrites existing lists. An older image
+may still rewrite an authored `[]` during its own Doctor activation, using internal
+listener origins rather than the published port. Setup warns before replacement;
+it does not skip Doctor or change your policy. Upgrade the selected image before
+launch if `[]` must remain authoritative.
+Upgrade the image to inherit launch defaults without saving origins. Setup
+does not upgrade your selected image or rewrite saved origin policy automatically.
+Custom images must provide `node` for the isolated setup probe. Failed or
+malformed Gateway help stops setup before replacing the running Gateway.
+
+Container launch retains the image's direct Gateway command, including its normal
+Doctor activation. New images receive the published port as launch metadata; old
+images ignore it and retain their existing behavior. Manual launch uses the checked image ID for that invocation. Quadlet retains the selected image name so pulling or rebuilding that image and restarting selects the updated image.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 

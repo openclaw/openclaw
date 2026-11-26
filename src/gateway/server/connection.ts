@@ -16,6 +16,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import { getHeader } from "../http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
+  resolveDirectIngressPublishedPort,
   hasCurrentRemoteControlUiIngress,
   type GatewayIngressAttribution,
 } from "../ingress-attribution.js";
@@ -56,6 +57,7 @@ import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from
 const preconnectAuthLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = Pick<
   GatewayWsMessageHandlerParams,
+  | "publishedPort"
   | "bootId"
   | "clients"
   | "connectionWork"
@@ -617,6 +619,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     ...params,
     ...connectionLifecycle,
     upgradeReq,
+    publishedPort: resolveDirectIngressPublishedPort(upgradeReq, params.publishedPort),
     ingressAttribution,
     ...params.addresses,
     forwardedFor,

@@ -118,59 +118,6 @@ resolve_user_home() {
   printf '%s' "$home"
 }
 
-write_local_control_ui_origins() {
-  python3 - "$@" <<'PY'
-import json
-import sys
-
-path, port, tmp, operation = sys.argv[1:]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to {operation} gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-public_origin = gateway.get("publicOrigin")
-inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
-desired = [f"http://127.0.0.1:{port}", f"http://localhost:{port}"]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-seen = set()
-# Setup replaces managed localhost ports; launch preserves and deduplicates them.
-for origin in allowed + (desired if operation == "sync" else []):
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized or (operation == "sync" and normalized in seen):
-        continue
-    if operation == "seed" and normalized.startswith("http://"):
-        host = normalized[len("http://") :].split(":", 1)[0]
-        if host in {"127.0.0.1", "localhost"}:
-            continue
-    cleaned.append(normalized)
-    seen.add(normalized)
-if not inherits_public_origin:
-    control_ui["allowedOrigins"] = cleaned + (desired if operation == "seed" else [])
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-}
-
 generate_token_hex_32() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 32
@@ -212,4 +159,99 @@ upsert_env_var() {
   fi
   mv "$tmp" "$file"
   chmod 600 "$file" 2>/dev/null || true
+}
+
+# Keep local deployment mode initialization separate from operator-owned origins.
+# Fresh files have no authored origin policy. Stable images need this initial seed
+# even on hosts without Python; subsequent setup never infers list provenance.
+write_initial_gateway_config() {
+  local file="$1" legacy_port="${2:-}"
+  if [[ -n "$legacy_port" ]]; then
+    write_file_atomically "$file" 600 <<JSON
+{ "gateway": { "mode": "local", "controlUi": { "allowedOrigins": ["http://localhost:$legacy_port", "http://127.0.0.1:$legacy_port"] } } }
+JSON
+  else
+    write_file_atomically "$file" 600 <<'JSON'
+{ "gateway": { "mode": "local" } }
+JSON
+  fi
+}
+
+ensure_local_gateway_mode() {
+  local file="$1"
+  local legacy_port="${2:-}"
+  local published_port="${3:-}"
+  local tmp=""
+  ensure_safe_write_file_path "config file" "$file"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Warning: python3 not found; unable to initialize gateway.mode in $file." >&2
+    return 0
+  fi
+  tmp="$(mktemp "$(dirname "$file")/.config.tmp.XXXXXX")"
+  if ! python3 - "$file" "$tmp" "$legacy_port" "$published_port" <<'PYTHON'
+import json
+import sys
+
+path, tmp, legacy_port, published_port = sys.argv[1:]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except json.JSONDecodeError as exc:
+    print(f"Warning: unable to initialize gateway.mode in {path}: existing config is not strict JSON ({exc}). Skipping direct JSON rewrite.", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(f"{path}: expected top-level object")
+gateway = data.setdefault("gateway", {})
+if not isinstance(gateway, dict):
+    raise SystemExit(f"{path}: expected gateway object")
+changed = "mode" not in gateway
+if changed:
+    gateway["mode"] = "local"
+# Stable images ignore launch metadata. Preserve their omitted-policy setup only.
+control_ui = gateway.get("controlUi", {})
+if legacy_port and not gateway.get("publicOrigin") and isinstance(control_ui, dict) and "allowedOrigins" not in control_ui:
+    control_ui["allowedOrigins"] = [f"http://localhost:{legacy_port}", f"http://127.0.0.1:{legacy_port}"]
+    gateway["controlUi"] = control_ui
+    changed = True
+origins = control_ui.get("allowedOrigins") if isinstance(control_ui, dict) else None
+if published_port and isinstance(origins, list):
+    desired = [f"http://localhost:{published_port}", f"http://127.0.0.1:{published_port}"]
+    has_loopback = any(isinstance(value, str) and value.startswith(("http://localhost:", "http://127.0.0.1:")) for value in origins)
+    # Authored policy wins: warn before replacement, never invent a launch permission gate.
+    if has_loopback and not any(value in origins for value in desired):
+        print(f"Warning: published Gateway port {published_port} does not match the saved loopback gateway.controlUi.allowedOrigins. Dashboard access may be refused. Update that list explicitly, or remove the field to inherit current-image launch defaults. Existing policy is unchanged.", file=sys.stderr)
+if changed:
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+PYTHON
+  then
+    rm -f "$tmp"
+    # The canonical CLI reads valid JSON5. Only seed legacy omitted policy; never merge lists.
+    if [[ -n "$legacy_port" ]] && command -v openclaw >/dev/null 2>&1; then
+      local gateway_json="" seed_origins=""
+      if gateway_json="$(OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$(dirname "$file")" OPENCLAW_CONFIG_PATH="$file" openclaw config get gateway --json 2>/dev/null)"; then
+        if seed_origins="$(printf '%s' "$gateway_json" | python3 -c '
+import json, sys
+gateway = json.load(sys.stdin)
+control_ui = gateway.get("controlUi", {})
+if not gateway.get("publicOrigin") and isinstance(control_ui, dict) and "allowedOrigins" not in control_ui:
+    port = sys.argv[1]
+    print(json.dumps([f"http://localhost:{port}", f"http://127.0.0.1:{port}"]))
+' "$legacy_port")" && [[ -n "$seed_origins" ]]; then
+          OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$(dirname "$file")" OPENCLAW_CONFIG_PATH="$file" \
+            openclaw config set gateway.controlUi.allowedOrigins "$seed_origins" --strict-json >/dev/null
+        fi
+      else
+        echo "Warning: canonical config read failed; set gateway.controlUi.allowedOrigins explicitly for the selected legacy image." >&2
+      fi
+    fi
+    return 0
+  fi
+  if [[ -s "$tmp" ]]; then
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"
+  fi
 }

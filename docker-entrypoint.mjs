@@ -5,7 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getCommandOptionsWithRootOptions } from "./cli-root-options.mjs";
+import {
+  consumeKnownOptionToken,
+  consumeRootCommandOptionToken,
+  getCommandOptionsWithRootOptions,
+} from "./cli-root-options.mjs";
 import {
   GATEWAY_RUN_BOOLEAN_FLAGS,
   GATEWAY_RUN_VALUE_FLAGS,
@@ -66,8 +70,29 @@ function gatewayInvocation(program) {
     valueFlags: [...GATEWAY_RUN_VALUE_FLAGS],
     mode: "command-path",
   });
+  let publishedPort;
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--published-port") {
+      publishedPort = argv[index + 1];
+    } else if (arg.startsWith("--published-port=")) {
+      publishedPort = arg.slice("--published-port=".length);
+    }
+    const consumed =
+      consumeRootCommandOptionToken(argv, index) ||
+      consumeKnownOptionToken(
+        argv,
+        index,
+        GATEWAY_RUN_BOOLEAN_FLAGS,
+        GATEWAY_RUN_VALUE_FLAGS,
+        "command-path",
+      );
+    index += Math.max(1, consumed) - 1;
+  }
   // Reset owns deletion before initialization; do not migrate state it will discard.
-  return options && !options.commandOptions.includes("--reset") ? options : undefined;
+  return options && !options.commandOptions.includes("--reset")
+    ? { ...options, publishedPort }
+    : undefined;
 }
 
 // Doctor owns this marker: it skips its full pre-repair capture while the marker
@@ -93,6 +118,15 @@ async function activate() {
   }
   const invocation = gatewayInvocation(program);
   if (invocation) {
+    if (invocation.publishedPort !== undefined) {
+      const raw = invocation.publishedPort.trim();
+      const port = Number(raw);
+      if (!/^[+-]?\d+$/.test(raw) || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
+        throw new Error("Invalid --published-port. Use a port number from 1 to 65535.");
+      }
+      // Doctor and the eventual Gateway must observe the same explicit launch fact.
+      process.env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT = String(port);
+    }
     let interrupted;
     let child;
     const listeners = new Map();

@@ -85,6 +85,7 @@ export async function createGatewayHttpTransport(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
+  publishedPort?: number;
   onListening?: () => void;
   /** Test-instance listener held since allocation; caller closes it if construction fails. */
   testListener?: HttpServer;
@@ -343,8 +344,10 @@ export async function createGatewayHttpTransport(params: {
     tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
     testListener?: HttpServer,
   ): HttpServer => {
+    const publishedPort = ingressTransport.kind === "ordinary" ? params.publishedPort : undefined;
     const httpServer = createGatewayHttpServer({
       testListener,
+      publishedPort,
       clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
@@ -380,6 +383,7 @@ export async function createGatewayHttpTransport(params: {
       reportUnattributableProxy,
     });
     const upgradeHandler = attachGatewayUpgradeHandler({
+      publishedPort,
       httpServer,
       controlUiBasePath: params.controlUiBasePath,
       wss,

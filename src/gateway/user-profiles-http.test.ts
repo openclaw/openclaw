@@ -75,19 +75,39 @@ function handle(
     method = "GET",
     headers = {},
     basePath = "",
+    publishedPort,
   }: {
     url?: string;
     method?: string;
     headers?: Record<string, string>;
     basePath?: string;
+    publishedPort?: number;
   } = {},
 ) {
   const req = { url, method, headers, socket: new EventEmitter() } as unknown as IncomingMessage;
   return handleUserProfileAvatarHttpRequest(req, res.response, pathname, {
     auth: {} as never,
     basePath,
+    publishedPort,
   });
 }
+
+describe("mapped-port avatar preflight", () => {
+  it.each(["http://localhost:25432", "http://127.0.0.1:25432"])(
+    "allows inherited launch origin %s without rewriting config",
+    async (origin) => {
+      getRuntimeConfig.mockReturnValue({ gateway: { publicOrigin: "https://ui.example.test" } });
+      const res = response();
+      await handle(res, undefined, {
+        method: "OPTIONS",
+        headers: { origin },
+        publishedPort: 25432,
+      });
+      expect(res.writeHead).toHaveBeenCalledWith(204);
+      expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin", origin);
+    },
+  );
+});
 
 function expectHeader(res: ReturnType<typeof response>, name: string, value: string) {
   expect(res.setHeader).toHaveBeenCalledWith(name, value);

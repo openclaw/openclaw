@@ -276,6 +276,8 @@ async function prepareGatewayServerBootstrapSelected(input: {
           log,
           runtimeBind: opts.bind,
           runtimePort: port,
+          publishedPort: opts.publishedPort,
+          runtimeAuthMode: startupAuthOverride?.mode,
         }),
       );
   if (controlUiSeed.seededAllowedOrigins) {
@@ -420,7 +422,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
     if (
       !seededControlUiAllowedOrigins ||
       runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined ||
-      resolveControlUiAllowedOrigins(runtimeConfig).length > 0
+      resolveControlUiAllowedOrigins(runtimeConfig, opts.publishedPort).length > 0
     ) {
       return runtimeConfig;
     }

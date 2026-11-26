@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkBrowserOrigin,
   normalizeChromeExtensionOrigin,
-  resolveAcceptedBrowserOrigin,
+  resolveAcceptedGatewayBrowserOrigin,
 } from "./origin-check.js";
 
 const denied = { ok: false, reason: "origin not allowed" } as const;
@@ -114,7 +114,7 @@ describe("checkBrowserOrigin", () => {
   });
 });
 
-describe("resolveAcceptedBrowserOrigin", () => {
+describe("resolveAcceptedGatewayBrowserOrigin", () => {
   const gateway = "https://gateway.example.com";
   const other = "https://other.example.com";
   it.each([
@@ -125,7 +125,7 @@ describe("resolveAcceptedBrowserOrigin", () => {
     { allowedOrigins: [other], origin: other, accepted: true },
   ])("uses the effective configured origin policy: %j", ({ allowedOrigins, origin, accepted }) => {
     expect(
-      resolveAcceptedBrowserOrigin({
+      resolveAcceptedGatewayBrowserOrigin({
         req: browserRequest(origin),
         cfg: {
           gateway: {
@@ -142,7 +142,7 @@ describe("resolveAcceptedBrowserOrigin", () => {
     const req = browserRequest(origin, "gateway.example.com:18789");
 
     expect(
-      resolveAcceptedBrowserOrigin({
+      resolveAcceptedGatewayBrowserOrigin({
         req,
         cfg: {
           gateway: {
@@ -151,6 +151,6 @@ describe("resolveAcceptedBrowserOrigin", () => {
         },
       }),
     ).toBe(origin);
-    expect(resolveAcceptedBrowserOrigin({ req, cfg: {} })).toBeUndefined();
+    expect(resolveAcceptedGatewayBrowserOrigin({ req, cfg: {} })).toBeUndefined();
   });
 });

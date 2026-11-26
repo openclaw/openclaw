@@ -24,20 +24,41 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it.each<OpenClawConfig>([
-    { gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } } },
-    { gateway: { publicOrigin: "https://control.example.com" } },
-  ])("does not rewrite an already configured origin policy: %j", (config) => {
+  it("retains runtime fallback for a legacy blank-only list", () => {
+    const config = { gateway: { controlUi: { allowedOrigins: [" "] } } };
+    const result = maybeSeedControlUiAllowedOriginsAtStartup({
+      config,
+      log: { info: vi.fn(), warn: vi.fn() },
+      runtimeBind: "lan",
+      runtimePort: 3000,
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ]);
+    expect(config.gateway.controlUi.allowedOrigins).toEqual([" "]);
+  });
+
+  it.each<{ config: OpenClawConfig; publishedPort?: number }>([
+    { config: { gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } } } },
+    { config: { gateway: { publicOrigin: "https://control.example.com" } } },
+    { config: { gateway: { controlUi: { allowedOrigins: [] } } } },
+    { config: { gateway: {} }, publishedPort: 25432 },
+  ])("does not overlay existing or launch-only origin policy: %j", ({ config, publishedPort }) => {
     const log = { info: vi.fn(), warn: vi.fn() };
+    const before = structuredClone(config);
 
     const result = maybeSeedControlUiAllowedOriginsAtStartup({
       config,
       log,
       runtimeBind: "lan",
       runtimePort: 3000,
+      publishedPort,
     });
 
     expect(result).toEqual({ config, seededAllowedOrigins: false });
+    expect(result.config).toBe(config);
+    expect(config).toStrictEqual(before);
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });

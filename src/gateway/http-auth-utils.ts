@@ -113,8 +113,9 @@ type ControlUiReadAuthParams = Omit<GatewayHttpRequestAuthParams, "auth"> & {
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
+  publishedPort?: number,
 ): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return resolveBrowserOriginPolicy({ req, cfg });
+  return resolveBrowserOriginPolicy({ req, cfg, publishedPort });
 }
 
 function readControlUiQueryToken(req: IncomingMessage): string | undefined {
@@ -187,7 +188,11 @@ async function checkHttpOperatorCredentials(
   if (ingressAttribution.kind === "unattributable-proxy") {
     return { authResult: { ok: false, reason: ingressAttribution.reason } };
   }
-  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(
+    params.req,
+    params.cfg,
+    params.publishedPort,
+  );
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
     Boolean(token) &&
@@ -354,6 +359,7 @@ export async function authorizeControlUiReadRequestOrReply(
     authResult,
     cfg,
     getRuntimeConfig: params.getRuntimeConfig,
+    publishedPort: params.publishedPort,
     req: params.req,
     res: params.res,
   });
@@ -541,7 +547,11 @@ export async function checkGatewayHttpRequestAuth(
             trustedProxies: params.trustedProxies,
             allowRealIpFallback: params.allowRealIpFallback,
             rateLimiter: params.rateLimiter,
-            browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, cfg),
+            browserOriginPolicy: resolveHttpBrowserOriginPolicy(
+              params.req,
+              cfg,
+              params.publishedPort,
+            ),
           }),
         };
   if (!authResult.ok) {
@@ -551,6 +561,7 @@ export async function checkGatewayHttpRequestAuth(
     authResult,
     cfg,
     getRuntimeConfig: params.getRuntimeConfig,
+    publishedPort: params.publishedPort,
     req: params.req,
     res: params.res,
   });

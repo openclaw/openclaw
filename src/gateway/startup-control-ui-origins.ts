@@ -1,4 +1,8 @@
-import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
+import {
+  ensureControlUiAllowedOriginsForNonLoopbackBind,
+  resolveControlUiAllowedOrigins,
+} from "../config/gateway-control-ui-origins.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isContainerEnvironment } from "./net.js";
 
@@ -11,7 +15,27 @@ export function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   runtimeBind?: unknown;
   runtimePort?: unknown;
+  publishedPort?: number;
+  runtimeAuthMode?: GatewayAuthMode;
 }): { config: OpenClawConfig; seededAllowedOrigins: boolean } {
+  const policyConfig = params.runtimeAuthMode
+    ? {
+        ...params.config,
+        gateway: {
+          ...params.config.gateway,
+          auth: { ...params.config.gateway?.auth, mode: params.runtimeAuthMode },
+        },
+      }
+    : params.config;
+  const authored = params.config.gateway?.controlUi?.allowedOrigins;
+  if (
+    authored?.length === 0 ||
+    resolveControlUiAllowedOrigins(policyConfig, params.publishedPort).some((origin) =>
+      origin.trim(),
+    )
+  ) {
+    return { config: params.config, seededAllowedOrigins: false };
+  }
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
     isContainerEnvironment,
     runtimeBind: params.runtimeBind,

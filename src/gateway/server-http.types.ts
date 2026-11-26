@@ -27,6 +27,7 @@ export type GatewayHttpServerOptions = {
   clients: Set<GatewayWsClient>;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
+  publishedPort?: number;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;

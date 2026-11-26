@@ -13,6 +13,7 @@ import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
+import { resolveContainerPublishedGatewayPort } from "../infra/container-environment.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -41,7 +42,28 @@ export function collectGatewayConfigFindings(
     env,
   });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = normalizeStringEntries(resolveControlUiAllowedOrigins(cfg));
+  const policyConfig: OpenClawConfig = {
+    ...cfg,
+    gateway: { ...cfg.gateway, auth: { ...cfg.gateway?.auth, mode: auth.mode } },
+  };
+  let publishedPort: number | undefined;
+  let invalidPublishedPort = false;
+  try {
+    publishedPort = resolveContainerPublishedGatewayPort(env);
+  } catch {
+    invalidPublishedPort = true;
+    findings.push({
+      checkId: "gateway.container_published_port_invalid",
+      severity: "warn",
+      title: "Container published-port launch metadata is invalid",
+      detail:
+        "The audit cannot derive browser origins from inherited metadata. A valid explicit --published-port takes precedence at startup; its effective value is not available to this audit.",
+      remediation: "Check the Docker/Podman published port or explicit --published-port (1–65535).",
+    });
+  }
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    resolveControlUiAllowedOrigins(policyConfig, publishedPort),
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -164,18 +186,25 @@ export function collectGatewayConfigFindings(
     bind !== "loopback" &&
     controlUiEnabled &&
     controlUiAllowedOrigins.length === 0 &&
+    cfg.gateway?.controlUi?.allowedOrigins?.length !== 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
+    const unknownLaunchOrigins =
+      invalidPublishedPort &&
+      cfg.gateway?.controlUi?.allowedOrigins === undefined &&
+      auth.mode !== "trusted-proxy";
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_required",
-      severity: "critical",
-      title: "Non-loopback Control UI missing allowed origins",
-      detail:
-        "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
-        "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
+      severity: unknownLaunchOrigins ? "warn" : "critical",
+      title: unknownLaunchOrigins
+        ? "Non-loopback Control UI browser origins could not be determined"
+        : "Non-loopback Control UI missing allowed origins",
+      detail: unknownLaunchOrigins
+        ? "No browser-origin allowlist is established by the audit inputs. Check the effective --published-port override before changing saved origin policy."
+        : "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
+          "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
       remediation:
-        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). " +
-        "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). Current container images can inherit the published loopback origins when the list is omitted.",
     });
   }
   if (controlUiAllowedOrigins.includes("*")) {

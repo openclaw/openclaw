@@ -513,13 +513,17 @@ it(
             }),
           });
           cleanup.defer(() => disconnectGatewayClient(revoked));
+          // Personal sends reach participation admission; the revoked role cannot see this session.
           await expect(
             revoked.request("chat.send", {
               sessionKey: scenario.sessionKey,
               message: `Try again: ${scenario.prompt}`,
               idempotencyKey: randomUUID(),
             }),
-          ).rejects.toThrow("missing scope: operator.write");
+          ).rejects.toMatchObject({
+            code: "INVALID_REQUEST",
+            message: `Session "${scenario.sessionKey}" was not found.`,
+          });
           const refusedDrained = await wait(waitForGatewayActiveWork(30_000));
           expect(refusedDrained.drained).toBe(true);
           expect(scenario.parentCalls).toBe(5);

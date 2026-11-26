@@ -7,6 +7,7 @@ import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js"
 import { getHeader } from "./http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
+  resolveDirectIngressPublishedPort,
   hasCurrentRemoteControlUiIngress,
 } from "./ingress-attribution.js";
 import {
@@ -36,7 +37,7 @@ export function checkGatewayWsBrowserOrigin(
   }
   return checkBrowserOrigin({
     ...origin,
-    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg, origin.publishedPort),
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   });
@@ -67,13 +68,17 @@ export type BrowserOriginPolicy = {
 export function resolveBrowserOriginPolicy(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): BrowserOriginPolicy {
   return {
     remoteControlUiIngress: getRemoteControlUiIngressContext(params.req),
     requestHost: getHeader(params.req, "host"),
     origin: getHeader(params.req, "origin"),
     fetchSite: getHeader(params.req, "sec-fetch-site"),
-    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(
+      params.cfg,
+      resolveDirectIngressPublishedPort(params.req, params.publishedPort),
+    ),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };
@@ -173,9 +178,10 @@ export function checkBrowserOrigin(params: {
 }
 
 /** Return the request Origin only when the Gateway's canonical browser policy accepts it. */
-export function resolveAcceptedBrowserOrigin(params: {
+export function resolveAcceptedGatewayBrowserOrigin(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): string | undefined {
   const policy = resolveBrowserOriginPolicy(params);
   const origin = policy.origin?.trim();

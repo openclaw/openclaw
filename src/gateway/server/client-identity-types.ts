@@ -52,6 +52,7 @@ export type RemoteControlUiIngressContext = Readonly<{
 }>;
 
 export type GatewayWsBrowserOrigin = {
+  publishedPort?: number;
   requestHost?: string;
   origin?: string;
   isLocalClient?: boolean;

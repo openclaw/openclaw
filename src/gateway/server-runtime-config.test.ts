@@ -182,14 +182,23 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "0.0.0.0",
       },
       {
-        name: "does not replace an explicit empty origin list with the public origin",
-        cfg: gateway({
-          bind: "lan",
-          auth: TOKEN_AUTH,
-          publicOrigin: allowedOrigins[0],
-          controlUi: { allowedOrigins: [] },
-        }),
+        name: "rejects whitespace-only lists instead of treating them as intentional deny-all",
+        cfg: {
+          gateway: { bind: "lan" as const, auth: TOKEN_AUTH, controlUi: { allowedOrigins: [" "] } },
+        },
         expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
+        name: "accepts an explicit empty origin list as deny-all",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+            controlUi: { allowedOrigins: [] },
+          },
+        },
+        expectedBindHost: "0.0.0.0",
       },
       {
         name: "allows non-loopback control UI without allowed origins when dangerous fallback is enabled",

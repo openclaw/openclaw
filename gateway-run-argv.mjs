@@ -3,6 +3,7 @@ import { getCommandPositionalsWithRootOptions } from "./cli-root-options.mjs";
 
 export const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--port",
+  "--published-port",
   "--bind",
   "--token",
   "--token-file",

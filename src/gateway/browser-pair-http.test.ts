@@ -36,3 +36,22 @@ it.each([
 ])("targets the issuing Gateway on %s", (_name, env, command) => {
   expect(buildBrowserPairCommand("ABCDEFGH", env)).toBe(command);
 });
+
+it("accepts the mapped origin at the browser pairing boundary", async () => {
+  const req = Object.assign(Readable.from(["{}"]), {
+    method: "POST",
+    headers: { host: "172.18.0.2:18789", origin: "http://localhost:25432" },
+    socket: { remoteAddress: "172.18.0.1" },
+  }) as unknown as IncomingMessage;
+  const res = createMockServerResponse();
+  await handleBrowserPairHttpRequest({
+    req,
+    res,
+    action: "start",
+    config: {},
+    publishedPort: 25432,
+    clientIp: "172.18.0.1",
+  });
+  expect(res.statusCode).toBe(400);
+  expect(String(res.body)).not.toContain("origin_not_allowed");
+});

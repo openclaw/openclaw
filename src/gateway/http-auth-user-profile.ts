@@ -168,6 +168,7 @@ export function usesSharedSecretGatewayMethod(
 
 export async function resolveAuthenticatedHttpUserProfile(params: {
   authResult: GatewayAuthResult;
+  publishedPort?: number;
   cfg: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;
   req: IncomingMessage;
@@ -195,7 +196,11 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     roles: cfg.gateway?.roles,
     trustedProxies: cfg.gateway?.trustedProxies,
     allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
-    browserOrigin: resolveBrowserOriginPolicy({ req: params.req, cfg }),
+    browserOrigin: resolveBrowserOriginPolicy({
+      req: params.req,
+      cfg,
+      publishedPort: params.publishedPort,
+    }),
   });
   const admissionPolicy = structuredClone(readAdmissionPolicy(params.cfg));
   const assertCurrent = () => {

@@ -28,7 +28,7 @@ import {
 } from "./auth-rate-limit.js";
 import { readJsonBodyOrError, sendJson } from "./http-common.js";
 import { getHeader } from "./http-header-value.js";
-import { resolveAcceptedBrowserOrigin } from "./origin-check.js";
+import { resolveAcceptedGatewayBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 
 const BROWSER_PAIR_MAX_BODY_BYTES = 4 * 1024;
@@ -100,6 +100,7 @@ export async function handleBrowserPairHttpRequest(params: {
   res: ServerResponse;
   action: BrowserPairAction;
   config: OpenClawConfig;
+  publishedPort?: number;
   clientIp: string | undefined;
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
@@ -112,7 +113,11 @@ export async function handleBrowserPairHttpRequest(params: {
   }
   // Keeps other sites from filing requests from a browser that can reach this Gateway.
   // A CSRF gate, not a network boundary: host approval and the key proof own authority.
-  const origin = resolveAcceptedBrowserOrigin({ req, cfg: params.config });
+  const origin = resolveAcceptedGatewayBrowserOrigin({
+    req,
+    cfg: params.config,
+    publishedPort: params.publishedPort,
+  });
   if (!origin) {
     sendJson(res, 403, { error: "origin_not_allowed" });
     return true;

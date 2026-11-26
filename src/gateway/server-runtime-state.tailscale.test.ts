@@ -101,9 +101,43 @@ describe("managed Tailscale gateway ingress", () => {
     expect(runtime.httpServer.listening).toBe(true);
   });
 
+  it("does not grant a configured reverse proxy the direct mapped image origin", async () => {
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
+      publishedPort: 25432,
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"], publicOrigin: "https://proxy.example" } },
+    });
+    openServers.push(runtime);
+    await runtime.startListening();
+    const address = runtime.httpServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected listener");
+    }
+    const request = (origin: string, forwarded: boolean) =>
+      requestStatus({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/api/users/fixture/avatar",
+        method: "OPTIONS",
+        headers: {
+          origin,
+          ...(forwarded
+            ? {
+                "x-forwarded-for": "192.0.2.10",
+                "x-forwarded-proto": "https",
+                "x-forwarded-host": "proxy.example",
+              }
+            : {}),
+        },
+      });
+    expect((await request("http://localhost:25432", true)).status).toBe(403);
+    expect((await request("https://proxy.example", true)).status).toBe(204);
+  });
+
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
+      publishedPort: 25432,
+      cfg: { gateway: { publicOrigin: "https://gateway.tailnet.ts.net" } },
       getReadiness: createPreparedReadinessFixture(() => ({
         ready: true,
         coreReady: true,
@@ -148,6 +182,21 @@ describe("managed Tailscale gateway ingress", () => {
       expect(ordinary.body).toContain("proxy_attribution_required");
     }
     expect(managed.status).toBe(200);
+    const imagePreflight = (port: number, origin: string, forwarded = false) =>
+      requestStatus({
+        host: "127.0.0.1",
+        port,
+        path: "/api/users/profile-1/avatar",
+        method: "OPTIONS",
+        headers: { ...(forwarded ? headers : {}), origin },
+      });
+    expect((await imagePreflight(ordinaryAddress.port, "http://localhost:25432")).status).toBe(204);
+    expect(
+      (await imagePreflight(tailscaleAddress.port, "http://localhost:25432", true)).status,
+    ).toBe(403);
+    expect(
+      (await imagePreflight(tailscaleAddress.port, "https://gateway.tailnet.ts.net", true)).status,
+    ).toBe(204);
   });
 
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {

@@ -135,6 +135,26 @@ export function readGatewayIngressTransport(
   return requestTransport.get(req);
 }
 
+/** Host mapping belongs to ordinary ingress, never ambient/relayed proxy identity. */
+export function resolveDirectIngressPublishedPort(
+  req: IncomingMessage,
+  publishedPort: number | undefined,
+): number | undefined {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution) {
+    return attribution.kind === "direct-local" || attribution.kind === "direct-remote"
+      ? publishedPort
+      : undefined;
+  }
+  const transport = readGatewayIngressTransport(req);
+  // Standalone HTTP handlers can run before attribution; forwarded evidence only denies.
+  return (!transport || transport.kind === "ordinary") &&
+    !hasForwardedRequestHeaders(req) &&
+    !hasTailscaleOwnedHeaders(req)
+    ? publishedPort
+    : undefined;
+}
+
 export function getRemoteControlUiIngressContext(
   req: IncomingMessage,
 ): RemoteControlUiIngressContext | undefined {

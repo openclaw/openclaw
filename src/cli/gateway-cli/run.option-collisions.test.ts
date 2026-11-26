@@ -43,6 +43,7 @@ import {
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
 import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
+import { registerGatewayOptionAdmissionTests } from "./run-option-admission.test-support.js";
 import { registerGatewayRunStartupRecoveryTests } from "./run-startup-recovery.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
@@ -512,16 +513,18 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
+  registerGatewayOptionAdmissionTests({
+    runGatewayCli,
+    startGatewayServer,
+    runtimeErrors,
+    configState,
+    prepareGatewayReset,
+    ensureDevGatewayConfig,
+  });
   const callOrder = (mock: { mock: { invocationCallOrder: number[] } }, index = 0) =>
     mock.mock.invocationCallOrder[index] ?? 0;
 
   registerGatewayRunCleanupReceiptTests({ runGatewayCli, runGatewayLoop });
-
-  it("allows ambient channel triggers with the deprecated alias", async () => {
-    await runUnconfigured("--dev-ambient-channels");
-
-    expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
-  });
 
   it.each([false, true])("prepares shell env fallback (%s)", async (changed) => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
@@ -1260,14 +1263,6 @@ describe("gateway run option collisions", () => {
 
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     expect(startGatewayServer).toHaveBeenCalledOnce();
-  });
-
-  it("prints all supported modes on invalid --auth value", async () => {
-    await expectExit(1, "--auth", "bad-mode");
-
-    expect(runtimeErrors).toContain(
-      'Invalid --auth. Use "none", "token", "password", or "trusted-proxy".',
-    );
   });
 
   it("allows password mode preflight when password is configured via SecretRef", async () => {

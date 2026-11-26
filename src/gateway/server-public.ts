@@ -64,6 +64,8 @@ export type GatewayServerOptions = {
     import("../infra/gateway-lock.js").GatewayLockHandle,
     "assertDatabaseAccess" | "markListening"
   >;
+  /** Host-mapped port for this server launch; never persisted as origin policy. */
+  publishedPort?: number;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */

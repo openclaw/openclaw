@@ -7,6 +7,7 @@ import {
 } from "../../../config/gateway-control-ui-origins.js";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { resolveContainerPublishedGatewayPort } from "../../../infra/container-environment.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
@@ -176,6 +177,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
   {
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     apply: (raw, changes) => {
+      // The launcher supplies runtime defaults; persisting listener origins would pin them.
+      if (resolveContainerPublishedGatewayPort() !== undefined) {
+        return;
+      }
       const gateway = getRecord(raw.gateway);
       if (!gateway) {
         return;

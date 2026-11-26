@@ -423,6 +423,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           reportedClientIpSource,
           hasBrowserOriginHeader,
           browserOrigin: resolveGatewayWsBrowserOrigin({
+            publishedPort: params.publishedPort,
             client: connectParams.client,
             requestHost,
             origin: requestOrigin,
@@ -673,9 +674,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           runWithMainThreadTask("gateway:ws:frame", () => handleIncomingMessage(data, admission)),
         ),
       )
-      .catch((error: unknown) => {
-        logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
-      })
+      .catch((error: unknown) =>
+        logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`),
+      )
       .finally(onSettled);
   };
 
@@ -686,9 +687,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     if (isClosed()) {
       return;
     }
-    for (const frame of frames) {
-      onMessage(frame);
-    }
+    frames.forEach(onMessage);
   }
 
   const onMessage = (data: GatewayConnectionFrame): void => {

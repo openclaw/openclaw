@@ -9,6 +9,43 @@ title: "Docker"
 
 Docker is **optional**. Use it for an isolated, throwaway Gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
 
+Container launch supplies the published Gateway port automatically. Existing host-qualified
+publish mappings remain valid; only concrete ports published on IPv4 loopback or
+the IPv4 wildcard inherit localhost defaults. Dynamic publish mappings do not
+claim a fixed localhost port. When
+`gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
+and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
+Trusted-proxy authentication retains its configured origin policy and does not
+inherit those direct-container loopback grants. Managed Tailscale Serve/Funnel
+and relayed ingress likewise retain their own origin policy.
+Changing the public origin updates the inherited origin without saving a copy
+in the allowlist. With a current image, an explicit list, including `[]`, remains authoritative and
+is not changed by setup or launch; include any desired browser origins yourself.
+Previously saved lists, including entries written by older setup versions,
+remain authoritative. If browser access fails after changing the published
+port or public origin, update `gateway.controlUi.allowedOrigins` to include
+the origins you intend to allow. To use the current public origin and mapped
+localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
+field from your configuration; setting it to `[]` disables those defaults.
+
+Setup checks the selected image before changing saved configuration or replacing
+the Gateway. Images with the existing `gateway --port` command remain supported;
+setup reports when an older image lacks runtime mapped-port defaults. For those
+images only, setup retains its legacy seed for an omitted origin policy with no
+public origin. Setup never infers or rewrites existing lists. An older image
+may still rewrite an authored `[]` during its own Doctor activation, using internal
+listener origins rather than the published port. Setup warns before replacement;
+it does not skip Doctor or change your policy. Upgrade the selected image before
+launch if `[]` must remain authoritative.
+Upgrade the image to inherit launch defaults without saving origins. Setup
+does not upgrade your selected image or rewrite saved origin policy automatically.
+Custom images must provide `node` for the isolated setup probe. Failed or
+malformed Gateway help stops setup before replacing the running Gateway.
+
+Container launch retains the image's direct Gateway command, including its normal
+Doctor activation. New images receive the published port as launch metadata; old
+images ignore it and retain their existing behavior. Docker setup keeps the selected image name in `.env` and uses the checked image ID for that invocation. Direct Compose launch keeps the selected image command.
+
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
 Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).

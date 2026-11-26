@@ -1,6 +1,7 @@
 // Pure `gateway run` flag checks, shared by run.ts and the pre-bootstrap config guard.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
+import { resolveContainerPublishedGatewayPort } from "../../infra/container-environment.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { parseEnumOption, toOptionString } from "./run-option-values.js";
@@ -22,10 +23,10 @@ export const INVALID_TAILSCALE = 'Invalid --tailscale. Use "off", "serve", or "f
 
 export type GatewayRunFlagOpts = Pick<
   GatewayRunOpts,
-  "auth" | "bind" | "compact" | "port" | "tailscale" | "wsLog"
+  "auth" | "bind" | "compact" | "port" | "publishedPort" | "tailscale" | "wsLog"
 >;
 
-/** Returns the first invalid-flag error, checking only CLI values (config is not loaded yet). */
+/** Returns the first invalid-flag error, checking launch values before config is loaded. */
 export function findGatewayRunFlagError(opts: GatewayRunFlagOpts): string | undefined {
   const wsLog = opts.compact ? "compact" : toOptionString(opts.wsLog);
   if (wsLog !== undefined && wsLog !== "auto" && wsLog !== "compact" && wsLog !== "full") {
@@ -33,6 +34,16 @@ export function findGatewayRunFlagError(opts: GatewayRunFlagOpts): string | unde
   }
   if (opts.port !== undefined && parseTcpPort(opts.port) === null) {
     return formatInvalidPortOption("--port");
+  }
+  if (opts.publishedPort !== undefined && parseTcpPort(opts.publishedPort) === null) {
+    return formatInvalidPortOption("--published-port");
+  }
+  if (opts.publishedPort === undefined) {
+    try {
+      resolveContainerPublishedGatewayPort();
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
   const bind = normalizeOptionalString(toOptionString(opts.bind));
   if (bind !== undefined && !GATEWAY_BIND_MODES.has(bind)) {

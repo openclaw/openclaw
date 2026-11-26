@@ -35,6 +35,28 @@ if [[ "\${1:-}" == "compose" && -n "$fail_match" && "$*" == *"$fail_match"* ]]; 
   echo "$1-fail $*" >>"$log"
   exit 1
 fi
+if [[ "\${1:-}" == "create" ]]; then
+  echo "create $*" >>"$log"
+  touch "$log-volume"
+  printf '%s' "\${!#}" > "$log-probe.cjs"
+  printf '%s' "\${@: -2:1}" > "$log-probe-mode"
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  exit 0
+fi
+if [[ "\${1:-}" == "inspect" ]]; then
+  printf '%s\\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  exit 0
+fi
+if [[ "\${1:-}" == "start" ]]; then
+  echo "start $*" >>"$log"
+  node "$log-probe.cjs" "$(cat "$log-probe-mode")"
+  exit $?
+fi
+if [[ "\${1:-}" == "rm" ]]; then
+  echo "rm $*" >>"$log"
+  if [[ " $* " == *" -v "* ]]; then rm -f "$log-volume"; fi
+  exit 0
+fi
 if [[ "\${1:-}" == "image" && "\${2:-}" == "inspect" ]]; then
   format=""
   image="\${3:-}"
@@ -70,6 +92,7 @@ if [[ "\${1:-}" == "run" ]]; then
 fi
 if [[ "\${1:-}" == "compose" ]]; then
   echo "compose $*" >>"$log"
+  echo "compose-image=\${OPENCLAW_IMAGE:-}" >>"$log"
   empty_json='{}'
   case "$*" in
     *"config get gateway.controlUi.allowedOrigins"*) printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"; exit 0 ;;
@@ -127,6 +150,7 @@ async function createDockerSetupSandbox() {
   for (const file of [
     "docker-build.sh",
     "build-metadata.sh",
+    "container-gateway-capability.sh",
     "docker-e2e-logs.sh",
     "docker-e2e-container.sh",
     "docker-e2e-watchdog.mjs",
@@ -136,6 +160,11 @@ async function createDockerSetupSandbox() {
   ]) {
     await copyFile(join(repoRoot, "scripts", "lib", file), join(rootDir, "scripts", "lib", file));
   }
+  await mkdir(join(rootDir, "dist"));
+  await writeFile(
+    join(rootDir, "dist", "index.js"),
+    'console.log(process.env.DOCKER_STUB_OLD_GATEWAY === "1" ? "--port <port>" : "--port <port>\\n--published-port <port>");',
+  );
   await writeFile(join(rootDir, "Dockerfile"), "FROM scratch\n");
   await writeFile(
     join(rootDir, "docker-compose.yml"),
@@ -262,6 +291,41 @@ describe("scripts/docker/setup.sh", () => {
 
   afterAll(sandboxRootTracker.cleanup);
 
+  it.each([undefined, "[]", '["https://authored.example"]'])(
+    "preserves legacy setup policy (%s)",
+    async (origins) => {
+      await resetDockerLog(sandbox);
+      const result = runDockerSetup(sandbox, {
+        DOCKER_STUB_OLD_GATEWAY: "1",
+        DOCKER_STUB_CONTROL_UI_ORIGINS: origins ?? "",
+        OPENCLAW_GATEWAY_PORT: "25432",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("predates mapped-port defaults");
+      expect(result.stderr).toContain("its Doctor may rewrite an authored []");
+      const log = await readDockerLog(sandbox);
+      expect(log.includes('"path":"gateway.controlUi.allowedOrigins"')).toBe(origins === undefined);
+      if (origins === undefined) {
+        expect(log).toContain("http://localhost:25432");
+      }
+      expect(log).toContain("up -d");
+      await expect(stat(`${sandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("launches the verified image identity while preserving the saved image selection", async () => {
+    await resetDockerLog(sandbox);
+    const result = runDockerSetup(sandbox, { OPENCLAW_IMAGE: "fixture:selected" });
+    expect(result.status, result.stderr).toBe(0);
+    await expect(stat(`${sandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readDockerLog(sandbox)).toContain(
+      "compose-image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    expect(await readFile(join(sandbox.rootDir, ".env"), "utf8")).toContain(
+      "OPENCLAW_IMAGE=fixture:selected",
+    );
+  });
+
   it("configures container-local state, mounts, and build defaults before startup", async () => {
     const buildCommit = "0123456789abcdef0123456789abcdef01234567";
 
@@ -325,7 +389,7 @@ describe("scripts/docker/setup.sh", () => {
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output`,
     );
     expect(log).toContain(
-      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}]`,
     );
     expect(result.stdout).toContain(
       `exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'`,
@@ -344,13 +408,7 @@ describe("scripts/docker/setup.sh", () => {
     const writes = lines.filter((line) => line.includes("config set --batch-json"));
     expect(writes).toHaveLength(1);
     expect(writes[0]).not.toContain("https://team.example.com");
-    if (allowedOrigins === undefined) {
-      expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
-    } else {
-      expect(writes[0]).toContain(
-        '"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]',
-      );
-    }
+    expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
   });
 
   it("allows ordinary spaces in host persistence paths and quotes generated mounts", async () => {
@@ -792,9 +850,15 @@ describe("scripts/docker/setup.sh", () => {
     });
     // docker-init warns on every run when it is not PID 1 in a shared PID namespace.
     expect(services["openclaw-cli"]).not.toHaveProperty("init");
-    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
+    const listenerPort = "18789";
+    expect(gateway.command.join(" ")).toContain("--port 18789");
     expect(listenerPort).toBe("18789");
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    expect(gateway.command.at(-1)).toBe(listenerPort);
+    expect(gateway.environment.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT).toBe(
+      "${OPENCLAW_GATEWAY_PORT:-18789}",
+    );
+    expect(services["openclaw-cli"].command).toBeUndefined();
     for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
       expect(services[name]).toMatchObject({ env_file: [{ path: ".env", required: false }] });
       expect(

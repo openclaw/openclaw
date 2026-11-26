@@ -14,7 +14,17 @@ function runFixture(entrypoint: string, backend: (typeof backends)[number], exit
   const root = createTempDir("openclaw-podman-token-");
   const { config, command, run } = podmanFixture(root);
   const calls = path.join(root, "podman-calls");
-  command("podman", 'printf "%s\\n" "$*" >> "$PODMAN_CALLS"');
+  command(
+    "podman",
+    [
+      'printf "%s\\n" "$*" >> "$PODMAN_CALLS"',
+      'case "$1" in',
+      `  create) printf '%s\\n' '${"a".repeat(64)}';;`,
+      `  inspect) printf '%s\\n' 'sha256:${"b".repeat(64)}';;`,
+      '  start) printf "%s" "published-port";;',
+      "esac",
+    ].join("\n"),
+  );
   const emitted = backend === "od" ? `${" ab".repeat(32)}\n` : `${fixtureToken}\n`;
   // Python also normalizes config after success; that operation may decline.
   command(

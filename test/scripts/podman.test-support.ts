@@ -17,6 +17,7 @@ export function podmanFixture(root: string, tools: string[] = []) {
     "scripts/podman/common.sh",
     "scripts/lib/host-timeout.sh",
     "scripts/lib/build-metadata.sh",
+    "scripts/lib/container-gateway-capability.sh",
   ]) {
     const target = path.join(root, relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });

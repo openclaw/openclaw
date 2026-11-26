@@ -237,6 +237,7 @@ export function createGatewayHttpRequestHandler(
           rateLimiter,
           getReadiness,
           getStartup,
+          opts.publishedPort,
         );
         return undefined;
       }
@@ -310,6 +311,7 @@ export function createGatewayHttpRequestHandler(
           rateLimiter,
           getReadiness,
           getStartup,
+          opts.publishedPort,
         ))
       ) {
         return undefined;
@@ -331,6 +333,7 @@ export function createGatewayHttpRequestHandler(
       }
       const requestClientIp = ingressAttribution.clientIp;
       const routeAuth = {
+        publishedPort: opts.publishedPort,
         auth: resolvedAuthValue,
         cfg: configSnapshot,
         getRuntimeConfig: loadGatewayConfig,
@@ -380,8 +383,7 @@ export function createGatewayHttpRequestHandler(
         remoteOwner?: RemoteControlUiHttpRoute,
       ) => addRequestStage(enabled, stage, true, remoteOwner);
 
-      const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
-      addRequestStage(workerGatewayRoute !== "outside", () => {
+      addRequestStage(classifyWorkerGatewayPath(scopedRequestPath) !== "outside", () => {
         respondNotFound(res);
         return true;
       });
@@ -440,6 +442,7 @@ export function createGatewayHttpRequestHandler(
           (await getBrowserPairHttpModule()).handleBrowserPairHttpRequest({
             ...transferRequest,
             action: browserPairAction,
+            publishedPort: opts.publishedPort,
             config: configSnapshot,
           }),
         );
@@ -567,6 +570,7 @@ export function createGatewayHttpRequestHandler(
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
+          publishedPort: opts.publishedPort,
           req,
           auth: resolvedAuthValue,
           trustedProxies,
@@ -653,6 +657,8 @@ export function createGatewayHttpRequestHandler(
               gatewayRequestAuth: pluginAuthorization?.requestAuth,
               gatewayRequestOperatorScopes: pluginAuthorization?.operatorScopes,
               gatewayRequestClientIp: requestClientIp,
+              publishedPort: opts.publishedPort,
+              browserOriginConfig: configSnapshot,
             }),
         );
       }

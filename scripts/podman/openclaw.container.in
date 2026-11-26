@@ -19,6 +19,7 @@ Environment=HOME=/home/node
 Environment=TERM=xterm-256color
 Environment=NPM_CONFIG_CACHE=/home/node/.openclaw/.npm
 Environment=OPENCLAW_NO_RESPAWN=1
+Environment=OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=18789
 PublishPort=127.0.0.1:18789:18789
 PublishPort=127.0.0.1:18790:18790
 Pull=never

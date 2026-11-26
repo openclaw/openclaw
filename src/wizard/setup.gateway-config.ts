@@ -20,6 +20,7 @@ import {
   validateGatewayPortInput,
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { resolveContainerPublishedGatewayPort } from "../infra/container-environment.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
@@ -285,9 +286,11 @@ export async function configureGatewayForSetup(opts: ConfigureGatewayOptions) {
     },
   };
 
-  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
-    requireControlUiEnabled: true,
-  }).config;
+  if (resolveContainerPublishedGatewayPort() === undefined) {
+    nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+      requireControlUiEnabled: true,
+    }).config;
+  }
   nextConfig = await maybeAddTailnetOriginToControlUiAllowedOrigins({
     config: nextConfig,
     tailscaleMode,
