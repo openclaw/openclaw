@@ -13,6 +13,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { resolveTransientCronRetryDecision } from "../service/timer-trigger.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import * as harness from "./run.test-harness.js";
 
@@ -106,7 +107,7 @@ describe("cron terminal error persistence", () => {
       })),
     );
   });
-  it("persists the terminal provider error after its root is renamed", async () => {
+  it("classifies and persists a terminal provider overload after its root is renamed", async () => {
     await withOpenClawTestState({ label: "cron-terminal-entrypoint" }, async (state) => {
       const accessor = await vi.importActual<
         typeof import("../../config/sessions/session-accessor.js")
@@ -116,7 +117,8 @@ describe("cron terminal error persistence", () => {
       const runKey = sessionKey + ":run:" + sessionId;
       const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
       const target = { agentId: "main", sessionId, sessionKey: runKey, storePath };
-      const failure = "Synthetic provider failure";
+      const failure =
+        "The AI service is temporarily overloaded. Please try again in a moment. (diagnostic: Codex error: Our servers are currently overloaded)";
       const entry = { sessionId, lifecycleRevision: "synthetic-revision", updatedAt: Date.now() };
       await accessor.replaceSessionEntry({ sessionKey, storePath }, entry);
       harness.patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
@@ -178,8 +180,9 @@ describe("cron terminal error persistence", () => {
             payloads: [],
             meta: {
               durationMs: 1,
+              status: "error",
               error: { kind: "test", message: failure },
-              agentMeta: { sessionId, provider: "mock", model: "mock" },
+              agentMeta: { sessionId, provider: "openai", model: "gpt-5.4" },
             },
           };
         },
@@ -193,6 +196,41 @@ describe("cron terminal error persistence", () => {
         }),
       );
       expect(result.error ?? "").not.toContain("session rebound");
+      const retryDecision = resolveTransientCronRetryDecision({
+        error: result.status === "error" ? result.error : undefined,
+        errorClassification: result.status === "error" ? result.errorClassification : undefined,
+        executionStarted: true,
+        consecutiveErrors: 0,
+      });
+      const permanentControl = resolveTransientCronRetryDecision({
+        error: failure,
+        errorClassification: { kind: "reason", reason: "auth_permanent" },
+        executionStarted: true,
+        consecutiveErrors: 0,
+      });
+      if (process.env.OPENCLAW_CRON_RETURNED_ERROR_PROOF === "1") {
+        console.info(
+          `[cron-returned-error-proof] ${JSON.stringify({
+            entrypoint: "runCronIsolatedAgentTurn",
+            boundary: "fixed returned agent result",
+            status: result.status,
+            errorClassification: result.status === "error" ? result.errorClassification : undefined,
+            retryDecision,
+            permanentControl,
+          })}`,
+        );
+      }
+      expect(result).toMatchObject({
+        status: "error",
+        errorClassification: { kind: "reason", reason: "overloaded" },
+      });
+      expect(retryDecision).toMatchObject({
+        retryable: true,
+        retryCategory: "overloaded",
+        backoffMs: 30_000,
+        reason: "transient retry",
+      });
+      expect(permanentControl).toMatchObject({ retryable: false, reason: "permanent error" });
       const messages = SessionManager.open(target)
         .getBranch()
         .filter((e) => e.type === "message");

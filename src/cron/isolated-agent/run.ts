@@ -54,6 +54,7 @@ import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../r
 import {
   resolveCronAgentErrorClassification,
   resolveCronAgentTerminalOutcome,
+  resolveCronRunErrorReason,
 } from "../run-error-reason.js";
 import {
   normalizeCronRunErrorText,
@@ -524,7 +525,13 @@ async function runCronIsolatedAgentTurnInTrace(
                 outcome = "error";
                 outcomeError = finalized.error;
                 finalized.errorClassification =
-                  resolveCronAgentErrorClassification(terminalOutcome);
+                  resolveCronAgentErrorClassification(
+                    terminalOutcome,
+                    resolveCronRunErrorReason(
+                      finalized.error,
+                      prepared.context.liveSelection.provider,
+                    ),
+                  );
                 finalized.interruptedByRestart =
                   resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
                   "restart";
