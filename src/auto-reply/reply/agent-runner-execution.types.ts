@@ -63,7 +63,7 @@ export type AgentTurnInternalResult =
 export type SettledAgentTurn = {
   kind: "settled";
   /** Captured before terminal event settlement consumes the invocation. */
-  automation?: { result?: AutomationResult; includeReasoning: boolean };
+  automation?: { result?: AutomationResult };
   /** The runtime's claimed writer, independent of whether it compacted. */
   sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;

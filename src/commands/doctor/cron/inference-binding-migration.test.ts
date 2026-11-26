@@ -406,8 +406,15 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       model: "openai/gpt-5.5@openai:default",
     });
     expect(binding).toBeDefined();
+    const legacyPayload = {
+      kind: "agentTurn" as const,
+      message: "Synthetic work",
+      model: "openai/gpt-5.5",
+      includeReasoning: false,
+    };
     const pinned: CronStoredJob = {
       ...legacyJob("pinned", "openai/gpt-5.5"),
+      payload: legacyPayload,
       sessionKey: "agent:main:upgrade",
       sessionTarget: "session:agent:main:upgrade",
       owner: { agentId: "main", sessionKey: "agent:main:upgrade", accountId: "default" },

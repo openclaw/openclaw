@@ -194,11 +194,6 @@ export function registerCronAddCommand(cron: Command) {
                   "--skip-if-scratch-empty/--no-skip-if-scratch-empty require --message",
                 );
               }
-              if (typeof opts.includeReasoning === "boolean" && !message) {
-                throw new CronCliError(
-                  "--include-reasoning/--no-include-reasoning require --message",
-                );
-              }
               if (systemEvent) {
                 if (opts.timeoutSeconds !== undefined) {
                   assertCronTimeoutSupported("systemEvent");
@@ -264,9 +259,6 @@ export function registerCronAddCommand(cron: Command) {
                 lightContext: opts.lightContext === true ? true : undefined,
                 ...(typeof opts.skipIfScratchEmpty === "boolean"
                   ? { skipIfScratchEmpty: opts.skipIfScratchEmpty }
-                  : {}),
-                ...(typeof opts.includeReasoning === "boolean"
-                  ? { includeReasoning: opts.includeReasoning }
                   : {}),
                 toolsAllow,
               };

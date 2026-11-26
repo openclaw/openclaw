@@ -62,8 +62,5 @@ export function buildCronPayload(
     ...(cloned?.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
       : {}),
-    ...(form.payloadIncludeReasoning || original?.includeReasoning !== undefined
-      ? { includeReasoning: form.payloadIncludeReasoning }
-      : {}),
   };
 }

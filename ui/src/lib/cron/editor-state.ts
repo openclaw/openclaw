@@ -43,7 +43,6 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
-  payloadIncludeReasoning: false,
   deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",

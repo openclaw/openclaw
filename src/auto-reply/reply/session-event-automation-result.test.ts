@@ -452,7 +452,6 @@ it.for([
             payload: {
               kind: "agentTurn",
               message: request,
-              includeReasoning: true,
             },
           }),
           sourceConversation: alias ? undefined : source,
@@ -576,9 +575,7 @@ it.for([
               expect(outcome.delivery?.messageToolSentTo).toBeUndefined();
             }
             expect(sendText.mock.calls.map(([sent]) => sent.text)).toEqual(
-              "notification" in scenario || "messageTool" in scenario
-                ? []
-                : ["Reasoning for the report.", summary],
+              "notification" in scenario || "messageTool" in scenario ? [] : [summary],
             );
           } else if (scenario.result === "no_change") {
             expect(outcome).toMatchObject({

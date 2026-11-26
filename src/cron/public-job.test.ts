@@ -16,6 +16,16 @@ function publicJob(job: CronStoredJob, privateFields: string[] = []) {
 }
 
 describe("toPublicCronJob", () => {
+  it.each([false, true])(
+    "hides retired reasoning metadata without changing saved authority: %s",
+    (includeReasoning) => {
+      const payload = { kind: "agentTurn" as const, message: "Check status", includeReasoning };
+      const job = makeCronJob({ payload });
+      const result = publicJob(job);
+      expect(result.payload).toEqual({ kind: "agentTurn", message: "Check status" });
+    },
+  );
+
   it("preserves script fields and public state without mutating the stored job", () => {
     const state = {
       nextRunAtMs: 2_000,

@@ -340,7 +340,6 @@ describe("follow-up delivery channel boundary", () => {
         replyToId: testCase.expectedReply,
       }),
       undefined,
-      undefined,
     );
   });
 
@@ -353,7 +352,6 @@ describe("follow-up delivery channel boundary", () => {
 
     expect(channelState.deliver).toHaveBeenCalledWith(
       expect.objectContaining({ replyToId: "111.000" }),
-      undefined,
       undefined,
     );
   });

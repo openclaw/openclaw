@@ -1168,7 +1168,7 @@ var External = [
     /(^script$|^once$)/u,
     /^session:.+/u,
     /(^kind$|^text$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
+    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$)/u,
@@ -1184,7 +1184,7 @@ var External = [
     /(^start$|^end$|^timezone$)/u,
     /(^script$|^once$)/u,
     /(^kind$|^text$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
+    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$)/u,
@@ -11077,9 +11077,6 @@ var External = [
     (value.skipIfScratchEmpty === void 0 ||
       !("skipIfScratchEmpty" in value) ||
       check_64(value.skipIfScratchEmpty)) &&
-    (value.includeReasoning === void 0 ||
-      !("includeReasoning" in value) ||
-      check_64(value.includeReasoning)) &&
     (value.toolsAllow === void 0 || !("toolsAllow" in value) || check_279(value.toolsAllow)) &&
     (value.toolsAllowIsDefault === void 0 ||
       !("toolsAllowIsDefault" in value) ||
@@ -11392,9 +11389,6 @@ var External = [
     (value.skipIfScratchEmpty === void 0 ||
       !("skipIfScratchEmpty" in value) ||
       check_64(value.skipIfScratchEmpty)) &&
-    (value.includeReasoning === void 0 ||
-      !("includeReasoning" in value) ||
-      check_64(value.includeReasoning)) &&
     (value.toolsAllow === void 0 || !("toolsAllow" in value) || check_1702(value.toolsAllow)) &&
     (value.toolsAllowIsDefault === void 0 ||
       !("toolsAllowIsDefault" in value) ||

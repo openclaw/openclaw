@@ -35,7 +35,6 @@ export const CronCreationSlotsSchema = Type.Array(
   },
 );
 
-export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
 // Spell out job properties for the model-facing schema; runtime validation
@@ -261,9 +260,6 @@ function createCronPayloadSchema(params: {
           Type.Boolean({
             description: "Lightweight bootstrap context (skip full workspace context)",
           }),
-        ),
-        includeReasoning: Type.Optional(
-          Type.Boolean({ description: "Include reasoning with a meaningful delivered result" }),
         ),
         skipIfScratchEmpty: Type.Optional(Type.Boolean()),
         allowUnsafeExternalContent: Type.Optional(
@@ -583,9 +579,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       runId: Type.Optional(
         Type.String({ description: 'Run id from action="run" to read with action="runs"' }),
       ),
-      contextMessages: Type.Optional(
-        Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
-      ),
       agentId: Type.Optional(
         Type.String({
           description: managementOnly
@@ -620,7 +613,5 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           ]),
     ]);
   }
-  return managementOnly
-    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey", "runId"])
-    : schema;
+  return managementOnly ? Type.Omit(schema, ["in", "text", "mode", "sessionKey", "runId"]) : schema;
 }
