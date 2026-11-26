@@ -17,7 +17,7 @@ it("resolves only a host-issued staged media handle and preserves its declared e
   fs.writeFileSync(file, data);
   const reference = {
     id: "file_upload",
-    name: "match.jpg",
+    name: path.basename(file),
     mimeType: "image/jpeg",
     sizeBytes: data.byteLength,
     sha256: crypto.createHash("sha256").update(data).digest("hex"),
