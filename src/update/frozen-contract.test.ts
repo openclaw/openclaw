@@ -106,6 +106,22 @@ it("feeds the real candidate restore receipt to the frozen manifest reader", asy
   expect(fs.readFileSync(live, "utf8")).toBe("candidate");
   expect(fs.existsSync(added)).toBe(true);
 
+  // Pin the deployed format independently: the current writer and reader can evolve together.
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(fixture.prefix, "releases", "candidate", ".restore"), "utf8"),
+  );
+  expect(manifest).toEqual({
+    v: 1,
+    runId: fixture.input.runId,
+    files: expect.arrayContaining([
+      { live, preimage: expect.any(String) },
+      { live: added, preimage: null },
+    ]),
+  });
+  expect(manifest.files).toHaveLength(2);
+  const image = manifest.files.find((entry: { live: string }) => entry.live === live);
+  expect(path.isAbsolute(image.preimage)).toBe(true);
+
   runInNewContext(
     `${MANIFEST_RESTORE_SOURCE}\nrestoreManifestFiles(readRestoreManifest(trial, false));`,
     {
