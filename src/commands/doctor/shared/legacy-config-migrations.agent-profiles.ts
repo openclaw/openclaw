@@ -52,15 +52,15 @@ const LEGACY_AGENT_PROFILE_RULES: LegacyConfigRule[] = [
 ];
 
 /**
- * Retired runtime flag. Doctor maps it to an Agent Profile and drops it:
- * true selects openclaw/small at the same scope; false is removed, except on
- * an agent under an enabled default, where it becomes openclaw/base.
+ * Retired runtime flag. Doctor maps it to an explicit Agent Profile at the same
+ * scope and drops it: true selects openclaw/small, false selects openclaw/base.
+ * openclaw/base keeps the full tool surface, so it preserves the behavior of false.
  */
 function migrateLegacyFlag(
   agent: Record<string, unknown>,
   pathLabel: string,
   changes: string[],
-  options: { defaultEnabled: boolean; removeEmpty?: boolean },
+  options: { removeEmpty?: boolean },
 ): void {
   const experimental = getRecord(agent.experimental);
   if (experimental && options.removeEmpty && Object.keys(experimental).length === 0) {
@@ -72,22 +72,14 @@ function migrateLegacyFlag(
     return;
   }
   const enabled = experimental[LEGACY_FLAG] === true;
-  const profileId = enabled
-    ? "openclaw/small"
-    : options.defaultEnabled
-      ? "openclaw/base"
-      : undefined;
+  const profileId = enabled ? "openclaw/small" : "openclaw/base";
   if (agent.agentProfileId !== undefined) {
     changes.push(
       `Removed ${pathLabel}.experimental.${LEGACY_FLAG}; kept the explicit Agent Profile.`,
     );
-  } else if (profileId) {
+  } else {
     agent.agentProfileId = profileId;
     changes.push(`Moved ${pathLabel}.experimental.${LEGACY_FLAG} → ${pathLabel}.agentProfileId.`);
-  } else {
-    changes.push(
-      `Removed ${pathLabel}.experimental.${LEGACY_FLAG}; the full tool surface is the default.`,
-    );
   }
   delete experimental[LEGACY_FLAG];
   if (Object.keys(experimental).length === 0) {
@@ -99,9 +91,8 @@ function migrateLegacyAgentProfiles(raw: Record<string, unknown>, changes: strin
   const agents = getRecord(raw.agents);
   if (agents) {
     const defaults = getRecord(agents.defaults);
-    const defaultEnabled = getRecord(defaults?.experimental)?.[LEGACY_FLAG] === true;
     if (defaults) {
-      migrateLegacyFlag(defaults, "agents.defaults", changes, { defaultEnabled: false });
+      migrateLegacyFlag(defaults, "agents.defaults", changes, {});
     }
     const entries = getRecord(agents.entries);
     if (entries) {
@@ -111,10 +102,7 @@ function migrateLegacyAgentProfiles(raw: Record<string, unknown>, changes: strin
         }
         const agent = getRecord(entry);
         if (agent) {
-          migrateLegacyFlag(agent, `agents.entries.${id}`, changes, {
-            defaultEnabled,
-            removeEmpty: true,
-          });
+          migrateLegacyFlag(agent, `agents.entries.${id}`, changes, { removeEmpty: true });
         }
       }
     }
@@ -122,10 +110,7 @@ function migrateLegacyAgentProfiles(raw: Record<string, unknown>, changes: strin
       for (const [index, entry] of agents.list.entries()) {
         const agent = getRecord(entry);
         if (agent) {
-          migrateLegacyFlag(agent, `agents.list[${index}]`, changes, {
-            defaultEnabled,
-            removeEmpty: true,
-          });
+          migrateLegacyFlag(agent, `agents.list[${index}]`, changes, { removeEmpty: true });
         }
       }
     }

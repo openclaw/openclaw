@@ -142,14 +142,13 @@ workspace-file content.
 Run `openclaw doctor --fix` to migrate the retired
 `agents.defaults.experimental.localModelLean` key and its per-agent equivalents:
 
-| Legacy value                               | Result                             |
-| ------------------------------------------ | ---------------------------------- |
-| `true` at any scope                        | `agentProfileId: "openclaw/small"` |
-| `false` at defaults                        | key removed                        |
-| `false` on an agent under a `true` default | `agentProfileId: "openclaw/base"`  |
-| `false` on an agent otherwise              | key removed                        |
+| Legacy value         | Result                             |
+| -------------------- | ---------------------------------- |
+| `true` at any scope  | `agentProfileId: "openclaw/small"` |
+| `false` at any scope | `agentProfileId: "openclaw/base"`  |
+| Key absent           | unchanged                          |
 
-A legacy `true` becomes an explicit `openclaw/small`. An explicit `agentProfileId` at the same scope always wins and the
+A legacy `true` becomes an explicit `openclaw/small`. A legacy `false` becomes an explicit `openclaw/base`, which keeps the full tool surface. An explicit `agentProfileId` at the same scope always wins and the
 legacy key is dropped. The CLI flag `--local-model-lean` remains a deprecated alias for
 `--agent-profile openclaw/small`.
 
