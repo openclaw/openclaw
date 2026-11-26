@@ -306,6 +306,42 @@ describe("secrets CLI", () => {
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
   });
 
+  it.each(["configure", "apply", "dry-run"])(
+    "prints preserved-account warnings for human-readable %s output",
+    async (mode) => {
+      const warning =
+        'Auth profile "other-account" retains its plaintext credential. Add an explicit auth-profile target to migrate this account.';
+      const applyOnlyWarning = "Additional apply warning.";
+      runSecretsApply.mockResolvedValue({
+        ...createSecretsApplyResult({ mode: mode === "dry-run" ? "dry-run" : "write" }),
+        warningCount: 4,
+        warnings: [warning, applyOnlyWarning, warning, applyOnlyWarning],
+      });
+      if (mode === "configure") {
+        const configured = createConfigureInteractiveResult();
+        runSecretsConfigureInteractive.mockResolvedValue({
+          ...configured,
+          preflight: { ...configured.preflight, warningCount: 2, warnings: [warning, warning] },
+        });
+        await runSecrets(["secrets", "configure", "--apply", "--yes"]);
+      } else {
+        await withPlanFile(async (planPath) => {
+          await runSecrets([
+            "secrets",
+            "apply",
+            "--from",
+            planPath,
+            ...(mode === "dry-run" ? ["--dry-run"] : []),
+          ]);
+        });
+      }
+      expect(runtimeLogs.filter((line) => line === `- warning: ${warning}`)).toHaveLength(1);
+      expect(runtimeLogs.filter((line) => line === `- warning: ${applyOnlyWarning}`)).toHaveLength(
+        1,
+      );
+    },
+  );
+
   it("shows the irreversibility warning before applying configured targets (#83883)", async () => {
     const configured = createConfigureInteractiveResult({
       changed: true,

@@ -11,10 +11,11 @@ export function describeGitHubPublishTool(options: {
 }): string {
   // One line per action; each result's `next` carries the procedure that applies at that point.
   const lines = [
-    "GitHub issues and PRs through Gateway-held credentials. The Gateway checks identity, eligibility and write access per call; listing grants nothing. Follow each result's next.",
+    "GitHub issues and PRs via Gateway credentials. Each call checks identity, eligibility and write access. Follow next.",
     "- readiness: observe publication state and an existing requestId; never resubmit it.",
     "- inspect_pr: read a PR by pullRequestUrl.",
     "- create_issue: title and optional body.",
+    "- create_comment: post approved Markdown (issueNumber, body).",
   ];
   if (options.publicationAvailable) {
     lines.push(
@@ -49,6 +50,7 @@ export const githubActionGuidance = {
   inspect_pr: "This read binds nothing and grants no later authority.",
   inspectPrPrepare: "To continue this PR, use prepare_pr with the same pullRequestUrl.",
   create_issue: "If creation is unconfirmed, check the repository before retrying.",
+  create_comment: "If the post is unconfirmed, check the thread before retrying.",
   prepare_pr:
     "Tests and Auto Review use the returned review base. If headChanged is true, repeat to integrate the newer head. Resolve any conflictPaths, then repeat with conflictsResolved: true and expectedHeadCommit set to the returned headCommit. Then omit action to append accepted changes to the original PR; a remote head change refuses publication, so integrate it and never create a replacement PR. For edit, ready or request_review on the bound PR, read with edit first and send expectedHeadCommit without requestId.",
   refresh_base:

@@ -32,7 +32,12 @@ const pasteStep = {
 
 async function startSignIn(
   page: Page,
-  replies: { next?: () => unknown; config?: () => unknown; pluginEntry?: boolean } = {},
+  replies: {
+    next?: () => unknown;
+    config?: () => unknown;
+    providers?: () => unknown[];
+    pluginEntry?: boolean;
+  } = {},
 ) {
   // The sign-in tab is the provider's; this proof stays on the Control UI page.
   await page.addInitScript(() => {
@@ -52,9 +57,17 @@ async function startSignIn(
     {
       featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
       methodResponses: {
-        "models.authStatus": {
+        "models.authLogin": { done: false, status: "running" },
+      },
+    },
+    // A Node-side reply outlives the page, so a reload sees the Gateway's current answer.
+    {
+      requestHandlers: {
+        "wizard.next": () => replies.next?.() ?? pasteStep,
+        "config.get": () => replies.config?.() ?? configSnapshot,
+        "models.authStatus": () => ({
           ts: 1,
-          providers: [],
+          providers: replies.providers?.() ?? [],
           providerCapabilities: [
             {
               provider: "example",
@@ -74,15 +87,7 @@ async function startSignIn(
               ],
             },
           ],
-        },
-        "models.authLogin": { done: false, status: "running" },
-      },
-    },
-    // A Node-side reply outlives the page, so a reload sees the Gateway's current answer.
-    {
-      requestHandlers: {
-        "wizard.next": () => replies.next?.() ?? pasteStep,
-        "config.get": () => replies.config?.() ?? configSnapshot,
+        }),
       },
     },
   );
@@ -140,12 +145,37 @@ suite.define(() => {
       const { gateway, paste, params } = await startSignIn(page, {
         pluginEntry: true,
         next: () => (finished ? { done: true, status: "done" } : pasteStep),
+        // The Gateway lists the account once the sign-in saved it.
+        providers: () =>
+          finished
+            ? [
+                {
+                  provider: "example",
+                  displayName: "Example",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: "example:user",
+                      type: "oauth",
+                      status: "ok",
+                      email: "user@example.com",
+                    },
+                  ],
+                },
+              ]
+            : [],
       });
       expect(params).not.toHaveProperty("selectModel");
       await page.reload();
       await paste.fill("http://127.0.0.1:1455/callback?code=typed");
       finished = true;
-      await page.getByText("Example is ready", { exact: true }).waitFor({ timeout: 5000 });
+      await page.getByText("Example connected", { exact: true }).waitFor({ timeout: 5000 });
+      // The reloaded page still names the account this sign-in connected.
+      const account = page.locator(
+        "openclaw-modal-dialog .model-setup-wizard__success-description",
+      );
+      await account.waitFor({ timeout: 5000 });
+      expect(await account.textContent()).toBe("user@example.com");
       expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
     });
   });

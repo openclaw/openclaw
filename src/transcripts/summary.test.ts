@@ -64,6 +64,22 @@ it("keeps plain transcript content unchanged", () => {
   });
 });
 
+it("distinguishes an empty live capture from a finished capture without usable speech", () => {
+  const stopped = { stoppedAt: "2026-01-01T12:00:00Z" };
+  expect(summarize([]).overview).toBe("No transcript captured yet.");
+  for (const rows of [[], ["context:", "###"]]) {
+    expect(summarize(rows, stopped)).toMatchObject({
+      overview: "No usable speech was captured.",
+      transcript: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      utteranceCount: rows.length,
+    });
+  }
+  expect(summarize(["採用します。"], stopped).overview).toBe("採用します。");
+});
+
 it("lists participants once in first-appearance order after the overview", () => {
   const summary = summarize([
     line("Hello", " Zoe "),

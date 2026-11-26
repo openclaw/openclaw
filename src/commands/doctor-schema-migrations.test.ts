@@ -286,7 +286,11 @@ it.each([
           preparedDiscovery.versionMigrations = result.versionMigrations;
           additiveSchema.mockClear();
           expect(
-            await migrateLegacyMediaPersistence({ env: state.env, preparedDiscovery }),
+            await migrateLegacyMediaPersistence({
+              env: state.env,
+              preparedDiscovery,
+              integrityCheck: update ? undefined : check,
+            }),
           ).toMatchObject({ warnings: [] });
           expect(additiveSchema).toHaveBeenCalledTimes(update ? 0 : 1);
           const verification = readSqliteDatabaseIntegrityVerification(pathname);

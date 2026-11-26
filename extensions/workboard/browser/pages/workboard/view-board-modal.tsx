@@ -235,7 +235,6 @@ export function BoardModal(props: {
                 class="settings-input"
                 autofocus
                 required
-                maxlength="120"
                 ref={nameValue}
                 disabled={saving() || !props.canWrite}
                 onInput={(event) => {
@@ -372,7 +371,6 @@ function SessionsEditor(props: {
                 <input
                   class="settings-input"
                   required
-                  maxlength="60"
                   aria-label={t("workboard.sessionsBoard.columnLabel")}
                   ref={labelValue}
                   onInput={(event) => {
@@ -410,7 +408,6 @@ function SessionsEditor(props: {
                 <textarea
                   class="settings-input"
                   required
-                  maxlength="400"
                   rows="2"
                   aria-label={t("workboard.sessionsBoard.description")}
                   ref={descriptionValue}
