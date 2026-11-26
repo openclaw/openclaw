@@ -147,8 +147,8 @@ export class PreparedCatalogContexts<T extends Generation> {
     try {
       await completion;
     } catch (error) {
-      for (const owner of owners) {
-        this.recordCleanupFailure(owner, error);
+      for (const affectedOwner of owners) {
+        this.recordCleanupFailure(affectedOwner, error);
       }
       throw error;
     } finally {

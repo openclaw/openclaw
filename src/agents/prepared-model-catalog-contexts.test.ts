@@ -212,24 +212,24 @@ it.each(["replacement", "scope growth", "failed replacement"])(
       return cleanup.promise;
     });
     const releasePredecessor = predecessor.release;
-    let finishing: Promise<void>;
-    if (mode === "replacement") {
-      contexts.publish(admitted, generation());
-      finishing = contexts.finish(admitted);
-    } else if (mode === "scope growth") {
-      predecessor.release = generation().release;
-      finishing = contexts
-        .releaseGeneration(second, predecessor, releasePredecessor)
-        .finally(() => contexts.finish(admitted));
-    } else {
-      const attempted = generation();
-      attempted.release.mockImplementation(() => candidateReleased.promise);
-      contexts.invalidate(admitted);
-      finishing = contexts
-        .releaseGeneration(second, attempted)
-        .finally(() => contexts.finish(admitted));
-    }
-    const closed = expect(finishing).rejects.toBe(retained);
+    const close = async () => {
+      try {
+        if (mode === "replacement") {
+          contexts.publish(admitted, generation());
+        } else if (mode === "scope growth") {
+          predecessor.release = generation().release;
+          await contexts.releaseGeneration(second, predecessor, releasePredecessor);
+        } else {
+          const attempted = generation();
+          attempted.release.mockImplementation(() => candidateReleased.promise);
+          contexts.invalidate(admitted);
+          await contexts.releaseGeneration(second, attempted);
+        }
+      } finally {
+        await contexts.finish(admitted);
+      }
+    };
+    const closed = expect(close()).rejects.toBe(retained);
     const deletion = expect(contexts.retire([first])).rejects.toBe(retained);
     await contexts.retire(["unrelated"]);
     if (mode === "failed replacement") {
