@@ -367,6 +367,79 @@ const rejectedAdmin = reuseCompletedSetup(() => {
   return { f, outcome, binding, source, current };
 });
 
+describePosix("current-workflow selection handoff", () => {
+  it.each(["admission", "recovery"] as const)(
+    "qualifies fresh main after a same-closure fetch during %s handoff",
+    (mode) => {
+      const setup = mode === "admission" ? firstAdmission() : rejectedAdmin();
+      const { f, source, current } = setup;
+      const outcome = "outcome" in setup ? setup.outcome : "";
+      const binding = f.git(["rev-parse", bindingRef]);
+      const advanced = f.commit(
+        f.git(["rev-parse", `${current}^{tree}`]),
+        [current],
+        "Unrelated main advance\n",
+      );
+      f.git(["push", "-q", "origin", `${advanced}:refs/heads/next-main`]);
+      const hook = join(f.root, "after-hold.sh");
+      writeFileSync(
+        hook,
+        `git --git-dir='${f.remote}' update-ref refs/heads/main '${advanced}' '${current}'\n` +
+          `git -C '${f.repo}' fetch -q origin main\n`,
+      );
+      f.workflowAfterHold(hook);
+
+      // The fixture loses only the final comment acknowledgment. Reaching its
+      // durable result proves both the descriptor read and locked qualification.
+      expectExit(runCurrent(f, { outcome, admin: f.path }), 1);
+      expect(f.record()).toMatchObject({
+        phase: "commenting",
+        [mode === "admission" ? "workflowAdmission" : "workflowRecovery"]: {
+          binding,
+          from: source,
+          to: advanced,
+        },
+      });
+      expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+      expectAncestors(f, [binding, source, advanced], outcomeRef);
+    },
+  );
+
+  it.each(["symbolic", "missing", "unreadable", "divergent"] as const)(
+    "refuses %s canonical tracking introduced after selection",
+    (fault) => {
+      const { f, current } = firstAdmission();
+      const binding = f.git(["rev-parse", bindingRef]);
+      const tracking = "refs/remotes/origin/main";
+      let command: string;
+      if (fault === "symbolic") {
+        command = `git -C '${f.repo}' symbolic-ref '${tracking}' refs/heads/main`;
+      } else if (fault === "missing") {
+        command = `git -C '${f.repo}' update-ref -d '${tracking}' '${current}'`;
+      } else if (fault === "unreadable") {
+        const path = f.git(["rev-parse", "--path-format=absolute", "--git-path", tracking]);
+        command = `printf 'invalid ref\\n' > '${path}'`;
+      } else {
+        const divergent = f.commit(
+          f.git(["rev-parse", `${f.base}^{tree}`]),
+          [f.base],
+          "Divergent main\n",
+        );
+        command = `git -C '${f.repo}' update-ref '${tracking}' '${divergent}' '${current}'`;
+      }
+      const hook = join(f.root, "after-hold.sh");
+      writeFileSync(hook, command + "\n");
+      f.workflowAfterHold(hook);
+      const result = runCurrent(f, { admin: f.path });
+      expectExit(result, 1);
+      expect(result.output).toMatch(/workflow anchor|Git read failed/);
+      expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+      expect(f.git(["for-each-ref", "--format=%(refname)", outcomeRef])).toBe("");
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
+    },
+  );
+});
+
 describePosix("current-main recovery of a retained workflow", () => {
   it.each([false, true])(
     "retains current-workflow retirement through concurrent merge=%s",
