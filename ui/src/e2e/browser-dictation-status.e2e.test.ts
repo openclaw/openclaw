@@ -108,6 +108,97 @@ const expectDraft = async (textarea: Locator, value: string) => {
 };
 
 suite.define(() => {
+  it.each(["chat", "new"] as const)(
+    "retains a failed recording for explicit same-audio retry in %s",
+    (route) =>
+      suite.withPage(
+        {
+          permissions: ["microphone"],
+          viewport: { width: route === "new" ? 390 : 1280, height: 900 },
+        },
+        async ({ page }) => {
+          const { gateway, textarea, admit } = await openDictation(page, { route });
+          await textarea.waitFor();
+          if (route === "new") {
+            await button(page, "Dictate", true).click();
+            await admit();
+          } else {
+            await button(page, "Start voice input", true).hover();
+            await page.mouse.down();
+            await admit();
+            await page.mouse.up();
+          }
+          await page.evaluate(() => {
+            const state = (
+              window as unknown as {
+                openclawTalkE2eState: {
+                  inputProcessor: {
+                    onaudioprocess: (event: {
+                      inputBuffer: { getChannelData: () => Float32Array };
+                    }) => void;
+                  };
+                };
+              }
+            ).openclawTalkE2eState;
+            state.inputProcessor.onaudioprocess({
+              inputBuffer: { getChannelData: () => new Float32Array([0, 1, -1]) },
+            });
+          });
+          await gateway.waitForRequest("talk.session.appendAudio");
+          await button(page, "Stop and keep text", true).click();
+          await gateway.waitForRequest("talk.session.close");
+          await gateway.emitGatewayEvent("talk.event", {
+            transcriptionSessionId: sessionId,
+            type: "error",
+            message: "Transcription unavailable",
+          });
+          await expectDraft(textarea, "");
+          await page
+            .getByText(/Transcription unavailable/)
+            .first()
+            .waitFor();
+          await captureComposer(page, "failed-recording-recovery.png");
+          const retry = button(page, "Retry recording", true);
+          await retry.waitFor();
+          const status = page.locator(".agent-chat__dictation-status[data-recovery]");
+          expect(
+            await status.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+          await retry.click();
+          await expect
+            .poll(async () => (await gateway.getRequests("talk.session.create")).length)
+            .toBe(2);
+          await expect
+            .poll(async () => (await gateway.getRequests("talk.session.appendAudio")).length)
+            .toBe(2);
+          const audio = await gateway.getRequests("talk.session.appendAudio");
+          expect(audio[1]?.params).toEqual(audio[0]?.params);
+          await gateway.emitGatewayEvent("talk.event", {
+            transcriptionSessionId: sessionId,
+            type: "transcript",
+            final: true,
+            text: "Recovered recording",
+          });
+          await gateway.emitGatewayEvent("talk.event", {
+            transcriptionSessionId: sessionId,
+            type: "close",
+            reason: "completed",
+          });
+          await expectDraft(textarea, "Recovered recording");
+          await expect.poll(() => page.getByText(/Transcription unavailable/).count()).toBe(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(
+            await page.evaluate(
+              () =>
+                (window as unknown as { openclawTalkE2eState: { constraints: unknown[] } })
+                  .openclawTalkE2eState.constraints.length,
+            ),
+          ).toBe(1);
+          await captureComposer(page, "recording-recovered-unsent.png");
+        },
+      ),
+  );
+
   it("dictates for a session-only guest without reading operator configuration", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {

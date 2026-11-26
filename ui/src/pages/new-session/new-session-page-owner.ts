@@ -220,6 +220,12 @@ export class NewSessionPageOwner {
       onError: (message) => {
         this.dictationError = message;
         this.changed();
+        return () => {
+          if (this.dictationError === message) {
+            this.dictationError = null;
+            this.changed();
+          }
+        };
       },
       onSubmit: () => void this.submit(),
     });

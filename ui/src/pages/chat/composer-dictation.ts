@@ -30,7 +30,7 @@ type ComposerDictationOwnerOptions = {
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string, late?: true, preservePreview?: true) => void;
-  onError: (message: string, failure: ComposerDictationFailure) => void;
+  onError: (message: string, failure: ComposerDictationFailure) => void | (() => void);
   onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
@@ -80,7 +80,7 @@ export class ComposerDictationOwner extends EventTarget {
 
   // Stop releases the microphone and typing lock before the final text arrives.
   get transcribing(): boolean {
-    return Boolean(this.commits?.size);
+    return Boolean(this.commits?.transcribing);
   }
 
   get locksComposer(): boolean {
@@ -106,6 +106,31 @@ export class ComposerDictationOwner extends EventTarget {
   // session that actually inserted text into the draft.
   finishActive(): Promise<boolean> {
     return this.stop({ commit: true });
+  }
+
+  get recovery() {
+    return this.commits?.recovery;
+  }
+
+  discardRecovery(): void {
+    const session = this.recovery;
+    if (session) {
+      this.commits?.retire(session);
+      this.releasePlayback();
+      this.pendingCommitsChanged();
+    }
+  }
+
+  retry(): Promise<boolean> {
+    const session = this.recovery;
+    if (!session || session.retrying || this.active || !this.canHold()) {
+      return Promise.resolve(false);
+    }
+    return this.complete(
+      session,
+      true,
+      session.retry(this.playback, () => this.cancel()),
+    );
   }
 
   startDirect(): boolean {
@@ -267,7 +292,7 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
+    if (event.key !== "Escape" || (this.phase === "idle" && !this.commits?.size)) {
       return;
     }
     event.preventDefault();
@@ -344,6 +369,7 @@ export class ComposerDictationOwner extends EventTarget {
       }
       describeStartError = describeDictationStartError;
       const commits = (this.commits ??= new ComposerDictationCommits());
+      commits.retireRecoveries();
       const session = new ComposerDictationSession(
         client,
         {
@@ -352,7 +378,7 @@ export class ComposerDictationOwner extends EventTarget {
               return;
             }
             try {
-              this.options.onError(message, { kind: "interrupted", preservesText });
+              return this.options.onError(message, { kind: "interrupted", preservesText });
             } finally {
               if (this.session === session) {
                 void this.stop({ commit: true });
@@ -405,26 +431,38 @@ export class ComposerDictationOwner extends EventTarget {
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    const committed = this.commits!.add(session, (lateTranscript) => {
-      this.releasePlayback();
-      this.pendingCommitsChanged();
-      if (
-        !lateTranscript ||
-        !wasActive ||
-        this.disposed ||
-        !this.options.enabled ||
-        this.options.realtimeTalkActive
-      ) {
-        return false;
-      }
-      if (this.active) {
-        this.options.onCommit(lateTranscript, true, true);
-      } else {
-        this.options.onCommit(lateTranscript, true);
-      }
-      this.dispatchEvent(new Event("change"));
-      return true;
-    });
+    return this.complete(session, wasActive);
+  }
+
+  private complete(
+    session: ComposerDictationSession,
+    wasActive: boolean,
+    result?: Promise<string>,
+  ): Promise<boolean> {
+    const committed = this.commits!.add(
+      session,
+      (lateTranscript) => {
+        this.releasePlayback();
+        this.pendingCommitsChanged();
+        if (
+          !lateTranscript ||
+          !wasActive ||
+          this.disposed ||
+          !this.options.enabled ||
+          this.options.realtimeTalkActive
+        ) {
+          return false;
+        }
+        if (this.active) {
+          this.options.onCommit(lateTranscript, true, true);
+        } else {
+          this.options.onCommit(lateTranscript, true);
+        }
+        this.dispatchEvent(new Event("change"));
+        return true;
+      },
+      result,
+    );
     this.pendingCommitsChanged();
     return committed;
   }
@@ -482,7 +520,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing) {
+    if (this.phase !== "idle" || this.commits?.size) {
       if (this.cancellationListeners) {
         return;
       }
