@@ -77,7 +77,14 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
   updaterNotification?: "published" | "consumed" | "consumed-before-exit";
-  gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
+  gatewayHealth?:
+    | "ready"
+    | "http-only"
+    | "unready"
+    | "wrong-version"
+    | "wrong-build"
+    | "exited"
+    | "throw";
   diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
 

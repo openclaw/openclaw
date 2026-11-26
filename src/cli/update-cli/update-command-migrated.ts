@@ -302,16 +302,16 @@ export async function continueMigratedUpdateInFreshProcess(
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
       stopState = serializableStop;
     }
+    const finalizationTimeoutMs =
+      run.activationTimeoutMs ??
+      (await resolveUpdateFinalizationTimeoutMs(params.updateStepTimeoutMs, {
+        env: params.ownedManagedUpdateEnv ?? run.env,
+        databases: params.schemaVersions,
+        pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
+        nodeRunner: params.packageUpdateNodeRunner,
+      }));
     if (params.opts.timeout !== undefined) {
-      run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
-        params.updateStepTimeoutMs,
-        {
-          env: params.ownedManagedUpdateEnv ?? run.env,
-          databases: params.schemaVersions,
-          pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
-          nodeRunner: params.packageUpdateNodeRunner,
-        },
-      );
+      run.activationTimeoutMs ??= finalizationTimeoutMs;
     }
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
@@ -348,9 +348,9 @@ export async function continueMigratedUpdateInFreshProcess(
         ...workerOptions,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
-        // Only an operator deadline bounds forward finalization. Probes and
-        // cancellation settlement keep their separate finite allowances.
-        timeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
+        // The waiting owner bounds a frozen worker even without an operator
+        // deadline. The runner joins extinction before handing back recovery.
+        timeoutMs: run.deadline?.remainingMs() ?? finalizationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
         onOutputChunk(chunk, stream) {
           if (stream === "stderr") {

@@ -243,6 +243,7 @@ export async function inspectGatewayRestart(params: {
 
   const {
     gatewayBootId,
+    healthRpcVerified,
     gatewayVersion,
     gatewayBuildId,
     probeError,
@@ -261,6 +262,7 @@ export async function inspectGatewayRestart(params: {
     portUsage,
     healthy,
     staleGatewayPids,
+    ...(healthRpcVerified ? { healthRpcVerified } : {}),
     ...(gatewayBootId ? { gatewayBootId } : {}),
     ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
     ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
