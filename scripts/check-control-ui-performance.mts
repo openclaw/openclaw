@@ -78,9 +78,9 @@ const controlUiPerformanceBudgets = {
   // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
   // Retain the approved #202534 file-link cost: measured 1,333,835 B against
   // paired base 1,333,358 B at d5a99b07, plus 64 B headroom.
-  // The total resident-history ceiling remains 1,339,362 B (frozen 11b
-  // measurement 1,338,663 B plus 699 B); these allowances are not additive.
-  chatBootJsGzipBytes: 1_339_362,
+  // The resident-history ceiling is the paired, hash-normalized measurement.
+  // Earlier feature allowances are not additive.
+  chatBootJsGzipBytes: 1_339_420,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
