@@ -90,7 +90,8 @@ export function consumeSqliteMaintenanceIntegrity(
     (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
   );
   return (
-    receipt.schemaOnly === (options.schemaOnly === true) &&
+    // A whole-file QUICK covers a schema-only step; a schema-only proof never covers more.
+    (!receipt.schemaOnly || options.schemaOnly === true) &&
     source !== undefined &&
     sameFileMutationFingerprint(receipt.source, source) &&
     !hasRecoveryData &&
