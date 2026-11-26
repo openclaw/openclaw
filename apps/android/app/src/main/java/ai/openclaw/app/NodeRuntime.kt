@@ -1121,8 +1121,6 @@ class NodeRuntime internal constructor(
     val realtime: VoiceE2eSliceResult?,
   )
 
-  private val _isConnected = MutableStateFlow(false)
-  val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
   private val _desktopObserveAvailable = MutableStateFlow(false)
@@ -2412,7 +2410,6 @@ class NodeRuntime internal constructor(
           nodeProblem = nodeConnectionProblem,
         )
       _gatewayConnectionDisplay.value = display
-      _isConnected.value = display.isConnected
     }
   }
 
