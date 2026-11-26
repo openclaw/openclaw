@@ -393,6 +393,37 @@ it("keeps deleted, disappearing, view-once, and missing images out of model inpu
   expect(getCapturedCtx().media ?? []).toEqual([]);
 });
 
+it("keeps a photo deleted by signal-cli 0.14.8 out of a later mention", async () => {
+  const fetchAttachment = vi.fn<SignalEventHandlerDeps["fetchAttachment"]>(
+    async ({ attachment }) => ({ path: `/tmp/${attachment.id}.jpg` }),
+  );
+  const handler = createMentionHandler({
+    historyLimit: 5,
+    ignoreAttachments: false,
+    fetchAttachment,
+  });
+  const deletedTimestamp = 1700000000000;
+  for (const [id, timestamp] of [
+    ["deleted", deletedTimestamp],
+    ["kept", deletedTimestamp + 1],
+  ] as const) {
+    await handler(
+      groupEvent("", { attachments: [{ id, contentType: "image/jpeg" }] }, { timestamp }),
+    );
+  }
+  await handler(
+    groupEvent(
+      "",
+      { remoteDelete: { timestamp: deletedTimestamp } },
+      { timestamp: deletedTimestamp + 2 },
+    ),
+  );
+  await handler(groupEvent("@bot what are my photos?", {}, { timestamp: deletedTimestamp + 3 }));
+
+  expect(fetchAttachment.mock.calls.map(([{ attachment }]) => attachment.id)).toEqual(["kept"]);
+  expect(getCapturedCtx().media?.map(({ path }) => path)).toEqual(["/tmp/kept.jpg"]);
+});
+
 it("filters history senders and bounds Signal image fetches before reading bytes", async () => {
   const fetchAttachment = vi.fn<SignalEventHandlerDeps["fetchAttachment"]>(
     async ({ attachment }) => ({

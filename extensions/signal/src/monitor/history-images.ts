@@ -175,8 +175,14 @@ export function forgetSignalHistoryImages(
   sender: SignalSender,
   message?: SignalDataMessage | null,
 ) {
-  const target = message?.adminDelete ?? message?.remoteDelete;
-  const timestamp = target?.targetTimestamp ?? target?.targetSentTimestamp;
+  const adminDelete = message?.adminDelete;
+  const remoteDelete = message?.remoteDelete;
+  const target = adminDelete ?? remoteDelete;
+  // signal-cli 0.14.8 reports the deleted message ID as remoteDelete.timestamp.
+  const timestamp =
+    target?.targetTimestamp ??
+    target?.targetSentTimestamp ??
+    (adminDelete ? undefined : remoteDelete?.timestamp);
   if (typeof timestamp !== "number") {
     return;
   }
@@ -184,7 +190,7 @@ export function forgetSignalHistoryImages(
     if (
       entry.messageId === String(timestamp) &&
       entry.imageSource &&
-      (message?.adminDelete || isSameSignalSender(entry.imageSource.sender, sender))
+      (adminDelete || isSameSignalSender(entry.imageSource.sender, sender))
     ) {
       delete entry.imageSource;
     }

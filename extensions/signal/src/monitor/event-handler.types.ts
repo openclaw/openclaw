@@ -41,7 +41,7 @@ export type SignalDataMessage = {
   attachments?: Array<SignalAttachment>;
   viewOnce?: boolean | null;
   expiresInSeconds?: number | null;
-  remoteDelete?: SignalDeleteTarget | null;
+  remoteDelete?: (SignalDeleteTarget & { timestamp?: number | null }) | null;
   adminDelete?: SignalDeleteTarget | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
