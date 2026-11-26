@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
-import { defaultOptions, scribeById, scribeSetup, setupPrompt } from "./scribes-catalog.js";
+import { defaultOptions, runPrompt, scribeById, scribeSetup } from "./scribes-catalog.js";
 import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
 
 const slack = scribeById("slack")!;
@@ -31,6 +31,7 @@ const open = (
     agentName: "Main",
     detection: { plugins: { slack: readiness }, ...(tokens && { tokens: { slack: tokens } }) },
     canWrite: true,
+    canAdmin: true,
     basePath: "/ui",
     start: async () => {},
   });
@@ -45,7 +46,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   expect(box(without, "scribe-slack-user-token").disabled).toBe(true);
   expect(without.textContent).toContain("No Slack user token is configured");
   expect(without.querySelector("textarea")!.value).toBe(
-    setupPrompt(scribeSetup("slack", "ongoing", defaultOptions("slack"), timezone)),
+    runPrompt(scribeSetup("slack", "ongoing", defaultOptions("slack"), timezone)),
   );
   document.body.replaceChildren();
 
@@ -54,7 +55,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   box(withToken, "scribe-slack-user-token").click();
   box(withToken, "scribe-slack-dms").click();
   expect(withToken.querySelector("textarea")!.value).toBe(
-    setupPrompt(
+    runPrompt(
       scribeSetup(
         "slack",
         "ongoing",

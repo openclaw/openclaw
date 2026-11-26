@@ -3,10 +3,10 @@ import { locationParams, readLocation } from "./page-location.js";
 import {
   checkRunMessage,
   defaultOptions,
-  repairPrompt,
   rescheduledRunMessage,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
+  runPrompt,
   scribeById,
   scribeLabel,
   scribeSetup,
@@ -35,34 +35,23 @@ describe("scribes catalog", () => {
     );
   });
 
-  it("writes an ongoing setup prompt as settings, numbered steps and its run message", () => {
+  it("writes an ongoing scribe's run message as settings and numbered steps", () => {
     const setup = scribeSetup(
       "conversations",
       "ongoing",
       { scope: "all", since: "90d", schedule: "0 4 * * *" },
       "America/Los_Angeles",
     );
-    const prompt = setupPrompt(setup);
-    expect(prompt).toMatch(
-      /^Set up the Knowledge scribe "Learn from conversations" in this conversation\./,
-    );
-    expect(prompt).toContain(
-      [
-        "Settings:",
-        "- Runs daily at 4:00 AM America/Los_Angeles (cron `0 4 * * *`).",
-        "- Conversations: active and archived, from the last 90 days.",
-      ].join("\n"),
-    );
-    expect(prompt).toContain("declaration key `knowledge:scribe:conversations`");
-    expect(prompt).toContain("Don't start a run from this turn");
-    expect(prompt).toContain("`Scribe status: on — <one sentence: the automation");
-    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    const runMessage = runPrompt(setup);
     expect(runMessage).toMatch(
-      /archived, from the last 90 days\.[\s\S]*"Learn from conversations"/,
+      /^Scheduled run of the Knowledge scribe "Learn from conversations"\./,
+    );
+    expect(runMessage).toContain(
+      ["Settings:", "- Conversations: active and archived, from the last 90 days."].join("\n"),
     );
     expect(runMessage).toContain("This run can't change automations");
     expect(runMessage).not.toContain("With the automations tool");
-    expect(prompt, "no JSON in the prompt").not.toMatch(/[{}]|```json|SCRIBE_RESULT/);
+    expect(runMessage, "no JSON in the run message").not.toMatch(/[{}]|```json|SCRIBE_RESULT/);
   });
 
   it("writes a once prompt that does the work in this turn, and defaults the review to weekly", () => {
@@ -75,44 +64,11 @@ describe("scribes catalog", () => {
     expect(memory).toContain("- Memory files: MEMORY.md and the Dreaming diary (DREAMS.md).");
     expect(memory).toContain("`Scribe status: done — <one sentence with counts");
     expect(memory).not.toMatch(/Run message|automations tool/);
-    const review = setupPrompt(
-      scribeSetup("claim-consolidation", "ongoing", defaultOptions("claim-consolidation"), "UTC"),
-    );
-    expect(review).toContain("- Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`).");
-    expect(review).toContain("The knowledge-claim-consolidation skill does the work on each run.");
-  });
-
-  it("writes a repair prompt that keeps the automation's schedule and run message", () => {
-    const prompt = repairPrompt("claim-consolidation", {
-      schedule: { kind: "cron", expr: "45 3 * * *", tz: "UTC" },
-      runMessage: "Edited run message",
-    });
-    expect(prompt).toMatch(/^Repair the Knowledge scribe "Knowledge Consolidation"/);
-    expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
-    expect(prompt).toContain("leave it as it is and go to the last step");
-    expect(prompt).toContain("Pass `enabled: true`");
-    expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
-    // Only this agent's automations are cleared or declared.
-    expect(prompt).toContain("list automations for this agent (pass `agentId` from Runtime)");
-    expect(prompt).toContain("never remove another agent's automation");
-    expect(prompt).toContain("- agent: this agent's ID from Runtime");
-    // Options the prompt doesn't set are passed on, so re-declaring keeps them.
-    const saved = { model: "provider/model", activeHours: { start: "09:00", end: "17:00" } };
-    expect(
-      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, saved }, "update"),
-    ).toContain(`exactly as written: \`${JSON.stringify(saved)}\``);
-    expect(
-      repairPrompt("claim-consolidation", {
-        schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },
-      }),
-    ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
   });
 
   it("moves a generated consolidation run message to the new schedule's run amounts", () => {
     const generated = (schedule: typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE) =>
-      setupPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC")).match(
-        /Run message:\n\n```text\n([\s\S]+)\n```$/,
-      )![1]!;
+      runPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC"));
     const weekly = { kind: "cron", expr: REVIEW_WEEKLY_SCHEDULE };
     const nightly = { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE };
     const custom = { kind: "cron", expr: "0 6 * * 1" };
@@ -134,17 +90,12 @@ describe("scribes catalog", () => {
   });
 
   it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {
-    const prompt = setupPrompt(
+    const runMessage = runPrompt(
       scribeSetup("granola", "ongoing", defaultOptions("granola"), "America/Los_Angeles"),
     );
-    expect(prompt).toContain(
-      [
-        "- Runs weekdays at 10:00 AM, 2:00 PM and 6:00 PM America/Los_Angeles (cron `0 10,14,18 * * 1-5`).",
-        "- Granola meetings: the owner's (recorded by them or with them invited), from the last 7 days.",
-      ].join("\n"),
+    expect(runMessage).toContain(
+      "- Granola meetings: the owner's (recorded by them or with them invited), from the last 7 days.",
     );
-    expect(prompt).toContain("declaration key `knowledge:scribe:granola`");
-    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
     expect(runMessage).toContain(
       'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill',
     );
@@ -156,20 +107,17 @@ describe("scribes catalog", () => {
   });
 
   it("writes a Slack prompt that names the channels, the opt-ins and the source-ingest work", () => {
-    const prompt = setupPrompt(
+    const runMessage = runPrompt(
       scribeSetup("slack", "ongoing", defaultOptions("slack"), "America/Los_Angeles"),
     );
-    expect(prompt).toContain(
+    expect(runMessage).toContain(
       [
-        "- Runs weekdays at 9:30 AM, 1:30 PM and 5:30 PM America/Los_Angeles (cron `30 9,13,17 * * 1-5`).",
         "- Slack channels: every channel the Slack bot is a member of, from the last 7 days.",
         "- Slack user token: not used; read only channels the Slack bot is a member of.",
         "- Direct messages and group DMs: skipped.",
         "- Each run: ingest 6 channels with new messages.",
       ].join("\n"),
     );
-    expect(prompt).toContain("declaration key `knowledge:scribe:slack`");
-    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
     expect(runMessage).toContain(
       'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill',
     );
@@ -181,9 +129,7 @@ describe("scribes catalog", () => {
     expect(once).toContain("- Direct messages and group DMs: included.");
     expect(once).not.toContain("Each run:");
     // Every choice the dialog offers is recognized, and an edited one keeps its settings.
-    const optedRun = setupPrompt(scribeSetup("slack", "ongoing", opted, "UTC")).match(
-      /Run message:\n\n```text\n([\s\S]+)\n```$/,
-    )![1]!;
+    const optedRun = runPrompt(scribeSetup("slack", "ongoing", opted, "UTC"));
     expect(checkRunMessage("slack", optedRun)).toEqual({ state: "current" });
     expect(checkRunMessage("slack", `${optedRun}\nSkip #random.`)).toEqual({ state: "custom" });
   });
@@ -191,9 +137,7 @@ describe("scribes catalog", () => {
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {
     const cron = (expr: string) => ({ kind: "cron", expr });
     const runMessage = (id: "claim-consolidation" | "granola", options: object) =>
-      setupPrompt(scribeSetup(id, "ongoing", options as never, "UTC")).match(
-        /Run message:\n\n```text\n([\s\S]+)\n```$/,
-      )![1]!;
+      runPrompt(scribeSetup(id, "ongoing", options as never, "UTC"));
     // The access step every run message carried before the never-written-store wording.
     const earlierOf = (message: string) =>
       message.replace(
@@ -243,12 +187,6 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("claim-consolidation", beforeAmounts, { kind: "every" })).toEqual({
       state: "current",
     });
-    expect(
-      repairPrompt("claim-consolidation", {
-        schedule: { kind: "every" },
-        runMessage: claimsOnly(beforeAmounts),
-      }),
-    ).toContain(`\`\`\`text\n${beforeAmounts}\n\`\`\``);
     expect(checkRunMessage("claim-consolidation", beforeAmounts, cron("5 1 * * 2"))).toEqual({
       state: "current",
     });
@@ -258,12 +196,6 @@ describe("scribes catalog", () => {
       state: "outdated",
       current: beforeAmounts,
     });
-    expect(
-      repairPrompt("claim-consolidation", {
-        schedule: { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE },
-        runMessage: beforeAmounts,
-      }),
-    ).toContain(`\`\`\`text\n${nightly}\n\`\`\``);
     for (const message of [earlier, claimsOnly(beforeAmounts), beforeAmounts]) {
       expect(message).not.toBe(current);
       expect(checkRunMessage("claim-consolidation", message)).toEqual({
@@ -344,15 +276,6 @@ describe("scribes catalog", () => {
         granola.replace("ingest 4 meetings", "ingest 2 meetings") + "\nAlso tag speakers.",
       ),
     ).toEqual({ state: "custom" });
-    expect(
-      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, runMessage: earlier }),
-    ).toContain(`\`\`\`text\n${current}\n\`\`\``);
-    expect(repairPrompt("granola", { schedule: { kind: "cron" }, runMessage: edited })).toContain(
-      edited,
-    );
-    expect(
-      setupPrompt(scribeSetup("granola", "ongoing", defaultOptions("granola"), "UTC")),
-    ).toContain("- session target: `current`, so each run starts in a fresh session");
   });
 
   it("reads a status line tolerantly", () => {
