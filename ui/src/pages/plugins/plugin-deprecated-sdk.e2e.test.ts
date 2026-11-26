@@ -18,19 +18,21 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+const displayedNotice =
+  "Uses older OpenClaw APIs. Migration date: Oct 1, 2026. Check for a plugin update.";
+
 const notice = {
   code: "deprecated-sdk-api",
   severity: "info",
-  message:
-    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
-  removalDate: "2026-12-31",
+  message: "SDK compatibility notice from the Gateway.",
+  removalDate: "2026-10-01",
   migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate",
   apis: [
     {
       id: "cron-store-path:resolveCronStorePath",
       displayName: "resolveCronStorePath",
       replacement: "resolveCronStorePathAsync",
-      removeAfter: "2026-12-31",
+      removeAfter: "2026-10-01",
     },
   ],
 } as const;
@@ -39,7 +41,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it("keeps retirement notices in inventory but not plugin details without changing state", async () => {
+  it("shows a dated migration notice in inventory without changing plugin state", async () => {
     const context = await newContext();
     onTestFinished(() => context.close());
     const page = await context.newPage();
@@ -76,7 +78,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     await row.getByText("SDK Demo", { exact: true }).waitFor();
     expect(await row.locator('[data-plugin-state="enabled"]').count()).toBe(1);
     const message = row.locator(".plugins-row-message--info");
-    expect(await message.textContent()).toContain(notice.message);
+    expect(await message.textContent()).toContain(displayedNotice);
     expect(await message.getAttribute("role")).toBe("status");
     expect(await message.locator("svg, .warn, [role=alert]").count()).toBe(0);
     expect(await message.getByRole("link", { name: "Details" }).getAttribute("href")).toBe(
@@ -90,7 +92,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     await gateway.waitForRequest("plugins.inspect");
     expect(await page.locator(".plugin-compatibility-apis").count()).toBe(0);
     expect(await page.locator(".plugin-catalog-detail").textContent()).not.toContain(
-      notice.message,
+      displayedNotice,
     );
     await capture("plugin-detail.png", page.locator(".plugin-catalog-detail"));
     expect(await page.getByRole("button", { name: "Disable SDK Demo", exact: true }).count()).toBe(
