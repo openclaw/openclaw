@@ -244,7 +244,11 @@ function describeAllowFromResolutionError(err: unknown): string {
 }
 
 function resolveOwnerAllowFromList(
-  params: AllowFromParams & { providerId?: ChannelId; allowFrom?: Array<string | number> },
+  params: AllowFromParams & {
+    providerId?: ChannelId;
+    allowFrom?: Array<string | number>;
+    migrationDeferredChannels?: readonly string[];
+  },
 ): string[] {
   const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -263,18 +267,21 @@ function resolveOwnerAllowFromList(
       filtered.push(trimmed);
       continue;
     }
-    // Typed direct targets are canonical for plugins that require the user kind.
-    // Their allowlist formatter owns the conversion to a native sender identity.
-    if (
-      !params.providerId ||
-      channel !== params.providerId ||
-      (normalizeChatChannelId(prefix) &&
-        /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
-        params.plugin?.messaging?.directTargetStyle !== "user-prefixed")
-    ) {
+    if (channel !== params.providerId) {
       continue;
     }
     const remainder = trimmed.slice(separatorIndex + 1).trim();
+    // Doctor can defer a channel before its formatter is available. Preserve its exact user ID.
+    if (
+      normalizeChatChannelId(prefix) &&
+      /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
+      params.plugin?.messaging?.directTargetStyle !== "user-prefixed"
+    ) {
+      if (!params.plugin && params.migrationDeferredChannels?.includes(channel)) {
+        filtered.push(remainder.slice("user:".length));
+      }
+      continue;
+    }
     if (remainder) {
       filtered.push(remainder);
     }
@@ -572,11 +579,12 @@ export function resolveConfiguredCommandOwners(
 export function isConfiguredCommandOwner(
   cfg: OpenClawConfig,
   requester: { channel?: string; accountId?: string; senderId?: string; senderE164?: string },
+  options: { migrationDeferredChannels?: readonly string[] } = {},
 ): boolean {
   const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
   const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
   const params = { cfg, plugin, providerId, accountId: requester.accountId };
-  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
+  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList({ ...params, ...options }));
   return resolveSenderCandidates({
     ...params,
     senderId: requester.senderId,
