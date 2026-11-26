@@ -11,6 +11,7 @@ const enCron = {
       script: "Script: {script}",
       agent: "Agent: {message}",
     },
+    linkUnavailable: "Couldn’t open this automation. Reload this page to try again.",
     missingConfigRevision:
       "This automation is missing its configuration revision. Refresh and try again.",
     changedOnGateway:
