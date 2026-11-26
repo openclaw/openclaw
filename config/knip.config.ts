@@ -334,7 +334,8 @@ const repositoryScriptEntries = [
   "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
-  // Invoked by the documented Gateway and macOS Computer Use live-proof commands.
+  // Invoked by the documented Gateway, paired-node, and receipt live-proof commands.
+  "scripts/dev/computer-use-effect-receipt-proof.ts!",
   "scripts/dev/computer-use-gateway-live-proof.ts!",
   "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
