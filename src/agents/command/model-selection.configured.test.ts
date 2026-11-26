@@ -285,6 +285,33 @@ describe("command selection with configured model facts", () => {
     expect(selected.sessionEntryForAttempt?.authProfileOverride).toBeUndefined();
   });
 
+  it.each(["manual", "child"])(
+    "retains a required AWS SDK profile through %s model selection",
+    async (model) => {
+      const fixture = createFixture();
+      fixture.custom.auth = "aws-sdk";
+      fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+      fixture.cfg.auth = { profiles: { "custom:sdk": { provider: "custom", mode: "aws-sdk" } } };
+      fixture.userSelection(model, "custom", {
+        authProfileOverride: "custom:sdk",
+        authProfileOverrideSource: "user",
+        authProfileOverrideRequired: true,
+      });
+      vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
+        version: 1,
+        profiles: {},
+      });
+      await expect(
+        model === "manual" ? fixture.unchanged() : fixture.select(),
+      ).resolves.toMatchObject({
+        sessionEntryForAttempt: {
+          authProfileOverride: "custom:sdk",
+          authProfileOverrideRequired: true,
+        },
+      });
+    },
+  );
+
   it("preserves a prepared missing personal account pin without main-thread SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = createFixture();

@@ -74,6 +74,7 @@ type CliCompactionContext = {
 
 type CliCompactionRuntimeContextParams = CliCompactionContext & {
   authProfileId?: string;
+  requiredAuthProfileId?: string;
   harnessRuntime?: string;
   modelSelectionLocked?: boolean;
   currentTokenCount: number;
@@ -106,6 +107,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       ...buildCliCompactionParams(params),
       messageProvider: params.messageChannel,
       authProfileId: params.authProfileId,
+      requiredAuthProfileId: params.requiredAuthProfileId,
       modelId: params.model,
       harnessRuntime: params.harnessRuntime,
       modelSelectionLocked: params.modelSelectionLocked,
@@ -360,6 +362,9 @@ export async function runCliTurnCompactionLifecycle(
                       sessionId: params.sessionId,
                       sessionFile,
                       authProfileId: nativeAuthProfileId,
+                      requiredAuthProfileId: params.sessionEntry?.authProfileOverrideRequired
+                        ? params.sessionEntry.authProfileOverride
+                        : undefined,
                       contextTokenBudget: tokenBudget,
                       currentTokenCount,
                       trigger: "budget",
@@ -372,6 +377,9 @@ export async function runCliTurnCompactionLifecycle(
                         contextTokenBudget: tokenBudget,
                         currentTokenCount,
                         authProfileId: nativeAuthProfileId,
+                        requiredAuthProfileId: params.sessionEntry?.authProfileOverrideRequired
+                          ? params.sessionEntry.authProfileOverride
+                          : undefined,
                         harnessRuntime: nativeHarnessId,
                         modelSelectionLocked: nativeModelSelectionLocked,
                         trigger: "cli_native_budget",
@@ -452,6 +460,9 @@ export async function runCliTurnCompactionLifecycle(
             const runtimeContext = buildCliCompactionRuntimeContext({
               ...params,
               authProfileId,
+              requiredAuthProfileId: params.sessionEntry?.authProfileOverrideRequired
+                ? params.sessionEntry.authProfileOverride
+                : undefined,
               harnessRuntime,
               modelSelectionLocked,
               contextTokenBudget: tokenBudget,

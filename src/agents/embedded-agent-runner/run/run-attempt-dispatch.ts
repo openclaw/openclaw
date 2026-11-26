@@ -36,6 +36,7 @@ import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-add
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 import { prepareEmbeddedHarnessTrajectory } from "./attempt-trajectory.js";
 import { resolveAttemptDispatchSessionTarget } from "./attempt-transcript-helpers.js";
+import { projectEmbeddedAttemptAuthSelection } from "./auth-plan.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
@@ -551,13 +552,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       runtime.transportConfig,
     ),
     resolvedApiKey: resolvedAttemptApiKey,
-    authProfileId: runtime.lastProfileId,
-    authProfileIdSource: params.authProfileBinding
-      ? params.authProfileIdSource
-      : explicitAuthProfile
-        ? "user"
-        : "auto",
-    authProfileBinding: params.authProfileBinding,
+    ...projectEmbeddedAttemptAuthSelection(params, runtime.lastProfileId, explicitAuthProfile),
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,

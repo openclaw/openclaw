@@ -239,6 +239,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : {}),
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
+              authProfileRequired: selected.authProfileRequired,
               thinkLevel: selected.thinkLevel,
               thinkingCatalog: selected.thinkingCatalog,
               cyberAccessProgram: selected.cyberAccessProgram,

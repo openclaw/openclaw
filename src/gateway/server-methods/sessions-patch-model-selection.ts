@@ -140,6 +140,7 @@ export function refreshSessionPatchQueuedSelection(params: {
           nextModelOverrideSource:
             entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
           nextAuthProfileId: entry.authProfileOverride,
+          nextAuthProfileRequired: entry.authProfileOverrideRequired,
           nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
         }
       : {}),

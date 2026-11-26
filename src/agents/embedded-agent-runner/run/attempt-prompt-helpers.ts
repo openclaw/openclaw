@@ -371,6 +371,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "ownerNumbers"
   | "authProfileId"
   | "authProfileIdSource"
+  | "requiredAuthProfileId"
   | "runtimePlan"
   | "userTurnTranscriptRecorder"
 > & {
@@ -419,6 +420,7 @@ export function buildAfterTurnRuntimeContext(params: {
         currentMessageId: params.attempt.currentMessageId,
         authProfileId: params.attempt.authProfileId,
         authProfileIdSource: params.attempt.authProfileIdSource,
+        requiredAuthProfileId: params.attempt.requiredAuthProfileId,
         modelSelectionLocked: params.attempt.modelSelectionLocked,
         config: params.attempt.config,
         toolsAllow: params.attempt.toolsAllow,
@@ -452,6 +454,9 @@ export function buildAfterTurnRuntimeContext(params: {
       sessionKey: params.attempt.sessionKey,
       explicitAgentId: params.attempt.contextEngineAgentId,
       authProfileId: params.attempt.authProfileId,
+      requiredAuthProfileId: params.attempt.requiredAuthProfileId,
+      provider: params.attempt.provider,
+      model: params.attempt.modelId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),

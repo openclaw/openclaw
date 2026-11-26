@@ -118,3 +118,66 @@ it("retains OAuth ownership on an API destination without converting the grant t
     resolveIsolatedCompletionAuthorizationOwner({ ...plan, selectedAuthMode: "api-key" }),
   ).toBe("host");
 });
+
+it.each([false, true])(
+  "provider-scopes isolated preferences but retains exact requirements (required=%s)",
+  async (required) => {
+    const { prepareAgentRuntimeAuth } = await vi.importActual<typeof RuntimeAuth>(
+      "./runtime-plan/prepare-auth.js",
+    );
+    mocks.prepareAgentRuntimeAuth.mockImplementation(prepareAgentRuntimeAuth);
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:delegated": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "synthetic",
+        },
+        "openai:default": createOAuthRefreshCredential(),
+      },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const dispatch = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "default account" }]),
+    }));
+    registerIsolatedHarness({
+      authBootstrap: "harness",
+      runIsolatedCompletionV2: dispatch,
+      resolveIsolatedCompletionRuntime: () => "self",
+    });
+    const request = {
+      ...isolatedRequest(),
+      authProfileId: "anthropic:delegated",
+      requiredAuthProfileId: required ? "anthropic:delegated" : undefined,
+    };
+    const model = {
+      provider: "openai",
+      id: "gpt-test",
+      name: "Test",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const runtime = await resolveIsolatedCompletionRuntime({
+      ...request,
+      preparedAuth: {
+        preparedAuthStore: store,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        snapshot: { entries: [model], routeVariants: [model] },
+      },
+    });
+    if (required) {
+      expect(runtime).toBeUndefined();
+    } else {
+      expect(runtime).toMatchObject({ kind: "harness", id: "codex" });
+    }
+    const completion = runIsolatedCompletion(request);
+    if (required) {
+      await expect(completion).rejects.toThrow();
+      expect(dispatch).not.toHaveBeenCalled();
+    } else {
+      await expect(completion).resolves.toMatchObject({ text: "default account" });
+      expect(dispatch).toHaveBeenCalledOnce();
+    }
+  },
+);

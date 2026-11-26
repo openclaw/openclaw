@@ -171,7 +171,7 @@ export function clearRemovedQueuedAuthProfiles(params: {
     // Pending work retains config as well as a selected account. Clear both sources
     // so a later model switch cannot restore the deleted account from its snapshot.
     run.config = params.rewriteConfig(run.config);
-    if (run.authProfileId && removed.has(run.authProfileId)) {
+    if (run.authProfileId && removed.has(run.authProfileId) && !run.authProfileRequired) {
       delete run.authProfileId;
       delete run.authProfileIdSource;
     }
@@ -202,6 +202,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextAuthProfileRequired?: true;
   nextCyberAccessProgram?: FollowupRun["run"]["cyberAccessProgram"] | null;
   nextThinking?: {
     level?: string;
@@ -272,6 +273,7 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
+        run.authProfileRequired = run.authProfileId ? params.nextAuthProfileRequired : undefined;
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;

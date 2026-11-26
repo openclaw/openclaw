@@ -8,6 +8,7 @@ export type LiveSessionModelSelection = {
   agentRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileRequired?: true;
 };
 
 export class LiveSessionModelSwitchError extends Error {
@@ -16,6 +17,7 @@ export class LiveSessionModelSwitchError extends Error {
   agentRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileRequired?: true;
 
   constructor(selection: LiveSessionModelSelection) {
     super(`Live session model switch requested: ${selection.provider}/${selection.model}`);
@@ -25,5 +27,6 @@ export class LiveSessionModelSwitchError extends Error {
     this.agentRuntimeOverride = selection.agentRuntimeOverride;
     this.authProfileId = selection.authProfileId;
     this.authProfileIdSource = selection.authProfileIdSource;
+    this.authProfileRequired = selection.authProfileRequired;
   }
 }

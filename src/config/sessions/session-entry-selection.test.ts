@@ -7,6 +7,14 @@ const inherit = (fields: Partial<SessionEntry>) =>
 
 it.each([
   [
+    { authProfileOverride: "openai:bound", authProfileOverrideRequired: true },
+    {
+      authProfileOverride: "openai:bound",
+      authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
+    },
+  ],
+  [
     { authProfileOverride: "openai:work", thinkingLevel: "ultra" },
     {
       authProfileOverride: "openai:work",

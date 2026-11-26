@@ -6,6 +6,7 @@ const current = {
   model: "claude-sonnet-4-6",
   authProfileId: "anthropic:default",
   authProfileIdSource: "user" as const,
+  requiredAuthProfileId: "anthropic:default",
 };
 
 describe("resolveCompactionLiveModelSelection", () => {
@@ -42,6 +43,25 @@ describe("resolveCompactionLiveModelSelection", () => {
       provider: "openai",
       model: "gpt-5.5",
       authProfileIdSource: "auto",
+    });
+  });
+
+  it("clears the exact requirement when its projection replaces a selected account", () => {
+    const selected = resolveCompactionLiveModelSelection({
+      current,
+      requested: { provider: "anthropic", model: current.model, authProfileId: "anthropic:other" },
+    });
+    expect({ ...current, ...selected }).toMatchObject({
+      authProfileId: "anthropic:other",
+      requiredAuthProfileId: undefined,
+    });
+    const cleared = resolveCompactionLiveModelSelection({
+      current,
+      requested: { provider: "openai", model: "gpt-5.5" },
+    });
+    expect({ ...current, ...cleared }).toMatchObject({
+      authProfileId: undefined,
+      requiredAuthProfileId: undefined,
     });
   });
 

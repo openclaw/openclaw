@@ -65,6 +65,7 @@ import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-s
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
+  prepareCommandRuntimeAuthProfile,
   createCommandSuccessfulAuthProfileCallback,
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
@@ -290,22 +291,15 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     authProfileMode: harnessAuthSelection.authProfileMode,
     sessionAuthProfileId: harnessAuthSelection.authProfileId,
   });
-  // Automatic selection needs the admitted session binding; explicit pins do not.
-  const cliAuthNeedsSessionBinding =
-    allowCliAuthProfileForwarding &&
-    !isRawModelRun &&
-    (!harnessAuthSelection.authProfileId || harnessAuthSelection.authProfileIdSource === "auto");
-  const buildCliAuthContext = () => ({
-    cliExecutionProvider,
-    authProfileProvider: params.authProfileProvider,
-    config: params.cfg,
-    agentDir: params.agentDir,
-    selected: harnessAuthSelection,
-  });
-  const authProfileId =
-    allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
-      ? await resolveCliExecutionAuthProfileId(buildCliAuthContext())
-      : runtimeAuthPlan.forwardedAuthProfileId;
+  const { authProfileId, cliAuthNeedsSessionBinding, buildCliAuthContext, embeddedAuthProfile } =
+    await prepareCommandRuntimeAuthProfile(params, {
+      cliExecutionProvider,
+      useCliExecution: isCliExecutionProvider,
+      allowCliAuthProfileForwarding,
+      isRawModelRun,
+      harnessAuthSelection,
+      forwardedAuthProfileId: runtimeAuthPlan.forwardedAuthProfileId,
+    });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
     sessionRuntimeOverride ??
@@ -672,8 +666,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
+    ...embeddedAuthProfile,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,

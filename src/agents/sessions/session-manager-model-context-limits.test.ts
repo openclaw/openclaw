@@ -786,52 +786,67 @@ it.each([false, true])(
   },
 );
 
-it("shows a fork a still-running tool call as pending without writing the source", async () => {
-  await withHistory("fork-running-tool", async ({ source, workspaceDir, verifyRead }) => {
-    await source.appendMessageAsync(makeUserMessage("Run the probe", 1));
-    // One call of the batch finished; the other is still running.
-    await source.appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [toolCall("done"), toolCall("running")],
-        stopReason: "toolUse",
-      }),
-    );
-    const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
-      toolResult("done-output", "done", 1),
-    );
-    assert(anchor);
-    await verifyRead(async () => {
-      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"] = [];
-      runEmbeddedAgent.mockImplementationOnce(async ({ sessionManager }) => {
-        assert(sessionManager);
-        messages = sessionManager.buildSessionContext().messages;
-        return { meta: { durationMs: 1 } };
-      });
-      const outcome = await runSessionFork(
-        {
-          config: {},
-          source: anchor,
-          prompt: "Review the probe results",
-          tools: [],
-          runId: "pending-tool-fork",
-          owner: "core:test",
-          model: { provider: "openai", model: "gpt-test" },
-          workspaceDir,
-          timeoutMs: 1_000,
-        },
-        async (result) => result,
+it.each([false, true])(
+  "shows a fork a pending tool call and preserves its account binding (required=%s)",
+  async (required) => {
+    runEmbeddedAgent.mockClear();
+    await withHistory("fork-running-tool", async ({ source, workspaceDir, verifyRead }) => {
+      await source.appendMessageAsync(makeUserMessage("Run the probe", 1));
+      // One call of the batch finished; the other is still running.
+      await source.appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [toolCall("done"), toolCall("running")],
+          stopReason: "toolUse",
+        }),
       );
-      expect(outcome).toMatchObject({ ok: true });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      const results = messages.filter((message) => message.role === "toolResult");
-      expect(results).toMatchObject([
-        { toolCallId: "done", content: [{ text: "done-output" }] },
-        {
-          toolCallId: "running",
-          isError: false,
-          content: [{ text: "This tool call is still running. Its result is not available yet." }],
-        },
-      ]);
+      const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+        toolResult("done-output", "done", 1),
+      );
+      assert(anchor);
+      await verifyRead(async () => {
+        let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"] = [];
+        runEmbeddedAgent.mockImplementationOnce(async ({ sessionManager }) => {
+          assert(sessionManager);
+          messages = sessionManager.buildSessionContext().messages;
+          return { meta: { durationMs: 1 } };
+        });
+        const outcome = await runSessionFork(
+          {
+            config: {},
+            source: anchor,
+            prompt: "Review the probe results",
+            tools: [],
+            runId: "pending-tool-fork",
+            owner: "core:test",
+            model: {
+              provider: "openai",
+              model: "gpt-test",
+              ...(required
+                ? { authProfileId: "openai:delegated", requiredAuthProfileId: "openai:delegated" }
+                : {}),
+            },
+            workspaceDir,
+            timeoutMs: 1_000,
+          },
+          async (result) => result,
+        );
+        expect(outcome).toMatchObject({ ok: true });
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgent.mock.calls[0]?.[0].requiredAuthProfileId).toBe(
+          required ? "openai:delegated" : undefined,
+        );
+        const results = messages.filter((message) => message.role === "toolResult");
+        expect(results).toMatchObject([
+          { toolCallId: "done", content: [{ text: "done-output" }] },
+          {
+            toolCallId: "running",
+            isError: false,
+            content: [
+              { text: "This tool call is still running. Its result is not available yet." },
+            ],
+          },
+        ]);
+      });
     });
-  });
-});
+  },
+);

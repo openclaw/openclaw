@@ -39,6 +39,7 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   adoptCompactedFollowupSession,
   defersTokenCompactionToRequestBoundary,
@@ -365,8 +366,7 @@ export async function runSessionCompactionIfNeeded(
         skillsSnapshot: params.followupRun.run.skillsSnapshot ?? entry.skillsSnapshot,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
-        authProfileId: params.followupRun.run.authProfileId,
-        authProfileIdSource: params.followupRun.run.authProfileIdSource,
+        ...resolveRunAuthProfile(params.followupRun.run, params.followupRun.run.provider),
         sessionEntry: entry,
         agentHarnessId:
           params.agentHarnessId ??

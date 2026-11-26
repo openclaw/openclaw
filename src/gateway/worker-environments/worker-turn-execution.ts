@@ -99,7 +99,7 @@ export async function executeWorkerTurn(
       environments: params.environments,
       placement,
     });
-    const inferencePlacement = workerInferencePlacement(environment);
+    const inferencePlacement = workerInferencePlacement(environment, turn.requiredAuthProfileId);
     if (inferencePlacement === "worker") {
       const policy = createModelVisibilityPolicy({
         cfg: turn.config ?? {},

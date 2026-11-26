@@ -46,7 +46,11 @@ import {
   resolveNativeModelPrimary,
   resolveSessionAgentId,
 } from "../agent-scope.js";
-import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
+import {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
+} from "../auth-profiles/order.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
@@ -205,6 +209,7 @@ export async function resolveEmbeddedModelSelection(params: {
       applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        preserveAuthProfileOverride: entry.authProfileOverrideRequired,
       }).updated;
     let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
     const repaired = repairProviderWrappedModelOverride({
@@ -526,14 +531,19 @@ export async function resolveEmbeddedModelSelection(params: {
     const authProvider = params.pluginsEnabled
       ? resolveProviderIdForAuth(providerForAuthProfileValidation, authAliasLookupParams)
       : providerForAuthProfileValidation;
-    const profileMatchesRuntime =
-      profile &&
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: authConfig,
-        authAliasLookupParams,
-        provider: authProvider,
-        credential: profile,
-      });
+    const profileMatchesRuntime = profile
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: authConfig,
+          authAliasLookupParams,
+          provider: authProvider,
+          credential: profile,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: authConfig,
+          authAliasLookupParams,
+          provider: authProvider,
+          profileId: authProfileId,
+        });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
       recordedProvider: { provider: profile?.provider },
@@ -544,6 +554,13 @@ export async function resolveEmbeddedModelSelection(params: {
       provider: providerForAuthProfileValidation,
       metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
     });
+    if (!profileMatchesRuntime && entry.authProfileOverrideRequired) {
+      throw createSelectedAuthProfileUnavailableError({
+        profileId: authProfileId,
+        provider: providerForAuthProfileValidation,
+        modelId: model,
+      });
+    }
     if (!profileMatchesRuntime && !preserveUnavailableSelection) {
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe || operatorModelOverride) {
         sessionEntryForAttempt = {
@@ -551,6 +568,7 @@ export async function resolveEmbeddedModelSelection(params: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         };
       } else if (params.sessionKey && !params.suppressVisibleSessionEffects) {
         const authEntry = { ...entry };

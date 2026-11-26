@@ -255,6 +255,7 @@ async function resolveHarnessCompactApiKey(params: {
       authProfileStore: runtimeAuthProfileStore,
       sessionAuthProfileId: compactParams.authProfileId,
       sessionAuthProfileSource: compactParams.authProfileIdSource,
+      requiredAuthProfileId: compactParams.requiredAuthProfileId,
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,

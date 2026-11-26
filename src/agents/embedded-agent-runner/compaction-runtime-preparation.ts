@@ -132,6 +132,7 @@ export async function prepareCompactionHarnessAuth(params: {
   workspaceDir: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  requiredAuthProfileId?: string;
   runtimePolicyAgentId?: string;
   runtimePolicySessionKey?: string | null;
   agentHarnessId?: string;
@@ -199,6 +200,7 @@ export async function prepareCompactionHarnessAuth(params: {
           authProfileStore: runtimeAuthProfileStore,
           sessionAuthProfileId: params.authProfileId,
           sessionAuthProfileSource: params.authProfileIdSource,
+          requiredAuthProfileId: params.requiredAuthProfileId,
           harnessId: harness.id,
           harnessRuntime: harness.id,
           harnessAuthBootstrap: harness.authBootstrap,

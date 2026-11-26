@@ -70,6 +70,13 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
+  const preserveAuthProfileRequirement =
+    entry.authProfileOverrideRequired &&
+    (!profileOverride ||
+      normalizeOptionalString(profileOverride) ===
+        normalizeOptionalString(entry.authProfileOverride));
+  const preserveAuthProfileOverride =
+    params.preserveAuthProfileOverride || preserveAuthProfileRequirement;
   assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
@@ -123,12 +130,16 @@ export function applyModelOverrideToSessionEntry(params: {
     profileUpdated = setField(entry, "authProfileOverride", profileOverride);
     profileUpdated =
       setField(entry, "authProfileOverrideSource", profileOverrideSource) || profileUpdated;
-  } else if (!params.preserveAuthProfileOverride) {
+  } else if (!preserveAuthProfileOverride) {
     profileUpdated = clearDefinedFields(entry, "authProfileOverride", "authProfileOverrideSource");
   }
   updated = profileUpdated || updated;
-  if (profileOverride || !params.preserveAuthProfileOverride) {
+  if (profileOverride || !preserveAuthProfileOverride) {
     updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
+  }
+
+  if (!preserveAuthProfileRequirement) {
+    updated = clearDefinedFields(entry, "authProfileOverrideRequired") || updated;
   }
 
   // Clear stale fallback notice when the user explicitly switches models.
@@ -174,6 +185,7 @@ export function repairProviderWrappedModelOverride(params: {
   if (runtimeProvider && runtimeModel === wrappedModel && runtimeProvider !== overrideProvider) {
     return applyModelOverrideToSessionEntry({
       entry: params.entry,
+      preserveAuthProfileOverride: params.entry.authProfileOverrideRequired,
       selection: {
         provider: runtimeProvider,
         model: runtimeModel,
@@ -187,6 +199,7 @@ export function repairProviderWrappedModelOverride(params: {
   if (params.defaultProvider !== overrideProvider && params.defaultModel === wrappedModel) {
     return applyModelOverrideToSessionEntry({
       entry: params.entry,
+      preserveAuthProfileOverride: params.entry.authProfileOverrideRequired,
       selection: {
         provider: params.defaultProvider,
         model: params.defaultModel,

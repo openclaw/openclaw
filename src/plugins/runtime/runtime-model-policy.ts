@@ -17,6 +17,10 @@ export type RuntimeLlmAuthority = {
   sessionKey?: string;
   agentId?: string;
   preferredProfile?: string;
+  /** Captured host model for a session-bound completion, not a caller override. */
+  defaultModel?: string;
+  /** Exact host/session account; completion callers cannot replace it. */
+  requiredAuthProfileId?: string;
   requiresBoundAgent?: boolean;
   allowAgentIdOverride?: boolean;
   allowModelOverride?: boolean;

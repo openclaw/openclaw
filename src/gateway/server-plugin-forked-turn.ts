@@ -264,7 +264,14 @@ export async function forkPluginSession<T>(input: {
     ? {
         provider: expectDefined(input.override?.provider, "override provider"),
         model: override.model,
-        ...(override.profile ? { authProfileId: override.profile } : {}),
+        ...(override.profile
+          ? {
+              authProfileId: override.profile,
+              ...(override.profile === sessionForkModel?.requiredAuthProfileId
+                ? { requiredAuthProfileId: override.profile }
+                : {}),
+            }
+          : {}),
       }
     : sessionForkModel;
   if (!model) {
@@ -276,6 +283,11 @@ export async function forkPluginSession<T>(input: {
     [turnModel, sessionModel].some(
       (own) => own !== undefined && own.provider === model.provider && own.model === model.model,
     );
+  if (override && ownModel && sessionForkModel?.authProfileId) {
+    // Naming the source model needs no override authority and is not an account change.
+    model.authProfileId = sessionForkModel.authProfileId;
+    model.requiredAuthProfileId = sessionForkModel.requiredAuthProfileId;
+  }
   if (override && !ownModel) {
     expectDefined(input.authorizeModelOverride, "model override authorization")(
       model,

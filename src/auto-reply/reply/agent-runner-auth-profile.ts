@@ -10,7 +10,12 @@ export function resolveRunAuthProfile(
   run: FollowupRun["run"],
   provider: string,
   params?: { config?: ProviderAuthAliasLookupParams["config"] },
-): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+): {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  allowAuthProfileFallback?: false;
+  requiredAuthProfileId?: string;
+} {
   const {
     provider: primaryProvider,
     authProfileId: requestedAuthProfileId,
@@ -23,10 +28,15 @@ export function resolveRunAuthProfile(
     (providerId !== "" && providerId === primaryProviderId) ||
     resolveProviderIdForAuth(provider, aliasParams) ===
       resolveProviderIdForAuth(primaryProvider, aliasParams);
-  const authProfileId = sharesAuthScope ? requestedAuthProfileId : undefined;
+  // The final auth planner knows the post-hook route and harness credential owner.
+  const authProfileId =
+    run.authProfileRequired || sharesAuthScope ? requestedAuthProfileId : undefined;
   return {
     authProfileId,
     authProfileIdSource: authProfileId ? authProfileIdSource : undefined,
+    ...(run.authProfileRequired
+      ? { allowAuthProfileFallback: false as const, requiredAuthProfileId: requestedAuthProfileId }
+      : {}),
   };
 }
 
@@ -40,6 +50,7 @@ export function resolveFallbackCandidateRun(
   const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
   if (
     !probe ||
+    run.authProfileRequired ||
     provider !== probe.fallbackProvider ||
     isPrimaryProbeCandidate ||
     !probe.fallbackAuthProfileId

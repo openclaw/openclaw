@@ -128,7 +128,7 @@ export function registerWorkerTurnInferenceTests(): void {
     },
   );
 
-  it.each(["missing-feature", "missing-node", "model-policy"] as const)(
+  it.each(["missing-feature", "missing-node", "model-policy", "exact-profile"] as const)(
     "rejects worker inference %s before credential, tunnel, or dispatch without local fallback",
     async (rejection) => {
       await seedActivePlacement();
@@ -160,6 +160,7 @@ export function registerWorkerTurnInferenceTests(): void {
           },
           {
             ...params,
+            ...(rejection === "exact-profile" ? { requiredAuthProfileId: "openai:delegated" } : {}),
             ...(rejection === "model-policy"
               ? {
                   config: {
@@ -178,11 +179,13 @@ export function registerWorkerTurnInferenceTests(): void {
           runLocal,
         ),
       ).rejects.toThrow(
-        rejection === "model-policy"
-          ? "Allow that model in the agent model policy"
-          : rejection === "missing-node"
-            ? "settings.device to a connected node"
-            : "Update and restart its OpenClaw node host",
+        rejection === "exact-profile"
+          ? "cannot honor a required Gateway auth profile"
+          : rejection === "model-policy"
+            ? "Allow that model in the agent model policy"
+            : rejection === "missing-node"
+              ? "settings.device to a connected node"
+              : "Update and restart its OpenClaw node host",
       );
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();

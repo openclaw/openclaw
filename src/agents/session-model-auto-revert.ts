@@ -192,6 +192,7 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
               authProfileOverride: marker.prevAuthProfileOverride,
               authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
               authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+              authProfileOverrideRequired: marker.prevAuthProfileOverrideRequired,
               contextWindow: marker.prevContextWindow,
               thinkingLevel: marker.prevThinkingLevel,
               modelFallback: undefined,

@@ -10,6 +10,7 @@ export type AgentPatchedSessionModelFallback = {
   prevAuthProfileOverride?: string;
   prevAuthProfileOverrideSource?: "auto" | "user" | "user-link";
   prevAuthProfileOverrideCompactionCount?: number;
+  prevAuthProfileOverrideRequired?: true;
   prevContextWindow?: string;
   prevThinkingLevel?: string;
   lastValidatedPatchTs?: number;
@@ -30,6 +31,7 @@ export function createAgentPatchedSessionModelFallback(params: {
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
+    authProfileOverrideRequired?: true;
     contextWindow?: string;
     thinkingLevel?: string;
   };
@@ -57,6 +59,9 @@ export function createAgentPatchedSessionModelFallback(params: {
       : {}),
     ...(entry.authProfileOverrideCompactionCount !== undefined
       ? { prevAuthProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount }
+      : {}),
+    ...(entry.authProfileOverrideRequired
+      ? { prevAuthProfileOverrideRequired: true as const }
       : {}),
     ...(entry.contextWindow ? { prevContextWindow: entry.contextWindow } : {}),
     ...(entry.thinkingLevel ? { prevThinkingLevel: entry.thinkingLevel } : {}),

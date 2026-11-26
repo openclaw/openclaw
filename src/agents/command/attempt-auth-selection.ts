@@ -4,7 +4,9 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
+import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
@@ -48,6 +50,66 @@ export function resolveCommandAuthProfileSelection(params: {
       : sessionAuthProfileId
         ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
         : undefined;
+}
+
+/** Resolve the runtime handoff without dropping an explicitly delegated account. */
+export async function prepareCommandRuntimeAuthProfile(
+  params: AgentAttemptParams,
+  options: {
+    cliExecutionProvider: string;
+    useCliExecution: boolean;
+    allowCliAuthProfileForwarding: boolean;
+    isRawModelRun: boolean;
+    harnessAuthSelection: HarnessAuthProfileSelection;
+    forwardedAuthProfileId?: string;
+  },
+) {
+  // Automatic selection needs the admitted session binding; explicit pins do not.
+  const cliAuthNeedsSessionBinding =
+    options.allowCliAuthProfileForwarding &&
+    !options.isRawModelRun &&
+    (!options.harnessAuthSelection.authProfileId ||
+      options.harnessAuthSelection.authProfileIdSource === "auto");
+  const buildCliAuthContext = () => ({
+    cliExecutionProvider: options.cliExecutionProvider,
+    authProfileProvider: params.authProfileProvider,
+    config: params.cfg,
+    agentDir: params.agentDir,
+    selected: options.harnessAuthSelection,
+  });
+  const authProfileId =
+    options.allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
+      ? await resolveCliExecutionAuthProfileId(buildCliAuthContext())
+      : options.forwardedAuthProfileId;
+  const required = params.sessionEntry?.authProfileOverrideRequired
+    ? params.sessionEntry.authProfileOverride?.trim()
+    : undefined;
+  if (
+    options.useCliExecution &&
+    required &&
+    (!options.allowCliAuthProfileForwarding || authProfileId !== required)
+  ) {
+    throw createSelectedAuthProfileUnavailableError({
+      profileId: required,
+      provider: params.providerOverride,
+      modelId: params.modelOverride,
+    });
+  }
+  return {
+    authProfileId,
+    cliAuthNeedsSessionBinding,
+    buildCliAuthContext,
+    embeddedAuthProfile: {
+      authProfileId: required ?? authProfileId,
+      authProfileIdSource: required
+        ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
+        : authProfileId
+          ? options.harnessAuthSelection.authProfileIdSource
+          : undefined,
+      allowAuthProfileFallback: required ? false : undefined,
+      requiredAuthProfileId: required,
+    },
+  };
 }
 
 export async function resolveHarnessAuthProfileSelection(params: {

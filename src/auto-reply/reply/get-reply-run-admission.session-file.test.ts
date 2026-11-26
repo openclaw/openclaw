@@ -388,6 +388,29 @@ describe("prepared reply transcript identity", () => {
   );
 
   it.each([false, true])(
+    "carries the required session profile into thread reply admission (fast=%s)",
+    async (fast) => {
+      const { context, entry } = await createAdmissionFixture();
+      entry.authProfileOverride = "anthropic:required";
+      entry.authProfileOverrideSource = "user";
+      entry.authProfileOverrideRequired = true;
+      if (!fast) {
+        vi.mocked(resolveSessionAuthSelection).mockResolvedValueOnce({
+          profileId: "anthropic:required",
+          source: "user",
+          routeRequirement: undefined,
+        });
+      }
+      const result = await prepareReplyRunAdmission({ ...context, useFastReplyRuntime: fast });
+      expect(result).toMatchObject({
+        kind: "ready",
+        authProfileId: "anthropic:required",
+        authProfileRequired: true,
+      });
+    },
+  );
+
+  it.each([false, true])(
     "keeps caller-only model auth selection off the shared session (fast=%s)",
     async (fast) => {
       const { context, entry } = await createAdmissionFixture();

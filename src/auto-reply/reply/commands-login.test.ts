@@ -306,6 +306,7 @@ it.each(["canonical", "same", "concurrently changed"] as const)(
     mockSuccessfulLoginFlow(nextProfile);
     const previousEntry = pinnedSession({
       authProfileOverride: "openai:owner@example.com",
+      authProfileOverrideRequired: true,
       authProfileOverrideSource:
         scenario === "canonical" ? undefined : scenario === "same" ? "auto" : "user",
       ...(scenario === "same" ? { authProfileOverrideCompactionCount: 3 } : {}),
@@ -336,6 +337,9 @@ it.each(["canonical", "same", "concurrently changed"] as const)(
         authProfileOverride: nextProfile,
         authProfileOverrideSource: "user",
       });
+      expect(params.sessionEntry?.authProfileOverrideRequired).toBe(
+        scenario === "same" ? true : undefined,
+      );
       if (scenario === "same") {
         expect(params.sessionEntry?.authProfileOverrideCompactionCount).toBeUndefined();
       } else {

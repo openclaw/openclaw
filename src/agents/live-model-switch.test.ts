@@ -125,6 +125,17 @@ it("strips duplicated provider prefixes from persisted overrides", async () => {
   });
 });
 
+it("carries the committed exact profile through a model-only live switch", async () => {
+  const selection = await resolvePendingSelection({
+    providerOverride: "openai",
+    modelOverride: "gpt-5.5",
+    authProfileOverride: "openai:delegated",
+    authProfileOverrideSource: "user",
+    authProfileOverrideRequired: true,
+  });
+  expect(selection).toMatchObject({ authProfileId: "openai:delegated", authProfileRequired: true });
+});
+
 it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {
   expect(
     await resolvePendingSelection(

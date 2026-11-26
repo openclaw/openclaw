@@ -153,6 +153,19 @@ export async function compactNativeCliSession(params: {
       forwardedAuthProfileId = params.compactParams.authProfileId;
     }
   }
+  if (
+    params.compactParams.requiredAuthProfileId &&
+    (!cliBackendAcceptsAuthProfileForwarding({
+      provider: runtime,
+      config: params.compactParams.config ?? {},
+      agentId: sessionAgentId,
+    }) ||
+      forwardedAuthProfileId !== params.compactParams.requiredAuthProfileId)
+  ) {
+    return buildCompactionFailureResult(
+      "The CLI backend cannot use the selected auth profile for compaction.",
+    );
+  }
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,

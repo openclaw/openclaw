@@ -354,3 +354,67 @@ test("Access-only requests require explicit grants despite wildcard model access
     loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.cyberAccessProgram,
   ).toBeUndefined();
 });
+
+test.each([false, true])(
+  "persists an explicit visible child's required profile (automatic=%s)",
+  async (automatic) => {
+    const { storePath } = await createSessionStoreDir();
+    const model = makeModel("selected");
+    const cfg = await modelConfig(
+      { model: "custom/selected" },
+      {
+        custom: {
+          auth: "aws-sdk",
+          api: "openai-completions",
+          baseUrl: "https://custom.invalid/v1",
+          models: [model],
+        },
+      },
+    );
+    cfg.auth = { profiles: { "custom:sdk": { provider: "custom", mode: "aws-sdk" } } };
+    const parentSessionKey = "agent:main:main";
+    const key = `agent:main:dashboard:required-${automatic}`;
+    const requestedModel = "custom/selected@custom:sdk";
+    await writeSessionStore({
+      entries: { [parentSessionKey]: sessions.sessionStoreEntry("required-parent") },
+    });
+    const client = createSyntheticPluginRuntimeClient({
+      scopes: ["operator.write"],
+      operatorRoleActor: { kind: "system" },
+      sessionCreation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: parentSessionKey,
+        inheritedToolPolicy: { version: 1, allow: [], deny: [] },
+        ...(automatic
+          ? { spawnModelAutoSelection: { model: requestedModel, hasFallbackOrigin: true } }
+          : {}),
+      },
+      agentToolCaller: { agentId: "main", sessionKey: parentSessionKey, assertCurrent() {} },
+    });
+    const result = await sessions.directSessionReq(
+      "sessions.create",
+      {
+        key,
+        agentId: "main",
+        parentSessionKey,
+        spawnDepth: 1,
+        model: requestedModel,
+      },
+      {
+        client,
+        context: {
+          getRuntimeConfig: () => cfg,
+          getCommittedRuntimeConfig: () => cfg,
+          loadGatewayModelCatalogSnapshot: async () => ({
+            entries: [{ ...model, provider: "custom" }],
+          }),
+        },
+      },
+    );
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(entry?.authProfileOverride).toBe("custom:sdk");
+    expect(entry?.authProfileOverrideRequired).toBe(automatic ? undefined : true);
+  },
+);

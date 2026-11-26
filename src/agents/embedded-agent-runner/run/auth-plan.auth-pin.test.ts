@@ -230,3 +230,28 @@ it.each([true, false])(
     expect(model).toEqual(platformModel);
   },
 );
+
+it("rejects a final routed provider that cannot use the delegated profile", async () => {
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      profiles: {
+        "anthropic:delegated": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "synthetic-selected",
+        },
+        "openai:backup": { type: "api_key", provider: "openai", key: "synthetic-backup" },
+      },
+    },
+    agentDir,
+  );
+  await expect(
+    prepare(platformModel, modelConfig(platformModel), {
+      authProfileId: "anthropic:delegated",
+      authProfileIdSource: "user",
+      requiredAuthProfileId: "anthropic:delegated",
+      allowAuthProfileFallback: false,
+    }),
+  ).rejects.toThrow(/not configured|unavailable/iu);
+});

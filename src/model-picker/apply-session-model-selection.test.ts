@@ -105,9 +105,17 @@ it.each([
 );
 
 it.each([false, true])(
-  "refreshes inherited thinking only with pending work=%s",
+  "refreshes inherited thinking and delegated profile with pending work=%s",
   async (pending) => {
-    const params = createParams();
+    const params = createParams({
+      currentProvider: "openai",
+      currentModel: "gpt-5.6-luna",
+      sessionEntry: createSelectedEntry("openai", "gpt-5.6-luna", {
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideRequired: true,
+      }),
+    });
     const observed = {
       ...catalog[1]!,
       reasoning: true,
@@ -120,6 +128,10 @@ it.each([false, true])(
     try {
       expect(await applySessionModelSelection(params)).toMatchObject({ status: "applied" });
       expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(pending ? 1 : 0);
+      expect(effects.refreshQueuedFollowupSession.mock.calls[0]?.[0]).toMatchObject({
+        nextAuthProfileId: "openai:work",
+        nextAuthProfileRequired: true,
+      });
       const thinking = effects.refreshQueuedFollowupSession.mock.calls[0]?.[0].nextThinking;
       expect(thinking.level).toBeUndefined();
       expect(thinking.catalog).toContainEqual(pending ? observed : catalog[1]);

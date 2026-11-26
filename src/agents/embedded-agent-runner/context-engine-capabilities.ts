@@ -8,6 +8,9 @@ export function resolveContextEngineCapabilities(params: {
   sessionKey?: string;
   explicitAgentId?: string;
   authProfileId?: string;
+  requiredAuthProfileId?: string;
+  provider?: string;
+  model?: string;
   contextEnginePluginId?: string;
   purpose: string;
 }): Pick<ContextEngineRuntimeContext, "llm"> {
@@ -30,6 +33,14 @@ export function resolveContextEngineCapabilities(params: {
             ...(sessionKey ? { sessionKey } : {}),
             ...(agentId ? { agentId } : {}),
             ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
+            ...(params.requiredAuthProfileId
+              ? {
+                  requiredAuthProfileId: params.requiredAuthProfileId,
+                  ...(params.provider && params.model
+                    ? { defaultModel: `${params.provider}/${params.model}` }
+                    : {}),
+                }
+              : {}),
             ...(contextEnginePluginId ? { pluginIdForPolicy: contextEnginePluginId } : {}),
             allowAgentIdOverride: false,
             allowModelOverride: false,

@@ -65,6 +65,27 @@ async function select(
   });
 }
 
+it("rejects a required child profile removed after spawn instead of selecting another account", () =>
+  withProfiles(async (state) => {
+    delete authStoreMocks.state.store.profiles[PRIMARY];
+    const sessionEntry: SessionEntry = {
+      sessionId: "required-child-profile",
+      updatedAt: 1,
+      model: "gpt-5.6-sol",
+      authProfileOverride: PRIMARY,
+      authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
+    };
+    await expect(select(state, { sessionEntry })).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      profileId: PRIMARY,
+    });
+    expect(sessionEntry).toMatchObject({
+      authProfileOverride: PRIMARY,
+      authProfileOverrideRequired: true,
+    });
+  }));
+
 it("selects the configured profile after model activation", () =>
   withProfiles(async (state) => {
     await expect(

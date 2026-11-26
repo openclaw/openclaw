@@ -9,6 +9,7 @@ type ProviderLoginSessionEntry = Pick<
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 
 type ProviderLoginSessionAdoption =
@@ -19,13 +20,17 @@ type ProviderLoginSessionAdoption =
         authProfileOverride: string;
         authProfileOverrideSource: "user";
         authProfileOverrideCompactionCount: undefined;
+        authProfileOverrideRequired: SessionEntry["authProfileOverrideRequired"];
       };
     }
   | { status: "rejected" };
 
 type AuthProfileOverrideProvenance = Pick<
   SessionEntry,
-  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 type SessionAuthProfileOverrideSnapshot = AuthProfileOverrideProvenance &
   Pick<SessionEntry, "sessionId">;
@@ -57,7 +62,8 @@ export function matchesSessionAuthProfileOverrideSnapshot(
     current.sessionId === snapshot.sessionId &&
     current.authProfileOverride === snapshot.authProfileOverride &&
     current.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    current.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
+    current.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount &&
+    current.authProfileOverrideRequired === snapshot.authProfileOverrideRequired
   );
 }
 
@@ -113,6 +119,10 @@ export function decideProviderLoginSessionAdoption(params: {
           authProfileOverride: params.nextProfileId,
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired:
+            params.current.authProfileOverride?.trim() === params.nextProfileId.trim()
+              ? params.current.authProfileOverrideRequired
+              : undefined,
         },
       }
     : { status: "unchanged" };

@@ -49,7 +49,12 @@ it("preserves prepared model facts and restrictive policy without foreground aut
   const maintenance = createSessionMaintenanceFollowup({
     run,
     ...model,
-    sessionEntry: { sessionId: "maintenance", updatedAt: 1 },
+    sessionEntry: {
+      sessionId: "maintenance",
+      updatedAt: 1,
+      authProfileOverride: "test-provider:delegated",
+      authProfileOverrideRequired: true,
+    },
     sessionKey: "agent:main:maintenance",
     cfg: run.config,
     auth: {},
@@ -61,7 +66,11 @@ it("preserves prepared model facts and restrictive policy without foreground aut
     sessionCtx: {},
     hasRepliedRef: undefined,
   });
-  expect(embedded).toMatchObject({ modelHasVision: true, senderIsOwner: false });
+  expect(embedded).toMatchObject({
+    modelHasVision: true,
+    senderIsOwner: false,
+    requiredAuthProfileId: "test-provider:delegated",
+  });
   expect(embedded.conversationToolPolicy).toEqual({ deny: ["read"] });
   expect(embedded.toolOverrides).toBeUndefined();
   expect(embedded.runtimePluginToolGrant).toBeUndefined();

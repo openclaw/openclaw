@@ -346,6 +346,9 @@ export async function handleCompactCommand(
               compactionCliTarget.cliSessionBinding?.authProfileId ??
               expectedSession.authProfileOverride,
             authProfileIdSource: resolveCollapsedSessionAuthPinSource(expectedSession),
+            requiredAuthProfileId: expectedSession.authProfileOverrideRequired
+              ? expectedSession.authProfileOverride
+              : undefined,
             contextTokenBudget,
             agentHarnessId: compactionCliTarget.agentHarnessId,
             cliSessionId: compactionCliTarget.cliSessionId,

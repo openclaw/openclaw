@@ -438,6 +438,7 @@ export async function applySessionModelSelectionInternal(
       nextRouteResolution: "resolved",
       nextModelOverrideSource: request.isDefault ? undefined : "user",
       nextAuthProfileId: persistedEntry.authProfileOverride,
+      nextAuthProfileRequired: persistedEntry.authProfileOverrideRequired,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(persistedEntry),
       nextThinking: {
         level: persistedEntry.thinkingLevel,

@@ -110,6 +110,25 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     primeCompletionMocks();
   });
 
+  it.each([false, true])(
+    "keeps isolated host preferences distinct from requirements (%s)",
+    async (required) => {
+      const profileId = "anthropic:session";
+      await createRuntimeLlm({
+        getConfig: () => cfg,
+        authority: {
+          allowComplete: true,
+          preferredProfile: profileId,
+          ...(required ? { requiredAuthProfileId: profileId } : {}),
+        },
+      }).complete(isolatedRequest());
+      expectSingleCallFirstArg(hoisted.runIsolatedCompletion, {
+        authProfileId: profileId,
+        requiredAuthProfileId: required ? profileId : undefined,
+      });
+    },
+  );
+
   it("routes authorized isolated completion through the configured agent runtime", async () => {
     const outputSchema = {
       type: "object",

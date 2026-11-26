@@ -52,6 +52,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** An explicitly delegated profile must survive final model/harness routing. */
+  requiredAuthProfileId?: string;
   /** The reply owner checkpoints the source before recovery rewrites its context. */
   beforeRecoveryCompaction?: (context: {
     sessionId: string;

@@ -101,6 +101,7 @@ export async function executePreparedReplyRun(
     isActive,
     authProfileId,
     authProfileIdSource,
+    authProfileRequired,
   } = state;
   const {
     prefixedCommandBody,
@@ -578,6 +579,7 @@ export async function executePreparedReplyRun(
       autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
       authProfileId,
       authProfileIdSource,
+      authProfileRequired,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       thinkingExplicit: params.thinkingExplicit,

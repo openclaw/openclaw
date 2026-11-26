@@ -11,8 +11,10 @@ export type RunIsolatedCompletionParams = {
   config?: OpenClawConfig;
   provider: string;
   model: string;
-  /** Explicit credential owner. CLI and harness paths must not replace it with another profile. */
+  /** Selected profile; ordinary preferences remain scoped to their provider. */
   authProfileId?: string;
+  /** Exact delegated/request-authorized account, including across provider routing. */
+  requiredAuthProfileId?: string;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;

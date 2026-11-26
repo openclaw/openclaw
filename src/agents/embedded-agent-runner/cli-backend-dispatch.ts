@@ -5,6 +5,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -23,6 +24,11 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   params: CliBackendDispatchParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
   if (params.cliBackendDispatch !== "subscription-auth") {
+    return undefined;
+  }
+  // The caller's explicit API-key requirement wins even when the preliminary
+  // CLI metadata probe cannot see the selected agent's credential store yet.
+  if (params.authProfileBinding?.authRequirement === "api-key") {
     return undefined;
   }
   // The one-shot bridge cannot carry authenticated source-channel delivery
@@ -63,32 +69,60 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const toolsAllow = [...new Set(names)];
-  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync(params);
+  const requiredProfile = params.authProfileBinding?.profileId ?? params.requiredAuthProfileId;
+  const selectedProfile = requiredProfile ?? params.authProfileId;
+  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync({
+    ...params,
+    authProfileId: selectedProfile,
+  });
   if (!eligibility) {
     return undefined;
   }
   const { runCliAgent } = await import("../cli-runner.runtime.js");
-  const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
-    await import("../cli-execution-auth.js");
+  const {
+    CliExecutionAuthProfileError,
+    cliBackendAcceptsAuthProfileForwarding,
+    resolveCliExecutionAuthProfileId,
+  } = await import("../cli-execution-auth.js");
+  if (params.authProfileBinding) {
+    // The bridge cannot carry credential-lifetime callbacks. Refuse rather than
+    // turning a subscription request into metered embedded/API inference.
+    const error = new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the caller credential binding; no inference was started.`,
+    );
+    recordModelFallbackStop(error);
+    throw error;
+  }
   // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
   // subscription login reaches the CLI as it does for the session's own turns.
   const { config, agentDir } = params;
-  const authProfileId =
-    config &&
-    agentDir &&
+  const canForwardProfile =
+    config !== undefined &&
+    agentDir !== undefined &&
     cliBackendAcceptsAuthProfileForwarding({
       provider: eligibility.provider,
       config,
       agentId: params.agentId,
-    })
-      ? await resolveCliExecutionAuthProfileId({
-          cliExecutionProvider: eligibility.provider,
-          authProfileProvider: params.provider ?? eligibility.provider,
-          config,
-          agentDir,
-          selected: { authProfileId: params.authProfileId },
-        })
-      : params.authProfileId;
+    });
+  if (requiredProfile && !canForwardProfile) {
+    throw new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the required auth profile "${requiredProfile}".`,
+    );
+  }
+  const authProfileId = canForwardProfile
+    ? await resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: eligibility.provider,
+        authProfileProvider: params.provider ?? eligibility.provider,
+        config,
+        agentDir,
+        selected: { authProfileId: selectedProfile },
+      })
+    : params.authProfileId;
+  if (requiredProfile && authProfileId !== requiredProfile) {
+    throw new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the required auth profile "${requiredProfile}".`,
+    );
+  }
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: "embedded",

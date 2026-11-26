@@ -232,54 +232,71 @@ it.each(["direct", "queued"] as const)(
   },
 );
 
-it("compacts through the configured fallback when the primary profile is cooling down", async () => {
-  const baseParams = await prepareCompactionParams();
-  const agentDir = join(baseParams.workspaceDir, "agent");
-  const authStore = {
-    version: 1 as const,
-    profiles: {
-      "primary:default": createApiKeyCredential("primary", "test-primary-key"),
-      "backup:default": createApiKeyCredential("backup", "test-backup-key"),
-    },
-    usageStats: {
-      "primary:default": {
-        cooldownUntil: Date.now() + 3_600_000,
-        cooldownReason: "rate_limit" as const,
+it.each([false, true])(
+  "honors the delegated account during compaction fallback (required=%s)",
+  async (required) => {
+    const baseParams = await prepareCompactionParams();
+    const agentDir = join(baseParams.workspaceDir, "agent");
+    const authStore = {
+      version: 1 as const,
+      profiles: {
+        "primary:default": createApiKeyCredential("primary", "test-primary-key"),
+        "backup:default": createApiKeyCredential("backup", "test-backup-key"),
       },
-    },
-  };
-  prepareSharedAuthStoreOwnershipForNative();
-  setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
-  onTestFinished(() => {
-    clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  });
-  vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
-  resolveContextEngineMock.mockResolvedValue({
-    info: { ownsCompaction: false },
-    compact: vi.fn(delegateCompactionToRuntime),
-  });
-
-  const result = await runOwnedCompaction(() =>
-    compactEmbeddedAgentSession({
-      ...baseParams,
-      agentDir,
-      provider: "primary",
-      model: "model",
-      trigger: "budget",
-      forcePreflight: true,
-      preflightRequired: true,
-      preflightCompactionTrigger: "transcript_bytes",
-      config: {
-        agents: {
-          defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+      usageStats: {
+        "primary:default": {
+          cooldownUntil: Date.now() + 3_600_000,
+          cooldownReason: "rate_limit" as const,
         },
       },
-    }),
-  );
+    };
+    prepareSharedAuthStoreOwnershipForNative();
+    setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
+    onTestFinished(() => {
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    });
+    vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: vi.fn(delegateCompactionToRuntime),
+    });
 
-  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
-  expect(sessionCompactImpl).toHaveBeenCalledOnce();
-  expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-    expect.objectContaining({ profileId: "backup:default" }),
-  );
-});
+    const result = await runOwnedCompaction(() =>
+      compactEmbeddedAgentSession({
+        ...baseParams,
+        agentDir,
+        provider: "primary",
+        model: "model",
+        ...(required
+          ? {
+              authProfileId: "primary:default",
+              authProfileIdSource: "user" as const,
+              requiredAuthProfileId: "primary:default",
+            }
+          : {}),
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+        config: {
+          agents: {
+            defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+          },
+        },
+      }),
+    );
+
+    if (required) {
+      expect(result.ok).toBe(false);
+      expect(getApiKeyForModelMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "backup:default" }),
+      );
+      return;
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+    expect(sessionCompactImpl).toHaveBeenCalledOnce();
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "backup:default" }),
+    );
+  },
+);

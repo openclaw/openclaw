@@ -190,12 +190,10 @@ async function executeRecoveryCompaction(
       {
         ...runParams,
         modelCallUrgency: resolveModelCallUrgency(runParams),
-        authProfileId: input.modelSelection.authProfileId,
-        authProfileIdSource: input.modelSelection.authProfileIdSource,
+        ...input.modelSelection,
         runtimeAuthPlan: input.runtimeAuthPlan,
         workspaceDir: input.workspaceDir,
         agentDir: input.agentDir,
-        provider: input.modelSelection.provider,
         modelId: input.modelSelection.model,
         harnessRuntime: input.harnessRuntime,
         thinkLevel: input.thinkLevel,
@@ -211,6 +209,7 @@ async function executeRecoveryCompaction(
     ),
     ...resolveContextEngineCapabilities({
       config: runParams.config,
+      ...input.modelSelection,
       sessionKey: runParams.sessionKey,
       explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),

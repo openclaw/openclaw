@@ -162,6 +162,7 @@ describe("clearRemovedQueuedAuthProfiles", () => {
     const [lastRun, queued, summarized, elided] = populateRepresentations(queue);
     const newer = { ...makeRun(), authProfileId: "profile-b" };
     const otherAgent = { ...makeRun(), agentId: "other" };
+    const required = { ...makeRun(), authProfileRequired: true as const };
     const retainedConfig = otherAgent.config;
     queued.autoFallbackPrimaryProbe = {
       provider: "anthropic",
@@ -176,7 +177,7 @@ describe("clearRemovedQueuedAuthProfiles", () => {
       fallbackAuthProfileId: "profile-b",
     };
     const otherAgentSource = makeSource(otherAgent);
-    addSources(queue, makeSource(newer), otherAgentSource);
+    addSources(queue, makeSource(newer), makeSource(required), otherAgentSource);
     const rewrittenConfig = { agents: { entries: { main: { model: "anthropic/model" } } } };
 
     clearRemovedQueuedAuthProfiles({
@@ -196,9 +197,11 @@ describe("clearRemovedQueuedAuthProfiles", () => {
     expect(newer.authProfileIdSource).toBe("user");
     expect(newer.autoFallbackPrimaryProbe.fallbackAuthProfileId).toBe("profile-b");
     expect(newer.config).toBe(rewrittenConfig);
+    expect(required.authProfileId).toBe("profile-a");
+    expect(required.authProfileRequired).toBe(true);
     expect(otherAgent.authProfileId).toBe("profile-a");
     expect(otherAgent.config).toBe(retainedConfig);
-    expect(queue.items).toHaveLength(2);
+    expect(queue.items).toHaveLength(3);
     expect(otherAgentSource.controllerInput?.mailbox).not.toBe(queue);
     expect(otherAgentSource.controllerInput?.mailbox.items).toEqual([otherAgentSource]);
   });
@@ -250,6 +253,23 @@ describe("refreshQueuedFollowupSession", () => {
     expect(run?.sessionId).toBe("session-2");
     expect(run?.scheduledAutomation).toBe(automation);
   });
+
+  it.each([true, undefined] as const)(
+    "copies committed auth strictness on same-ID retarget (%s)",
+    (required) => {
+      const run = retarget(
+        { authProfileId: "profile-a", authProfileRequired: true },
+        {
+          nextProvider: "openai",
+          nextModel: "new-model",
+          nextAuthProfileId: "profile-a",
+          nextAuthProfileRequired: required,
+        },
+      );
+      expect(run?.authProfileId).toBe("profile-a");
+      expect(run?.authProfileRequired).toBe(required);
+    },
+  );
 
   it.each([
     { requested: "high", stored: "low", expected: ["high", "high", "high"] },

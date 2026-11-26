@@ -9,7 +9,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
-import { prepareSessionFork } from "./session-fork-run.js";
+import { prepareSessionFork, resolveSessionForkModel } from "./session-fork-run.js";
 
 let state: OpenClawTestState;
 const model = { provider: "openai", model: "gpt-test" };
@@ -96,3 +96,36 @@ describe("assertSessionForkRunSucceeded", () => {
     review({ aborted: true }).toThrow("aborted");
   });
 });
+
+it.each([false, true])(
+  "inherits the detached fork account requirement only with the selected account (%s)",
+  (required) => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/gpt-test" } } };
+    const entry = {
+      sessionId: "synthetic",
+      updatedAt: 1,
+      authProfileOverride: "openai:delegated",
+      ...(required ? { authProfileOverrideRequired: true as const } : {}),
+    };
+    expect(resolveSessionForkModel({ cfg, agentId: "main", entry }).model).toEqual({
+      ...model,
+      authProfileId: "openai:delegated",
+      ...(required ? { requiredAuthProfileId: "openai:delegated" } : {}),
+    });
+    const anchored = resolveSessionForkModel({
+      cfg,
+      agentId: "main",
+      entry,
+      turnModel: { provider: "anthropic", model: "claude-test" },
+    }).model;
+    if (required) {
+      expect(anchored).toMatchObject({
+        authProfileId: "openai:delegated",
+        requiredAuthProfileId: "openai:delegated",
+      });
+    } else {
+      expect(anchored).not.toHaveProperty("authProfileId");
+      expect(anchored).not.toHaveProperty("requiredAuthProfileId");
+    }
+  },
+);

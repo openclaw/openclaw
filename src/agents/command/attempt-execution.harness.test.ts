@@ -277,6 +277,30 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
+  it.each([false, true])(
+    "keeps cross-provider fallback credential selection scoped (required=%s)",
+    async (required) => {
+      saveTestAuthProfiles(tmpDir, { "openai:work": createOAuthRefreshCredential() });
+      const attempt = runHarnessAttempt({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        agentHarnessRuntimeOverride: "openclaw",
+        isFallbackRetry: true,
+        sessionEntry: makeSessionEntry("required-fallback", {
+          authProfileOverride: "openai:work",
+          authProfileOverrideSource: "user",
+          ...(required ? { authProfileOverrideRequired: true } : {}),
+        }),
+      });
+      await attempt;
+      expectMockArgFields(runEmbeddedAgentMock, {
+        authProfileId: required ? "openai:work" : undefined,
+        requiredAuthProfileId: required ? "openai:work" : undefined,
+        allowAuthProfileFallback: required ? false : undefined,
+      });
+    },
+  );
+
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const sessionEntry = makeSessionEntry("codex-auth-session");

@@ -77,6 +77,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   | "allowGatewaySubagentBinding"
   | "oneShotCliRun"
 > & {
+  /** Exact delegated profile retained across summary routing. */
+  requiredAuthProfileId?: string;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   runId?: string;

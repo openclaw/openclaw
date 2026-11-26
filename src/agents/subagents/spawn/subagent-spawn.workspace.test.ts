@@ -276,6 +276,7 @@ it.each(["user", "auto"] as const)("separates %s model from auth profile", async
   });
   expect(result).toMatchObject({ status: "accepted", resolvedModel });
   const entry = persistedModel("openai", "gpt-5.6-luna", source);
+  expect(entry?.authProfileOverrideRequired).toBe(source === "user" ? true : undefined);
   expect(entry).toMatchObject({
     authProfileOverride: "openai:test-profile",
     authProfileOverrideSource: "user",

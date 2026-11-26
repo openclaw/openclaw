@@ -36,6 +36,7 @@ export function resolveReplySessionRolloverState(
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
+    authProfileOverrideRequired: preservedSelection.authProfileOverrideRequired,
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,

@@ -173,6 +173,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
+  /** Exact delegated profile retained for attempt-owned compaction. */
+  requiredAuthProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */
   authProfileIdSource?: "auto" | "user";
   provider: string;

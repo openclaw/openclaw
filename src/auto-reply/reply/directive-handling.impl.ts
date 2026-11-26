@@ -535,6 +535,7 @@ export async function handleDirectiveOnly(
               nextRouteResolution: "resolved",
               nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
               nextAuthProfileId: sessionEntry.authProfileOverride,
+              nextAuthProfileRequired: sessionEntry.authProfileOverrideRequired,
               nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(sessionEntry),
             }
           : {}),

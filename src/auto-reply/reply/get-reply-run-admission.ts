@@ -382,7 +382,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const resolveRuntimeAuthProfile = async () => {
     const binding = opts?.scheduledAutomation?.job.inferenceBinding;
     if (binding) {
-      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
+      return {
+        authProfileId: binding.profileId,
+        authProfileIdSource: binding.source,
+        authProfileRequired: undefined,
+      };
     }
     if (
       useFastReplyRuntime &&
@@ -392,6 +396,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
+        authProfileRequired: preparedSessionState.sessionEntry?.authProfileOverrideRequired,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
@@ -440,9 +445,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     return {
       authProfileId: selection?.profileId,
       authProfileIdSource: selection?.source,
+      authProfileRequired:
+        selection?.profileId === authSessionEntry?.authProfileOverride
+          ? authSessionEntry?.authProfileOverrideRequired
+          : undefined,
     };
   };
-  let { authProfileId, authProfileIdSource } = await traceRunPhase(
+  let { authProfileId, authProfileIdSource, authProfileRequired } = await traceRunPhase(
     "reply.resolve_auth_profile",
     () => resolveRuntimeAuthProfile(),
   );
@@ -562,7 +571,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ]),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
+        ({ authProfileId, authProfileIdSource, authProfileRequired } =
+          await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
         refreshInboundContextAfterAdmissionWait();
@@ -612,6 +622,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     isActive,
     authProfileId,
     authProfileIdSource,
+    authProfileRequired,
   } as const;
 }
 

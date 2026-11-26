@@ -43,6 +43,7 @@ import { beginForegroundSessionMaintenance } from "../session-maintenance/coordi
 import { prepareSessionPlacementSandbox } from "../session-placement-admission.js";
 import {
   buildCompactionFailureResult,
+  buildLockedCompactionRuntimeFailure,
   DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
 } from "./compact-reasons.js";
 import {
@@ -82,15 +83,6 @@ type QueuedCompactionParams = CompactEmbeddedAgentSessionParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
   sandbox?: SandboxContext | null;
 };
-
-function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
-  return buildCompactionFailureResult(
-    runtime
-      ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
-      : "Model selection is locked but the persisted agent harness is unavailable.",
-    { reason: "model_selection_locked" },
-  );
-}
 
 const manualCompactionActiveRunFailure = (): EmbeddedAgentCompactResult => ({
   ok: false,
@@ -380,7 +372,7 @@ async function compactEmbeddedAgentSessionImpl(
       const preparedModelRuntime = lease.snapshot;
       const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
       if (lockedHarnessRuntime === "auto") {
-        return lockedCompactionRuntimeFailure();
+        return buildLockedCompactionRuntimeFailure();
       }
       // A concrete model lock does not pin the observed or requested runtime. Only
       // durable native ownership can forbid a prepared transport's host fallback.
@@ -539,6 +531,9 @@ async function compactEmbeddedAgentSessionImpl(
           sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
           explicitAgentId: contextEngineAgentId,
           authProfileId: preparedParams.authProfileId,
+          requiredAuthProfileId: preparedParams.requiredAuthProfileId,
+          provider: preparedParams.provider,
+          model: preparedParams.model,
           contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
           purpose: "context-engine.compaction",
         }),
@@ -600,7 +595,7 @@ async function compactEmbeddedAgentSessionImpl(
           isRecoverableNativeHarnessBindingFailure(harnessResult)
         )
       ) {
-        return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+        return harnessResult ?? buildLockedCompactionRuntimeFailure(selectedHarnessRuntime);
       }
       if (harnessResult) {
         if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {

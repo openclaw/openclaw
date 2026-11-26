@@ -72,6 +72,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   }
   if (entryRef && authProfileId) {
     fallbackRun.authProfileId = authProfileId;
+    fallbackRun.authProfileRequired = params.entry.authProfileOverrideRequired;
     const authProfileIdSource = resolveCollapsedSessionAuthPinSource(params.entry);
     if (authProfileIdSource) {
       fallbackRun.authProfileIdSource = authProfileIdSource;
@@ -81,6 +82,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   } else if (entryRef) {
     delete fallbackRun.authProfileId;
     delete fallbackRun.authProfileIdSource;
+    delete fallbackRun.authProfileRequired;
   }
   return fallbackRun;
 }

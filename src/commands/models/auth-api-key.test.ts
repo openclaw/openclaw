@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -441,6 +442,21 @@ it("deleting the selected account preserves the model and releases existing and 
       prevAuthProfileOverrideCompactionCount: 1,
     },
   });
+  const requiredScope = { ...scope, sessionKey: "agent:writer:required-chat" };
+  await replaceSessionEntry(requiredScope, {
+    ...retainedSession,
+    sessionId: "required-chat",
+    providerOverride: "sample",
+    authProfileOverride: removedId,
+    authProfileOverrideSource: "user",
+    authProfileOverrideRequired: true,
+    modelFallback: {
+      ...retainedFallback,
+      prevAuthProfileOverride: removedId,
+      prevAuthProfileOverrideSource: "user",
+      prevAuthProfileOverrideRequired: true,
+    },
+  });
   await remove(removedId);
   const cfg = await readConfig();
   expect(cfg.agents?.entries?.writer?.model).toBe("sample/astra");
@@ -454,6 +470,31 @@ it("deleting the selected account preserves the model and releases existing and 
   ]).toEqual([undefined, undefined, undefined]);
   expect(existing?.modelFallback).toMatchObject(retainedFallback);
   expect(existing?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
+  const required = expectDefined(readSession(requiredScope), "required child session");
+  expect(required).toMatchObject({
+    authProfileOverride: removedId,
+    authProfileOverrideSource: "user",
+    authProfileOverrideRequired: true,
+    modelFallback: {
+      prevAuthProfileOverride: removedId,
+      prevAuthProfileOverrideSource: "user",
+      prevAuthProfileOverrideRequired: true,
+    },
+  });
+  await expect(
+    resolveSessionAuthSelection({
+      cfg,
+      agentId: "writer",
+      agentDir: agentDir("writer"),
+      provider: "sample",
+      modelId: "astra",
+      sessionEntry: required,
+      sessionStore: { [requiredScope.sessionKey]: required },
+      sessionKey: requiredScope.sessionKey,
+      storePath: requiredScope.storePath,
+      isNewSession: false,
+    }),
+  ).rejects.toThrow(/selected auth profile.*unavailable/i);
   await seedKey(replacementId, "replacement", "writer");
   const freshScope = { ...scope, sessionKey: "agent:writer:new" };
   await replaceSessionEntry(freshScope, { sessionId: "new-chat", updatedAt: 1 });
