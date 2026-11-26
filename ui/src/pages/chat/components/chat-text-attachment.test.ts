@@ -199,7 +199,7 @@ it.each([
 it.each([
   { title: "notes.md", mimeType: "text/markdown; charset=utf-8", kind: "document" },
   { title: "notes.markdown", mimeType: "application/octet-stream", kind: "document" },
-  { title: "download", mimeType: "Text/X-Markdown; charset=UTF-8", kind: "document" },
+  { title: "notes.csv", mimeType: "Text/X-Markdown; charset=UTF-8", kind: "document" },
   { title: "long.md", mimeType: "text/plain", kind: "long" },
   { title: "notes.md", mimeType: "text/plain", kind: "inert" },
 ])("renders $kind Markdown attachment $title ($mimeType)", async ({ title, mimeType, kind }) => {
@@ -278,6 +278,35 @@ it.each([
       [...row.querySelectorAll("td")].map((cell) => cell.textContent),
     ),
   ).toEqual([[""]]);
+});
+
+it("renders the first record as data when a CSV attachment declares no header", async () => {
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("Alice,42\nBob,17")));
+  const panel = await mountAttachment({
+    title: "names.csv",
+    mimeType: 'text/csv; charset=utf-8; Header="absent"',
+  });
+  await vi.waitFor(() => expect(panel.querySelector("article table")).not.toBeNull());
+  expect(panel.querySelector("article th")).toBeNull();
+  expect([...panel.querySelectorAll("article td")].map((cell) => cell.textContent)).toEqual([
+    "Alice",
+    "42",
+    "Bob",
+    "17",
+  ]);
+});
+
+it.each([
+  { reason: "over the table cell budget", text: `name\n${"x,".repeat(9_999)}x` },
+  { reason: "with a quote in an unquoted field", text: 'part,qty\r\n12",2\r\nbolt,3' },
+  { reason: "with an unterminated quoted field", text: 'part,qty\r\n"12,2' },
+  { reason: "with text after a closing quote", text: 'part,qty\r\n"12"x,2' },
+])("opens a CSV attachment $reason as raw text", async ({ text }) => {
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+  const panel = await mountAttachment({ title: "wide.csv", mimeType: "text/csv" });
+  await vi.waitFor(() => expect(panel.querySelector("article table, pre")).not.toBeNull());
+  expect(panel.querySelector("pre")?.textContent).toBe(text);
+  expect(panel.querySelector("article table, button[aria-pressed]")).toBeNull();
 });
 
 it.each([
@@ -552,7 +581,7 @@ it.each([
 
 it.each([
   ["page.HTM", "application/octet-stream"],
-  ["download", "Text/HTML; charset=UTF-8"],
+  ["report.csv", "Text/HTML; charset=UTF-8"],
 ])(
   "renders HTML attachment %s (%s) in a sandbox and preserves exact Source and download",
   async (title, mimeType) => {

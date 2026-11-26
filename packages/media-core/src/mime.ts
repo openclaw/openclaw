@@ -175,6 +175,27 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
+export const HEADERLESS_CSV_MIME_TYPE = "text/csv; header=absent";
+
+export function isHeaderlessCsvMime(mime: string): boolean {
+  if (normalizeMimeType(mime) !== "text/csv") {
+    return false;
+  }
+  for (const [, name, value] of mime.matchAll(
+    /;\s*([^=;\s]+)\s*=\s*("(?:[^"\\]|\\.)*"\s*(?=;|$)|[^;]*)/g,
+  )) {
+    if (name?.toLowerCase() === "header") {
+      const parameter = value?.trim() ?? "";
+      const decoded =
+        parameter.startsWith('"') && parameter.endsWith('"')
+          ? parameter.slice(1, -1).replace(/\\(.)/g, "$1")
+          : parameter;
+      return decoded.toLowerCase() === "absent";
+    }
+  }
+  return false;
+}
+
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;

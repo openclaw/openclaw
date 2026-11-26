@@ -217,6 +217,29 @@ describe("composer attachment origin", () => {
   );
 });
 
+it("retains an explicit headerless CSV declaration in chat history", async () => {
+  const fileName = "names.csv";
+  const bytes = Buffer.from("Alice,42\nBob,17");
+  saveMediaBufferMock.mockResolvedValueOnce(savedMedia(fileName, "text/csv", bytes.length));
+  const parsed = await parseMessageWithAttachments("Read this", [
+    {
+      mimeType: String.raw`text/csv; charset=utf-8; HEADER="Abse\nt"`,
+      fileName,
+      content: bytes.toString("base64"),
+    },
+  ]);
+  const persisted = await persist(parsed);
+  const message = buildPersistedUserTurnMessage({
+    text: "Read this",
+    media: persisted.entries.map((entry) => entry.fact),
+  });
+  const [history] = sanitizeChatHistoryMessages([message]);
+  expect(readPersistedMediaFacts(history)?.[0]).toMatchObject({
+    fileName,
+    contentType: "text/csv; header=absent",
+  });
+});
+
 describe("persistInboundImagesForTranscript", () => {
   it.each([
     ["inline", 32, 16],

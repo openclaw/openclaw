@@ -316,12 +316,13 @@
   margin-top: 16px;
 }
 
-.sidebar-attachment-preview__csv :where(th) {
-  white-space: nowrap;
+.sidebar-attachment-preview__csv :where(th),
+.sidebar-attachment-preview__csv :where(td) {
+  white-space: break-spaces;
 }
 
-.sidebar-attachment-preview__csv :where(td) {
-  white-space: pre-line;
+.sidebar-attachment-preview__csv th {
+  text-transform: none;
 }
 
 .sidebar-attachment-preview__text {

@@ -1,3 +1,4 @@
+import { HEADERLESS_CSV_MIME_TYPE, isHeaderlessCsvMime } from "@openclaw/media-core/mime";
 import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -12,7 +13,8 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   }
   // FileReader may include MIME parameters. Validate metadata separately from
   // the payload, so neither repeated parameters nor image bytes need a capture regex.
-  const [mimeType, ...parameters] = dataUrl.slice(5, commaIndex).split(";");
+  const mediaType = dataUrl.slice(5, commaIndex);
+  const [mimeType, ...parameters] = mediaType.split(";");
   if (
     !mimeType ||
     parameters.pop() !== "base64" ||
@@ -21,7 +23,9 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   const content = dataUrl.slice(commaIndex + 1);
-  return content && !/[\r\n\u2028\u2029]/.test(content) ? { mimeType, content } : null;
+  return content && !/[\r\n\u2028\u2029]/.test(content)
+    ? { mimeType: isHeaderlessCsvMime(mediaType) ? HEADERLESS_CSV_MIME_TYPE : mimeType, content }
+    : null;
 }
 
 /** Converts composer attachments into the base64 payload accepted by chat.send. */

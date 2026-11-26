@@ -1,5 +1,11 @@
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  extensionForMime,
+  HEADERLESS_CSV_MIME_TYPE,
+  isHeaderlessCsvMime,
+  kindFromMime,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -466,7 +472,10 @@ export async function parseMessageWithAttachments(
         id: savedMedia.id,
         path: savedMedia.path,
         kind: kindFromMime(finalMime) ?? "unknown",
-        mimeType: finalMime,
+        mimeType:
+          finalMime === "text/csv" && isHeaderlessCsvMime(mime)
+            ? HEADERLESS_CSV_MIME_TYPE
+            : finalMime,
         label,
         sizeBytes,
         sourceIndex: idx,
