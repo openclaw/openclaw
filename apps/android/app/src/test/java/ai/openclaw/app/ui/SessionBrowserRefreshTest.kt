@@ -78,7 +78,10 @@ class SessionBrowserRefreshTest {
         runtime.chat.sessions.first { it.isNotEmpty() }
         // The screenshot history bootstrap awaits a health-driven roster refresh after publishing its rows.
         val chatScope = ReflectionHelpers.getField<CoroutineScope>(runtime.chat, "scope")
-        val startupReads = chatScope.coroutineContext.job.children.filterIsInstance<Deferred<*>>().toList()
+        val startupReads =
+          chatScope.coroutineContext.job.children
+            .filterIsInstance<Deferred<*>>()
+            .toList()
         withTimeout(5_000) { startupReads.joinAll() }
       }
       val original = ReflectionHelpers.getField<suspend (String, String?) -> String>(runtime.chat, "requestGateway")
