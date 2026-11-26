@@ -47,7 +47,7 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-it.each(["openrouter", "kilocode"])(
+it.each(["openrouter", "kilocode", "litellm"])(
   "keeps the %s capacity declaration in its bundled manifest",
   (provider) => {
     expect(loadPluginManifest(path.resolve("extensions", provider), false)).toMatchObject({
