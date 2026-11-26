@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime, getProcessStartTime } from "../shared/pid-alive.js";
 import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
 import {
   prepareAgentDatabaseLeaseProvenance,
@@ -89,6 +89,7 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
     machineIdentity: previous.machineIdentity,
+    readGatewayHeartbeat: () => previous.heartbeatAt,
   });
   if (namespace === "dead") {
     return previous;
@@ -324,6 +325,7 @@ export function acquireGatewayOwnerLease(params: {
   };
   const payload = {
     owner: processOwner,
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     port: params.port,
     mode: params.mode,
     supervisor: params.supervisor,
