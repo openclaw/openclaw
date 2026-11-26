@@ -353,7 +353,7 @@ it.each([false, true])("isolates ClawRouter cooldowns (managed=%s)", async (mana
       }),
       undefined,
     );
-    if (managed && disabledUntil !== keyUntil) {
+    if (!localCooldown && disabledUntil !== keyUntil) {
       const serialized = JSON.stringify(respond.mock.calls[0]?.[1]);
       expect(serialized).not.toContain('"unavailableUntil"');
       expect(serialized).not.toContain('"unavailableReason"');
