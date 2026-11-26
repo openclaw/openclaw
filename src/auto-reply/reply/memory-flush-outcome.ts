@@ -11,6 +11,27 @@ import { truncateMemoryFlushErrorMessage } from "./memory-flush-errors.js";
 
 const MAX_FLUSH_FAILURES = 3;
 
+export async function recordMemoryFlushSuccess(
+  { sessionKey, storePath }: Pick<MemoryFlushRunParams, "sessionKey" | "storePath">,
+  compactionCount: number,
+  initialSessionEntry?: SessionEntry,
+): Promise<MemoryFlushResult> {
+  let sessionEntry = initialSessionEntry;
+  if (storePath && sessionKey) {
+    try {
+      const updatedEntry = await updateSessionEntry(
+        { storePath, sessionKey },
+        async () => ({ memoryFlush: { kind: "succeeded", compactionCount } }),
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      sessionEntry = updatedEntry ?? sessionEntry;
+    } catch (error) {
+      logVerbose(`failed to persist memory flush metadata: ${String(error)}`);
+    }
+  }
+  return { sessionEntry, outcome: "completed" };
+}
+
 export async function recordMemoryFlushFailure(
   error: unknown,
   run: MemoryFlushRunParams,
