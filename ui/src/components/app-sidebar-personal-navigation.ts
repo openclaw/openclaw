@@ -11,7 +11,10 @@ import {
   findSidebarSessionRow,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
-import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
+import {
+  applySidebarSessionOwnerFilter,
+  filterPinnedSessionChildrenByOwner,
+} from "./app-sidebar-session-ownership.ts";
 import type { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   sidebarPinnedSessionRows,
@@ -273,15 +276,15 @@ function resolvePinnedSession(
   ) {
     return navigationState.toSidebarSession(row);
   }
-  return projectSidebarSessionReference({
+  const { session } = projectSidebarSessionReference({
     host,
     row,
     agentId,
     navigationState,
     resolveAttention: host.resolveSessionAttention,
     involvingMe: host.sessionInvolvingMeFilterActive,
-    ownerId: host.sessionOwnerFilterId,
-  }).session;
+  });
+  return filterPinnedSessionChildrenByOwner(session, host.sessionOwnerFilterId);
 }
 
 function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {

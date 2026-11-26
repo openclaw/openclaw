@@ -1,7 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
+  owners,
+  selectFilter,
   settleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
@@ -195,6 +198,85 @@ it("opens a catalog-adopted parent's child from its personal pin", async () => {
   childLink.click();
   expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/offlist-child" });
 });
+
+it.each([false, true])(
+  "retains a saved parent under another owner filter (matching child: %s)",
+  async (matchingChild) => {
+    const parent = "agent:main:sam-parent";
+    const child = "agent:main:review";
+    const hidden = "agent:main:sam-notes";
+    const rows = [
+      {
+        key: parent,
+        label: "Sam parent",
+        childSessions: [child, hidden],
+        owner: { actor: owners[1] },
+      },
+      {
+        key: child,
+        label: "Review",
+        spawnedBy: parent,
+        owner: { actor: owners[matchingChild ? 0 : 1] },
+      },
+      { key: hidden, label: "Sam notes", spawnedBy: parent, owner: { actor: owners[1] } },
+    ];
+    const { sidebar } = await mountRoster(
+      undefined,
+      rows.map((row) => ({ ...row, kind: "direct", agentId: "main" })),
+    );
+    sidebar.sessionKey = parent;
+    sidebar.activeRouteId = "chat";
+    sidebar.sidebarEntries = [`session:${parent}`];
+    await selectFilter(sidebar, "owner:profile-ada");
+    await settleRoster(sidebar);
+
+    const pins = () =>
+      expectDefined(sidebar.querySelector('[data-session-section="pinned"]'), "pinned section");
+    const link = (key: string) =>
+      expectDefined(
+        pins().querySelector<HTMLAnchorElement>(`[data-session-key="${key}"] a`),
+        `saved navigation link for ${key}`,
+      );
+    expect(link(parent).textContent).toContain("Sam parent");
+    sidebar.onNavigate = vi.fn();
+    const toggle = pins().querySelector<HTMLButtonElement>(
+      `[data-child-session-toggle="${parent}"]`,
+    );
+    if (matchingChild) {
+      const disclosure = expectDefined(toggle, "matching child disclosure");
+      expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+      disclosure.click();
+      await settleRoster(sidebar);
+      link(child).click();
+      expect(sidebar.onNavigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/main/review" }),
+      );
+      await settleRoster(sidebar);
+    } else {
+      expect(toggle).toBeNull();
+      expect(pins().querySelector(`[data-session-key="${child}"]`)).toBeNull();
+    }
+    expect(pins().querySelector(`[data-session-key="${hidden}"]`)).toBeNull();
+    link(parent).click();
+    expect(sidebar.onNavigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/main/sam-parent" }),
+    );
+    if (matchingChild) {
+      sidebar.sidebarEntries = [];
+      await settleRoster(sidebar);
+      expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
+      sidebar.sidebarEntries = [`session:${parent}`];
+      await settleRoster(sidebar);
+      expect(
+        pins()
+          .querySelector(`[data-child-session-toggle="${parent}"]`)
+          ?.getAttribute("aria-expanded"),
+      ).toBe("false");
+    }
+  },
+);
 
 it("keeps a descriptor-only pin navigable without inventing a child row", async () => {
   const parent = "agent:main:described-parent";
