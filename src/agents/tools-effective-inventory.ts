@@ -17,6 +17,7 @@ import {
   hasBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "../plugin-sdk/facade-runtime.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -115,16 +116,23 @@ function buildToolInventoryNotices(params: {
     ];
   }
 
-  if (
-    Array.isArray(params.cfg.plugins?.allow) &&
-    !listIncludesTool(params.cfg.plugins.allow, "browser")
-  ) {
+  const browserPlugin = resolveEffectiveEnableState({
+    id: "browser",
+    origin: "bundled",
+    config: normalizePluginsConfig(params.cfg.plugins),
+    rootConfig: params.cfg,
+    enabledByDefault: true,
+  });
+  if (!browserPlugin.enabled) {
     return [
       {
         id: "browser-plugin-not-allowed",
         severity: "warning",
-        message:
-          'Browser is configured, but plugins.allow does not include browser. Add "browser" to plugins.allow or remove the restrictive plugin allowlist.',
+        message: `Browser is configured, but the browser plugin is disabled by plugin policy (${browserPlugin.reason ?? "plugin disabled"}). ${
+          browserPlugin.reason === "not in allowlist"
+            ? 'Add "browser" to plugins.allow or remove the restrictive plugin allowlist.'
+            : "Remove the plugin disable that applies to browser."
+        }`,
       },
     ];
   }

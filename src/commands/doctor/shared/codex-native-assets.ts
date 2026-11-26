@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { canAccess, safeStat } from "../../../infra/path-existence.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "../../../plugins/config-state.js";
 
 type CodexNativeAssetHit = {
   /** Native Codex asset category discovered under Codex or personal agent homes. */
@@ -75,15 +77,16 @@ async function discoverDirectoryAssets(
 }
 
 function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
-  const plugins = cfg.plugins;
-  if (plugins?.enabled === false) {
-    return false;
-  }
-  const allow = plugins?.allow;
-  if (Array.isArray(allow)) {
-    return allow.some((entry) => normalizeString(entry) === "codex");
-  }
-  return hasRecord(plugins?.entries?.codex) && plugins.entries.codex.enabled !== false;
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  // A declared codex config block or an explicit allowlist entry is the plugin-side
+  // default; see the Codex plugin's own gate.
+  return resolveEffectiveEnableState({
+    id: "codex",
+    origin: "bundled",
+    config: plugins,
+    rootConfig: cfg,
+    enabledByDefault: plugins.entries.codex !== undefined || plugins.allow.includes("codex"),
+  }).enabled;
 }
 
 /** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */

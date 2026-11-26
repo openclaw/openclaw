@@ -103,7 +103,7 @@ describe("OpenShell standalone worker CLI", () => {
           /existing plugin restriction/,
         ],
         [
-          (cfg) => Object.assign(cfg.plugins!, { deny: ["file-transfer"] }),
+          (cfg) => Object.assign(cfg.plugins!, { allow: [], deny: [" File-Transfer "] }),
           /existing plugin restriction/,
         ],
         [

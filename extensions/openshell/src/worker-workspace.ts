@@ -2,6 +2,10 @@ import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
@@ -26,14 +30,15 @@ export function prepareOpenShellAgentWorkspace(
   nodeId: string,
   runtimeConfig: OpenClawConfig,
 ) {
-  const plugins = config.plugins;
-  const entry = plugins?.entries?.["file-transfer"];
-  if (
-    plugins?.enabled === false ||
-    entry?.enabled === false ||
-    plugins?.deny?.includes("file-transfer") ||
-    (plugins?.allow?.length && !plugins.allow.includes("file-transfer"))
-  ) {
+  const entry = config.plugins?.entries?.["file-transfer"];
+  const fileTransferEnabled = resolveEffectiveEnableState({
+    id: "file-transfer",
+    origin: "bundled",
+    config: normalizePluginsConfig(config.plugins),
+    rootConfig: config,
+    enabledByDefault: true,
+  }).enabled;
+  if (!fileTransferEnabled) {
     throw new Error(
       "Agent workspace binding requires File Transfer; preserve the existing plugin restriction and enable it explicitly before retrying.",
     );

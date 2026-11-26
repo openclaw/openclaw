@@ -54,11 +54,16 @@ describe("scanCodexNativeAssets", () => {
     ]);
   });
 
-  it("does not scan when Codex is not configured", async () => {
+  it.each([
+    [{}, 0],
+    [{ plugins: { allow: ["slack"] } }, 0],
+    [{ plugins: { allow: [], entries: { codex: { enabled: true } } } }, 2],
+    [{ plugins: { allow: [" CODEX "] } }, 2],
+    [{ plugins: { allow: [], deny: [" Codex "] } }, 0],
+  ])("scans Codex assets only while Codex stays on: %j", async (cfg, hits) => {
     await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
-
-    await expect(scanCodexNativeAssets({ cfg: {}, env })).resolves.toStrictEqual([]);
+    expect(await scanCodexNativeAssets({ cfg: cfg as never, env })).toHaveLength(hits);
   });
 });
 

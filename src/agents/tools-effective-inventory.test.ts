@@ -453,6 +453,16 @@ it("falls back to a sanitized summary for multi-line raw descriptions", async ()
   expect(result.groups[0]?.tools[0]?.rawDescription).toContain("ACTIONS:");
 });
 
+it("includes the resolved tool profile", async () => {
+  await loadExecHarness();
+
+  const result = await resolveEffectiveToolInventory({
+    cfg: { tools: { profile: "minimal", byProvider: { openai: { profile: "coding" } } } },
+    modelProvider: "openai",
+  });
+  expect(result.profile).toBe("coding");
+});
+
 it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
   await loadHarness({
     tools: [mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" })],
@@ -465,6 +475,8 @@ it("adds an actionable notice when configured browser is filtered by the tool pr
       plugins: { entries: { browser: { enabled: true } } },
     } as never,
   });
+  const policy = (plugins: object) =>
+    resolveEffectiveToolInventory({ cfg: { browser: { enabled: true }, plugins } as never });
 
   expect(result.notices).toEqual([
     {
@@ -474,4 +486,10 @@ it("adds an actionable notice when configured browser is filtered by the tool pr
         'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.entries.*.tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
     },
   ]);
+  expect((await policy({ deny: ["browser"] })).notices?.[0]?.message).toContain(
+    "blocked by denylist",
+  );
+  expect(
+    (await policy({ allow: [], entries: { browser: { enabled: false } } })).notices?.[0]?.message,
+  ).toContain("disabled in config");
 });
