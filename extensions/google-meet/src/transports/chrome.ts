@@ -1,16 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  callMeetingBrowserProxyOnNode,
-  leaveMeetingWithBrowser,
-  readMeetingTranscriptWithBrowser,
-  recoverMeetingBrowserTab,
-  resolveLocalMeetingBrowserRequest,
-  resolveMeetingBrowserNode,
-  MeetingPlatformAdapter,
-  type MeetingBrowserRequestCaller,
-} from "openclaw/plugin-sdk/meeting-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import {
@@ -47,12 +37,6 @@ export const launchChromeMeetOnNode = chromeTransport.launchOnNode;
 
 export const launchChromeMeet = chromeTransport.launchInChrome;
 
-function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig): boolean {
-  return (
-    mode === "transcribe" || !fullConfig || resolveTranscriptsConfig(fullConfig.transcripts).enabled
-  );
-}
-
 type ChromeBrowserRouteParams = {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
@@ -60,79 +44,28 @@ type ChromeBrowserRouteParams = {
   nodeId?: string;
 };
 
-type ChromeBrowserRoute = {
-  callBrowser: MeetingBrowserRequestCaller;
-} & ({ transport: "chrome"; nodeId?: undefined } | { transport: "chrome-node"; nodeId: string });
+type SessionTab = {
+  meetingSessionId: string;
+  meetingUrl: string;
+  tab: GoogleMeetBrowserTab;
+};
 
-async function resolveChromeBrowserRoute(
-  params: ChromeBrowserRouteParams,
-): Promise<ChromeBrowserRoute> {
-  if (params.transport !== "chrome-node") {
-    return {
-      transport: "chrome",
-      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
-    };
-  }
-  const nodeId =
-    params.nodeId ??
-    (await resolveMeetingBrowserNode({
-      runtime: params.runtime,
-      requestedNode: params.config.chromeNode.node,
-      adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
-    }));
-  return {
-    transport: "chrome-node",
-    nodeId,
-    callBrowser: (request) =>
-      callMeetingBrowserProxyOnNode({
-        ...request,
-        runtime: params.runtime,
-        nodeId,
-        adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
-      }),
-  };
-}
-
-export async function leaveChromeMeet(
-  params: ChromeBrowserRouteParams & {
-    meetingSessionId: string;
-    meetingUrl: string;
-    tab: GoogleMeetBrowserTab;
-  },
-): Promise<{ left: boolean; note: string }> {
-  const { callBrowser } = await resolveChromeBrowserRoute(params);
-  return leaveMeetingWithBrowser({
-    adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser,
-    launch: params.config.chrome.launch,
-    meetingSessionId: params.meetingSessionId,
-    meetingUrl: params.meetingUrl,
-    tab: params.tab,
-    timeoutMs: params.config.chrome.joinTimeoutMs,
+export function leaveChromeMeet(params: ChromeBrowserRouteParams & SessionTab) {
+  return chromeTransport.leaveInBrowser({
+    ...params,
+    transport: params.transport ?? "chrome",
+    // Meet requires browser launch permission even for a reused tab.
+    requireLaunch: true,
   });
 }
 
-export async function readChromeMeetTranscript(
-  params: ChromeBrowserRouteParams & {
-    finalize?: boolean;
-    meetingUrl: string;
-    meetingSessionId: string;
-    tab: GoogleMeetBrowserTab;
-  },
-): Promise<GoogleMeetTranscriptSnapshot> {
-  const { callBrowser } = await resolveChromeBrowserRoute(params);
-  return readMeetingTranscriptWithBrowser({
-    adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser,
-    finalize: params.finalize === true,
-    meetingUrl: params.meetingUrl,
-    meetingSessionId: params.meetingSessionId,
-    tab: params.tab,
-    timeoutMs: Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 10_000),
-  });
+export function readChromeMeetTranscript(
+  params: ChromeBrowserRouteParams & SessionTab & { finalize?: boolean },
+) {
+  return chromeTransport.readTranscript({ ...params, transport: params.transport ?? "chrome" });
 }
 
-export async function recoverCurrentMeetTab(
+export function recoverCurrentMeetTab(
   params: Omit<ChromeBrowserRouteParams, "nodeId"> & {
     fullConfig?: OpenClawConfig;
     mode?: GoogleMeetMode;
@@ -142,25 +75,16 @@ export async function recoverCurrentMeetTab(
     url?: string;
   },
 ) {
-  // Recovery deliberately re-resolves the configured node, not the session pin.
-  const { callBrowser, ...route } = await resolveChromeBrowserRoute({
-    ...params,
-    nodeId: undefined,
+  // Recovery follows the current configured node; leave and captions follow the session pin.
+  return chromeTransport.recoverCurrentTab({
+    runtime: params.runtime,
+    config: params.config,
+    fullConfig: params.fullConfig,
+    transport: params.transport ?? "chrome",
+    mode: params.mode ?? "bidi",
+    readOnly: params.readOnly,
+    trackedMeetingUrl: params.trackedMeetingUrl,
+    trackedTargetId: params.trackedTargetId,
+    url: params.url,
   });
-  return {
-    ...route,
-    ...(await recoverMeetingBrowserTab({
-      adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-      callBrowser,
-      captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
-      config: params.config.chrome,
-      locationLabel:
-        route.transport === "chrome-node" ? "on the selected Chrome node" : "in local Chrome",
-      mode: params.mode ?? "bidi",
-      readOnly: params.readOnly,
-      requestedMeetingUrl: params.url,
-      trackedMeetingUrl: params.trackedMeetingUrl,
-      trackedTargetId: params.trackedTargetId,
-    })),
-  };
 }

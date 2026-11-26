@@ -2,6 +2,9 @@ import type { SessionListOptions } from "../../lib/sessions/session-capability.t
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 
+// Transcript search applies its UTF-16 limit after trimming the submitted query.
+export const TRANSCRIPT_SEARCH_QUERY_MAX_LENGTH = 4096;
+
 export type TranscriptSearchResult = Awaited<ReturnType<typeof searchVisibleSessionTranscripts>>;
 export type TranscriptSearchState = {
   transcriptSearchQuery: string;
@@ -23,15 +26,14 @@ export function createTranscriptSearch(host: {
     reset,
     run: async () => {
       const query = state.transcriptSearchQuery.trim();
-      if (!query) {
-        reset("");
+      if (!query || query.length > TRANSCRIPT_SEARCH_QUERY_MAX_LENGTH) {
+        reset();
         return;
       }
       const scope = host.captureScope();
       if (!scope) {
         return;
       }
-      state.transcriptSearchQuery = query;
       // Replacing or clearing the receipt retires its results without cancelling the transport.
       const isCurrent = () => state.transcriptSearch === result && host.isCurrent(scope);
       const result: Promise<TranscriptSearchResult | null> = searchVisibleSessionTranscripts({

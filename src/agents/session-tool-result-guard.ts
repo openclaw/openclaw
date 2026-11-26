@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import { shellCallResultKey } from "../config/sessions/transcript-shell-receipt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -513,9 +514,15 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      // A blocked or failed append must remain pending for transcript repair.
+      // A generated missing-result row or a discarded write cannot settle a shell call.
+      const key = shellCallResultKey(message, context.runId, id ?? undefined);
+      const finalResult = capToolResultForPersistence(persisted.message, maxToolResultChars);
+      const accepted =
+        key && finalResult.role === "toolResult" && finalResult.toolCallId === id
+          ? { ...finalResult, idempotencyKey: key }
+          : finalResult;
       return (yield* appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted.message, maxToolResultChars),
+        accepted,
         context,
         {
           invalidateSerializedPrefixCache:

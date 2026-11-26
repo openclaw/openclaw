@@ -152,6 +152,7 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.github.action") {
     return [
       record?.action === "create_issue" ||
+      record?.action === "create_comment" ||
       record?.action === "inspect_pr" ||
       record?.action === "prepare_pr" ||
       record?.action === "refresh_base" ||
@@ -363,7 +364,9 @@ export function authorizeOperatorScopesForRequiredScope(
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
       ((requiredScope === WRITE_SCOPE ||
         requiredScope === TALK_SCOPE ||
-        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question.")) ||
+        // The handler binds a non-admin restore to the caller's own session worktree.
+        (requiredScope === ADMIN_SCOPE && method === "worktrees.restore")) &&
         sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)
   ) {

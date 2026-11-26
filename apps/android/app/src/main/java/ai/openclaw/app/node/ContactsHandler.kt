@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.asStringOrNull
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.hasPermission
 import android.Manifest
@@ -83,7 +84,9 @@ private class SystemContactsDataSource(
         while (cursor.moveToNext() && out.size < request.limit) {
           val contactId = cursor.getLong(idIndex)
           val displayName = cursor.getString(displayNameIndex).orEmpty()
-          out += loadContactRecord(resolver, contactId, fallbackDisplayName = displayName)
+          val record = loadContactRecord(resolver, contactId, fallbackDisplayName = displayName)
+          // Linked raw contacts can disagree; keep the aggregate name used by this search.
+          out += record.copy(displayName = displayName.ifEmpty { record.displayName })
         }
         return out
       }

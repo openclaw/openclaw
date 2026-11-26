@@ -200,6 +200,52 @@ it("can prove Google Meet API create access", async () => {
 });
 
 it.each([
+  ["--mode", "transribe", "mode must be"],
+  ["--transport", "chorme", "transport must be"],
+])(
+  "rejects invalid create %s before contacting the Gateway or creating a room",
+  async (flag, value, error) => {
+    const callGatewayFromCli = vi.fn().mockResolvedValue({ meetingUri: MEET_URL });
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("unexpected runtime");
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      run(["create", flag, value], { callGatewayFromCli, ensureRuntime }),
+    ).rejects.toThrow(error);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(ensureRuntime).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);
+
+it("ignores join-only choices when creating a URL without joining", async () => {
+  const api = cli.stubJsonRoutes({
+    "https://meet.googleapis.com/v2/spaces": { name: "spaces/new", meetingUri: MEET_URL },
+  });
+  await run(["create", "--no-join", "--mode", "unused", "--json"], {
+    config: { oauth: { accessToken: "fixture-token", expiresAt: Date.now() + 3_600_000 } },
+  });
+  expect(api).toHaveBeenCalledTimes(1);
+  expect(json()).toMatchObject({ meetingUri: MEET_URL, joined: false });
+});
+
+it.each(["join", "create"])("preserves an explicitly empty intro on local %s", async (command) => {
+  const join = vi.fn<GoogleMeetRuntime["join"]>().mockResolvedValue({ session: meetSession() });
+  cli.stubJsonRoutes({
+    "https://meet.googleapis.com/v2/spaces": { name: "spaces/new", meetingUri: MEET_URL },
+  });
+  await run([command, ...(command === "join" ? [MEET_URL] : []), "--message", ""], {
+    config: { oauth: { accessToken: "fixture-token", expiresAt: Date.now() + 3_600_000 } },
+    runtime: { join },
+  });
+  expect(join).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ url: MEET_URL, message: "" }),
+  );
+});
+
+it.each([
   ["oauth-token", "https://oauth2.googleapis.com/token"],
   ["meet-spaces-get", "https://meet.googleapis.com/v2/spaces/existing"],
   ["meet-spaces-create", "https://meet.googleapis.com/v2/spaces"],

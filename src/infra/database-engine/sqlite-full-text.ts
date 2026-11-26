@@ -43,13 +43,24 @@ export function bindSqliteFullText(store: object, db?: DatabaseSync): FullTextCa
         toRank: (raw) => (Number.isFinite(raw) ? -raw : 0),
       };
     },
-    snippet(index, field, maxTokens) {
+    snippet(index, field, maxTokens, _query, _maxChars, sqliteMatchMarkers) {
       const table = relation(index);
       const column = index.fields.indexOf(field);
       if (column < 0) {
         throw new Error(`Text index has no field ${field}`);
       }
-      return /* kysely-allow-raw: Native snippet uses the admitted table, checked field ordinal, and caller token budget. */ sql<string>`${sql.raw(`snippet(${table}, ${column}, '', '', ' … ', ${maxTokens})`)}`;
+      const start = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.start) : sql.lit("");
+      const end = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.end) : sql.lit("");
+      const snippet = createFunctionModule()<string>("snippet", [
+        // kysely-allow-raw: relation() checks the store binding before returning the declared alias or table.
+        sql.table(table),
+        sql.lit(column),
+        start,
+        end,
+        sql.lit(" … "),
+        sql.lit(maxTokens),
+      ]);
+      return /* kysely-allow-raw: Expose the native function through the full-text expression contract. */ sql<string>`${snippet}`;
     },
     identity: (index) =>
       /* kysely-allow-raw: Native row identity uses the admitted index declaration. */ sql<number>`${sql.raw(`${relation(index)}.rowid`)}`,

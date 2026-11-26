@@ -915,7 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
-    automationFailure: "An automation has failed",
+    automationFailure: "An automation needs attention",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -942,6 +942,7 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
+    settingsGroupTeam: "Team",
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
@@ -1027,6 +1028,7 @@ const startupEnglish = {
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
+    roles: "Roles",
     workboard: "Workboard",
     worktrees: "Worktrees",
     projects: "Projects",

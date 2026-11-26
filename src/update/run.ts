@@ -38,7 +38,6 @@ import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
 import {
   checkUpdateInstallationSlot,
-  hasReleaseUpdateOwner,
   isNodeOnlyUpdateInstallation,
   resolveInstalledPackageFrontend,
 } from "./installation-identity.js";
@@ -51,6 +50,7 @@ import {
   allocateStaging,
   collectReleases,
   createTrialPending,
+  hasReleaseUpdateOwner,
   publishStaging,
   readTrial,
   releaseUpdateLock,
@@ -317,6 +317,7 @@ export async function prepareUpdate(params: {
         target.kind === "git"
           ? await prepareGit({
               checkout: target.checkout,
+              runningRoot: params.runningRoot,
               sha: target.sha,
               staging: staging.path,
               node,

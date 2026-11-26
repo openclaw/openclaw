@@ -10,6 +10,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import * as btw from "./btw.test-support.js";
 import type { CliModelRequestGate } from "./cli-runner/model-request-hook.js";
+import type { AgentHarnessSideQuestionParamsV2 } from "./harness/types.js";
 import type { StreamFn } from "./runtime/index.js";
 
 const SECRET = "API_TOKEN=fixture-value";
@@ -48,6 +49,52 @@ afterEach(() => {
 
 describe("before_model_request on side questions", () => {
   btw.setupBtwTestHooks();
+
+  it.each([false, true])("gates the native side question request (block=%s)", async (block) => {
+    installRedactor(block);
+    btw.mockTranscriptEntries([
+      btw.createTranscriptEntry({
+        id: "native-user",
+        message: btw.createUserTranscriptMessage([{ type: "text", text: SECRET }]),
+      }),
+      btw.createTranscriptEntry({
+        id: "native-assistant",
+        parentId: "native-user",
+        message: btw.createAssistantTranscriptMessage([{ type: "text", text: "noted" }]),
+      }),
+    ]);
+    const sent: unknown[] = [];
+    btw.registerAgentHarness({
+      id: "copilot",
+      label: "Native fixture",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+      async runSideQuestion(params: AgentHarnessSideQuestionParamsV2) {
+        const prepared = await params.prepareIsolatedSideQuestion!();
+        if (prepared.kind === "handled") {
+          return prepared.result;
+        }
+        const request = await prepared.prepareRequest({
+          prompt: `${JSON.stringify(prepared.messages)}\n${prepared.params.prompt}`,
+          images: [],
+        });
+        sent.push(request);
+        return { text: "Native answer." };
+      },
+    });
+    const result = btw.runSideQuestion({
+      cfg: btw.createRuntimeConfig(`${btw.DEFAULT_PROVIDER}/${btw.DEFAULT_MODEL}`, "copilot"),
+    });
+    if (block) {
+      await expect(result).rejects.toThrow("side question withheld");
+      expect(sent).toEqual([]);
+    } else {
+      await expect(result).resolves.toEqual({ text: "Native answer." });
+      expect(JSON.stringify(sent)).toContain("API_TOKEN=[REDACTED]");
+      expect(JSON.stringify(sent)).not.toContain(SECRET);
+      expect(seen[0]?.event).toMatchObject({ runtime: "cli", requestKind: "side_question" });
+    }
+  });
 
   it.each([false, true])("gates the embedded side question request (block=%s)", async (block) => {
     installRedactor(block);

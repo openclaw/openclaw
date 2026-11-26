@@ -24,6 +24,11 @@ import {
   projectTranscriptUtterance,
 } from "./read.js";
 import {
+  createTranscriptSpeakerLabels,
+  formatTranscriptTurn,
+  presentTranscriptTurn,
+} from "./speaker-labels.js";
+import {
   assertTranscriptByteLimit,
   assertTranscriptByteCount,
   cursorScope,
@@ -143,21 +148,29 @@ export async function exportTranscriptLibrary(
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
   const parts: string[] = [];
+  const speakerLabel = params.format === "markdown" ? createTranscriptSpeakerLabels() : undefined;
   let sizeBytes = 0;
   const completed = await store.streamExport(
     params.selector,
     params.format === "markdown",
     (rows) => {
       for (const utterance of rows) {
-        if (isTranscriptArtifactText(utterance.text)) {
-          continue;
+        let line: string;
+        if (speakerLabel) {
+          const turn = presentTranscriptTurn(
+            utterance.text,
+            speakerLabel(utterance.speakerId, utterance.speakerLabel),
+          );
+          if (!turn) {
+            continue;
+          }
+          line = formatTranscriptTurn(turn);
+        } else {
+          if (isTranscriptArtifactText(utterance.text)) {
+            continue;
+          }
+          line = `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`;
         }
-        const text =
-          params.format === "jsonl"
-            ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
-            : sanitizeTerminalText(utterance.text).trim();
-        const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
-        const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
         // Include Markdown list/newline overhead while accumulating, before rendering the body.
         sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
         assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
