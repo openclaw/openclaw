@@ -62,7 +62,6 @@ export class ComposerDictationOwner extends EventTarget {
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
   private reviewCapture: ComposerDictationReviewCapture | undefined;
-  private readonly pendingReviews = new Set<ComposerDictationReviewCapture>();
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
@@ -113,7 +112,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get requiresReview(): boolean {
-    return this.reviewCapture !== undefined || this.pendingReviews.size > 0;
+    return this.reviewCapture !== undefined || this.commits?.hasReview === true;
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -234,10 +233,6 @@ export class ComposerDictationOwner extends EventTarget {
   cancel(): void {
     this.reviewCapture?.cancel();
     this.reviewCapture = undefined;
-    for (const review of this.pendingReviews) {
-      review.cancel();
-    }
-    this.pendingReviews.clear();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -441,13 +436,7 @@ export class ComposerDictationOwner extends EventTarget {
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    if (review) {
-      this.pendingReviews.add(review);
-    }
-    const committed = this.commits!.add(session, (lateTranscript) => {
-      if (review) {
-        this.pendingReviews.delete(review);
-      }
+    const committed = this.commits!.add(session, review, (lateTranscript) => {
       this.releasePlayback();
       this.pendingCommitsChanged();
       if (

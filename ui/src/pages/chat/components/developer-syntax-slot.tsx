@@ -1,4 +1,4 @@
-import { createMemo, createSignal, lazy, Show } from "solid-js";
+import { createSignal, lazy, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDeveloperSyntax } from "../composer-developer-syntax.ts";
@@ -7,11 +7,8 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerChatComposerEnglish();
 
-const DeveloperSyntaxSettings = lazy(() => import("./developer-syntax-panel.tsx"), {
-  export: "DeveloperSyntaxSettings",
-});
-const DeveloperSyntaxReview = lazy(() => import("./developer-syntax-panel.tsx"), {
-  export: "DeveloperSyntaxReview",
+const DeveloperSyntaxContent = lazy(() => import("./developer-syntax-panel.tsx"), {
+  export: "DeveloperSyntaxContent",
 });
 
 /** Keep the disclosure usable without loading optional grammar, editor, or panel code. */
@@ -21,13 +18,13 @@ export function DeveloperSyntaxSlot(props: {
   readOwner: () => ComposerDeveloperSyntax | null;
 }) {
   const [settingsRequested, setSettingsRequested] = createSignal(false);
-  const ready = createMemo(() => (props.requested ? props.state.loadDeveloperSyntax() : undefined));
-  const owner = () => {
-    ready();
-    return props.readOwner();
-  };
   return (
-    <section class="developer-syntax" dir="auto" aria-label={t("chat.composer.dictationSyntax")}>
+    <section
+      class="developer-syntax"
+      dir="auto"
+      aria-label={t("chat.composer.dictationSyntax")}
+      style={{ "min-width": "0", padding: "8px 12px", "font-size": "12px", "line-height": "1.5" }}
+    >
       <details
         onToggle={(event) => {
           if (event.currentTarget.open) {
@@ -37,18 +34,18 @@ export function DeveloperSyntaxSlot(props: {
           }
         }}
       >
-        <summary>{t("chat.composer.dictationSyntax")}</summary>
+        <summary class="muted" style={{ cursor: "pointer" }}>
+          {t("chat.composer.dictationSyntax")}
+        </summary>
         <Show when={settingsRequested()}>
           <ChatLazyBoundary>
-            <DeveloperSyntaxSettings readOwner={owner} />
+            <DeveloperSyntaxContent state={props.state} readOwner={props.readOwner} settings />
           </ChatLazyBoundary>
         </Show>
       </details>
       <Show when={props.requested}>
         <ChatLazyBoundary fallback={<p role="status">{t("common.loading")}</p>}>
-          <Show when={ready()}>
-            <DeveloperSyntaxReview readOwner={owner} />
-          </Show>
+          <DeveloperSyntaxContent state={props.state} readOwner={props.readOwner} />
         </ChatLazyBoundary>
       </Show>
     </section>

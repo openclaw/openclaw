@@ -114,53 +114,37 @@ async function capture(page: Page, name: string, content: Locator[]) {
 }
 
 suite.define(() => {
-  it("loads syntax processing and styles only after opening syntax settings", async () => {
+  it("loads syntax processing and review copy only after opening syntax settings", async () => {
     const { page, textarea } = await openDictationPage();
     const modules = [
       controlUiE2eBuiltModuleRequest("ui/src/pages/chat/composer-developer-syntax.ts"),
       controlUiE2eBuiltModuleRequest("src/shared/dictation-developer.ts"),
+      controlUiE2eBuiltModuleRequest("ui/src/i18n/locales/en-chat-dictation.ts"),
       controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/developer-syntax-panel.tsx"),
     ];
     const requests: string[] = [];
-    const syntaxStyles: string[] = [];
-    const stylesheetReads: Promise<void>[] = [];
-    const phases: { disabled?: { requests: string[]; syntaxStyles: string[] } } = {};
     page.on("request", (request) => requests.push(new URL(request.url()).pathname));
-    page.on("response", (response) => {
-      if (response.request().resourceType() === "stylesheet") {
-        stylesheetReads.push(
-          response.text().then((css) => {
-            if (css.includes(".developer-syntax__review")) {
-              syntaxStyles.push(new URL(response.url()).pathname);
-            }
-          }),
-        );
-      }
-    });
+    const phaseRequests: { disabled?: string[] } = {};
     onTestFinished(async () => {
-      await Promise.all(stylesheetReads);
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(suite.artifactDir, "syntax-module-requests.json"),
-          JSON.stringify({ ...phases, requests, syntaxStyles }, null, 2),
+          JSON.stringify({ ...phaseRequests, requests }, null, 2),
         );
       }
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await textarea.waitFor();
-    await Promise.all(stylesheetReads);
-    await capture(page, "disabled", [textarea]);
-    phases.disabled = { requests: [...requests], syntaxStyles: [...syntaxStyles] };
+    phaseRequests.disabled = [...requests];
     expect(requests.filter((request) => modules.some((module) => module.test(request)))).toEqual(
       [],
     );
-    expect(syntaxStyles).toEqual([]);
+    await capture(page, "disabled", [textarea]);
 
     await openSyntaxSettings(page);
     for (const module of modules) {
       expect(requests.some((request) => module.test(request))).toBe(true);
     }
-    await expect.poll(() => syntaxStyles.length).toBeGreaterThan(0);
   });
 
   it("reviews a finalized capture, inserts exact unsent text and supports native undo", async () => {

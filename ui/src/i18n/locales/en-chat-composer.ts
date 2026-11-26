@@ -7,6 +7,9 @@ const catalog = {
     view: {
       workingDetails: "Agent is working. View details",
     },
+    dictation: {
+      busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
+    },
     composer: {
       textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",

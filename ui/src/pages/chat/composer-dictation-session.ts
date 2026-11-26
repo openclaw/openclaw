@@ -2,10 +2,11 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { ComposerDictationReviewCapture } from "./composer-dictation.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -15,7 +16,7 @@ import {
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
-registerEnglishCatalog(registerChatDictationEnglish);
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -60,13 +61,25 @@ function formatDictationError(error: unknown): string {
  * when a later recording's provider finishes first.
  */
 export class ComposerDictationCommits {
-  private readonly sessions = new Set<ComposerDictationSession>();
+  private readonly sessions = new Map<
+    ComposerDictationSession,
+    ComposerDictationReviewCapture | undefined
+  >();
   private tail: Promise<unknown> = Promise.resolve();
   // Consumers place delivered and preview transcripts in their drafts.
   readonly place = placeComposerDictation;
 
   get size(): number {
     return this.sessions.size;
+  }
+
+  get hasReview(): boolean {
+    for (const review of this.sessions.values()) {
+      if (review) {
+        return true;
+      }
+    }
+    return false;
   }
 
   has(session: ComposerDictationSession): boolean {
@@ -76,10 +89,11 @@ export class ComposerDictationCommits {
   /** Delivers once earlier recordings settle; a retired recording resolves false. */
   add(
     session: ComposerDictationSession,
+    review: ComposerDictationReviewCapture | undefined,
     deliver: (transcript: string) => boolean,
   ): Promise<boolean> {
     const previous = this.tail;
-    this.sessions.add(session);
+    this.sessions.set(session, review);
     const settled = session
       .finish(true)
       .catch(() => "")
@@ -93,13 +107,14 @@ export class ComposerDictationCommits {
   }
 
   markGatewayDisconnected(): void {
-    for (const session of this.sessions) {
+    for (const session of this.sessions.keys()) {
       session.markGatewayDisconnected();
     }
   }
 
   retire(): void {
-    for (const session of this.sessions) {
+    for (const [session, review] of this.sessions) {
+      review?.cancel();
       void session.cancel().catch(() => undefined);
     }
     this.sessions.clear();

@@ -22,7 +22,6 @@ function createChatComposerState(): ChatComposerState {
   const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
   const [developerSyntaxReady, setDeveloperSyntax] =
     createSignal<ChatComposerState["developerSyntax"]>(null);
-  let developerLoading: ReturnType<ChatComposerState["loadDeveloperSyntax"]> | undefined;
   // Signal writes commit on flush, so concurrent loads share this synchronous owner.
   let owner: ComposerTasks | undefined;
   const state: ChatComposerState = {
@@ -53,25 +52,7 @@ function createChatComposerState(): ChatComposerState {
     developerSyntax: null,
     developerSyntaxReady,
     developerSyntaxHost: null,
-    loadDeveloperSyntax: () => {
-      if (state.developerSyntax) {
-        return Promise.resolve(state.developerSyntax);
-      }
-      return (developerLoading ??= (async () => {
-        const { createComposerDeveloperSyntax } = await import("../composer-developer-syntax.ts");
-        // A retired presenter cannot install an owner after its import finishes.
-        if (!state.developerSyntaxHost) {
-          return undefined;
-        }
-        const created = createComposerDeveloperSyntax(state);
-        state.developerSyntax = created;
-        setDeveloperSyntax(() => created);
-        return created;
-      })().finally(() => {
-        // Rejected imports can be retried by the existing lazy error boundary.
-        developerLoading = undefined;
-      }));
-    },
+    setDeveloperSyntax,
     composerDraftScope: null,
     dictationSelection: null,
     tasks,

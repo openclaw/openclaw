@@ -309,7 +309,7 @@ export type ChatComposerState = {
   developerSyntax: ComposerDeveloperSyntax | null;
   developerSyntaxReady: Accessor<ComposerDeveloperSyntax | null>;
   developerSyntaxHost: { readProps: () => ChatComposerProps; request: () => void } | null;
-  loadDeveloperSyntax: () => Promise<ComposerDeveloperSyntax | undefined>;
+  setDeveloperSyntax: (owner: ComposerDeveloperSyntax) => void;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
   /** Plugin composer tasks and proposals; null until the first plugin composer action loads it. */

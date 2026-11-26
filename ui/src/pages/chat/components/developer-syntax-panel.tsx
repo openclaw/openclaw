@@ -1,12 +1,15 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import {
   builtinDeveloperProfiles,
   type DeveloperDiagnostic,
   type DeveloperProfile,
 } from "../../../../../src/shared/dictation-developer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import "../../../styles/chat/developer-syntax.css";
-import type { ComposerDeveloperSyntax } from "../composer-developer-syntax.ts";
+import {
+  createComposerDeveloperSyntax,
+  type ComposerDeveloperSyntax,
+} from "../composer-developer-syntax.ts";
+import type { ChatComposerState } from "./chat-composer-types.ts";
 
 function profileLabel(profile: DeveloperProfile) {
   if (!builtinDeveloperProfiles.includes(profile)) {
@@ -56,6 +59,8 @@ function alternativeLabel(label: string) {
   }
 }
 
+const exactStyle = { "font-family": "var(--mono)", "font-variant-ligatures": "none" };
+
 function SyntaxPreview(props: {
   text: string;
   label: string;
@@ -66,15 +71,30 @@ function SyntaxPreview(props: {
     <Show
       when={props.text.includes("\r")}
       fallback={
-        <label>
+        <label class="field">
           {props.label}
-          <textarea readonly rows={props.rows} dir={props.direction} value={props.text} />
+          <textarea
+            readonly
+            rows={props.rows}
+            dir={props.direction}
+            value={props.text}
+            style={{ ...exactStyle, "min-height": "0", "min-width": "0" }}
+          />
         </label>
       }
     >
       <div>
         <p>{props.label}</p>
-        <pre aria-label={props.label} dir={props.direction}>
+        <pre
+          aria-label={props.label}
+          dir={props.direction}
+          style={{
+            ...exactStyle,
+            "white-space": "pre-wrap",
+            "overflow-wrap": "anywhere",
+            "unicode-bidi": "isolate",
+          }}
+        >
           {props.text}
         </pre>
       </div>
@@ -84,14 +104,37 @@ function SyntaxPreview(props: {
 
 type DeveloperSyntaxPanelProps = { readOwner: () => ComposerDeveloperSyntax | null };
 
-export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
+export function DeveloperSyntaxContent(
+  props: DeveloperSyntaxPanelProps & { state: ChatComposerState; settings?: true },
+) {
+  onSettled(() => {
+    const state = props.state;
+    if (!state.developerSyntax) {
+      // The lazy presenter must be mounted before it can install the pane owner.
+      state.developerSyntax = createComposerDeveloperSyntax(state);
+      state.setDeveloperSyntax(state.developerSyntax);
+    }
+  });
+  return (
+    <Show when={props.readOwner()}>
+      <Show when={props.settings} fallback={<DeveloperSyntaxReview readOwner={props.readOwner} />}>
+        <DeveloperSyntaxSettings readOwner={props.readOwner} />
+      </Show>
+    </Show>
+  );
+}
+
+function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
   const [importText, setImportText] = createSignal("");
   const [exportText, setExportText] = createSignal("");
   const owner = () => props.readOwner();
   return (
     <>
-      <fieldset disabled={owner()?.invalidSettings}>
-        <label>
+      <fieldset
+        style={{ display: "grid", gap: "8px", "min-width": "0" }}
+        disabled={owner()?.invalidSettings}
+      >
+        <label class="field checkbox">
           <input
             type="checkbox"
             checked={owner()?.settings.enabled ?? false}
@@ -99,7 +142,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
           />
           {t("chat.dictation.developer.enable")}
         </label>
-        <label>
+        <label class="field">
           {t("chat.dictation.developer.mode")}
           <select
             value={owner()?.settings.mode ?? "prose"}
@@ -115,7 +158,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
             <option value="developer">{t("chat.dictation.developer.developer")}</option>
           </select>
         </label>
-        <label>
+        <label class="field">
           {t("chat.dictation.developer.locale")}
           <select
             value={owner()?.settings.locale ?? ""}
@@ -128,7 +171,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
             <option value="en-US">{t("chat.dictation.developer.english")}</option>
           </select>
         </label>
-        <label>
+        <label class="field">
           {t("chat.dictation.developer.profile")}
           <select
             value={owner()?.settings.profileId ?? "en-us-plain-code"}
@@ -140,7 +183,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
           </select>
         </label>
         <p>{t("chat.dictation.developer.grammar")}</p>
-        <label>
+        <label class="field">
           {t("chat.dictation.developer.importLabel")}
           <textarea
             rows="3"
@@ -151,6 +194,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
           />
         </label>
         <button
+          class="btn btn--sm"
           type="button"
           onClick={() => {
             if (owner()?.importProfile(importText())) {
@@ -161,18 +205,22 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
           {t("chat.dictation.developer.import")}
         </button>
       </fieldset>
-      <button type="button" onClick={() => setExportText(owner()?.exportProfile() ?? "")}>
+      <button
+        class="btn btn--sm"
+        type="button"
+        onClick={() => setExportText(owner()?.exportProfile() ?? "")}
+      >
         {t("chat.dictation.developer.export")}
       </button>
       <Show when={exportText()}>
-        <label>
+        <label class="field">
           {t("chat.dictation.developer.exportLabel")}
           <textarea readonly rows="5" dir="ltr" value={exportText()} />
         </label>
       </Show>
       <Show when={owner()?.invalidSettings}>
         <p role="status">{t("chat.dictation.developer.invalidSettings")}</p>
-        <button type="button" onClick={() => owner()?.useProseFallback()}>
+        <button class="btn btn--sm" type="button" onClick={() => owner()?.useProseFallback()}>
           {t("chat.dictation.developer.useProseFallback")}
         </button>
       </Show>
@@ -180,7 +228,7 @@ export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
   );
 }
 
-export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
+function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
   const [inspect, setInspect] = createSignal(false);
   const owner = () => props.readOwner();
   const review = () => owner()?.review;
@@ -212,6 +260,12 @@ export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
         <section
           aria-label={t("chat.dictation.developer.review")}
           class="developer-syntax__review"
+          style={{
+            display: "grid",
+            gap: "8px",
+            "padding-block": "10px",
+            "border-top": "1px solid var(--border)",
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -241,13 +295,23 @@ export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
             {(diagnostic) => (
               <div role={diagnostic.severity === "blocking" ? "alert" : "status"}>
                 <p>{diagnosticLabel(diagnostic.code)}</p>
-                <code dir="ltr">{review()?.raw.slice(diagnostic.start, diagnostic.end)}</code>
+                <code
+                  dir="ltr"
+                  style={{
+                    "overflow-wrap": "anywhere",
+                    "white-space": "pre-wrap",
+                    "unicode-bidi": "isolate",
+                  }}
+                >
+                  {review()?.raw.slice(diagnostic.start, diagnostic.end)}
+                </code>
                 <Show when={diagnostic.alternatives}>
-                  <fieldset>
+                  <fieldset class="row" style={{ "flex-wrap": "wrap" }}>
                     <legend>{t("chat.dictation.developer.alternatives")}</legend>
                     <For each={diagnostic.alternatives}>
                       {(alternative) => (
                         <button
+                          class="btn btn--sm"
                           type="button"
                           onClick={() => owner()?.choose(diagnostic.id, alternative.text)}
                         >
@@ -260,17 +324,18 @@ export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
               </div>
             )}
           </For>
-          <button type="button" onClick={() => owner()?.useOriginal()}>
+          <button class="btn btn--sm" type="button" onClick={() => owner()?.useOriginal()}>
             {t("chat.dictation.developer.useOriginal")}
           </button>
           <button
+            class="btn btn--sm"
             type="button"
             disabled={!review()?.plan?.edits.length}
             onClick={() => owner()?.undoLast()}
           >
             {t("chat.dictation.developer.undoLast")}
           </button>
-          <label>
+          <label class="field checkbox">
             <input
               type="checkbox"
               checked={inspect()}
@@ -294,14 +359,27 @@ export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
           <Show when={owner()?.canCopy && !owner()?.canAccept}>
             <p role="status">{t("chat.dictation.developer.copyRequired")}</p>
           </Show>
-          <div class="developer-syntax__actions">
-            <button type="button" onClick={() => owner()?.cancel()}>
+          <div
+            class="developer-syntax__actions row"
+            style={{ "flex-wrap": "wrap", "justify-content": "flex-end" }}
+          >
+            <button class="btn btn--sm" type="button" onClick={() => owner()?.cancel()}>
               {t("chat.dictation.developer.cancel")}
             </button>
-            <button type="button" disabled={!owner()?.canCopy} onClick={() => void owner()?.copy()}>
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={!owner()?.canCopy}
+              onClick={() => void owner()?.copy()}
+            >
               {t("chat.dictation.developer.copy")}
             </button>
-            <button type="button" disabled={!owner()?.canAccept} onClick={() => owner()?.accept()}>
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={!owner()?.canAccept}
+              onClick={() => owner()?.accept()}
+            >
               {t("chat.dictation.developer.insert")}
             </button>
           </div>

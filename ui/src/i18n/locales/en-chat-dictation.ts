@@ -1,11 +1,11 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Loads with dictation capture; keep it out of the composer's startup copy.
+// Review copy loads with the optional syntax runtime, not the capture transport.
 const enChatDictation = {
   chat: {
     dictation: {
-      busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
       developer: {
         enable: "Enable exact syntax review",
         mode: "Dictation mode",
@@ -86,7 +86,6 @@ const enChatDictation = {
   },
 } satisfies TranslationMap;
 
-export const registerChatDictationEnglish = Object.assign(
-  () => Object.assign(en.chat, enChatDictation.chat),
-  { catalog: enChatDictation },
-);
+export const registerChatDictationEnglish = Object.assign(() => mergeCatalog(en, enChatDictation), {
+  catalog: enChatDictation,
+});
