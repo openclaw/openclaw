@@ -36,7 +36,7 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
-export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
 export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 
