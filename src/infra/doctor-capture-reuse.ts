@@ -101,7 +101,7 @@ export async function findReusableDoctorCapture(
       ) {
         return undefined;
       }
-      if (preview.entries.length > MAX_REUSE_ENTRIES) {
+      if (preview.entries.length > MAX_REUSE_ENTRIES || (await hasVisibleSourceChange(preview))) {
         return undefined;
       }
       // Large originals are the reason to reuse, not a reason to allocate another
@@ -162,6 +162,45 @@ export async function findReusableDoctorCapture(
     params.signal?.throwIfAborted();
     return undefined;
   }
+}
+
+/**
+ * Metadata the full comparison requires of every recorded entry. A Gateway that ran
+ * since the capture usually grows a database, so this rejects such a capture before
+ * hashing its payloads or imaging the current databases. Passing proves nothing.
+ */
+async function hasVisibleSourceChange(manifest: UpdateRecoveryBackupManifest): Promise<boolean> {
+  for (const entry of manifest.entries) {
+    const stat = await fs.lstat(entry.sourcePath).catch(ignoreMissingPath);
+    if (!stat || entry.kind === "missing") {
+      if (stat || entry.kind !== "missing") {
+        return true;
+      }
+      continue;
+    }
+    if (entry.kind === "symlink") {
+      if (!stat.isSymbolicLink()) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      (entry.kind === "directory" ? !stat.isDirectory() : !stat.isFile()) ||
+      entry.mode !== (stat.mode & 0o777) ||
+      (entry.kind === "file" && entry.size !== stat.size)
+    ) {
+      return true;
+    }
+    if (entry.kind === "file" && entry.sqlite) {
+      for (const suffix of ["-wal", "-journal"]) {
+        const sidecar = await fs.lstat(entry.sourcePath + suffix).catch(ignoreMissingPath);
+        if (sidecar && (!sidecar.isFile() || sidecar.size !== 0)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 async function compareCurrentSources(

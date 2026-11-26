@@ -200,6 +200,42 @@ it("rejects an ineligible retained capture before verifying its payloads", async
   ).not.toHaveBeenCalled();
 });
 
+it("rejects a grown database before hashing retained payloads or imaging current databases", async () => {
+  const f = await fixture();
+  const file = path.join(f.plugin, "plugin.sqlite");
+  {
+    using db = new DatabaseSync(file);
+    db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('retained')");
+  }
+  const originals = await f.capture();
+  const verifyPayloads = vi.spyOn(backupReader, "withVerifiedUpdateRecoveryBackup");
+  const imageDatabases = vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker");
+  {
+    // A Gateway writing between Doctor runs typically adds pages.
+    using db = new DatabaseSync(file);
+    db.exec("INSERT INTO payload VALUES(zeroblob(65536))");
+  }
+  expect(await f.reuse(), "grown database").toBeUndefined();
+  expect(
+    verifyPayloads,
+    "a visible size change streams zero payload hashes",
+  ).not.toHaveBeenCalled();
+  expect(imageDatabases, "a visible size change images no database").not.toHaveBeenCalled();
+
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(2);
+  expect(await f.capture(), "the fresh capture is reusable while unchanged").toEqual(fresh);
+  {
+    // Same-size content change: only the full comparison can see it.
+    using db = new DatabaseSync(file);
+    db.exec("UPDATE payload SET value = 'replaced'");
+  }
+  verifyPayloads.mockClear();
+  expect(await f.reuse(), "same-size change").toBeUndefined();
+  expect(verifyPayloads, "same-size changes still take the full comparison").toHaveBeenCalled();
+  expect(fresh).toEqual(expect.arrayContaining(originals));
+});
+
 it("rediscovers files, declared paths, config includes, links, permissions, and new agent databases", async () => {
   const f = await fixture();
   const missing = path.join(f.root, "not-created");
