@@ -137,7 +137,8 @@ export function encodeAgentDatabaseReaderRequest(request: AgentDatabaseReaderReq
 export function decodeAgentDatabaseReaderRequest(
   key: string | undefined,
 ): AgentDatabaseReaderRequest | undefined {
-  if (key === undefined) {
+  // Worker-specific resource keys share this channel. Only arrays and objects can name readers.
+  if (key === undefined || !/^[ \t\r\n]*[[{]/.test(key)) {
     return undefined;
   }
   let parsed: unknown;
