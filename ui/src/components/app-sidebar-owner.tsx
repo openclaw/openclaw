@@ -20,7 +20,6 @@ import {
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/sidebar-reorder.css";
@@ -439,10 +438,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.invalidate();
   }
 
-  hideSessionCatalog(catalogId: string): void {
-    hidePersonalSidebarCatalog(this, catalogId);
-  }
-
   renderSessionsBody() {
     const host = () => this;
     const navigationState = createMemo(() => host().getSessionNavigationState());
@@ -583,51 +578,51 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
                   onScroll={scroll.onScroll}
                 >
-                  <Switch
-                    fallback={
-                      <>
-                        <div
-                          ref={scroll.createContentRef()}
-                          class="sidebar-session-content"
-                          hidden={Boolean(this.contextualSidebar)}
-                        >
-                          <SidebarScrollContext value={scroll}>
+                  <SidebarScrollContext value={scroll}>
+                    <Switch
+                      fallback={
+                        <>
+                          <div
+                            ref={scroll.createContentRef()}
+                            class="sidebar-session-content"
+                            hidden={Boolean(this.contextualSidebar)}
+                          >
                             <Sessions />
-                          </SidebarScrollContext>
-                        </div>
-                        {this.contextualSidebar?.render(
-                          this.contextualSidebar.data,
-                          this.contextualSidebar.loaderPending,
-                          true,
-                        )}
-                      </>
-                    }
-                  >
-                    <Match when={this.navigationView === "automations"}>
-                      <SidebarViewBoundary>
-                        <SidebarReady />
-                        <SidebarAutomations host={this} />
-                      </SidebarViewBoundary>
-                    </Match>
-                    <Match when={this.navigationView === "customize"}>
-                      <SidebarViewBoundary>
-                        <SidebarReady />
-                        <SidebarCustomize host={this} />
-                      </SidebarViewBoundary>
-                    </Match>
-                    <Match when={this.navigationView === "online"}>
-                      <SidebarViewBoundary>
-                        <SidebarReady />
-                        <SidebarOnline host={this} />
-                      </SidebarViewBoundary>
-                    </Match>
-                    <Match when={this.navigationView === "plugin"}>
-                      <SidebarViewBoundary>
-                        <SidebarReady />
-                        <SidebarPluginSection host={this} />
-                      </SidebarViewBoundary>
-                    </Match>
-                  </Switch>
+                          </div>
+                          {this.contextualSidebar?.render(
+                            this.contextualSidebar.data,
+                            this.contextualSidebar.loaderPending,
+                            true,
+                          )}
+                        </>
+                      }
+                    >
+                      <Match when={this.navigationView === "automations"}>
+                        <SidebarViewBoundary>
+                          <SidebarReady />
+                          <SidebarAutomations host={this} />
+                        </SidebarViewBoundary>
+                      </Match>
+                      <Match when={this.navigationView === "customize"}>
+                        <SidebarViewBoundary>
+                          <SidebarReady />
+                          <SidebarCustomize host={this} />
+                        </SidebarViewBoundary>
+                      </Match>
+                      <Match when={this.navigationView === "online"}>
+                        <SidebarViewBoundary>
+                          <SidebarReady />
+                          <SidebarOnline host={this} />
+                        </SidebarViewBoundary>
+                      </Match>
+                      <Match when={this.navigationView === "plugin"}>
+                        <SidebarViewBoundary>
+                          <SidebarReady />
+                          <SidebarPluginSection host={this} />
+                        </SidebarViewBoundary>
+                      </Match>
+                    </Switch>
+                  </SidebarScrollContext>
                 </div>
                 <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
                   <PanelRefreshStatus

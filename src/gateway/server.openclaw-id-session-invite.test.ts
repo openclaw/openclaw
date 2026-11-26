@@ -446,7 +446,7 @@ it.for<Mode>([
       writer: { invited: true, other: false, otherAgent: true },
     });
     expect(report.guestHistory).toBe(true);
-    expect(report.check1GuestSandboxedTurn).toBe("Session-scoped writes require your own session.");
+    expect(report.check1GuestSandboxedTurn).toMatch(/requires a sandboxed session/);
     expect(report.check1GuestUnsandboxedTurn).toBe(
       "Session-scoped writes require your own session.",
     );

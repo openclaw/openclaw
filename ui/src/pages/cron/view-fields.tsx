@@ -134,10 +134,10 @@ export function FieldRow(props: {
   );
 }
 type CronStringFormField = {
-  [Field in keyof CronFormState]: CronFormState[Field] extends string ? Field : never;
+  [Field in keyof CronFormState]-?: CronFormState[Field] extends string ? Field : never;
 }[keyof CronFormState];
 type CronBooleanFormField = {
-  [Field in keyof CronFormState]: CronFormState[Field] extends boolean ? Field : never;
+  [Field in keyof CronFormState]-?: CronFormState[Field] extends boolean ? Field : never;
 }[keyof CronFormState];
 type FormProps = Pick<CronProps, "form" | "fieldErrors" | "onFormChange">;
 type CronInputOptions = {

@@ -877,7 +877,9 @@ reclamation, or host-maintenance deletion.
 Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
 executing agent's database. It stores only aggregate successful-call scores and
 last-success timestamps. The existing `cache_entries` owner holds import coverage
-boundaries and a reset generation; it does not retain per-call IDs or payloads.
+boundaries, a reset generation, and the time the agent first offered each tool to
+a ranked prompt; it does not retain per-call IDs or payloads. Reset keeps the
+first-seen times so existing tools do not become new again.
 
 The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
 counts share the existing transcript actor's transaction and authority grant when

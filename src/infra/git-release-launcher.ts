@@ -6,8 +6,8 @@ import {
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "../daemon/windows-task-supervisor-contract.js";
+import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { LINK_SOURCE } from "../update/link-source.js";
-import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL } from "./git-release-paths.js";
 
 export type GitReleaseTrial = {
@@ -92,7 +92,7 @@ function writeTrial(record) {
 // ("<stateDir>/.upgrade-<generation>-*/plan.json") would be finished by the previous release,
 // and an applied one (".upgraded-<generation>.json") names files it added with no
 // predecessor. Undo those additions and retire both; the suffix restore covers the rest.
-${ROLLBACK_SOURCE}
+${LEGACY_ROLLBACK_SOURCE}
 
 ${LINK_SOURCE}
 

@@ -128,23 +128,26 @@ export function createSessionsListTool(opts?: {
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
   requesterProfileId?: string;
-  supportsActiveOnly?: boolean;
+  gatewayBacked?: boolean;
   requireSessionReadOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
+    description: describeSessionsListTool({
+      sessionLinkBase: opts?.sessionLinkBase,
+      gatewayBacked: opts?.gatewayBacked,
+    }),
     parameters:
-      opts?.supportsActiveOnly === false
-        ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
+      opts?.gatewayBacked === false
+        ? Type.Omit(SessionsListToolSchema, ["activeOnly", "pinned"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const gatewayContext = getInProcessGatewayToolContext();
-      if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
+      if (params.activeOnly === true && opts?.gatewayBacked === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
       const {
@@ -444,7 +447,7 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           archived: entry.archived === true,
-          pinned: entry.pinned === true,
+          ...(typeof entry.pinned === "boolean" ? { pinned: entry.pinned } : {}),
           sidebarRoot: entry.sidebarRoot === true,
           ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),

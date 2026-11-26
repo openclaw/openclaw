@@ -119,6 +119,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+With Tool Search or Code Mode active, `computer` and the yielding
+`github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
+series.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,

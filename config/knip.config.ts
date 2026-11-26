@@ -160,6 +160,8 @@ const repositoryScriptEntries = [
   "scripts/ci-build-manifest.mjs!",
   // Full release validation invokes child-evidence reuse through a shell variable.
   "scripts/find-reusable-release-child.mjs!",
+  // The release candidate checklist spawns its Parallels preflight by exact path.
+  "scripts/e2e/parallels/candidate-preflight.ts!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
