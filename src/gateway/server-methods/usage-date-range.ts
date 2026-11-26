@@ -133,6 +133,10 @@ export const resolveDateInterpretation = (params: {
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
     if (params.timeZone !== undefined && params.timeZone !== null) {
       const requestedTimeZone = normalizeOptionalString(params.timeZone);
+      // "Local" on a UTC client and explicit UTC use the same calendar and snapshot.
+      if (requestedTimeZone === "UTC") {
+        return { ok: true, value: { mode: "utc" } };
+      }
       const timeZone = requestedTimeZone ? resolveTimezone(requestedTimeZone) : undefined;
       if (!timeZone) {
         // Browser tzdata can lead Gateway ICU. Preserve legacy fixed-offset
@@ -307,7 +311,11 @@ export const resolveDateRange = (
       (interpretation.mode === "utc-offset" ? interpretation.utcOffsetMinutes * 60_000 : 0);
     return { startMs, endMs: startMs + DAY_MS - 1 };
   };
-  const startDay = bounds(start);
+  let startDay = bounds(start);
+  if (!startDay && !explicitStart && !all) {
+    // A date-line change can skip one civil day. A trailing range starts at the next real day.
+    startDay = bounds(shiftDateParts(start, 1));
+  }
   const endDay =
     start.year === end.year && start.monthIndex === end.monthIndex && start.day === end.day
       ? startDay

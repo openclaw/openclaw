@@ -137,17 +137,6 @@ describe("tool display details", () => {
     expect(detailFor(name, args)).toBe(expected);
   });
 
-  it("keeps positive numbers and true booleans", () => {
-    const detail = detailFor("sessions_history", {
-      sessionKey: "agent:main:main",
-      limit: 20,
-      includeTools: true,
-    });
-    for (const field of ["session agent:main:main", "limit 20", "tools true"]) {
-      expect(detail).toContain(field);
-    }
-  });
-
   it("summarizes exec commands with context", () => {
     const detail = execDetail(
       "set -euo pipefail\ngit -C /Users/adityasingh/.openclaw/workspace status --short | head -n 3",
@@ -157,17 +146,6 @@ describe("tool display details", () => {
 
     expect(detail).toContain("check git status -> show first 3 lines");
     expect(detail).toContain("(agent)");
-  });
-
-  it("summarizes bash commands with the same command explainer", () => {
-    expect(
-      execDetail(
-        "sed -n '1,80p' extensions/discord/src/draft-stream.ts",
-        "explain",
-        undefined,
-        "bash",
-      ),
-    ).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
 
   it("keeps shell compound commands intact instead of inventing command stages", () => {

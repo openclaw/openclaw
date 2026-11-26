@@ -206,8 +206,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         specificKey,
         includeContextWeight,
         creatorKey,
-        // Paging, sorting, and usage filters derive from the same source snapshot.
-        overview: overviewOptions !== undefined,
         projection: p.projection === "overview" ? "overview" : "detail",
         includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
@@ -629,8 +627,33 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
+    let matchesTimestamp: ((ms: number) => boolean) | undefined;
+    if (params?.selectedDays !== undefined) {
+      if (
+        !assertValidParams(
+          params,
+          validateSessionsUsageParams,
+          "sessions.usage.timeseries",
+          respond,
+        )
+      ) {
+        return;
+      }
+      const dates = resolveUsageDateRangeOrRespond(params, respond);
+      if (!dates) {
+        return;
+      }
+      const days = new Set(params.selectedDays);
+      const { startMs, endMs } = dates.range;
+      // A sample can span midnight. Select the original turns in the displayed calendar first.
+      matchesTimestamp = (ms) =>
+        ms >= startMs &&
+        ms <= endMs &&
+        (!days.size || days.has(formatDateLabel(ms, dates.interpretation)));
+    }
     const timeseries = await loadSessionUsageTimeSeries({
       ...resolved,
+      matchesTimestamp,
       maxPoints: 200,
     });
 

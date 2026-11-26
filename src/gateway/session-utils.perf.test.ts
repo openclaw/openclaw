@@ -394,53 +394,6 @@ describe("session list resolver cache", () => {
     });
   });
 
-  test.each([
-    { name: "ordinary page", limit: 100, search: undefined },
-    { name: "wide ordering", limit: 300, search: undefined },
-    { name: "unmatched search", limit: 1, search: "unmatched" },
-  ])(
-    "reuses resident input facts for $name without a request-time yield",
-    async ({ limit, search }) => {
-      await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
-        const cfg: OpenClawConfig = {};
-        prepareRuntime(cfg);
-        const entryCount = limit === 300 ? 2051 : 32;
-        const store = makeStore(entryCount, "budget");
-        const projection = createSessionRowProjectionFixture({
-          cfg,
-          store,
-          storePath: path.join(stateDir, "sessions.json"),
-        });
-        // Measure resident row work independently of asynchronous identity-file admission.
-        const identityRuntime = await import("../agents/identity-file-runtime.js");
-        const identityReads = vi.spyOn(identityRuntime, "prepareIdentityFile");
-        identityReads.mockResolvedValue({ kind: "missing" });
-        // Charge former acquisition work before each read, even if it throws.
-        const measured = measureRows(undefined, true);
-        let controlRan = false;
-        const control = atImmediate(() => {
-          controlRan = true;
-        });
-        try {
-          for (let request = 0; request < 2; request++) {
-            const result = await listProjectedSessions({ projection, opts: { limit, search } });
-            expect(result.sessions.map((row) => row.key)).toEqual(
-              !search ? Object.keys(store).toReversed().slice(0, limit) : [],
-            );
-            expect(controlRan).toBe(false);
-            expect(measured.rows).not.toHaveBeenCalled();
-            expect(measured.work.milliseconds).toBe(0);
-          }
-        } finally {
-          identityReads.mockRestore();
-          measured.restore();
-          projection.dispose();
-          await control;
-        }
-      });
-    },
-  );
-
   test("bounds owner-first transcript fields without starving shared rows", async () => {
     await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {

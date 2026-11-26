@@ -206,7 +206,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             : undefined;
         choices.set(model, {
           ...row,
-          ...(label ? { label: `${row.label} · ${label}` } : {}),
+          ...(label ? { label: `${row.label} · ${label}`, labelSuffix: ` · ${label}` } : {}),
           model,
           disabled: baseDisabled,
         });
@@ -221,6 +221,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           value,
           model,
           label: `${row.label} · ${label}`,
+          labelSuffix: ` · ${label}`,
           disabled,
           runtime: { id, base },
         });

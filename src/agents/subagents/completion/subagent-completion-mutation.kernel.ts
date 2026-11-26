@@ -321,7 +321,7 @@ function reconcileRequesterWake(
       !isDeepStrictEqual(current.killIntent, intended.killIntent) ||
       !isDeepStrictEqual(current.killReconciliation, intended.killReconciliation) ||
       !isDeepStrictEqual(current.requesterSettleWake, intended.requesterSettleWake) ||
-      current.retireAfterRequesterTurn !== intended.retireAfterRequesterTurn ||
+      current.retireAfterSettle !== intended.retireAfterSettle ||
       (params.kind === "requesterBatch" &&
         (!isDeepStrictEqual(current.delivery, intended.delivery) ||
           current.suppressCompletionDelivery !== intended.suppressCompletionDelivery ||

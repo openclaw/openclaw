@@ -16,6 +16,7 @@ export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
+  staleFts?: true;
 };
 
 export type SqliteIntegrityCheckTiming = {
@@ -256,6 +257,13 @@ export function assertSqliteIntegrity(
     ) {
       throw error;
     }
+    if (check === "quick_check") {
+      // QUICK skips ordinary index consistency. Only excuse stale FTS after ruling out mixed damage.
+      return assertSqliteIntegrity(database, databaseLabel, {
+        check: "full",
+        ftsSchemas: options.ftsSchemas,
+      });
+    }
     staleFts = true;
   }
   if (check === "quick_check" && options.tables?.length) {
@@ -274,7 +282,7 @@ export function assertSqliteIntegrity(
   if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck: "ok" };
+  return staleFts ? { integrityCheck: "ok", staleFts: true } : { integrityCheck: "ok" };
 }
 
 /** Only exact, owned FTS definitions may treat their inverted index as derived data. */

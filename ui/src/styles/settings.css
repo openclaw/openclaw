@@ -649,10 +649,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-/* A phone gives the help the screen's width, whatever the row's "?" offset. Like everywhere,
-   it opens above the row so the setting's own text and control stay in view. */
+/* Center schema help on phones regardless of where the section or field puts its trigger.
+   Open above it when possible so the settings it explains stay in view. */
 @media (max-width: 640px) {
-  .oc-overlay[data-placement].config-field-help__popover {
+  .oc-overlay[data-placement]:is(.config-section-help__popover, .config-field-help__popover) {
     --oc-overlay-max-width: calc(100dvw - 32px);
 
     width: var(--oc-overlay-max-width);
@@ -1985,6 +1985,43 @@ openclaw-approvals-page .data-table-pagination__info {
   visibility: hidden;
 }
 
+.settings-row__control > .notification-agents__trigger {
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--settings-control-height);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: start;
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > svg {
+    flex: none;
+  }
+}
+
+.notification-agents__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  row-gap: 0;
+
+  .settings-row__title,
+  .settings-row__desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-row__desc {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
 .quiet-hours-window .settings-row {
   padding-top: 0;
@@ -2026,8 +2063,9 @@ openclaw-approvals-page .data-table-pagination__info {
 /* In the header the picker is the agent's avatar alone; the trigger keeps the name
    in its accessible label and the menu lists every agent by name. */
 .settings-sidebar__agent--header .agent-select__trigger {
+  justify-content: flex-end;
   gap: 4px;
-  width: auto;
+  width: 54px;
   height: 32px;
   min-height: 32px;
   padding: 0 6px 0 4px;

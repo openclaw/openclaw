@@ -50,12 +50,8 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
-  stateUpgradeLiveStateDir?: string,
 ): T {
-  return captures.run(
-    { ...captures.getStore(), backup, fullBackups: new Map(), stateUpgradeLiveStateDir },
-    operation,
-  );
+  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
 }
 
 /** Only the general Doctor backup owner admits full images for this maintenance run. */

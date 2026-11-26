@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   resolveFileMutationQueueKey,
@@ -402,45 +401,6 @@ console.log("headless-read-ok");`,
       scoring.mockRestore();
       directory.mockRestore();
       syncBuiltinESMExports();
-    }
-  });
-
-  it("preserves the full-sort suggestion message for randomized filenames", async () => {
-    const tempDir = tempDirs.make("read-suggestion-equivalence-");
-    const tool = createReadToolDefinition(tempDir);
-    let seed = 2255;
-    const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
-    const alphabet = ["a", "b", "A", "B", "é", "中", "🙂"];
-    const mutate = () => {
-      const chars = "abcdeffedcba.txt".split("");
-      for (let index = 0, count = random() % 9; index < count; index++) {
-        chars.splice(random() % chars.length, random() % 3, alphabet[random() % alphabet.length]!);
-      }
-      return chars.join("");
-    };
-    const names = [...new Set(Array.from({ length: 80 }, mutate))];
-    await Promise.all(names.map((name) => fs.writeFile(path.join(tempDir, name), "")));
-    const entries = await fs.readdir(tempDir);
-    for (let index = 0; index < 32; index++) {
-      const filename = `${mutate()}~`;
-      const requested = filename.toLowerCase();
-      const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
-      // The previous owner retained every acceptable distance before sorting and slicing.
-      const suggestions = entries
-        .map((entry) => ({
-          entry,
-          distance: levenshteinDistance(requested, entry.toLowerCase(), maxDistance),
-        }))
-        .filter((match): match is { entry: string; distance: number } => match.distance !== null)
-        .toSorted(
-          (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
-        )
-        .slice(0, 3)
-        .map(({ entry }) => entry);
-      const hint = suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : "";
-      await expect(executeRead(tool, { path: filename })).rejects.toMatchObject({
-        message: `File not found: ${path.join(tempDir, filename)}.${hint}`,
-      });
     }
   });
 

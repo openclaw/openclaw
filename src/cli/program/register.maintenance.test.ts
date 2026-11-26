@@ -104,15 +104,6 @@ describe("registered maintenance commands", () => {
     expect(mocks.requestOneShotSettledExitWatchdog).toHaveBeenCalledOnce();
   });
 
-  it("passes the upgrade publication directory through Doctor's repair options", async () => {
-    await runCli("doctor --fix --non-interactive --state-upgrade-live-state-dir /state/live");
-    expectDoctorOptions({
-      repair: true,
-      nonInteractive: true,
-      stateUpgradeLiveStateDir: "/state/live",
-    });
-  });
-
   const mapping = JSON.stringify({
     from: "openai/gpt-daybreak-blue-latest",
     to: "openai/gpt-6.1-sol",

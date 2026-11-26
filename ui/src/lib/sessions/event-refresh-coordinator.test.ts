@@ -1,5 +1,7 @@
 // @vitest-environment node
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { monotonicNow } from "../../../../src/shared/monotonic-time.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 
 const coordinators: ReturnType<typeof createSessionEventRefreshCoordinator>[] = [];
@@ -100,4 +102,28 @@ it("keeps one minute fallback under row traffic and absorbs it on an authoritati
   coordinator.scheduleFallback();
   coordinator.absorb();
   await advance(65_000, refresh, 1);
+});
+
+it.each([
+  { reset: false, reads: 1 },
+  { reset: true, reads: 0 },
+])("keeps a failed consumer wake owed until reset retires it (reset $reset)", async (item) => {
+  const { coordinator, refresh } = setup();
+  coordinator.wake();
+  if (item.reset) {
+    coordinator.reset();
+  }
+  // A read from a surviving subscriber adopts only a wake that is still owed.
+  coordinator.beginWindowRead(
+    monotonicNow(),
+    () => true,
+    false,
+  )(
+    new GatewayProtocolRequestTimeoutError({
+      method: "sessions.list",
+      timeoutMs: 1,
+      requestSent: true,
+    }),
+  );
+  await advance(60_000, refresh, item.reads);
 });

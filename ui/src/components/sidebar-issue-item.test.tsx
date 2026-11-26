@@ -24,16 +24,16 @@ import {
 
 const item: SidebarAttentionItem = {
   type: "attention",
-  category: "automations",
+  category: "system",
   dismissal: null,
   requiresAction: true,
-  kind: "cronFailed",
+  kind: "modelAuthExpired",
   severity: "error",
-  icon: "clock",
-  label: "Nightly backup",
-  detail: "Failed now",
-  action: { kind: "navigate", routeId: "cron" },
-  signature: "backup",
+  icon: "plug",
+  label: "OpenAI",
+  detail: "Sign-in required",
+  action: { kind: "navigate", routeId: "model-providers" },
+  signature: "openai",
 };
 
 const container = document.createElement("div");
@@ -67,7 +67,7 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
   const dismiss = find(".sidebar-issues-panel__dismiss");
-  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss Nightly backup");
+  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss OpenAI");
   expect(dismiss?.hasAttribute("title")).toBe(false);
   dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();

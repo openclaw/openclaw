@@ -20,7 +20,6 @@ const READERS = new Set([
 // scopes, role and policy from the admitted operator authority instead of joining this list.
 export const ADMISSION_FILES = new Set([
   "src/commands/doctor/cron/execution-context-check.ts",
-  "src/cron/execution-context-admission.ts",
   "src/flows/doctor-member-roles.store.ts",
   "src/gateway/agent-turn/agent-session-persist.ts",
   "src/gateway/assistant-media-policy.ts",

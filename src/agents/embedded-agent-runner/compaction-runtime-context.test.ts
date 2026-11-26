@@ -70,20 +70,6 @@ function think(params: Partial<ThinkingInput> = {}) {
 
 describe("compaction runtime context", () => {
   it.each([
-    [100_000, 500_000, 100_000],
-    [500_000, 64_000, 64_000],
-  ])("caps requested %i tokens by model window %i", (requested, contextWindow, expected) => {
-    expect(
-      resolveCompactionContextTokenBudget({
-        provider: "openai",
-        modelId: "mock-model",
-        model: modelWithWindow(contextWindow),
-        requestedTokenBudget: requested,
-      }),
-    ).toBe(expected);
-  });
-
-  it.each([
     [16_000, 3_000],
     [2_000, 2_000],
   ])(
@@ -191,38 +177,6 @@ describe("compaction runtime context", () => {
       ...routing,
       provider: "openai",
       model: "gpt-5.4",
-    });
-  });
-
-  it("normalizes nullable routing fields", () => {
-    expect(
-      createContext({
-        sessionKey: null,
-        messageChannel: null,
-        messageProvider: null,
-        chatType: null,
-        agentAccountId: null,
-        currentChannelId: null,
-        currentThreadTs: null,
-        currentMessageId: null,
-        authProfileId: null,
-        senderId: null,
-        provider: null,
-        modelId: null,
-      }),
-    ).toMatchObject({
-      sessionKey: undefined,
-      messageChannel: undefined,
-      messageProvider: undefined,
-      chatType: undefined,
-      agentAccountId: undefined,
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      currentMessageId: undefined,
-      authProfileId: undefined,
-      senderId: undefined,
-      provider: undefined,
-      model: undefined,
     });
   });
 

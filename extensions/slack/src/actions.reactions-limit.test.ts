@@ -152,13 +152,13 @@ describe("Slack reactions", () => {
     },
   );
 
-  it("rejects invalid read limits before Slack API work", async () => {
+  it.each([0, 2.5])("rejects read limit %s before Slack API work", async (limit) => {
     const { client, calls } = createClient();
     const lookups = lookupSpies(client);
     vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
       type: "channel",
     });
-    await expect(action("read", slackConfig, { limit: 0 })).rejects.toThrow(
+    await expect(action("read", slackConfig, { limit })).rejects.toThrow(
       "limit must be a positive integer.",
     );
     expect(lookups).not.toHaveBeenCalled();

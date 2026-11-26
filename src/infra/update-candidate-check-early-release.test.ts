@@ -36,7 +36,13 @@ function install(params: {
   const stateDir = makeTempDir(roots, "openclaw-early-release-");
   const prefix = path.join(stateDir, "git-install");
   const agents = (params.agents ?? [OPENCLAW_AGENT_SCHEMA_VERSION - 1]).map((version, index) => {
-    const file = path.join(stateDir, "agents", `a${index}`, "agent", "openclaw-agent.sqlite");
+    const file = path.join(
+      stateDir,
+      params.registered === true ? "registered-agents" : "agents",
+      `a${index}`,
+      "agent",
+      "openclaw-agent.sqlite",
+    );
     sqlite(file, version);
     return file;
   });

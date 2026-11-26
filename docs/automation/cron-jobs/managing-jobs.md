@@ -86,7 +86,7 @@ Model choices load when you open an automation's settings or create an automatio
 
 ### Conversational management
 
-Any turn admitted with `operator.admin` can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. That includes the owner on any Gateway client (Control UI, native app, CLI, or a local client of a `gateway.auth.mode: "none"` Gateway), an administrator, and a verified channel sender listed in `commands.ownerAllowFrom`. A channel owner linked to a personal profile gets that profile's access. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+Any turn admitted with `operator.admin` can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. That includes the owner on any Gateway client (Control UI, native app, CLI, or a local client of a `gateway.auth.mode: "none"` Gateway), an administrator, and a verified channel sender listed in `commands.ownerAllowFrom`, also when that sender is linked to a personal profile. An unlisted channel sender linked to a personal profile gets that profile's access. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
 
 When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
 
@@ -204,7 +204,7 @@ continuation also retains `next_check`; a session key alone cannot restore it.
 
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 
-Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
+Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error in the history section. When **Retry** is available, it reloads the failed page of history without starting the automation. Previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
 After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
