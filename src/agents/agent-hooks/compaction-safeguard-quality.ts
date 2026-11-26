@@ -133,7 +133,7 @@ export function buildCompactionStructureInstructions(
   const identifierSectionInstruction =
     resolveExactIdentifierSectionInstruction(summarizationInstructions);
   const sectionsTemplate = [
-    "Archive the conversation under these exact headings:",
+    "Produce a compact summary under these exact headings:",
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions, updating superseded facts when corrected.",
