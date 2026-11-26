@@ -31,6 +31,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [input],
   })),
   {
+    // A Node-only suite must execute, not silently skip, when its runtime policy changes.
+    testFile: "src/infra/git-release.test.ts",
+    watchGlobs: ["scripts/lib/ci-test-runtime.mts"],
+  },
+  {
     // Scenario coverage and taxonomy are filesystem inventories, not imports.
     testFile: "extensions/qa-lab/src/coverage-report.test.ts",
     watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
@@ -2286,14 +2291,4 @@ export function resolvePolicyTestTargets(
       );
     })
     .map(({ testFile }) => testFile);
-}
-
-/** True when the policy tests are the complete bounded owner for this path. */
-export function isPolicyTestOwnedPath(changedPath: string): boolean {
-  const literal = isPlainRepoRelativePath(changedPath);
-  return policyTestWatches.some(({ ownerGlobs, includeDotPaths }) =>
-    ownerGlobs?.some((ownerGlob) =>
-      matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
-    ),
-  );
 }

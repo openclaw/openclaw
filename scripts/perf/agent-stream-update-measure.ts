@@ -55,6 +55,7 @@ import type { MutableAssistantMessageEventStream } from "../../src/agents/stream
 import { PluginInstance } from "../../src/plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -382,12 +383,7 @@ globalThis.gc?.();
 const allocation = values.mode === "allocation";
 const inspector = new Session();
 if (allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
 }
 const hostLoad = loadavg();
 let promises = 0;

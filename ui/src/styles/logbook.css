@@ -113,6 +113,9 @@
 }
 
 .logbook-card {
+  display: grid;
+  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
+  column-gap: 10px;
   border: 1px solid color-mix(in oklab, var(--muted) 18%, transparent);
   border-radius: var(--radius-md);
   background: var(--card);
@@ -121,8 +124,8 @@
 
 .logbook-card__header {
   display: grid;
-  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   width: 100%;
   padding: 10px 12px;
@@ -131,6 +134,11 @@
   color: inherit;
   font: inherit;
   text-align: left;
+}
+
+.logbook-card__header:focus-visible {
+  /* Keep the full outline above the expanded image in the next grid row. */
+  z-index: 1;
 }
 
 .logbook-card__header:hover {
@@ -214,9 +222,10 @@
 
 .logbook-card__body {
   display: flex;
+  grid-column: 3 / -1;
   flex-direction: column;
   gap: 10px;
-  padding: 0 12px 12px 118px;
+  padding: 0 12px 12px 0;
 }
 
 .logbook-card__keyframe {
@@ -265,8 +274,8 @@
 }
 
 @media (max-width: 768px) {
-  .logbook-card__header {
-    grid-template-columns: 4px minmax(0, 1fr);
+  .logbook-card {
+    grid-template-columns: max-content minmax(0, 1fr);
   }
 
   .logbook-card__time,
@@ -275,6 +284,7 @@
   }
 
   .logbook-card__body {
+    grid-column: 1 / -1;
     padding-left: 12px;
   }
 }

@@ -3,10 +3,7 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type {
-  PluginStateActionAuthority,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateActionAuthority } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type {
   CatalogExportItem,
@@ -29,20 +26,22 @@ import {
   type BeamMirrorCandidate,
 } from "./mirror-candidate.js";
 import { MIRROR_TOKEN_PATH, parseBeamMirrorConfig } from "./mirror-config.js";
+import { openBeamMirrorEnrollment, type BeamMirrorEnrollment } from "./mirror-publication.js";
 import {
-  openBeamMirrorEnrollment,
-  type BeamMirrorEnrollment,
-  type MirrorPublicationStoreValue,
-} from "./mirror-publication.js";
+  MIRROR_LIST_LIMIT,
+  scheduleBeamEnrollments,
+  selectBeamEnrollment,
+  type BeamPublicationStore,
+  type BeamScheduleStore,
+} from "./mirror-schedule.js";
 import type { BeamMirrorV2Head } from "./mirror-v2.js";
 import { BEAM_MAX_ITEMS, BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.js";
 
-const MIRROR_LIST_LIMIT = 100;
 // Strictest transcript-read cap across catalog providers (the Claude Code
 // provider rejects limits above 50); asking for more fails the whole read.
 const MIRROR_READ_LIMIT = 50;
-// Bounds concurrent remote rows and per-tick reads; oldest active sessions
-// beyond the cap simply wait until newer ones go idle.
+// Active work and terminal work have separate per-tick budgets. V1 selects
+// recent sources; v2 rotates existing enrollments across durable checkpoints.
 const MIRROR_MAX_SESSIONS = 32;
 // Keeping twice the receiver capacity prevents independent clocks and foreign
 // writers from making the sender under-retain retry ownership.
@@ -72,12 +71,8 @@ type TrackedMirrorSession = Delivery & {
 export function createBeamMirrorRunner(params: {
   catalogExports: PluginServiceCatalogExports;
   resolveExecutable: () => Promise<string>;
-  getPublicationStore?: (
-    authority: PluginStateActionAuthority,
-  ) => Pick<
-    PluginStateKeyedStore<MirrorPublicationStoreValue, 2>,
-    "observe" | "compareAndApply" | "registerIfAbsent"
-  >;
+  getPublicationStore?: (authority: PluginStateActionAuthority) => BeamPublicationStore;
+  getScheduleStore?: (authority: PluginStateActionAuthority) => BeamScheduleStore;
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
   now?: () => number;
@@ -347,23 +342,31 @@ export function createBeamMirrorRunner(params: {
       .update(mirrorCandidateKey(candidate))
       .digest("hex");
     const inputDigest = createHash("sha256").update(input).digest("hex");
-    if (previous?.credential === credential && previous.inputDigest === inputDigest) {
-      if (!binding && typeof previous.receipt === "string") {
+    const match =
+      previous?.credential === credential && previous.inputDigest === inputDigest
+        ? previous
+        : undefined;
+    if (binding) {
+      const next = await binding.afterSourceRead(
+        typeof match?.receipt === "object" ? match.receipt : undefined,
+      );
+      if (next === "retired") {
+        return { retired: true };
+      }
+      if (next === "defer") {
         return undefined;
       }
-      if (
-        binding &&
-        typeof previous.receipt !== "string" &&
-        (await binding.isAcknowledged(previous.receipt))
-      ) {
-        return { acknowledged: previous };
+      if (next === "acknowledged" && match) {
+        return { acknowledged: match };
       }
+    } else if (typeof match?.receipt === "string") {
+      return undefined;
     }
     const cleaned = await cleanBeamCandidate(input, signal, params.resolveExecutable);
     assertCurrent();
     const { packet } = cleaned;
     if (binding) {
-      const receipt = await binding.publish(packet.beamId, cleaned.raw);
+      const receipt = await binding.publish(packet.beamId, cleaned.raw, packet.completed);
       if (receipt === "retired") {
         return { retired: true };
       }
@@ -444,6 +447,50 @@ export function createBeamMirrorRunner(params: {
         );
       }
       const catalogById = new Map(catalogs.map((catalog) => [catalog.id, catalog]));
+      if (mirror.apiV2) {
+        if (!params.getPublicationStore || !params.getScheduleStore || !catalogs.length) {
+          return;
+        }
+        const assertCurrent = () => {
+          signal.throwIfAborted();
+          if (params.runtime.config.current() !== config || enrolling) {
+            throw new Error("Beam mirror service configuration or source selection changed");
+          }
+        };
+        await raceCatalog(
+          scheduleBeamEnrollments({
+            agentId,
+            endpoint,
+            token: mirror.token,
+            catalogs: catalogById,
+            assertCurrent,
+            getStore: params.getPublicationStore,
+            schedule: params.getScheduleStore({ assertCurrent }),
+            activeSinceMs,
+            workLimit: MIRROR_MAX_SESSIONS,
+            pageSize: MIRROR_LIST_LIMIT,
+            warn: (reason) =>
+              warnThrottled(
+                reason === "credential"
+                  ? "beam mirror publisher credential changed; repeat beam.mirror.enroll with the original source and confirmed generation"
+                  : "beam mirror could not update an enrolled source; check its local visibility, receiver, and publisher authorization",
+              ),
+            async deliver(catalog, candidate, completed) {
+              const key = mirrorCandidateKey(candidate);
+              const result = await deliver(
+                catalog,
+                candidate,
+                completed,
+                tracked.get(key)?.acknowledged,
+              );
+              if (result) {
+                trackSuccessfulUpload(key, candidate, result);
+              }
+            },
+          }),
+        );
+        return;
+      }
       const observed = new Map<string, BeamMirrorCandidate>();
       const observedOrigins = new Map(
         Array.from(tracked, ([key, entry]) => [entry.candidate.beamId, key] as const),
@@ -486,9 +533,7 @@ export function createBeamMirrorRunner(params: {
               if (
                 session.exportPolicy?.origin !== "native-local" ||
                 !session.exportPolicy.automatic ||
-                (mirror.apiV2
-                  ? !candidate.sourceHomeId
-                  : !session.exportPolicy.stableHostThreadIdentity) ||
+                !session.exportPolicy.stableHostThreadIdentity ||
                 (earlier !== undefined && earlier !== key)
               ) {
                 // An old ID may already name a released conversation. Never mint a
@@ -598,7 +643,7 @@ export function createBeamMirrorRunner(params: {
                       session.sourceHomeId === entry.candidate.sourceHomeId &&
                       session.exportPolicy?.origin === "native-local" &&
                       session.exportPolicy.automatic &&
-                      (mirror.apiV2 || session.exportPolicy.stableHostThreadIdentity),
+                      session.exportPolicy.stableHostThreadIdentity,
                   ),
               )
             ) {
@@ -647,15 +692,8 @@ export function createBeamMirrorRunner(params: {
     if (!catalog) {
       throw new Error("The source catalog is unavailable for local export");
     }
-    const hosts = await raceCatalog(
-      catalog.list({ agentId: source.agentId, limitPerHost: MIRROR_LIST_LIMIT, source }),
-    );
-    const row = hosts
-      .find((host) => host.hostId === source.hostId)
-      ?.sessions.find(
-        (entry) => entry.threadId === source.threadId && entry.sourceHomeId === source.sourceHomeId,
-      );
-    if (!row || row.exportPolicy?.origin !== "native-local" || !row.exportPolicy.automatic) {
+    const candidate = await raceCatalog(selectBeamEnrollment(catalog, source));
+    if (!candidate) {
       throw new Error("Select a listed native source with its exact owner and home");
     }
     const assertCurrent = () => {
@@ -672,13 +710,6 @@ export function createBeamMirrorRunner(params: {
       ) {
         throw new Error("Beam mirror receiver authorization changed");
       }
-    };
-    const candidate = {
-      ...source,
-      beamId: beamMirrorId(source.catalogId, source.hostId, source.threadId),
-      title: row.name?.trim() || `${source.catalogId} session`,
-      recencyAt: row.recencyAt ?? row.updatedAt ?? now(),
-      modelProvider: row.modelProvider,
     };
     const binding = await openBeamMirrorEnrollment({
       store: params.getPublicationStore({ assertCurrent }),

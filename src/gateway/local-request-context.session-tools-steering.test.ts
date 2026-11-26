@@ -167,7 +167,10 @@ describe("sessions_send steering custody", () => {
                 if (!owned) {
                   expect((await sent).details).toMatchObject({
                     status: "error",
-                    error: "Session-scoped writes require your own session.",
+                    error:
+                      targetKind === "shared noncreator"
+                        ? "Session-scoped writes require your own session."
+                        : "session is shared for this connection",
                   });
                   expect(receiver.pendingCount()).toBe(0);
                   return;

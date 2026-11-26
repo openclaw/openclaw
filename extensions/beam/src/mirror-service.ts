@@ -41,6 +41,11 @@ function createBeamMirrorService(params: {
             { namespace: "mirror-publications", retention: "retained" },
             authority,
           ),
+        getScheduleStore: (authority) =>
+          params.runtime.state.openKeyedStoreV2<string>(
+            { namespace: "mirror-schedule", maxEntries: 1024 },
+            authority,
+          ),
         runtime: params.runtime,
         logger: ctx.logger,
         signal: ctx.scheduler.signal,

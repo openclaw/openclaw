@@ -66,37 +66,57 @@ export function readCronInventory(
   params: CronListParams,
   options: ReadOptions = {},
 ) {
-  options.signal?.throwIfAborted();
+  if (params.compact) {
+    return readCompactCronInventory(client, params, options).then((page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.lastRunStatus,
+        (jobs) =>
+          sortCronJobs(
+            jobs.map((job) => ({
+              id: job.id,
+              name: job.name,
+              updatedAtMs: job.updatedAtMs,
+              state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
+              job,
+            })),
+            params.sortBy ?? "nextRunAtMs",
+            params.sortDir ?? "asc",
+          ).map(({ job }) => job),
+      ),
+    );
+  }
   const owner = getCronInventory(client);
-  const source = inventoryQuery(params);
-  return params.compact
-    ? readRows(client, owner, owner.compact, source, updateCompact, options).then((page) =>
-        selectPage(
-          page,
-          params,
-          (job) => job.lastRunStatus,
-          (jobs) =>
-            sortCronJobs(
-              jobs.map((job) => ({
-                id: job.id,
-                name: job.name,
-                updatedAtMs: job.updatedAtMs,
-                state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
-                job,
-              })),
-              params.sortBy ?? "nextRunAtMs",
-              params.sortDir ?? "asc",
-            ).map(({ job }) => job),
-        ),
-      )
-    : readRows(client, owner, owner.full, source, updateFull, options).then((page) =>
-        selectPage(
-          page,
-          params,
-          (job) => job.state.lastRunStatus ?? job.state.lastStatus,
-          (jobs) => sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
-        ),
-      );
+  return readRows(client, owner, owner.full, inventoryQuery(params), updateFull, options).then(
+    (page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.state.lastRunStatus ?? job.state.lastStatus,
+        (jobs) => sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
+      ),
+  );
+}
+
+/** All scoped jobs, without the table's runtime filters, ordering or paging. */
+export function readCompactCronInventory(
+  client: GatewayBrowserClient,
+  params: Pick<
+    CronListParams,
+    "agentId" | "sessionKey" | "sessionAgentId" | "query" | "scheduleKind" | "trigger"
+  >,
+  options: ReadOptions = {},
+) {
+  const owner = getCronInventory(client);
+  return readRows(
+    client,
+    owner,
+    owner.compact,
+    inventoryQuery({ ...params, compact: true }),
+    updateCompact,
+    options,
+  );
 }
 
 function selectPage<Row extends { enabled: boolean }>(
@@ -136,6 +156,7 @@ function readRows<Row>(
   update: (page: CronJobsListResult<Row>, event: Runtime) => CronJobsListResult<Row>,
   options: ReadOptions,
 ): Promise<CronJobsListResult<Row>> {
+  options.signal?.throwIfAborted();
   const key = queryKey(params);
   let entry = entries.get(key);
   if (!entry) {
@@ -191,16 +212,33 @@ function readRows<Row>(
           const response = await client.request<CronJobsListResult<Row>>("cron.list", params, {
             signal: pending.controller.signal,
           });
+          // An invalidated response cannot establish current membership, even when malformed.
+          if (version !== owner.version) {
+            continue;
+          }
           const first = readCanonicalCronListPage<Row>(response, params.limit ?? 50);
-          resolveCronListPageNextOffset(first, 0);
-          const jobs = [...first.jobs];
+          const jobs: Row[] = [];
           let page = first;
-          while (page.hasMore && version === owner.version) {
-            const offset = resolveCronListPageNextOffset(page, page.offset);
-            if (offset === null) {
+          let offset = 0;
+          for (;;) {
+            const nextOffset = resolveCronListPageNextOffset(page, offset);
+            for (const job of page.jobs) {
+              // A partial or malformed response must not replace the last valid scoped inventory.
+              if (
+                !isRecord(job) ||
+                typeof job.id !== "string" ||
+                !job.id ||
+                typeof job.enabled !== "boolean"
+              ) {
+                throw new Error("cron.list returned an invalid inventory job");
+              }
+              jobs.push(job);
+            }
+            if (nextOffset === null || version !== owner.version) {
               break;
             }
             assertPresented();
+            offset = nextOffset;
             const next = await client.request(
               "cron.list",
               { ...params, offset },
@@ -210,12 +248,10 @@ function readRows<Row>(
               break;
             }
             page = readCanonicalCronListPage<Row>(next, params.limit ?? 50);
-            resolveCronListPageNextOffset(page, offset);
             // Name order and membership hold until the definition invalidation.
             if (first.total !== page.total) {
               throw new Error("Automation inventory changed. Refresh and try again.");
             }
-            jobs.push(...page.jobs);
           }
           pending.controller.signal.throwIfAborted();
           if (!isCurrentCronInventory(client, owner)) {

@@ -5,11 +5,16 @@ import {
   readToolErrorFlag,
 } from "../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import {
+  findTranscriptToolPreamble,
+  type TranscriptPreambleSource,
+} from "../config/sessions/transcript-tool-preamble.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../logging/diagnostic-payload.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
@@ -195,30 +200,58 @@ export function reportOmittedChatHistory(params: {
   return omittedCount;
 }
 
+function evictedPreamble(
+  snapshot: InFlightRunSnapshot,
+  retained: number,
+  page: unknown[] | SerializedJsonArray,
+  source?: TranscriptPreambleSource,
+) {
+  const match = findTranscriptToolPreamble(
+    snapshot,
+    (snapshot.events?.length ?? 0) - retained,
+    () => (page instanceof SerializedJsonArray ? page.materialize() : page),
+    source,
+  );
+  return (
+    match && {
+      wire: { textFromMessage: match.messageIndex, text: snapshot.text.slice(match.end) },
+      source: match.source,
+    }
+  );
+}
+
 export function boundInFlightRunSnapshotForChatHistory(params: {
   snapshot: InFlightRunSnapshot | undefined;
-  messages: unknown[];
+  messages: unknown[] | SerializedJsonArray;
   getMessagesBytes?: () => number;
   maxBytes: number;
+  preambleSource?: TranscriptPreambleSource;
+  onPreambleBudgetMiss?: (minimumSnapshotBytes: number, source: TranscriptPreambleSource) => void;
 }): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;
   }
   const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
-  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
-  if (messagesBytes + snapshotBytes <= params.maxBytes) {
-    return params.snapshot;
+  // A smaller page may lose its input anchor. Keep the first page's proof only if the
+  // fresh run still marks the same call beside the same delivered native row.
+  const retried = params.preambleSource
+    ? evictedPreamble(params.snapshot, 0, params.messages, params.preambleSource)
+    : undefined;
+  const full = retried ? { ...params.snapshot, ...retried.wire } : params.snapshot;
+  if (messagesBytes + jsonUtf8Bytes(full) <= params.maxBytes) {
+    return full;
   }
   // Recovery priority is run adoption, authoritative timing, active progress,
   // plan replay, and opportunistic text. Explicit empty projections
   // authoritatively clear stale client state when a richer snapshot cannot fit.
-  let bounded: InFlightRunSnapshot = {
+  const minimum: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
     ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+  let bounded = minimum;
   const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
     if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
       return false;
@@ -252,7 +285,23 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.text) {
-    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    const preamble =
+      retried ?? evictedPreamble(params.snapshot, bounded.events?.length ?? 0, params.messages);
+    if (!preamble) {
+      retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    } else if (!retainIfWithinBudget({ ...bounded, ...preamble.wire })) {
+      // The next raw delta needs this receipt even when the answer itself cannot fit.
+      const { text, textFromMessage } = preamble.wire;
+      const receipt = { ...minimum, textFromMessage };
+      if (
+        !retainIfWithinBudget({ ...receipt, text }) &&
+        !retainIfWithinBudget({ ...bounded, textFromMessage }) &&
+        !retainIfWithinBudget(receipt) &&
+        preamble.source
+      ) {
+        params.onPreambleBudgetMiss?.(jsonUtf8Bytes(receipt), preamble.source);
+      }
+    }
   }
   return bounded;
 }

@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -43,20 +44,6 @@ function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): str
   return matches;
 }
 
-function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
-  const sanitized: TranscriptUtterance = {
-    ...utterance,
-    text: sanitizeTerminalText(utterance.text),
-  };
-  if (utterance.speaker) {
-    sanitized.speaker = {
-      ...utterance.speaker,
-      label: sanitizeTerminalText(utterance.speaker.label),
-    };
-  }
-  return sanitized;
-}
-
 function formatSpeakerLine(utterance: TranscriptUtterance): string {
   const text = utterance.text.trim();
   if (!text) {
@@ -67,15 +54,26 @@ function formatSpeakerLine(utterance: TranscriptUtterance): string {
 }
 
 /** Build a deterministic summary from transcript utterances. */
-export function summarizeTranscripts(params: {
-  session: TranscriptSessionDescriptor;
-  utterances: TranscriptUtterance[];
-}): TranscriptsSummary {
+export function summarizeTranscripts(
+  params: { session: TranscriptSessionDescriptor; utterances: TranscriptUtterance[] },
+  speakerLabel = createTranscriptSpeakerLabels(),
+): TranscriptsSummary {
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
+  // Reserve names in recording order, even if a particular line is filtered
+  // out of the notes. The roster and Markdown export use the same order.
   const utterances = params.utterances
-    .map(sanitizeUtterance)
+    .map((utterance) => ({
+      ...utterance,
+      text: sanitizeTerminalText(utterance.text),
+      speaker: utterance.speaker && {
+        ...utterance.speaker,
+        label: speakerLabel(utterance.speaker.id, utterance.speaker.label),
+      },
+    }))
     .filter((utterance) => !isTranscriptArtifactText(utterance.text));
-  const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
+  const overview =
+    firstSentences(utterances, 4) ||
+    (params.session.stoppedAt ? "No usable speech was captured." : "No transcript captured yet.");
   return {
     sessionId: params.session.sessionId,
     title,

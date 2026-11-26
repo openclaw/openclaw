@@ -5,8 +5,10 @@ import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
   type DeviceIdentity,
@@ -54,6 +56,7 @@ export type IngressFrame = {
   event?: string;
   ok?: boolean;
   payload?: {
+    features?: { capabilities?: string[] };
     status?: SessionsFilesPreviewResult["status"];
     sandboxPath?: SessionsFilesPreviewResult["sandboxPath"];
     nonce?: string;
@@ -82,6 +85,7 @@ type ConnectOptions = {
   scopes?: string[];
   owner?: boolean;
   profileId?: string;
+  caps?: string[];
   tamperSignature?: boolean;
 };
 
@@ -141,6 +145,7 @@ export async function connect(peer: Peer, options: ConnectOptions): Promise<Ingr
     role,
     scopes: options.scopes,
     auth: options.auth,
+    caps: options.caps,
     ...(device ? { device } : {}),
   });
   if (hello.ok && !options.owner) {
@@ -185,6 +190,47 @@ export async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
+}
+
+export async function expectStatus(response: Promise<Response>, status: number) {
+  const result = await response;
+  expect(result.status).toBe(status);
+  await result.body?.cancel();
+}
+
+export async function expectNegotiatedIngressArchive(peer: Peer, scopes: readonly string[]) {
+  const id = "ingress-archive";
+  const key = `agent:main:${id}`;
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    {
+      sessionId: id,
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+    },
+  );
+  const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-archive-browser" });
+  const hello = await connect(peer, {
+    identity,
+    scopes: [...scopes],
+    caps: ["personal-session-pins"],
+  });
+  expectHello(hello, "remote-ingress", scopes);
+  const caps = hello.payload?.features?.capabilities;
+  expect(caps).toContain("personal-session-pins");
+  const undo = caps?.includes("session-archive-undo-v1");
+  const archive = await request(peer, "sessions.patch", {
+    key,
+    expectedSessionId: id,
+    archived: true,
+    ...(undo ? { requestArchiveUndo: true } : {}),
+  });
+  expect(archive, archive.error?.message).toMatchObject({
+    ok: true,
+    payload: { entry: { sessionId: id, archivedAt: expect.any(Number) } },
+  });
+  expect(archive.payload).not.toHaveProperty("archiveUndoToken");
+  expect(undo).toBe(false);
 }
 
 export function heldReadBarrier() {

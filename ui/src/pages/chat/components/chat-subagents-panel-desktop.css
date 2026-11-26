@@ -201,10 +201,9 @@
 }
 
 .subagents-desktop__name {
-  overflow: hidden;
+  overflow-wrap: anywhere;
   font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .subagents-desktop__status,
@@ -291,16 +290,8 @@
 }
 
 .subagents-desktop__child-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
   font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.subagents-desktop__child-name[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .subagents-desktop__child-rail .subagents-desktop__stop {

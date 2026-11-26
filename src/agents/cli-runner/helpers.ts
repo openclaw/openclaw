@@ -17,7 +17,7 @@ import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { isMeaningfulMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
@@ -30,6 +30,7 @@ import {
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -318,6 +319,8 @@ type CliPromptImageInput = {
   imagePrompt?: string;
   workspaceDir: string;
   localRoots?: readonly string[];
+  /** Owning run config: its image limits apply to hydrated images. */
+  config?: OpenClawConfig;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
@@ -345,6 +348,7 @@ export async function loadCliPromptImages(params: CliPromptImageInput): Promise<
         mediaImageLayout: params.mediaImageLayout,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         maxBytes: MAX_IMAGE_BYTES,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
         localRoots: params.localRoots,
       })
     : undefined;
@@ -369,6 +373,16 @@ export async function prepareCliPromptImagePayload(
 }> {
   let prompt = params.prompt;
   const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
+  const inlinePaths =
+    !params.backend.imageArg || params.backend.input === "stdin" || params.backend.imageArg === "@";
+  // Documents expand into model-facing text without an @image path. Correlate
+  // that native prompt with its persisted attachment turn just as for images.
+  if (
+    params.imageTurnKey &&
+    (params.media?.some(isMeaningfulMediaFact) || (resolvedImages.length && inlinePaths))
+  ) {
+    prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
+  }
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -377,14 +391,7 @@ export async function prepareCliPromptImagePayload(
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  if (
-    !params.backend.imageArg ||
-    params.backend.input === "stdin" ||
-    params.backend.imageArg === "@"
-  ) {
-    if (params.imageTurnKey) {
-      prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
-    }
+  if (inlinePaths) {
     prompt = appendImagePathsToPrompt(
       prompt,
       imagePaths,

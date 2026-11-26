@@ -24,6 +24,7 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { cancelSelfSnooze, isOriginalVisibleUserInput } from "./session-self-snooze.js";
 import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -59,6 +60,7 @@ import {
 } from "./user-turn-transcript.persistence.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
+  NativeSteerInputIdentity,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
   UserTurnTranscriptPersistResult,
@@ -101,6 +103,7 @@ export function createUserTurnTranscriptRecorder(
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
   let persistedMessageNotified = false;
   let originalInputCommitted = false;
+  let inputAlreadyAccepted = params.inputAlreadyAccepted === true;
   let resolvedSourceMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
   let sentToProvider = false;
@@ -228,18 +231,14 @@ export function createUserTurnTranscriptRecorder(
   const notifyOriginalInputCommitted = (commit: UserTurnOriginalInputCommit) => {
     const sourceMessage = commit.message;
     const metadata = sourceMessage["__openclaw"];
-    if (
-      originalInputCommitted ||
-      blocked ||
-      sourceMessage.display === false ||
-      sourceMessage.excludeFromContext === true ||
-      (sourceMessage.provenance && sourceMessage.provenance.kind !== "external_user") ||
-      metadata?.lateMedia === true ||
-      metadata?.beforeAgentRunBlocked !== undefined
-    ) {
+    if (originalInputCommitted || blocked || !isOriginalVisibleUserInput(sourceMessage)) {
       return;
     }
     originalInputCommitted = true;
+    // Promotion/replay of custody already accepted at staging isn't a new user input.
+    if (!inputAlreadyAccepted && !acceptedPendingInputId && !params.pendingInputSources?.length) {
+      cancelSelfSnooze(commit.anchor);
+    }
     // Collection commits one framed message, but each source owns its sender and
     // selections. A rewritten aggregate no longer attests those original bytes.
     if (
@@ -301,11 +300,11 @@ export function createUserTurnTranscriptRecorder(
   });
 
   // Steering resolves its message at enqueue; the target run is stamped on the committed row.
-  const stampPersistedSteerTargetRunId = async (targetRunId: string) =>
+  const stampSteer = async (runId: string, identity?: NativeSteerInputIdentity) =>
     admissionReceipt &&
-    confirmPersistedSteerTargetRunId({ admission: admissionReceipt, targetRunId }).then(
+    confirmPersistedSteerTargetRunId(admissionReceipt, runId, identity).then(
       (confirmed) => confirmed && refreshAdmission(confirmed.admission, confirmed.message),
-      handlePersistenceError,
+      identity ? undefined : handlePersistenceError,
     );
 
   const waitForRuntimePersistence = async () => {
@@ -589,6 +588,7 @@ export function createUserTurnTranscriptRecorder(
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
             onCommitted: adopt,
+            inputAlreadyAccepted,
             prepareMessageAfterIdempotencyCheck: (next) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 projectUserTurnRequesterOrigin(next, stagedOrigin),
@@ -621,17 +621,17 @@ export function createUserTurnTranscriptRecorder(
       resolvedMessagePromise = undefined;
       admissionOwner.invalidateSubmittedText();
     },
-    confirmSteerTargetRunIdForPersistence: async (targetRunId) => {
-      const normalizedTargetRunId = normalizePersistedSteerTargetRunId(targetRunId);
-      if (!normalizedTargetRunId || confirmedSteerTargetRunId === normalizedTargetRunId) {
+    confirmSteerTargetRunIdForPersistence: async (targetRunId, identity) => {
+      const runId = normalizePersistedSteerTargetRunId(targetRunId);
+      if (!runId || (confirmedSteerTargetRunId === runId && !identity)) {
         return;
       }
-      confirmedSteerTargetRunId = normalizedTargetRunId;
+      confirmedSteerTargetRunId = runId;
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
       // Before the commit, the runtime commit chain stamps the row; acceptance never waits.
       // A harness that self-persists only after queueMessage resolves would miss the stamp.
-      await stampPersistedSteerTargetRunId(normalizedTargetRunId);
+      await stampSteer(runId, identity);
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
@@ -669,13 +669,11 @@ export function createUserTurnTranscriptRecorder(
         }
         // Settled by waitForRuntimePersistence.
         const admission = recordAdmission(receipt, persistedMessage, true);
-        const targetRunId = confirmedSteerTargetRunId;
-        if (targetRunId) {
+        const runId = confirmedSteerTargetRunId;
+        if (runId) {
           // The stamp joins the admission write that the turn owner already awaits; it is a
           // no-op when the committed row already names this run.
-          admissionWrite = admission.then(() =>
-            runInDetachedAsyncContext(() => stampPersistedSteerTargetRunId(targetRunId)),
-          );
+          admissionWrite = admission.then(() => runInDetachedAsyncContext(() => stampSteer(runId)));
           admissionWrite.catch(() => undefined);
         }
       }
@@ -724,6 +722,9 @@ export function createUserTurnTranscriptRecorder(
     inputActorBinding = binding;
   });
   const admissionOwner = registerUserTurnTranscriptAdmissionOwner(recorder, {
+    markInputAccepted: () => {
+      inputAlreadyAccepted = true;
+    },
     onOriginalInputCommitted: (anchor) => {
       const sourceMessage = pendingInput?.message ?? resolvedSourceMessage ?? message;
       if (sourceMessage) {

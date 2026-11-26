@@ -16,7 +16,7 @@ import { registerIngressPrincipalRecovery } from "../../gateway/remote-ingress-p
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "../../gateway/session-operator-sources.js";
-import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "../../gateway/session-sharing-authorization-async.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../../plugins/gateway-ingress.types.js";
 import type { CronStoredJob } from "../types.js";
 
@@ -71,7 +71,7 @@ export async function prepareRestartBeforeScheduling(params: {
     ingressPermitted = false;
     await expect(
       prepareSessionSystemTurnAuthority({ ...target, context, preserveRecordedSource: true }),
-    ).rejects.toThrow(/ingress|authority|grant/i);
+    ).rejects.toThrow("The sign-in it was started with is no longer valid.");
     expect(await readJobs()).toEqual([]);
     service.abort();
     return false;

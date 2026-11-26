@@ -9,9 +9,13 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import * as mainThreadStall from "./main-thread-stall.js";
 import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
+import { onSqliteWalCheckpoint } from "./sqlite-wal-checkpoint.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
-import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
+import type {
+  SqliteWorkerCloseReceipt,
+  SqliteWorkerWalCheckpoint,
+} from "./sqlite-worker-contract.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   isSqliteWorkerError,
@@ -95,8 +99,9 @@ it.each(["framed", "close"])("publishes receipts before settling: %s", async (ki
     assert(isRecord(receipt) && isRecord(receipt.runtime));
     setEnvironmentData(key, undefined);
     const nativeQueries = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
+    const actor: Pick<Actor, "id" | "identity" | "closeReceipt" | "openDispatch"> = {
       id: 1,
+      identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
       openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
     };
     const closeReceipt: SqliteWorkerCloseReceipt = {
@@ -114,6 +119,7 @@ it.each(["framed", "close"])("publishes receipts before settling: %s", async (ki
           lastCompletedAtMs: 1,
           consecutiveBlocked: 0,
           warning: false,
+          bytePressure: false,
         },
       },
     };
@@ -221,3 +227,75 @@ it("hydrates cached-context execute-frame failures and their uncertain ordinary 
     },
   });
 });
+
+it.each(["matching", "physical", "birthtime", "path", "incarnation", "custody", "owner"])(
+  "publishes ordinary checkpoint facts only under their original actor custody (%s)",
+  (scenario) => {
+    const identity = {
+      key: "file:original",
+      canonicalPath: "/fixture/original.sqlite",
+      birthtime: "1",
+    };
+    const walCheckpoint: SqliteWorkerWalCheckpoint = {
+      identity,
+      incarnation: "original-native",
+      checkpoint: {
+        observedAtNs: 1n,
+        health: {
+          state: "blocked",
+          observedAtMs: 1,
+          walBytes: 100,
+          databaseBytes: 1,
+          logFrames: 2,
+          checkpointedFrames: 0,
+          lastCompletedAtMs: null,
+          consecutiveBlocked: 1,
+          bytePressure: true,
+          warning: true,
+        },
+      },
+    };
+    const actor: Pick<Actor, "id" | "identity" | "closeReceipt" | "openDispatch"> = {
+      id: 1,
+      identity: {
+        ...identity,
+        ...(scenario === "physical" ? { key: "file:replacement" } : {}),
+        ...(scenario === "birthtime" ? { birthtime: "2" } : {}),
+        ...(scenario === "path" ? { canonicalPath: "/fixture/replacement.sqlite" } : {}),
+      },
+      openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
+    };
+    const job = createJob({ type: "execute", id: 1, actor: 1, input: new Uint8Array() });
+    job.custody.activate();
+    job.custody.accept();
+    if (scenario === "incarnation") {
+      job.request.executionAuthority = {
+        logical: new Int32Array(new SharedArrayBuffer(4)),
+        native: new Int32Array(new SharedArrayBuffer(4)),
+        physicalIdentity: "original",
+        birthtime: "1",
+        incarnation: "replacement-native",
+      };
+    }
+    if (scenario === "custody") {
+      job.custody.retire();
+    }
+    if (scenario === "owner") {
+      job.assertCurrent = unexpected;
+    }
+    const observed = vi.fn();
+    const stop = onSqliteWalCheckpoint(observed);
+    const finish = vi.fn();
+    try {
+      receiveSqliteWorkerReply(
+        { actors: new Set([actor]), current: job, worker: { postMessage: unexpected } },
+        { id: 1, ok: true, value: serialize(undefined), walCheckpoint },
+        { fail: unexpected, finish, dispatch() {} },
+      );
+      expect(observed).toHaveBeenCalledTimes(scenario === "matching" ? 1 : 0);
+      expect(finish).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+    }
+  },
+);

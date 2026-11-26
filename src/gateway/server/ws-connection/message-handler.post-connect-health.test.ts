@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../../../state/user-profile-writes.js";
 import {
   linkEmail,
   setAvatar,
@@ -31,13 +32,13 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { prepareGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import {
   HEALTH_REFRESH_INTERVAL_MS,
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
 } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import { healthHandlers } from "../../server-methods/health.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import {
@@ -1793,45 +1794,38 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(response?.error?.retryAfterMs).toBeGreaterThan(0);
   });
 
-  it.each([false, true])(
-    "retains handshake-attested operator locality (remote: %s)",
-    async (remote) => {
-      const harness = attachGatewayHarness({
-        connId: "operator-authority",
-        connectNonce: "operator-authority",
-        ...(remote ? REMOTE_BACKEND_OPTIONS : {}),
-      });
-      harness.sendConnect("connect", {
-        ...BACKEND_CONNECT_PARAMS,
-        scopes: ["operator.admin"],
-        ...(remote ? { auth: { token: "gateway-token" } } : {}),
-      });
-      await harness.whenAttached;
-      const client = harness.client as GatewayWsClient;
-      expect(client.clientIp).toBe(remote ? "203.0.113.50" : undefined);
-      expect(client.internal?.isLocalClient).toBe(remote ? undefined : true);
-      const runId = `${remote ? "remote" : "local"}-operator-run`;
-      expect(
-        resolveGatewayCronCreatorAuthorityAdmission({
-          runId,
-          resolvedSessionKey: "agent:main:main",
-          client,
-          request: { message: "hello", idempotencyKey: runId },
-          isOneShotModelRun: false,
-        }),
-      ).toEqual(remote ? undefined : { runId, callerOrigin: { kind: "local" } });
-    },
-  );
+  it("admits an authless local socket as the local host, with the owner's automations", async () => {
+    const harness = attachGatewayHarness({
+      connId: "operator-authority",
+      connectNonce: "operator-authority",
+    });
+    harness.sendConnect("connect", { ...BACKEND_CONNECT_PARAMS, scopes: ["operator.admin"] });
+    await harness.whenAttached;
+    const client = harness.client as GatewayWsClient;
+    expect(client.internal?.isLocalClient).toBe(true);
+    expect(client.authPolicy?.authMethod).toBe("none");
+    // Gateway startup creates the owner profile for an authless Gateway.
+    await ensureCanonicalGatewayOwnerProfile("Owner");
+    const admitted = await prepareGatewayOperatorRunAuthority({
+      client,
+      context: { getRuntimeConfig: () => loadConfigMock() as OpenClawConfig },
+    });
+    onTestFinished(() => admitted?.release());
+    expect(admitted?.authority).toMatchObject({
+      profileId: "gateway-owner",
+      grant: { owner: true, automations: "manage" },
+    });
+  });
 
   it.each([
-    ["openclaw-control-ui", "operator.admin", true],
-    ["openclaw-control-ui", "operator.read", false],
-    ["openclaw-control-ui", "operator.write", false],
-    ["openclaw-control-ui", "operator.cron", false],
-    ["openclaw-tui", "operator.admin", false],
+    ["openclaw-control-ui", "operator.admin", "manage"],
+    ["openclaw-control-ui", "operator.read", "none"],
+    ["openclaw-control-ui", "operator.write", "self"],
+    ["openclaw-control-ui", "operator.cron", "self"],
+    ["openclaw-tui", "operator.admin", "manage"],
   ] as const)(
-    "records authenticated remote management authority for %s with %s: %s",
-    async (id, scope, allowed) => {
+    "admits a remote %s person with %s for %s automations",
+    async (id, scope, expected) => {
       await withOpenClawTestState(
         { label: "gateway-control-ui-admin", prepareProfileCatalog: true },
         async () => {
@@ -1839,21 +1833,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             scope,
           ]);
           await harness.whenAttached;
-          expect(harness.client).toMatchObject({ connect: { scopes: [scope] } });
-          const admission = resolveGatewayCronCreatorAuthorityAdmission({
-            runId: "control-ui-admin-run",
-            resolvedSessionKey: "agent:main:main",
+          const admitted = await prepareGatewayOperatorRunAuthority({
             client: harness.client as never,
-            request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
-            isOneShotModelRun: false,
+            context: { getRuntimeConfig: () => loadConfigMock() as OpenClawConfig },
           });
-          const expected = {
-            runId: "control-ui-admin-run",
-            callerOrigin: { kind: "unknown" },
-            callerScopedCreation: true,
-            ...(allowed ? { managementEntitlement: { source: "control-ui-admin" } } : {}),
-          };
-          expect(admission).toEqual(scope === "operator.read" ? undefined : expected);
+          onTestFinished(() => admitted?.release());
+          expect(admitted?.authority.grant.automations).toBe(expected);
         },
       );
     },

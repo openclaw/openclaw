@@ -290,10 +290,16 @@ export function copySessionNodeArtifactsForRepair(
         const memberIds = postimage
           ? new Set<string>(JSON.parse(postimage.sideTables.memberIdsJson))
           : undefined;
+        const memberAccess: Record<string, string> = JSON.parse(
+          postimage?.sideTables.memberAccessJson ?? "{}",
+        );
         for (const member of executeSqliteQuerySync(
           source.db,
           sourceDb.selectFrom("session_members").selectAll().where("session_key", "in", keys),
         ).rows) {
+          if (!memberIds?.has(member.identity_id) && member.access !== null) {
+            memberAccess[member.identity_id] = member.access;
+          }
           memberIds?.add(member.identity_id);
           if (postimage) {
             postimage.changed = true;
@@ -309,6 +315,7 @@ export function copySessionNodeArtifactsForRepair(
           );
         }
         if (postimage && memberIds) {
+          postimage.sideTables.memberAccessJson = JSON.stringify(memberAccess);
           postimage.sideTables.memberIdsJson = JSON.stringify(
             [...memberIds].toSorted((left, right) =>
               Buffer.compare(Buffer.from(left), Buffer.from(right)),

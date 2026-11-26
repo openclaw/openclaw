@@ -11,6 +11,10 @@ export async function prepareGatewayMatrixProcessOwner(runtimeRoot: string, fixt
     path.join(fixtureRoot, "process-owner"),
     "serviceChildRelay",
     {
+      serviceChildRelay: resolveRuntimeWorkerUrl({
+        ...runtimeProcessEntrypoints.serviceChildRelay,
+        root: runtimeRoot,
+      }),
       serviceChildGroupAnchor: resolveRuntimeWorkerUrl({
         ...runtimeProcessEntrypoints.serviceChildGroupAnchor,
         root: runtimeRoot,

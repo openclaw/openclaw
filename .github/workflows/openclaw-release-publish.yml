@@ -4,8 +4,8 @@ run-name: ${{ inputs.release_profile == 'clawhub-only' && 'ClawHub registry upda
 on:
   workflow_dispatch:
     inputs:
-      fast_track_approval:
-        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
         required: false
         type: string
       tag:
@@ -141,7 +141,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   RETIRED_LINE_PUBLICATION_REASON: ${{ inputs.retired_line_publication_reason }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
@@ -210,7 +210,7 @@ jobs:
           fi
           printf 'prepared_plugins=%s\n' "$PREPARED_PLUGINS" >> "$GITHUB_OUTPUT"
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
-          if [[ -n "${FAST_TRACK_APPROVAL_JSON}" && ( "$RELEASE_EVIDENCE_MODE" != full-release-validation || -z "$FULL_RELEASE_VALIDATION_RUN_ID" || -z "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
+          if [[ -n "${FAST_TRACK_REQUEST_JSON}" && ( "$RELEASE_EVIDENCE_MODE" != full-release-validation || -z "$FULL_RELEASE_VALIDATION_RUN_ID" || -z "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
             echo "Fast-track requires the original full-release evidence mode and exact run/attempt." >&2
             exit 1
           fi
@@ -499,7 +499,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-validation-tooling
-          fetch-depth: ${{ inputs.fast_track_approval != '' && '0' || '1' }}
+          fetch-depth: ${{ inputs.fast_track_request != '' && '0' || '1' }}
           persist-credentials: false
 
       - name: Resolve full release validation run
@@ -632,7 +632,7 @@ jobs:
             echo "OpenClaw npm preflight run must come from main, the active protected release branch, or a verified protected release-publish tag." >&2
             exit 1
           fi
-          if [[ ( "$preflight_conclusion" != "success" && !( -n "$FAST_TRACK_APPROVAL_JSON" && "$full_release_preflight" == "true" && "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ) ) || "$(jq -r '.status' <<<"$preflight_run")" != "completed" || "$preflight_event" != "workflow_dispatch" || ( "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" && "$full_release_preflight" != "true" ) ]]; then
+          if [[ ( "$preflight_conclusion" != "success" && !( -n "$FAST_TRACK_REQUEST_JSON" && "$full_release_preflight" == "true" && "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ) ) || "$(jq -r '.status' <<<"$preflight_run")" != "completed" || "$preflight_event" != "workflow_dispatch" || ( "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" && "$full_release_preflight" != "true" ) ]]; then
             echo "OpenClaw npm preflight evidence requires a successful NPM Release or exact Full Release Validation dispatch." >&2
             exit 1
           fi
@@ -647,6 +647,7 @@ jobs:
           import { dirname, join } from 'node:path';
           import { downloadExactActionsArtifactArchive, inspectActionsArtifactZipWithPolicy, readPublicationArtifactArchive } from './.release-validation-tooling/scripts/lib/actions-artifact-archive.mjs';
           import { downloadFullReleaseNpmPreflight } from './.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs';
+          import { SEALED_NPM_PREFLIGHT_SCHEMA } from './.release-validation-tooling/scripts/npm-prepared-bundle.mjs';
 
           const env = process.env;
           const producer = JSON.parse(process.argv[2]);
@@ -669,7 +670,10 @@ jobs:
           const preflight = qualified ? [qualified.artifact] : preferred.length > 0 ? preferred : candidates;
           const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producerAttempt}`;
           const sdk = artifacts.filter((artifact) => artifact.expired === false && artifact.name === sdkName);
-          if (preflight.length !== 1 || sdk.length !== 1) {
+          // Transport only: the full-manifest owner below authenticates the exception
+          // before version 4 can bypass SDK validation or authorize publication.
+          const buildOnly = Boolean(env.FAST_TRACK_REQUEST_JSON) && qualified?.descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA;
+          if (preflight.length !== 1 || (!buildOnly && sdk.length !== 1)) {
             throw new Error(`Expected ${preferredName} or one historical preflight, and exactly one ${sdkName}.`);
           }
           const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
@@ -679,11 +683,11 @@ jobs:
           const sdkAllowedEntries = new Set([...sdkRequiredEntries, 'plugin-sdk-api-release-diff.md']);
           for (const [artifact, directory, entryPolicy] of [
             [preflight[0], 'openclaw-npm-preflight-manifest', { minEntries: 1, maxEntries: 1024, allowPath: () => true }],
-            [sdk[0], 'openclaw-plugin-sdk-api-evidence', {
+            ...(!buildOnly ? [[sdk[0], 'openclaw-plugin-sdk-api-evidence', {
               minEntries: sdkRequiredEntries.length,
               maxEntries: sdkAllowedEntries.size,
               allowPath: (name) => sdkAllowedEntries.has(name),
-            }],
+            }]] : []),
           ]) {
             const outputDir = join(env.RUNNER_TEMP, directory);
             const archivePath = join(archivesDir, `${artifact.id}.zip`);
@@ -900,22 +904,25 @@ jobs:
             exit 1
           fi
           node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/openclaw-npm-extended-stable-release.mjs" verify-preflight-channel < "$manifest"
-          immutable_sdk_evidence="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
-          if [[ ! -f "$immutable_sdk_evidence" ]]; then
-            echo "Immutable Plugin SDK API evidence artifact is missing." >&2
-            exit 1
+          # Producer identity and the authenticated full manifest above admit version 4.
+          if [[ "$(jq -r '.version' "$manifest")" != "4" ]]; then
+            immutable_sdk_evidence="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
+            if [[ ! -f "$immutable_sdk_evidence" ]]; then
+              echo "Immutable Plugin SDK API evidence artifact is missing." >&2
+              exit 1
+            fi
+            if ! cmp -s <(jq -S '.pluginSdkApi' "$manifest") <(jq -S '.' "$immutable_sdk_evidence"); then
+              echo "Preflight manifest Plugin SDK API evidence does not match its immutable artifact." >&2
+              exit 1
+            fi
+            current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+            current_selector_ref="v${current_selector_version}"
+            if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+                "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
+            fi
+            current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
           fi
-          if ! cmp -s <(jq -S '.pluginSdkApi' "$manifest") <(jq -S '.' "$immutable_sdk_evidence"); then
-            echo "Preflight manifest Plugin SDK API evidence does not match its immutable artifact." >&2
-            exit 1
-          fi
-          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
-          current_selector_ref="v${current_selector_version}"
-          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
-          fi
-          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
           extended_stable_preflight=false
           expected_extended_stable_branch=""
           if [[ "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9][0-9]*)\. ]]; then
@@ -933,15 +940,17 @@ jobs:
               --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA" \
               --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           fi
-          node "$PLUGIN_SDK_API_VALIDATOR" \
-            --manifest "$manifest" \
-            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --head "$EXPECTED_SHA" \
-            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
-            --current-selector-ref "$current_selector_ref" \
-            --current-selector-sha "$current_selector_sha" \
-            --target-ref "$RELEASE_TAG" \
-            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
+          if [[ "$(jq -r '.version' "$manifest")" != "4" ]]; then
+            node "$PLUGIN_SDK_API_VALIDATOR" \
+              --manifest "$manifest" \
+              --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+              --head "$EXPECTED_SHA" \
+              --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+              --current-selector-ref "$current_selector_ref" \
+              --current-selector-sha "$current_selector_sha" \
+              --target-ref "$RELEASE_TAG" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
+          fi
           if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
             exit 1
@@ -1398,14 +1407,15 @@ jobs:
       contents: write
       id-token: write
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Child waits plus up to one hour each of core visibility and final npm readback.
+    timeout-minutes: 270
     environment: npm-release
     steps:
       - name: Checkout release SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
-          fetch-depth: ${{ (inputs.fast_track_approval != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || '1' }}
+          fetch-depth: ${{ (inputs.fast_track_request != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || '1' }}
           persist-credentials: false
 
       - name: Checkout trusted release tooling
@@ -1413,7 +1423,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: .release-harness
-          fetch-depth: ${{ inputs.fast_track_approval != '' && '0' || '1' }}
+          fetch-depth: ${{ inputs.fast_track_request != '' && '0' || '1' }}
           persist-credentials: false
 
       - name: Download focused release evidence
@@ -1434,7 +1444,7 @@ jobs:
           package-manager-cache: false
 
       - name: Acquire authenticated publication manifest
-        if: ${{ (inputs.publish_openclaw_npm || inputs.fast_track_approval != '') && inputs.release_evidence_mode == 'full-release-validation' }}
+        if: ${{ (inputs.publish_openclaw_npm || inputs.fast_track_request != '') && inputs.release_evidence_mode == 'full-release-validation' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1538,16 +1548,16 @@ jobs:
           retention-days: 30
 
       - name: Retain original fast-track request and validation evidence
-        if: inputs.fast_track_approval != ''
+        if: inputs.fast_track_request != ''
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/fast-track-evidence"
-          printf '%s\n' "$FAST_TRACK_APPROVAL_JSON" > "$RUNNER_TEMP/fast-track-evidence/approval.json"
+          printf '%s\n' "$FAST_TRACK_REQUEST_JSON" > "$RUNNER_TEMP/fast-track-evidence/request.json"
           cp "$RUNNER_TEMP/full-release-validation-manifest/full-release-validation-manifest.json" \
             "$RUNNER_TEMP/fast-track-evidence/full-release-validation-manifest.json"
 
       - name: Upload fast-track publication evidence
-        if: inputs.fast_track_approval != ''
+        if: inputs.fast_track_request != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-fast-track-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1640,7 +1650,7 @@ jobs:
               tag: env.RELEASE_TAG, npm_dist_tag: env.RELEASE_NPM_DIST_TAG,
               full_release_validation_run_id: env.FULL_RELEASE_VALIDATION_RUN_ID,
               full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
-              fast_track_approval: env.FAST_TRACK_APPROVAL_JSON,
+              fast_track_request: env.FAST_TRACK_REQUEST_JSON,
             },
             targets: env.CLAWHUB_ONLY === 'true' ? ['clawhub'] : ['npm'],
             sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, toolingFullRef: env.GITHUB_REF, sourceRoot: process.cwd(),
@@ -2659,7 +2669,7 @@ jobs:
       prepared_run_attempt: ${{ needs.resolve_release_target.outputs.prepared_docker_run_attempt }}
       prepared_artifact_name: ${{ needs.resolve_release_target.outputs.prepared_docker_artifact_name }}
       prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
-      fast_track_approval: ${{ inputs.fast_track_approval }}
+      fast_track_request: ${{ inputs.fast_track_request }}
       release_publish_run_id: ${{ github.run_id }}
       release_publish_run_attempt: ${{ needs.publish.outputs.publication_attempt }}
       full_release_validation_run_id: ${{ inputs.full_release_validation_run_id }}

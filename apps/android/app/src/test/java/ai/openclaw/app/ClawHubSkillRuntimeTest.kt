@@ -232,7 +232,6 @@ class ClawHubSkillRuntimeTest {
           assertNull(runtime.clawHubSkillSearchState.value.errorText)
           assertTrue(
             checkNotNull(runtime.skillsState.value.summary)
-              .skills
               .isEmpty(),
           )
           assertEquals(1, installCalls.get())

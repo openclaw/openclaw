@@ -307,6 +307,33 @@ describe("models.authLogin ownership", () => {
     },
   );
 
+  it("a credential-only sign-in selects the model its provider recommends for an agent without one", async () => {
+    const h = harness();
+    hooks.login.mockResolvedValueOnce({ ...result, defaultModel: "fixture/plan" });
+    hooks.catalog.mockResolvedValue({
+      models: [
+        { provider: "fixture", id: "first", name: "First", available: true },
+        { provider: "fixture", id: "best", name: "Best", available: true, recommended: true },
+        { provider: "fixture", id: "plan", name: "Plan", available: true },
+      ],
+    });
+    hooks.activate.mockResolvedValue({
+      ok: true,
+      modelRef: "fixture/plan",
+      latencyMs: 1,
+      lines: [],
+    });
+    await h.invoke("models.authLogin", {
+      sessionId: "login",
+      authChoice: "fixture/fixture-device",
+      selectModel: true,
+    });
+    expect(await h.next()).toMatchObject({ done: true, status: "done" });
+    expect(hooks.activate).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "fixture/plan", selectModel: true }),
+    );
+  });
+
   it("reports a saved sign-in whose model check failed with the activation's one sentence", async () => {
     const h = harness();
     hooks.catalog.mockResolvedValue({

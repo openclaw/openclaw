@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as hostMemory from "../infra/host-memory.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -35,10 +36,15 @@ vi.mock("./server-startup-plugins.js", () => ({
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
 beforeEach(() => {
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
   resetGatewayWorkAdmission();
   resetRuntimeServiceMocks();
 });
-afterEach(resetGatewayWorkAdmission);
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetGatewayWorkAdmission();
+});
 
 describe("post-ready maintenance scheduling", () => {
   it("waits for post-ready work before admitting maintenance, so lean releases when idle", async () => {
@@ -140,7 +146,7 @@ describe("post-ready maintenance scheduling", () => {
     const platform = mockProcessPlatform("linux");
     const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
     const lowMemory = vi
-      .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+      .spyOn(hostMemory, "isMemoryPressureHigh")
       .mockReturnValue(cause === "memory pressure");
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
