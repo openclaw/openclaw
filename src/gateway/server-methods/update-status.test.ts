@@ -89,7 +89,8 @@ vi.mock("../../infra/update-startup.js", () => ({
 }));
 
 const refreshStatus = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../../infra/update-status-schedule.js", () => ({
+vi.mock("../../infra/update-status-schedule.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-status-schedule.js")>()),
   getGatewayUpdateSchedule: () => getUpdateSchedule(),
   refreshGatewayUpdateStatus: refreshStatus,
 }));

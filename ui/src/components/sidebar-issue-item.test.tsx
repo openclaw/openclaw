@@ -199,7 +199,11 @@ function renderUpdate(
   );
   return container.querySelector<HTMLElement>("openclaw-sidebar-update-card")!;
 }
-const freshStatusCall = ["update.status", { refreshCheckout: true }, { timeoutMs: null }] as const;
+const freshStatusCall = [
+  "update.status",
+  { includeSupervisorGuidance: true, refreshCheckout: true },
+  { timeoutMs: null },
+] as const;
 describe("renderSidebarUpdateSurface", () => {
   beforeEach(() => {
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -321,7 +325,7 @@ describe("renderSidebarUpdateSurface", () => {
       } else {
         expect(request).not.toHaveBeenCalledWith(
           "update.status",
-          { refreshCheckout: true },
+          { includeSupervisorGuidance: true, refreshCheckout: true },
           expect.anything(),
         );
         expect(card.textContent).not.toContain("Could not check");

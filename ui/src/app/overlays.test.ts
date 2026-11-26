@@ -743,6 +743,6 @@ describe("application update overlays", () => {
     expect(updateRunningWhenDrained).toBe(true);
     expect(
       request.mock.calls.filter(([method]) => method === "update.run").map(([, params]) => params),
-    ).toEqual([{ sessionKey: "agent:main:originating-chat" }]);
+    ).toEqual([{ includeSupervisorGuidance: true, sessionKey: "agent:main:originating-chat" }]);
   });
 });
