@@ -730,8 +730,8 @@ new snapshot.
 
 ## Local model lean mode
 
-Lean mode is retired. Select the `openclaw/small` [Agent Profile](/concepts/agent-profiles)
-instead; `openclaw doctor --fix` migrates the old `experimental.localModelLean` keys. See
+Lean mode is retired. Select the `openclaw/small` [Agent Profile](/concepts/agent-profiles),
+which behaves exactly as Lean did, instead; `openclaw doctor --fix` migrates the old `experimental.localModelLean` keys. See
 [Compact tool surface for small local models](/gateway/local-models#compact-tool-surface-for-small-local-models).
 
 - <a id="why-these-tools" />[Why these tools](/gateway/local-models#why-these-tools)

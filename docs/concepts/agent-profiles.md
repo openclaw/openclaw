@@ -2,7 +2,7 @@
 summary: "How OpenClaw applies named prompt and tool behavior"
 title: "Agent Profiles"
 read_when:
-  - You want a smaller tool surface and bounded workspace context for a model
+  - You want a smaller tool surface, or a smaller tool surface with bounded workspace context, for a model
   - You need to pin or override a profile
   - You are migrating from experimental.localModelLean
 ---
@@ -29,7 +29,7 @@ values select OpenClaw runtime behavior:
 spec:
   common: {}
   openclaw.ai:
-    toolProfile: compact
+    toolProfile: lean
 ```
 
 The OpenClaw adapter stays in the OpenClaw repository. There is no global
@@ -38,10 +38,11 @@ OpenClaw extension resolution remain separate.
 
 ## Built-in profiles
 
-| Profile          | Parent          | Initial behavior                                                 |
-| ---------------- | --------------- | ---------------------------------------------------------------- |
-| `openclaw/base`  | none            | Standard OpenClaw behavior and fallback                          |
-| `openclaw/small` | `openclaw/base` | Composed prompt with bounded workspace context and compact tools |
+| Profile            | Parent          | Initial behavior                                                     |
+| ------------------ | --------------- | -------------------------------------------------------------------- |
+| `openclaw/base`    | none            | Standard OpenClaw behavior and fallback                              |
+| `openclaw/small`   | `openclaw/base` | Exact migration of the retired Lean mode: the Lean tool surface only |
+| `openclaw/compact` | `openclaw/base` | Opt-in: bounded workspace context, and the scheduler stays available |
 
 ## Selection
 
@@ -86,8 +87,34 @@ Select it for one agent and keep the base profile for the rest:
 
 ## Small profile behavior
 
-`openclaw/small` uses the normal OpenClaw prompt composer. It does not replace
-the complete system prompt. Its OpenClaw extension limits the content OpenClaw
+`openclaw/small` is the exact migration of `experimental.localModelLean: true`.
+It changes the tool surface the way Lean did and nothing else. It does not limit
+workspace context, and it does not replace the system prompt.
+
+The profile removes these optional tools: `browser`, `automations`,
+`message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and
+`pdf`. `message` stays available when it owns the visible reply for the run.
+
+The profile filters these tools before OpenClaw builds its Tool Search catalog.
+A tool the profile removes is not discoverable or callable through Tool Search.
+An explicit allow rule or delivery requirement can preserve a tool, subject to
+normal tool policy. Where OpenClaw Tool Search applies, the profile defaults to
+bounded structured search (`tool_search`, `tool_describe`, and `dispatch_action`)
+when `tools.toolSearch` is unset. Explicit Tool Search configuration takes
+precedence over that default. Tool Search lists the remaining tools in a compact
+directory. The worker wire field that carries the compact directory choice keeps
+its name, `toolSearchDirectoryLean`, so gateways and workers on different
+versions keep working.
+
+The profile keeps `exec` directly visible. Normal tool policy, sandboxing, and
+exec approvals still apply.
+
+## Compact profile behavior
+
+`openclaw/compact` is a separate choice for a model that needs less than Lean
+gives. It never changes what `openclaw/small` does. Pick it on purpose.
+
+It uses the normal OpenClaw prompt composer. Its OpenClaw extension limits the content OpenClaw
 prepares from `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` to 11,500
 characters together, which is a rough 2,900-token proxy at four
 characters per token. Memory and other injected files keep the operator
@@ -110,24 +137,11 @@ OpenClaw owns the strict `spec["openclaw.ai"].prompt.workspaceContext` schema,
 inheritance, allocation, and diagnostics. See [Agent workspace](/concepts/agent-workspace) and
 [workspace and bootstrap configuration](/gateway/config-agents/workspace-and-bootstrap).
 
-The profile also removes heavyweight optional tools: `browser`, `message`,
-`image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. It keeps
-`automations`: a model without the scheduler tends to fake a reminder through a
-shell command and then report it as scheduled. `message` stays available when it
-owns the visible reply for the run.
-
-The profile filters these tools before OpenClaw builds its Tool Search catalog.
-A tool the profile removes is not discoverable or callable through Tool Search.
-An explicit allow rule or delivery requirement can preserve a tool, subject to
-normal tool policy. Where OpenClaw Tool Search applies, the profile defaults to
-bounded structured search (`tool_search`, `tool_describe`, and `dispatch_action`)
-when `tools.toolSearch` is unset. Explicit Tool Search configuration takes
-precedence over that default. The worker wire field that carries the compact
-directory choice keeps its name, `toolSearchDirectoryLean`, so gateways and
-workers on different versions keep working.
-
-The profile keeps `exec` directly visible. Normal tool policy, sandboxing, and
-exec approvals still apply.
+The tool surface is the Lean surface with one difference: `automations` stays
+available. A small model without the scheduler tends to fake a reminder through
+a shell command and then report it as scheduled. Preservation rules, Tool Search
+defaults, the compact directory, and `exec` visibility work as they do for
+`openclaw/small`.
 
 ## Diagnostics
 
@@ -148,7 +162,7 @@ Run `openclaw doctor --fix` to migrate the retired
 | `false` at any scope | `agentProfileId: "openclaw/base"`  |
 | Key absent           | unchanged                          |
 
-A legacy `true` becomes an explicit `openclaw/small`. A legacy `false` becomes an explicit `openclaw/base`, which keeps the full tool surface. An explicit `agentProfileId` at the same scope always wins and the
+A legacy `true` becomes an explicit `openclaw/small`, which behaves exactly as Lean did. A legacy `false` becomes an explicit `openclaw/base`, which keeps the full tool surface. An explicit `agentProfileId` at the same scope always wins and the
 legacy key is dropped. The CLI flag `--local-model-lean` remains a deprecated alias for
 `--agent-profile openclaw/small`.
 

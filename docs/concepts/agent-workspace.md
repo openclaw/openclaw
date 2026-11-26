@@ -303,11 +303,11 @@ shows sizes and truncation causes without storing file contents.
 
 `BOOTSTRAP.md`, `BOOT.md`, and memory keep their separate lifecycle and privacy
 rules. Conversation history, skills, tool schemas, and tool selection also have
-separate controls. The built-in `openclaw/small` profile caps the content
+separate controls. The built-in `openclaw/compact` profile caps the content
 OpenClaw prepares from `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` at
 11,500 characters, a rough 2,900-token proxy rather than an exact tokenizer
 limit. These limits do not constrain project-local instructions that Codex
-loads natively.
+loads natively. The built-in `openclaw/small` profile sets no workspace-context limits.
 
 See [Agent Profiles](/concepts/agent-profiles) and
 [workspace and bootstrap configuration](/gateway/config-agents/workspace-and-bootstrap).
