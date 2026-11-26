@@ -29,6 +29,11 @@ async function remove(target: string): Promise<boolean> {
     return true;
   }
   if (stat.isDirectory()) {
+    // Go module caches and similar tools leave owned read-only directories; like
+    // `go clean -modcache`, restore owner access before unlinking their entries.
+    if ((stat.mode & 0o700) !== 0o700) {
+      fs.chmodSync(target, stat.mode | 0o700);
+    }
     const handle = fs.opendirSync(target);
     try {
       let child;
