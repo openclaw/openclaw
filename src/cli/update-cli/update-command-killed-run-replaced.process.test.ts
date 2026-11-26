@@ -72,16 +72,54 @@ describe.skipIf(process.platform === "win32")(
         expect(replacedWarning(killed.runId)).toContain(home(install.key));
       }));
 
-    it("is settled by repair after its driver released its lease, and the next update proceeds", () =>
+    // 2026.11.10 ends this way after losing its plugin lifecycle lease (#205167).
+    it("is settled by the next update after its driver released its lease", () =>
       fixtures.lifetime.run(async () => {
         const install = await linkedInstallation();
         const killed = await updater(install.key, { ...verified, root: install.slot });
         // The driver exited through its own unwind, which releases its lease.
         await lease(install.key);
         await replacePackageDirectory(install);
+
+        await nextUpdate(install.slot);
+
+        expect(mocks.release).toHaveBeenCalledOnce();
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(config().gateway).toEqual({ mode: "local" });
+        expect(replacedWarning(killed.runId)).toMatch(
+          /^Plugin recovery was settled from a replacing/u,
+        );
+        await reconcileAbandonedUpdateRunsAsync({});
+        expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+      }));
+
+    it("finishes a released update that had begun rolling back, as repair would", () =>
+      fixtures.lifetime.run(async () => {
+        const install = await linkedInstallation();
+        const killed = await updater(install.key, { ...verified, root: install.slot });
+        // Rollback had restored some state before its updater unwound; the owner would finish it.
+        writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
+          ...loadPluginCohortRecovery(killed.runId)!.cohort,
+          disposition: "rollback",
+        });
+        await lease(install.key);
+        await replacePackageDirectory(install);
+
+        await nextUpdate(install.slot);
+
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(mocks.release).toHaveBeenCalledOnce();
+      }));
+
+    it("leaves a released lease to repair once its verified candidate is no longer installed", () =>
+      fixtures.lifetime.run(async () => {
+        const install = await linkedInstallation();
+        const killed = await updater(install.key, { ...verified, root: install.slot });
+        await lease(install.key);
+        await replacePackageDirectory(install, { version: "2026.12.2" });
         const before = reserved(killed.runId);
 
-        // Without that lease the update cannot show the driver's children gone; it names repair.
+        // Nothing shows the build that update verified is the one installed; it names repair.
         await expect(nextUpdate(install.slot)).rejects.toThrow(unleased);
         expect(reserved(killed.runId)).toEqual(before);
 

@@ -3,10 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
+import { captureCommandOwnerIdentity } from "../auto-reply/command-owner-facts.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelOperatorAdminAuthority } from "../gateway/channel-operator-authority.js";
 import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -91,10 +92,11 @@ async function linkedAdmins() {
     accountId: identity.accountId,
     senderId: identity.senderId,
   };
-  const authorizationSource = resolveCommandOwnerAuthority(
+  const authorizationSource = captureCommandOwnerIdentity(
     config,
     channelRequester,
     options,
+    resolveChannelOperatorAdminAuthority,
   ).source;
   expect(authorizationSource).toBe(`profile:${ada.id}`);
   return {
@@ -139,8 +141,12 @@ it.each(["reassignment", "role change in original state"])(
       unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
       linkUserChannelIdentity(fixture.grace.id, fixture.identity, fixture.options);
       expect(
-        resolveCommandOwnerAuthority(fixture.config, fixture.channelRequester, fixture.options)
-          .source,
+        captureCommandOwnerIdentity(
+          fixture.config,
+          fixture.channelRequester,
+          fixture.options,
+          resolveChannelOperatorAdminAuthority,
+        ).source,
       ).toBe(`profile:${fixture.grace.id}`);
     } else {
       setUserProfileRole(fixture.ada.id, "member", fixture.options);
