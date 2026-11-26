@@ -16,6 +16,8 @@ update availability, and the active or most recent update report.
 While an update is active, the table shows its phase instead of advertising another
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
+When the saved step history reaches its size limit, status reports how many
+rows were omitted. Routine diagnostics yield before warnings and failures.
 
 A failed or interrupted attempt becomes history only when its saved observation
 of a running Gateway differs in version or build ID from the live serving

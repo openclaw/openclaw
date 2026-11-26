@@ -19,7 +19,11 @@ import {
   RecordedUpdateRunDriverSchema as recordedDriver,
   UpdateRunDriverSchema as driver,
 } from "./update-run-driver-schema.js";
-import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
+import {
+  UPDATE_RUN_TEXT_LIMIT,
+  UPDATE_RUN_DIAGNOSTIC_LIMIT,
+  UPDATE_RUN_STEP_LIMIT,
+} from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
 export const UPDATE_ADMISSION_PROTOCOL = 1;
@@ -323,7 +327,7 @@ export const UpdateRunRecordSchema = z.object({
   }),
   before: version,
   after: version,
-  steps: z.array(UpdateRunStepSchema).max(128),
+  steps: z.array(UpdateRunStepSchema).max(UPDATE_RUN_STEP_LIMIT),
   verification: z.object({
     rollbackOutcome: UpdateRollbackOutcomeSchema.nullable().optional(),
     recovery: updateRecoverySchema.nullable().optional(),

@@ -22,6 +22,7 @@ import {
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+import { formatUpdateRunOmittedSteps } from "./update-run-omission.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -363,7 +364,11 @@ export function renderUpdateRunReport(
   const markdownLimit = opts.markdownLimit ?? 1500;
   // Successful activation must not bury recovery constraints behind snapshot inventory.
   // Failed runs keep their failure diagnostics ahead of warnings in the short report.
-  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
+  const omission = formatUpdateRunOmittedSteps(run.steps);
+  const lines: string[] = [
+    ...(omission ? [omission] : []),
+    ...(run.status === "succeeded" ? warnings : []),
+  ];
   if (
     currentHealth &&
     (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))
@@ -592,7 +597,7 @@ export function renderUpdateRunReport(
     const lead = bounded([headline, ...repairedLead, ...steps].join("\n"), 1100);
     return {
       headline,
-      lines: [...repaired, ...steps],
+      lines: [...repaired, ...steps, ...(omission ? [omission] : [])],
       markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
     };
   }

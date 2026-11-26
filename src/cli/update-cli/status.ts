@@ -40,6 +40,7 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -663,7 +664,8 @@ async function inspectUpdateStatus(
       if (!abandonedRun && !staleRun) {
         defaultRuntime.log(historical ?? report.headline);
       }
-      for (const line of historical ? [] : report.lines) {
+      const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
+      for (const line of historical ? (omission ? [omission] : []) : report.lines) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");

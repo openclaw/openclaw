@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as state from "../state/openclaw-state-db.js";
 import * as ledger from "./update-run-ledger.js";
+import { updateOwedStepRow } from "./update-run-owed-step.js";
 import { toPublicUpdateRun } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -14,7 +15,12 @@ afterEach(async () => {
 });
 
 function isolatedOptions() {
-  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-compaction-") } };
+  return {
+    env: {
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-compaction-"),
+      HOME: tempDirs.make("openclaw-update-compaction-home-"),
+    },
+  };
 }
 function timedStep(step: string, status: "completed" | "failed" = "completed") {
   return { step, status, startedAtMs: 1_000, endedAtMs: 2_000 };
@@ -50,6 +56,7 @@ describe("update run ledger compaction", () => {
       "openclaw doctor",
       "managed-service-restart",
       "managed-service update handoff",
+      "warning:managed-service-reconciliation",
       "service-stop",
       "service-start",
       "service-running",
@@ -135,10 +142,53 @@ describe("update run ledger compaction", () => {
       );
     }
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
-    const report = renderUpdateRunReport(
-      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
-    );
+    const stored = ledger.getUpdateRun(run.runId, options)!;
+    const report = renderUpdateRunReport(toPublicUpdateRun(stored));
     expect(report.headline).toContain("2 warnings need attention");
+    // Requested phase + two warnings + count plain rows, plus the new marker.
+    expect(report.lines).toContain(
+      `Update history truncated: ${count + 4 - stored.steps.length} rows omitted.`,
+    );
+  });
+
+  it("keeps actionable rows through late cleanup", () => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "cli" }, options);
+    const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
+      ledger.recordUpdateRunStep(run.runId, step, options);
+    const browserWarning = "Review legacy Browser Relay authentication.";
+    write({ step: "warning:doctor:browser", status: "completed", detail: browserWarning });
+    write({ step: "service-refresh", status: "failed", detail: "Service definition unchanged." });
+    write(updateOwedStepRow("service-definition", "Review the service installation."));
+    for (let index = 0; index < 14; index++) {
+      write({
+        step: `warning:doctor:${index}`,
+        status: "completed",
+        detail: `Doctor advisory ${index}: ${"🦞".repeat(235)}`,
+      });
+    }
+    write({ step: "diagnostic:disposable", status: "completed", detail: "i".repeat(350) });
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const cleanup = (suffix: string) =>
+      write({ step: suffix, status: "completed", detail: `Late cleanup: ${"🦞".repeat(240)}` });
+    cleanup("recovery-artifact-cleanup");
+    cleanup("diagnostic:recovery-artifact-cleanup");
+    cleanup("warning:recovery-artifact-cleanup");
+    state.closeOpenClawStateDatabaseForTest();
+
+    const persisted = ledger.getUpdateRun(run.runId, options)!;
+    const report = renderUpdateRunReport(toPublicUpdateRun(persisted));
+    expect(report.lines).toEqual(
+      expect.arrayContaining([
+        "Update history truncated: 1 row omitted.",
+        `Warning: ${browserWarning}`,
+        "Failed: service-refresh — Service definition unchanged.",
+        expect.stringContaining("Gateway service definition refresh is owed"),
+      ]),
+    );
+    expect(report.markdown).toContain(browserWarning);
+    expect(persisted.steps.some((step) => step.step === "diagnostic:disposable")).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
 
   it("reads and compacts pre-timing rows without adding timing steps", () => {
