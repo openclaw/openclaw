@@ -206,7 +206,7 @@ describe.each([
       async ({ file, encoding }) => {
         const read = vi.spyOn(WorkerTaskPool.prototype, "run");
         const sent = vi.spyOn(ServerResponse.prototype, "end");
-        for (const accept of ["br, gzip", "br", "br, gzip", "br"]) {
+        const get = async (accept: string) => {
           const { response, body } = await requestAsset(`${baseUrl}/assets/${file}`, "GET", {
             "Accept-Encoding": accept,
           });
@@ -214,18 +214,28 @@ describe.each([
           expect(response.headers.vary).toBe("Accept-Encoding");
           expect(response.headers["content-encoding"]).toBe(encoding === "br" ? "br" : undefined);
           expect(encoding === "br" ? brotliDecompressSync(body) : body).toEqual(assetBody);
-        }
-        const bodies = sent.mock.calls.flatMap((args) =>
-          args.filter((arg) => Buffer.isBuffer(arg)),
+        };
+        await Promise.all([get("br, gzip"), get("br")]);
+        await get("br, gzip");
+        await get("br");
+        const bodies = sent.mock.calls.flatMap(([chunk]) =>
+          Buffer.isBuffer(chunk) ? [chunk] : [],
         );
         expect(bodies).toHaveLength(4);
         const uniqueBodies = new Set(bodies);
         const workerBodyReads = read.mock.calls.filter(
           ([input]) => (input as ControlUiFileRead).readBody,
         ).length;
-        expect({ workerBodyReads, uniqueBuffers: uniqueBodies.size }).toEqual({
+        const retainedBytes = Array.from(uniqueBodies).reduce(
+          (sum, body) => sum + body.byteLength,
+          0,
+        );
+        const observation = { workerBodyReads, uniqueBuffers: uniqueBodies.size, retainedBytes };
+        expect(observation, JSON.stringify(observation)).toEqual({
           workerBodyReads: 1,
           uniqueBuffers: 1,
+          retainedBytes:
+            encoding === "br" ? brotliCompressSync(assetBody).byteLength : assetBody.byteLength,
         });
       },
     );

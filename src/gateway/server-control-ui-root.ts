@@ -45,7 +45,11 @@ type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "
 type RootFiles = {
   controller: AbortController;
   cacheEnabled: boolean;
-  pending: Map<string, Promise<ControlUiRootAsset | null>>;
+  generation: number;
+  pending: Map<
+    string,
+    { preferences: string; readBody: boolean; result: Promise<ControlUiRootAsset | null> }
+  >;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
   assetNames?: Promise<Map<string, fs.Dirent> | null>;
 };
@@ -76,6 +80,7 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
     files = {
       controller: new AbortController(),
       cacheEnabled: true,
+      generation: 0,
       pending: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
         maxBytes: MAX_PREPARED_BYTES,
@@ -85,6 +90,30 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
     runtime.roots.set(root, files);
   }
   return files;
+}
+
+function preparedBytes(asset: ControlUiRootAsset): number {
+  const { file, br, gzip } = asset;
+  return (
+    (file.body?.byteLength ?? 0) +
+    (br && !(br instanceof Error) ? (br.body?.byteLength ?? 0) : 0) +
+    (gzip && !(gzip instanceof Error) ? (gzip.body?.byteLength ?? 0) : 0)
+  );
+}
+
+function coversControlUiRead(
+  asset: ControlUiRootAsset,
+  preferences: readonly HttpRepresentationEncoding[],
+  readBody: boolean,
+): boolean {
+  for (const encoding of preferences) {
+    const file = encoding === "identity" ? asset.file : asset[encoding];
+    // Only an observed absence may be skipped. An unexamined preferred sidecar still needs admission.
+    if (file !== null) {
+      return !!file && !(file instanceof Error) && (!readBody || !!file.body);
+    }
+  }
+  return true;
 }
 
 /** Bundled bytes belong to this root generation; custom roots only share concurrent reads. */
@@ -103,17 +132,21 @@ export function readControlUiRootAsset(
     isControlUiCompressibleAsset(fileRel)
       ? encodings
       : (["identity"] as const);
-  const identity = `${preferences.join(",")}:${fileRel}`;
-  const key = `${readBody ? "body" : "metadata"}:${identity}`;
-  const bodyKey = `body:${identity}`;
-  const cachedKey = owner.cached.peek(bodyKey) ? bodyKey : key;
-  const cached = owner.cached.get(cachedKey);
-  if (cached) {
-    return Promise.resolve(cached.asset);
+  const cached = owner.cached.get(fileRel)?.asset;
+  if (cached && coversControlUiRead(cached, preferences, readBody)) {
+    return Promise.resolve(cached);
   }
-  const pending = owner.pending.get(key) ?? (!readBody ? owner.pending.get(bodyKey) : undefined);
+  const generation = owner.generation;
+  const key = `${generation}:${fileRel}`;
+  const accepted = preferences.join(",");
+  const pending = owner.pending.get(key);
   if (pending) {
-    return pending;
+    if (pending.preferences === accepted && (!readBody || pending.readBody)) {
+      return pending.result;
+    }
+    // A different client can use the same bytes after the active read establishes availability.
+    const resume = () => readControlUiRootAsset(root, fileRel, readBody, encodings);
+    return pending.result.then(resume, resume);
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
@@ -192,11 +225,21 @@ export function readControlUiRootAsset(
         );
     // Pin the source's metadata and canonical path even when serving a sidecar.
     // Known identity-only bundled files need one admitted read for metadata and body.
-    const file = await read(location, readBody && (preferences[0] === "identity" || knownIdentity));
+    const file = await read(
+      location,
+      readBody && !cached?.file.body && (preferences[0] === "identity" || knownIdentity),
+    );
     if (!file) {
       return null;
     }
     owner.controller.signal.throwIfAborted();
+    // A newly requested variant still admits the source's canonical path before sharing bytes.
+    const unchanged =
+      cached &&
+      cached.file.path === file.path &&
+      cached.file.mtimeMs === file.mtimeMs &&
+      cached.file.size === file.size;
+    const previous = unchanged ? cached : undefined;
     const asset: ControlUiRootAsset = { file };
     // Optional variants are sparse. One listing per bundled root generation
     // avoids opening known-absent sidecars; canonical admission still owns every read.
@@ -208,7 +251,10 @@ export function readControlUiRootAsset(
         : null;
     for (const encoding of preferences) {
       if (encoding === "identity") {
-        if (readBody && !file.body) {
+        if (previous?.file.body) {
+          asset.file = previous.file;
+        }
+        if (readBody && !asset.file.body) {
           const body = await read(location, true);
           if (!body) {
             return null;
@@ -217,8 +263,20 @@ export function readControlUiRootAsset(
         }
         break;
       }
+      const prepared = previous?.[encoding];
+      if (
+        prepared === null ||
+        (prepared && !(prepared instanceof Error) && (!readBody || prepared.body))
+      ) {
+        asset[encoding] = prepared;
+        if (prepared) {
+          break;
+        }
+        continue;
+      }
       const sidecarPath = `${file.path}${encoding === "br" ? ".br" : ".gz"}`;
       if (assetNames && !assetNames.has(path.basename(sidecarPath).toLowerCase())) {
+        asset[encoding] = null;
         continue;
       }
       const sidecar = await read({ ...location, filePath: sidecarPath }, readBody).catch(
@@ -234,20 +292,25 @@ export function readControlUiRootAsset(
     if (
       root.kind === "bundled" &&
       owner.cacheEnabled &&
+      owner.generation === generation &&
       !(asset.br instanceof Error) &&
       !(asset.gzip instanceof Error)
     ) {
-      const bytes =
-        (asset.file.body?.byteLength ?? 0) +
-        (asset.br?.body?.byteLength ?? 0) +
-        (asset.gzip?.body?.byteLength ?? 0);
+      // Oversized combinations must not displace an individually cacheable selected representation.
+      const merged = previous
+        ? { ...previous, ...asset, file: asset.file.body ? asset.file : previous.file }
+        : asset;
+      const retained =
+        merged !== asset && preparedBytes(merged) > MAX_PREPARED_BYTES ? asset : merged;
+      const bytes = preparedBytes(retained);
       if (bytes <= MAX_PREPARED_BYTES) {
-        owner.cached.set(key, { asset, bytes });
+        owner.cached.set(fileRel, { asset: retained, bytes });
+        return retained;
       }
     }
     return asset;
   })().finally(() => owner.pending.delete(key));
-  owner.pending.set(key, preparation);
+  owner.pending.set(key, { preferences: accepted, readBody, result: preparation });
   return preparation;
 }
 
@@ -426,6 +489,7 @@ export function createGatewayControlUiRootLifecycle(
       // Stop still joins every outstanding read.
       const files = rootFiles(fileRuntime(), state);
       files.cacheEnabled = enabled;
+      files.generation += 1;
       files.cached.clear();
       files.assetNames = undefined;
       if (enabled) {
@@ -445,7 +509,7 @@ export function createGatewayControlUiRootLifecycle(
       const files = rootFiles(fileRuntime(), state);
       files.controller.abort();
       files.assetNames = undefined;
-      await Promise.allSettled(files.pending.values());
+      await Promise.allSettled(Array.from(files.pending.values(), (read) => read.result));
       files.cached.clear();
     },
   };
