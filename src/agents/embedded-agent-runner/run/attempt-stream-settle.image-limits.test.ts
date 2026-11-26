@@ -35,12 +35,17 @@ describe("embedded provider image handoff", () => {
         provider = await resolveProviderContext(context, options);
         return createAssistantResultStream(createAssistant(model, "ok"));
       };
-      const runtimeHandle = {
+      const runtimeHandle: ProviderRuntimePluginHandle = {
         provider: testModel.provider,
-        plugin: { id: testModel.provider, createStreamFn: () => providerStream },
-      } as unknown as ProviderRuntimePluginHandle;
+        plugin: {
+          id: testModel.provider,
+          label: "Test",
+          auth: [],
+          createStreamFn: () => providerStream,
+        },
+      };
       const model = attachModelProviderRuntimePluginHandle(
-        { ...testModel, input: ["text", "image"] },
+        { ...testModel, input: ["text" as const, "image" as const] },
         runtimeHandle,
       );
       const fixture = await createFixture({ exerciseTerminalMerges: false });
@@ -71,7 +76,7 @@ describe("embedded provider image handoff", () => {
         providerPromptState: { state: {}, effectiveContextTokenBudget: 32_768 },
       });
       const message = {
-        role: "user",
+        role: "user" as const,
         content: "describe the attachment",
         timestamp: 1,
         __openclaw: { media: [{ path: imagePath, contentType: "image/png" }] },
