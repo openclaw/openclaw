@@ -46,10 +46,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  // The config can outlive the remote snapshot; cached rows do not own that snapshot.
-  // Use null for absence so a collected snapshot and a no-overlay plan cannot compare equal.
-  remoteCatalog: WeakRef<NonNullable<ReturnType<typeof getActiveRemoteModelCatalog>>> | null;
-  rows: ModelCatalogEntry[];
+  /** A long-lived registration config must not retain a superseded publication or its rows. */
+  rowsBySource: WeakMap<object, ModelCatalogEntry[]>;
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
@@ -229,15 +227,12 @@ function loadManifestModelCatalogRows(
   if (config.models?.mode === "replace") {
     return [];
   }
-  const remoteCatalog = getActiveRemoteModelCatalog(config);
+  // The metadata snapshot keys manifest-only rows when there is no hosted publication.
+  const source = getActiveRemoteModelCatalog(config) ?? snapshot;
   const cached = manifestModelCatalogCache.get(config);
-  if (
-    cached?.snapshot === snapshot &&
-    (remoteCatalog
-      ? cached.remoteCatalog?.deref() === remoteCatalog
-      : cached.remoteCatalog === null)
-  ) {
-    return cached.rows;
+  const cachedRows = cached?.snapshot === snapshot ? cached.rowsBySource.get(source) : undefined;
+  if (cachedRows) {
+    return cachedRows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
   const plan =
@@ -267,11 +262,7 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, {
-    snapshot,
-    remoteCatalog: remoteCatalog ? new WeakRef(remoteCatalog) : null,
-    rows,
-  });
+  manifestModelCatalogCache.set(config, { snapshot, rowsBySource: new WeakMap([[source, rows]]) });
   return rows;
 }
 
