@@ -23,7 +23,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-vi.mock("../../cli/command-secret-targets.js", () => ({
+vi.mock("../../cli/model-secret-targets.js", () => ({
   getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
 }));
 
