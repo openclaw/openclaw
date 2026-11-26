@@ -1,4 +1,5 @@
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabaseReadOnlyResult } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -151,11 +152,8 @@ function hotExportSnapshot<Snapshot>(sessionId: string, snapshot: Snapshot | "co
   return snapshot;
 }
 
-/**
- * Rows one slice query may return. PostgreSQL buffers a whole result before the byte budget
- * can stop iteration, so the query itself must be bounded.
- */
-export const TRANSCRIPT_PAYLOAD_SLICE_ROWS = 256;
+// PostgreSQL materializes a result before iteration. SQLite streams rows until the byte budget.
+const POSTGRES_TRANSCRIPT_SLICE_ROWS = 256;
 
 /** Captures decoded payload text after `afterSeq` up to the slice budget. */
 function readTranscriptPayloadSlice(
@@ -167,7 +165,7 @@ function readTranscriptPayloadSlice(
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const slice: TranscriptPayloadSlice = { payloads: [] };
     let bytes = 0;
-    let lastSeq: number | undefined;
+    const postgres = isPostgresSqlConnection(database.db);
     // Leaving the loop early or by a throw closes the iterator; no live cursor escapes a read.
     for (const row of iterateSqliteQuerySync(
       database.db,
@@ -179,19 +177,19 @@ function readTranscriptPayloadSlice(
         .where("seq", "<=", throughSeq)
         .$if(afterSeq !== undefined, (query) => query.where("seq", ">", afterSeq!))
         .orderBy("seq", "asc")
-        .limit(TRANSCRIPT_PAYLOAD_SLICE_ROWS),
+        .$if(postgres, (query) => query.limit(POSTGRES_TRANSCRIPT_SLICE_ROWS)),
     )) {
       slice.payloads.push(readTranscriptPayload(row));
       bytes += row.payload_bytes;
-      lastSeq = row.seq;
-      if (bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES) {
+      if (
+        bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES ||
+        (postgres &&
+          slice.payloads.length === POSTGRES_TRANSCRIPT_SLICE_ROWS &&
+          row.seq < throughSeq)
+      ) {
         slice.resumeAfterSeq = row.seq;
         break;
       }
-    }
-    // A full page may have more rows after it; an empty next slice ends the export.
-    if (slice.payloads.length === TRANSCRIPT_PAYLOAD_SLICE_ROWS && lastSeq !== throughSeq) {
-      slice.resumeAfterSeq = lastSeq;
     }
     return slice;
   });
