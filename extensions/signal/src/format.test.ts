@@ -65,6 +65,43 @@ describe("Signal formatting", () => {
     expect(chunks.every((chunk) => chunk.text.length <= 25)).toBe(true);
   });
 
+  it("keeps the quote marker on continuation lines, nested quotes, and later paragraphs", () => {
+    const result = markdownToSignalText(
+      "> line one\n> **line two**\n>\n> second para\n> > nested one\n> > nested two",
+    );
+
+    expect(result.text).toBe(
+      "> line one\n> line two\n\n> second para\n\n> > nested one\n> > nested two",
+    );
+    expect(result.styles).toContainEqual({
+      start: "> line one\n> ".length,
+      length: "line two".length,
+      style: "BOLD",
+    });
+  });
+
+  it("keeps the quote marker on the first line of every chunk of a split quote", () => {
+    const words = Array.from({ length: 18 }, () => "word").join(" ");
+    const chunks = markdownToSignalTextChunks(`> ${words}`, 40);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.text.startsWith("> "))).toBe(true);
+    expect(chunks.map((chunk) => chunk.text.slice("> ".length)).join(" ")).toBe(words);
+  });
+
+  it("keeps the nested quote marker when a transcript-role header starts a later chunk", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`> > padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.includes(header));
+
+    expect(roleChunk?.text).toBe(`> > ${header}`);
+    expect(roleChunk?.styles).toContainEqual({
+      start: "> > ".length,
+      length: header.length,
+      style: "MONOSPACE",
+    });
+  });
+
   it("preserves case-distinct destinations and chunk-local UTF-16 styles", () => {
     const chunks = markdownToSignalTextChunks(
       "𐐀 [example.com/Report](https://example.com/report) **one**\n\n[example.com?id=AbC](https://example.com?id=abc) **two**",

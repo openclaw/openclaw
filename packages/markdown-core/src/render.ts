@@ -36,6 +36,33 @@ export type RenderLink = {
 
 type MarkdownLinkOrigin = "authored" | "linkify";
 
+/** Nonempty blockquote line starts mapped to their parser-owned nesting depth. */
+export function collectBlockquoteLineStarts(ir: MarkdownIR): Map<number, number> {
+  const lineStarts = new Map<number, number>();
+  const text = ir.text;
+  const codeBlocks = ir.styles.filter((span) => span.style === "code_block");
+  const metadataIR: MarkdownIRWithMetadata = ir;
+  const quotes: { start: number; end: number; blockquoteDepth?: number }[] =
+    metadataIR.blocks?.filter((block) => block.kind === "blockquote") ??
+    ir.styles.filter((span) => span.style === "blockquote");
+  for (const quote of quotes) {
+    for (let start = quote.start; start < quote.end;) {
+      if (
+        text[start] !== "\n" &&
+        !codeBlocks.some((code) => code.start < start && start < code.end)
+      ) {
+        lineStarts.set(start, Math.max(lineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1));
+      }
+      const newline = text.indexOf("\n", start);
+      if (newline === -1) {
+        break;
+      }
+      start = newline + 1;
+    }
+  }
+  return lineStarts;
+}
+
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
@@ -199,32 +226,11 @@ export function renderMarkdownWithMarkers(
   const blockquotePrefix = options.blockquotePrefix ?? "";
   const quoteLineStarts =
     blockquotePrefix && projected.styles.some((span) => span.style === "blockquote")
-      ? new Map<number, number>()
+      ? collectBlockquoteLineStarts(projected)
       : undefined;
   if (quoteLineStarts) {
-    const codeBlocks = projected.styles.filter((span) => span.style === "code_block");
-    const metadataIR: MarkdownIRWithMetadata = projected;
-    const quotes: { start: number; end: number; blockquoteDepth?: number }[] =
-      metadataIR.blocks?.filter((block) => block.kind === "blockquote") ??
-      projected.styles.filter((span) => span.style === "blockquote");
-    for (const quote of quotes) {
-      for (let start = quote.start; start < quote.end;) {
-        if (
-          text[start] !== "\n" &&
-          !codeBlocks.some((code) => code.start < start && start < code.end)
-        ) {
-          quoteLineStarts.set(
-            start,
-            Math.max(quoteLineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1),
-          );
-          boundaries.add(start);
-        }
-        const newline = text.indexOf("\n", start);
-        if (newline === -1) {
-          break;
-        }
-        start = newline + 1;
-      }
+    for (const start of quoteLineStarts.keys()) {
+      boundaries.add(start);
     }
   }
 
