@@ -125,8 +125,7 @@ pub(crate) fn connect_auth(
 ) -> Result<Value, String> {
     if auth.is_none() {
         return Err(
-            "The native Gateway has not accepted dashboard authentication. Reconnect the app."
-                .into(),
+            "The Gateway has not accepted this window's sign-in. Reconnect the app.".into(),
         );
     }
     let scope_refs: Vec<_> = scopes.iter().map(String::as_str).collect();

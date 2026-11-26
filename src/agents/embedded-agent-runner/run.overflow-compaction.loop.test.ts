@@ -9,7 +9,6 @@ import type { EmbeddedRunAttemptParamsV2 } from "../../plugin-sdk/agent-harness-
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
@@ -198,7 +197,6 @@ function makeDispatchInput(
     startupStagesEmitted: false,
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
-    getPostCompactionAbortError: vi.fn(() => undefined),
   } as unknown as Parameters<typeof dispatch>[0];
 }
 
@@ -508,31 +506,5 @@ describe("embedded run retry dispatch", () => {
       expect(names).toContain("github_identity_status");
       expect(names).toContain("github_publish");
     }
-  });
-
-  it("retains accepted spawns for the logical owner after a late post-compaction abort", async () => {
-    const postCompactionAbortError = new Error("post-compaction loop detected");
-    const input = makeDispatchInput();
-    input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
-    const acceptedSessionSpawns = [
-      {
-        runId: "child-run",
-        childSessionKey: "agent:main:subagent:child",
-        expectsCompletionMessage: true,
-      },
-    ];
-    mocks.runAttempt.mockResolvedValueOnce({
-      terminal: { kind: "ok" },
-      agentHarnessId: "codex",
-      yieldDetected: true,
-      acceptedSessionSpawns,
-    });
-
-    await expect(dispatch(input)).rejects.toBe(postCompactionAbortError);
-
-    expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
-      acceptedSessionSpawns,
-    );
-    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 });

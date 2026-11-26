@@ -13,11 +13,16 @@ struct TalkWaveformMathTests {
 
     @Test
     func `thinking breathes inside its band`() {
+        var minimum = 1.0
+        var maximum = 0.0
         for time in stride(from: 0.0, through: 10.0, by: 0.25) {
             let power = TalkWaveformMath.power(for: .thinking, time: time)
             #expect(power >= 0.16)
             #expect(power <= 0.26 + 1e-9)
+            minimum = min(minimum, power)
+            maximum = max(maximum, power)
         }
+        #expect(maximum - minimum > 0.05)
     }
 
     @Test

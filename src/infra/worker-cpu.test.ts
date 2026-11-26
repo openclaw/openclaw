@@ -11,6 +11,7 @@ import type { WorkerMemorySample } from "./diagnostic-process-types.js";
 import {
   getTrackedWorkerCpuSources,
   getTrackedWorkerLifecycleSnapshot,
+  getTrackedWorkerPoolSnapshot,
   createCpuTrackedWorker,
   markWorkerRetirement,
   trackNativeWorkerForCpu,
@@ -444,10 +445,19 @@ describe("worker CPU lifecycle", () => {
         file,
         'import("node:worker_threads").then(({ parentPort }) => parentPort.on("message", () => {}));',
       );
-      const [directHeap, ownedHeap] = await Promise.all([
-        direct.getHeapStatistics(),
-        owned.getHeapStatistics(),
-      ]);
+      const native = await direct.getHeapStatistics();
+      const directHeap = {
+        ...native,
+        used_heap_size: 1024,
+        total_heap_size: 4096,
+        external_memory: 256,
+      };
+      const ownedHeap = {
+        ...native,
+        used_heap_size: 2048,
+        total_heap_size: 8192,
+        external_memory: 512,
+      };
       const directHeapRead = vi.spyOn(direct, "getHeapStatistics").mockResolvedValue(directHeap);
       const ownedHeapRead = vi.spyOn(owned, "getHeapStatistics").mockResolvedValue(ownedHeap);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount + 2);
@@ -472,8 +482,9 @@ describe("worker CPU lifecycle", () => {
         workerArrayBuffersBytes: undefined,
         workerMemoryCoverage: "partial",
       });
-      expect(memory.workerHeapTotalBytes).toBeGreaterThan(memory.workerHeapUsedBytes!);
-      expect(memory.workerExternalBytes).toBeGreaterThan(0);
+      expect(memory.workerHeapUsedBytes).toBe((initial.workerHeapUsedBytes ?? 0) + 3072);
+      expect(memory.workerHeapTotalBytes).toBe((initial.workerHeapTotalBytes ?? 0) + 12288);
+      expect(memory.workerExternalBytes).toBe((initial.workerExternalBytes ?? 0) + 768);
       expect(memory.workerHeaps).toEqual([
         ...initial.workerHeaps,
         expect.objectContaining({ script: "other", ...nativeHeap(directHeap) }),
@@ -487,7 +498,11 @@ describe("worker CPU lifecycle", () => {
       await Promise.all([direct.terminate(), owned.terminate()]);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount);
       const retired = sampleTrackedWorkerMemory();
-      expect(retired).toEqual({ ...initial, workerLifecycle: retired.workerLifecycle });
+      expect(retired).toEqual({
+        ...initial,
+        workerLifecycle: retired.workerLifecycle,
+        workerTaskMetrics: memory.workerTaskMetrics,
+      });
       for (const [name, reason] of [
         ["other", "exit"],
         [script, "idle_timeout"],
@@ -697,4 +712,60 @@ describe("worker CPU lifecycle", () => {
     await pending;
     expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
   });
+});
+
+it("censuses native lifetimes, actual pool policies and only fresh heap samples", async () => {
+  const first = registerWorker(9001, "git-operation.worker.ts");
+  const second = registerWorker(9002, "git-operation.worker.ts");
+  const external = registerWorker(9003, "external.js");
+  const pool = {};
+  const policy = { floor: 1, cap: 2, pointReadCap: 3, idleTimeoutMs: 60_000 };
+  try {
+    attributeWorkerToPool(first, pool, "reader", policy);
+    attributeWorkerToPool(second, pool, "reader", policy);
+    const initial = getTrackedWorkerPoolSnapshot();
+    expect(initial.workerCensus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "git-operation.worker.js",
+          count: 2,
+          floor: 1,
+          cap: 2,
+          pointReadCap: 3,
+          idlePolicy: "retain-one",
+          heapUsedBytes: null,
+          heapSampledCount: 0,
+        }),
+        expect.objectContaining({
+          kind: "other",
+          count: 1,
+          floor: null,
+          cap: null,
+          idlePolicy: "unknown",
+          heapUsedBytes: null,
+        }),
+      ]),
+    );
+    await sampledMemory();
+    const memory = getTrackedWorkerPoolSnapshot();
+    expect(memory.workerCensus.find((row) => row.kind === "git-operation.worker.js")).toMatchObject(
+      {
+        heapSampledCount: 2,
+        heapUsedBytes: expect.any(Number),
+      },
+    );
+    markWorkerRetirement(first, "closed");
+    expect(getTrackedWorkerPoolSnapshot().workerCount).toBe(3);
+    first.emit("exit");
+    expect(
+      getTrackedWorkerPoolSnapshot().workerCensus.find(
+        (row) => row.kind === "git-operation.worker.js",
+      )?.count,
+    ).toBe(1);
+  } finally {
+    first.emit("exit");
+    second.emit("exit");
+    external.emit("exit");
+  }
+  expect(getTrackedWorkerPoolSnapshot().workerCensus).toEqual([]);
 });

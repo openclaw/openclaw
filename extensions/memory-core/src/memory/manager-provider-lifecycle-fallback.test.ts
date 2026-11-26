@@ -62,7 +62,7 @@ describe("memory index", () => {
     expect(manager.status().provider).toBe("fallback-provider");
 
     providerFixture.beforeEmbedQuery = null;
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_000);
     try {
       const recovered = await Promise.all([
         manager.search("alpha recovered"),

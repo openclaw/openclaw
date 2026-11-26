@@ -221,6 +221,17 @@ def establish_ancestry():
         # hide previously visible commits. A changed frontier is progress even
         # when its reachable count shrinks; only unchanged cuts can be stuck.
         if current_count <= previous_count and current_boundaries == previous_boundaries:
+            # Previously loaded history can leave Git's deepen frontier stuck.
+            # Request the remaining parents once, within the same fetch budget,
+            # then prove the relationship against the original pinned commits.
+            fetch_history(
+                "--unshallow",
+                f"+{source}:{source_local_ref}",
+                f"+{target_ref}:{target_hydration_local_ref}",
+            )
+            result, _ = relation_result(mode, source_sha, target_sha)
+            if result is not None:
+                return result
             print("::error::Release ancestry fetch completed without ancestry progress.", flush=True)
             return 125
         previous_count = current_count

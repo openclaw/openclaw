@@ -12,9 +12,11 @@ Which tool policies push a Codex turn onto the restricted native surface. Part o
 
 ## Restricted turns
 
-The Codex harness evaluates the effective tool policy for every turn. It marks
-the turn policy-restricted when any explicit policy would otherwise leave a
-Codex-native capability outside the OpenClaw policy boundary.
+The Codex harness evaluates the effective tool policy when each turn starts. It
+marks the turn policy-restricted when any explicit policy would otherwise leave
+a Codex-native capability outside the OpenClaw policy boundary. Changes apply
+when the next turn starts, including in an existing conversation; they do not
+revoke the policy of a turn already in progress.
 
 Restriction sources include global, provider, agent, group, sender, sandbox,
 subagent, inherited, scheduled/runtime, and per-run tool policies. A finite
@@ -29,9 +31,10 @@ The current audited safe-deny names are:
 
 ```text
 agents_list, automations, canvas, dashboard, gateway,
-image_generate, memory_get, memory_search, message, music_generate, openclaw,
+image_generate, intent, memory_forget, memory_get, memory_recall, memory_search,
+memory_store, message, music_generate, openclaw,
 progress_card, session_status, show_widget, skill_library, skill_workshop, tts,
-video_generate, web_fetch, x_search,
+video_generate, web_fetch, wiki_apply, wiki_get, wiki_lint, wiki_search, wiki_status, x_search,
 sessions_send, sessions_list, sessions_history, sessions_search, sessions_spawn,
 subagents, conversations_list, conversations_send, conversations_turn
 ```
@@ -40,6 +43,13 @@ A policy containing only those denies stays on the normal Codex native surface;
 the harness applies the named OpenClaw denial directly. Any other deny uses
 the restricted surface. For example, `tools.deny: ["nodes"]`
 restricts the native surface because `nodes` is not in the audited set.
+
+Plugin-owned names must also be present in the current plugin manifest metadata.
+For example, denying Memory Core `intent` blocks that tool without disabling
+hosted apps such as GitHub. The same applies to the audited LanceDB and Memory
+Wiki tools above; they operate on OpenClaw-owned memory stores, not Codex native
+memory. Plugin ownership alone does not make a denial safe: unknown names and
+unaudited plugin tools still use the restricted surface.
 
 OpenClaw admin and status denies alone do not remove native Codex tools.
 Session, conversation and delegation-tool denies keep the native shell and file

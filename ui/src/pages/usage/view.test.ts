@@ -78,6 +78,17 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("renders the toolbar's filter, display and refresh actions as one row of icon buttons", () => {
+    const { container } = mountReactiveUsage(createUsageProps());
+    const actions = [...container.querySelectorAll(".usage-view-options button")];
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Filters",
+      "Display",
+      "Refresh",
+    ]);
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
+  });
+
   it("identifies each query removal action and removes only its named token", () => {
     const props = createUsageProps();
     props.filters.queryDraft = 'provider:openai "label:Team Planning"';
@@ -97,6 +108,52 @@ describe("renderUsage", () => {
     expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
       "Remove filter: Provider",
     ]);
+  });
+
+  it("keeps selected providers usable without claiming an unknown inventory is empty", () => {
+    const props = createUsageProps();
+    const onQueryDraftChange = (props.callbacks.filters.onQueryDraftChange = vi.fn());
+    props.filters.queryDraft = "provider:openai";
+    const { container, setData } = mountReactiveUsage(props);
+    document.body.appendChild(container);
+    onTestFinished(() => container.remove());
+    const { surface } = openUsageFilter(container, "Provider");
+    expect(surface.querySelector('[aria-label="openai"]')?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    const search = surface.querySelector<HTMLInputElement>("input")!;
+    search.value = "anthropic";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    setData((current) => ({ ...current, error: "Report unavailable" }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    const filterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
+    setData((current) => ({ ...current, error: null, filterOptions }));
+    flush();
+    expect(surface.querySelector(".usage-value-picker__empty")?.textContent).toContain("anthropic");
+    setData((current) => ({
+      ...current,
+      filterOptions: { ...filterOptions, provider: ["anthropic"] },
+    }));
+    flush();
+    expect(surface.querySelector("input")).toBe(search);
+    expect(search.value).toBe("anthropic");
+    expect(surface.querySelector('[aria-label="anthropic"]')).not.toBeNull();
+    expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    search.focus();
+    const confirm = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirm, "keyCode", { value: 229 });
+    search.dispatchEvent(confirm);
+    expect(confirm.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+    expect(onQueryDraftChange).not.toHaveBeenCalled();
+    search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onQueryDraftChange).toHaveBeenCalledExactlyOnceWith(
+      "provider:openai provider:anthropic ",
+    );
   });
 
   it("keeps an IME-composed Enter from applying the usage query", () => {
@@ -170,14 +227,9 @@ describe("renderUsage", () => {
   });
 
   it.each(["session", "day"] as const)(
-    "restores the range warning after clearing a known-zero %s filter",
+    "distinguishes selected %s pricing and restores the range warning when cleared",
     (filter) => {
       const fixture = createRecordedCostUsage();
-      const zeroSession = fixture.sessions[0]!;
-      const selected: Partial<UsageProps["filters"]> =
-        filter === "session"
-          ? { selectedSessions: [zeroSession.key] }
-          : { selectedDays: zeroSession.usage!.activityDates! };
       const props = usageFixture(
         {
           ...fixture,
@@ -186,33 +238,31 @@ describe("renderUsage", () => {
         { startDate: fixture.costDaily[0]!.date },
       );
       const clearedFilters = { ...props.filters };
-      const container = document.createElement("div");
-      const [currentFilters, setFilters] = createSignal(props.filters);
-      mountUsage(
-        {
-          ...props,
-          get filters() {
-            return currentFilters();
-          },
-          get data() {
-            return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
-          },
-        },
-        container,
-      );
-      for (const { filters, missing, value } of [
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-        { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
-        { filters: clearedFilters, missing: true, value: "$0.03" },
-      ]) {
+      const { container, setFilters, setData } = mountReactiveUsage(props);
+      for (const [index, missing, value, cost] of [
+        [-1, true, "$0.03", "$0.20"],
+        [0, false, "$0.00", "$0.00"],
+        [-1, true, "$0.03", "$0.20"],
+        [1, false, "$0.10", "$0.20"],
+        [2, true, "$0.00", "Unpriced"],
+      ] as const) {
+        const session = fixture.sessions[index];
+        const selected: Partial<UsageProps["filters"]> = !session
+          ? {}
+          : filter === "session"
+            ? { selectedSessions: [session.key] }
+            : { selectedDays: session.usage!.activityDates! };
+        const filters = { ...clearedFilters, ...selected };
         setFilters(filters);
+        setData({ ...props.data, ...projectUsageData(fixture.sessions, filters) });
         flush();
         expect(averageCostSummary(container)).toEqual({
           hint: missing
-            ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
-            : "Average cost per message when providers report costs.",
+            ? "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data."
+            : "Known cost, including estimates, divided by all user and agent messages.",
           value,
         });
+        expect(texts(container, ".usage-metric-badge strong", false)[1]).toBe(cost);
       }
     },
   );
@@ -268,15 +318,11 @@ describe("renderUsage", () => {
     try {
       expect(container.querySelector(".usage-filter-menu__query input")).toBeNull();
       const { dropdown, surface, trigger } = openProviderFilter(container);
-      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
-        (item) => item.getAttribute("aria-label") === "clear",
-      )!;
+      const first = dropdown.querySelector('[aria-label="clear"]')!;
       expect(trigger.getAttribute("aria-label")).toBe("Provider");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
-        const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
-        ].find((item) => item.getAttribute("aria-label") === provider)!;
+        const option = dropdown.querySelector<HTMLButtonElement>(`[aria-label="${provider}"]`)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
         expect(trigger.textContent).toContain(provider === "clear" ? "clear" : "2");
@@ -286,9 +332,7 @@ describe("renderUsage", () => {
         expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
-      const mainTrigger = container.querySelector<HTMLButtonElement>(
-        ".usage-filter-menu__trigger",
-      )!;
+      const mainTrigger = container.querySelector<HTMLButtonElement>('[aria-label="Filters"]')!;
       mainTrigger.click();
       await waitForSolid(() => expect(mainTrigger.getAttribute("aria-expanded")).toBe("false"));
       expect(first.isConnected).toBe(true);
@@ -495,15 +539,51 @@ describe("renderUsage", () => {
       )
       ?.querySelector(".usage-summary-value");
     expect(messagesValue?.textContent?.trim()).toBe("100");
-    expect(container.textContent).toContain(
-      "Cost data is missing for some or all sessions in this range.",
-    );
+    expect(container.textContent).toContain("Some usage has no cost data.");
     expect(texts(container, ".usage-metric-badge strong", false)).toEqual(["1.0K", "$10.00", "1"]);
     const firstDay = container.querySelector(".daily-bar-wrapper");
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
+  });
+
+  it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {
+    const props = usageFixture({ totals: createEmptyCostUsageTotals() });
+    const refresh = vi.fn();
+    props.callbacks.filters.onRefresh = refresh;
+    const { container, setData } = mountReactiveUsage(props);
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const button = container.querySelector<HTMLButtonElement>(".usage-empty-state button")!;
+    expect(button).not.toBeNull();
+    button.focus();
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const pending = Promise.withResolvers<null>();
+    onTestFinished(() => pending.resolve(null));
+    setData({ ...props.data, read: pending.promise });
+    flush();
+    expect(container.querySelector(".usage-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    pending.resolve(null);
+    await waitForSolid(() => expect(button.getAttribute("aria-disabled")).not.toBe("true"));
+    expect(container.querySelector(".usage-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    const retired = Promise.withResolvers<null>();
+    onTestFinished(() => retired.resolve(null));
+    setData({ ...props.data, read: retired.promise, error: "Usage unavailable" });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    setData({ ...props.data, read: retired.promise, totals: null });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    expect(container.querySelector(".usage-loading-card")).not.toBeNull();
   });
 
   it("shows the empty state for an all-zero successful response", () => {

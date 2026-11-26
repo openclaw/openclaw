@@ -24,6 +24,7 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionGroupCatalogSnapshot
 import ai.openclaw.app.chat.SessionRewindResult
+import ai.openclaw.app.chat.SessionWakeDeadline
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.runCatchingCancellable
@@ -63,6 +64,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -487,11 +489,11 @@ class MainViewModel internal constructor(
   internal fun resumeNodeServiceForConnection(): () -> Boolean = NodeForegroundService.resume(context = nodeApp, startNow = prefs.onboardingCompleted.value)
 
   /**
-   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   * Adapts a runtime Flow to a stable ViewModel StateFlow before runtime startup.
    */
   private fun <T> runtimeState(
     initial: T,
-    selector: (NodeRuntime) -> StateFlow<T>,
+    selector: (NodeRuntime) -> Flow<T>,
   ): StateFlow<T> =
     runtimeRef
       .flatMapLatest { runtime -> runtime?.let(selector) ?: flowOf(initial) }
@@ -514,7 +516,7 @@ class MainViewModel internal constructor(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
 
-  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.gatewayConnectionDisplay.map { display -> display.isConnected } }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
   val desktopObserveAvailable: StateFlow<Boolean> =
@@ -548,6 +550,14 @@ class MainViewModel internal constructor(
 
   internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
 
+  internal val sessionBrowserRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.chat.sessionBrowserRevision }
+
+  internal val sessionWindowWake: StateFlow<SessionWakeDeadline?> = runtimeState(initial = null) { it.chat.sessionWindowWake }
+
+  internal fun refreshChatSessionsAfterWake(wake: SessionWakeDeadline) = ensureRuntime().chat.refreshSessionsAfterWake(wake)
+
+  internal fun refreshCurrentChatSessionWindow(): Unit = ensureRuntime().chat.refreshSessionsForCurrentWindow()
+
   internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
 
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
@@ -555,6 +565,7 @@ class MainViewModel internal constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val personalSessionPinAccess = runtimeState(initial = PersonalSessionPinAccess.Unsupported) { it.personalSessionPinAccess }
   internal val sessionDiffAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
@@ -574,7 +585,7 @@ class MainViewModel internal constructor(
   val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
-  internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
+  internal val skillsState = runtimeState(initial = GatewaySummaryState<List<GatewaySkillSummary>>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
@@ -1254,6 +1265,10 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent) }
   }
 
+  fun enterGatewayFingerprintManually() {
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
+  }
+
   fun startGatewayDiscovery() {
     queueRuntimeStartup()
   }
@@ -1833,7 +1848,7 @@ class MainViewModel internal constructor(
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
-  ): List<ChatSessionEntry> = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
+  ): List<ChatSessionEntry>? = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
 
   fun abortChat(): Unit = ensureRuntime().chat.abort()
 

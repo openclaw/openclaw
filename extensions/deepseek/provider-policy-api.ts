@@ -2,21 +2,18 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
 
-type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
-
-// Onboarding wrote these catalog-owned values into user config in prior releases.
-// Refresh only exact matches; any other values remain explicit user overrides.
-const PREVIOUS_BUNDLED_METADATA: Record<string, CatalogMetadataSnapshot> = {
-  "deepseek-v4-flash": {
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
-  },
-  "deepseek-v4-pro": {
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-  },
+// Onboarding wrote these prices with the 1M/384K limits into user config.
+// Refresh only exact snapshots; authored limits and prices remain overrides.
+const PREVIOUS_BUNDLED_COSTS: Record<string, ModelDefinitionConfig["cost"][]> = {
+  "deepseek-v4-flash": [
+    { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+    { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+  ],
+  "deepseek-v4-pro": [
+    { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+    { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+  ],
+  "deepseek-v4-flash-vision-exp": [{ input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0 }],
 };
 
 function isPositiveNumber(value: unknown): value is number {
@@ -52,17 +49,11 @@ function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undef
   );
 }
 
-function isPreviousBundledMetadataSnapshot(
-  raw: ModelDefinitionConfig,
-  previous: CatalogMetadataSnapshot | undefined,
-): boolean {
-  if (!previous) {
-    return false;
-  }
+function isPreviousBundledMetadataSnapshot(raw: ModelDefinitionConfig): boolean {
   return (
-    raw.contextWindow === previous.contextWindow &&
-    raw.maxTokens === previous.maxTokens &&
-    hasSameCost(raw.cost, previous.cost)
+    raw.contextWindow === 1_000_000 &&
+    raw.maxTokens === 384_000 &&
+    (PREVIOUS_BUNDLED_COSTS[raw.id]?.some((cost) => hasSameCost(raw.cost, cost)) ?? false)
   );
 }
 
@@ -89,10 +80,7 @@ export function normalizeConfig(params: {
     if (!catalogEntry) {
       return model;
     }
-    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(
-      model,
-      PREVIOUS_BUNDLED_METADATA[model.id],
-    );
+    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(model);
     const patched: Partial<ModelDefinitionConfig> = {};
 
     // Refresh only whole snapshots written by prior releases. A partial match can

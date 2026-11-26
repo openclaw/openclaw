@@ -455,6 +455,57 @@ describe("installPackageDir", () => {
     },
   );
 
+  it("stages a host-package junction without Windows symbolic-link privileges", async () => {
+    const { fixtureRoot, sourceDir, targetDir } = await createSourceFixture();
+    const hostRoot = path.join(fixtureRoot, "host");
+    const link = path.join(sourceDir, "node_modules", "openclaw");
+    await fs.mkdir(hostRoot);
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink(hostRoot, link, "junction");
+    const denied = () =>
+      Object.assign(new Error("Symbolic-link privilege is unavailable"), { code: "EPERM" });
+    const hostPlatform = process.platform;
+    const platform = vi.spyOn(process, "platform", "get");
+    const copy = fs.cp.bind(fs);
+    vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      platform.mockReturnValue("win32");
+      try {
+        return await copy(source, destination, {
+          ...options,
+          filter: async (sourceEntry, destinationEntry) => {
+            if (options?.filter && !(await options.filter(sourceEntry, destinationEntry))) {
+              return false;
+            }
+            // Node recreates a copied junction as a directory symlink.
+            if ((await fs.lstat(sourceEntry)).isSymbolicLink()) {
+              throw denied();
+            }
+            return true;
+          },
+        });
+      } finally {
+        platform.mockReturnValue(hostPlatform);
+      }
+    });
+    const symlink = fsSync.symlinkSync.bind(fsSync);
+    vi.spyOn(fsSync, "symlinkSync").mockImplementation((target, destination, type) => {
+      if (type !== "junction") {
+        throw denied();
+      }
+      symlink(target, destination, type);
+    });
+
+    const result = await installPackageDir({
+      ...updateOptions(sourceDir, targetDir),
+      mode: "install",
+    });
+
+    expect(result).toEqual({ ok: true });
+    const installed = path.join(targetDir, "node_modules", "openclaw");
+    expect((await fs.lstat(installed)).isSymbolicLink()).toBe(true);
+    expect(await fs.realpath(installed)).toBe(await fs.realpath(hostRoot));
+  });
+
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
     const { sourceDir, targetDir, options } = await createNpmFixture();
     const npmrcContent = "git=calc.exe\n";

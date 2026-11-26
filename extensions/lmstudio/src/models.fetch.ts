@@ -40,11 +40,16 @@ type LmstudioLoadResponse = {
 };
 
 export class LmstudioModelLoadError extends Error {
+  readonly requiredContextLength: number | undefined;
+
   constructor(
     readonly resolvedModelKey: string,
-    readonly requiredContextLength: number | undefined,
+    readonly attemptedContextLength: number,
+    smallerInstanceLoaded: boolean,
     cause: unknown,
   ) {
+    // Only an undersized resident instance makes chat's JIT fallback unsafe.
+    const requiredContextLength = smallerInstanceLoaded ? attemptedContextLength : undefined;
     super(
       requiredContextLength === undefined
         ? cause instanceof Error
@@ -53,6 +58,7 @@ export class LmstudioModelLoadError extends Error {
         : `LM Studio could not load "${resolvedModelKey}" with ${requiredContextLength} context tokens. Wait for loading to finish in LM Studio, then retry, or lower the model's contextTokens.`,
       { cause },
     );
+    this.requiredContextLength = requiredContextLength;
   }
 }
 
@@ -339,7 +345,8 @@ export async function prepareLmstudioModelForInference(
   } catch (error) {
     throw new LmstudioModelLoadError(
       canonicalModelKey,
-      loadedContextWindow === null ? undefined : contextLengthForLoad,
+      contextLengthForLoad,
+      loadedContextWindow !== null,
       error,
     );
   }

@@ -13,7 +13,7 @@ it.each([
   ["ci", "security-fast", "Check main push ratchets and protocol additions", ".ci-harness"],
   [
     "openclaw-npm-preflight",
-    "check_openclaw_npm",
+    "check_openclaw_npm_stage",
     "Check source, test types, and architecture",
     ".release-harness",
   ],

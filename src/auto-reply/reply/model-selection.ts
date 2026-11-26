@@ -12,11 +12,13 @@ import {
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { assertModelSupportsChat } from "../../agents/failover/error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import {
   normalizeProviderId,
   normalizeModelRef,
@@ -71,7 +73,8 @@ type ThinkingDefaultSelection = {
 
 type ModelSelectionState = {
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model; only inference needs one. */
+  model: string | undefined;
   requestedRouteResolution: ModelFallbackRouteResolution;
   modelPolicy: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -148,11 +151,13 @@ export async function createModelSelectionState(params: {
   parentSessionKey?: string;
   storePath?: string;
   defaultProvider: string;
-  defaultModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
   primaryProvider?: string;
   primaryModel?: string;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model; only inference needs one. */
+  model: string | undefined;
   hasModelDirective: boolean;
   skipStoredModelOverride?: boolean;
   /** One-shot scheduled model selection never changes the stored session preference. */
@@ -163,7 +168,6 @@ export async function createModelSelectionState(params: {
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", params.cfg);
   const startMs = timingEnabled ? Date.now() : 0;
@@ -209,7 +213,7 @@ export async function createModelSelectionState(params: {
       cfg,
       catalog,
       defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
+      defaultModel: defaultModel ? { provider: defaultProvider, model: defaultModel } : undefined,
       agentId: params.agentId,
       ...runtimeModelNormalization,
     });
@@ -218,10 +222,9 @@ export async function createModelSelectionState(params: {
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
     Object.keys(agentEntry?.models ?? {}).length > 0;
-  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
-    provider: defaultProvider,
-    model: defaultModel,
-  });
+  const defaultModelVisibleByWildcard =
+    defaultModel !== undefined &&
+    visibilityPolicy.allowsByWildcard({ provider: defaultProvider, model: defaultModel });
   const configuredModelCatalog = mergePreparedConfiguredCatalog({
     configured: [...visibilityPolicy.configuredCatalog],
     prepared: params.preparedModelCatalog?.entries,
@@ -286,6 +289,7 @@ export async function createModelSelectionState(params: {
       normalizeProviderId(override.provider ?? "") === OPENAI_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
+      primaryModel !== undefined &&
       normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
         normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
@@ -318,7 +322,7 @@ export async function createModelSelectionState(params: {
     );
   }
 
-  if (params.hasResolvedTurnModelOverride) {
+  if (params.hasResolvedTurnModelOverride && model) {
     // Scheduled payload choices are explicit, so re-admission must reject revoked models.
     const selection = { provider, model };
     if (!visibilityPolicy.allows(selection)) {
@@ -339,6 +343,14 @@ export async function createModelSelectionState(params: {
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
     const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
+    if (!params.hasModelDirective && !params.hasResolvedTurnModelOverride) {
+      // Preserve the saved selection when discovery withdraws chat support.
+      assertModelSupportsChat(
+        findSelectedCatalogEntry({ catalog: visibilityPolicy.catalog, ...storedOverrideRef })
+          ?.inference?.chat,
+        storedOverrideRef,
+      );
+    }
     const overrideAllowed =
       (effectiveStoredModelOverride?.source === "session" &&
         hasSessionAutoModelSelection(sessionEntry)) ||
@@ -357,7 +369,7 @@ export async function createModelSelectionState(params: {
       // The child's policy cannot clear the parent's choice.
       resetModelOverrideRef = key;
       resetModelOverrideReason = "disallowed";
-    } else if (shouldResetOverride) {
+    } else if (shouldResetOverride && primaryModel !== undefined) {
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
@@ -374,7 +386,6 @@ export async function createModelSelectionState(params: {
             sessionKey,
             initialEntry: initialSessionEntry,
             entry: nextSessionEntry,
-            commitGuard: operatorAuthority?.assertCurrent,
           });
           if (
             persistence.status === "lifecycle-invalidated" ||
@@ -408,6 +419,10 @@ export async function createModelSelectionState(params: {
     params.provider === storedOverrideRef?.provider &&
     params.model === storedOverrideRef.model
   ) {
+    if (primaryModel === undefined) {
+      // The refused pin was the only model; no configured primary can replace it.
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     provider = primaryProvider;
     model = primaryModel;
   }
@@ -459,9 +474,10 @@ export async function createModelSelectionState(params: {
     }
   }
 
+  // With no model selected, policy has nothing to admit; commands still run and inference refuses.
   const skipResolveSelection =
     params.hasModelDirective || modelSelectionLocked || usesStoredAutomaticSelection;
-  if (!skipResolveSelection) {
+  if (!skipResolveSelection && model) {
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,
@@ -476,7 +492,7 @@ export async function createModelSelectionState(params: {
     ({ provider, model } = allowedInitialSelection);
   }
   let operatorModelOverride = false;
-  if (!params.hasModelDirective) {
+  if (!params.hasModelDirective && model) {
     const selection = modelSelectionLocked
       ? { provider, model }
       : resolveOperatorModelDefault({
@@ -527,7 +543,6 @@ export async function createModelSelectionState(params: {
         credential: profile,
       });
     const assertSelectionCurrent = () => {
-      operatorAuthority?.assertCurrent();
       if (
         sessionStore[sessionKey] !== sessionEntry ||
         sessionEntry.sessionId !== selection.sessionId ||
@@ -598,10 +613,14 @@ export async function createModelSelectionState(params: {
         }),
     };
   };
+  const currentSelection = model ? { provider, model } : undefined;
   const thinkingCatalogs = new Map<string, ModelCatalog>();
   const resolveThinkingCatalog = async (
-    selection: ThinkingDefaultSelection = { provider, model },
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
   ) => {
+    if (!selection) {
+      return undefined;
+    }
     const { agentRuntime } = resolveThinkingSelection(selection);
     const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
     let catalog = thinkingCatalogs.get(key);
@@ -626,8 +645,11 @@ export async function createModelSelectionState(params: {
 
   const defaultThinkingLevels = new Map<string, ThinkLevel>();
   const resolveDefaultThinkingLevel = async (
-    selection: ThinkingDefaultSelection = { provider, model },
-  ) => {
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
+  ): Promise<ThinkLevel> => {
+    if (!selection) {
+      return "off";
+    }
     const thinkingSelection = resolveThinkingSelection(selection);
     const cacheKey = JSON.stringify([
       selection.provider,
@@ -650,26 +672,23 @@ export async function createModelSelectionState(params: {
   };
 
   const hasConfiguredThinkingDefault =
-    resolveConfiguredThinkingDefault({
-      cfg,
-      agentId: params.agentId,
-      provider,
-      model,
-    }) !== undefined;
+    currentSelection !== undefined &&
+    resolveConfiguredThinkingDefault({ cfg, agentId: params.agentId, ...currentSelection }) !==
+      undefined;
 
   const resolveDefaultReasoningLevel = async (
-    selection: ThinkingDefaultSelection = { provider, model },
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
   ): Promise<"on" | "off"> =>
-    resolveReasoningDefault({
-      provider: selection.provider,
-      model: selection.model,
-      catalog: await resolveThinkingCatalog(selection),
-    });
-  const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: visibilityPolicy.catalog,
-    provider,
-    model,
-  });
+    selection
+      ? resolveReasoningDefault({
+          provider: selection.provider,
+          model: selection.model,
+          catalog: await resolveThinkingCatalog(selection),
+        })
+      : "off";
+  const selectedCatalogEntry =
+    currentSelection &&
+    findSelectedCatalogEntry({ catalog: visibilityPolicy.catalog, ...currentSelection });
   return {
     provider,
     model,

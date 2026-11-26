@@ -2,8 +2,11 @@ import type {
   DispatchReplyWithBufferedBlockDispatcher as CoreBufferedDispatcher,
   DispatchReplyWithDispatcher as CoreDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.types.js";
-import { createLazyPromise, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
-import { publicChannelTurn, type PublicReplyParams } from "./reply-options.js";
+import {
+  dispatchReplyWithBufferedBlockDispatcher as dispatchBuffered,
+  dispatchReplyWithDispatcher as dispatch,
+} from "../plugins/legacy-sdk-reply-dispatch.js";
+import type { PublicReplyParams } from "./reply-options.js";
 /**
  * Runtime SDK subpath for lazy reply dispatch and inbound-context helpers.
  */
@@ -20,23 +23,9 @@ export type DispatchReplyWithDispatcher = (
 ) => ReturnType<CoreDispatcher>;
 export type { ReplyPayload } from "./reply-payload.js";
 
-const loadProviderDispatcherRuntimeModule = createLazyPromise(
-  () => import("../auto-reply/reply/provider-dispatcher.runtime.js"),
-  { cacheRejections: true },
-);
+/** Dispatches a reply with buffered block support through its exact host's lazy runtime. */
+export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
+  dispatchBuffered;
 
-const bindProviderDispatcher = createLazyRuntimeMethodBinder(loadProviderDispatcherRuntimeModule);
-
-const dispatchBuffered = bindProviderDispatcher(
-  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
-);
-const dispatch = bindProviderDispatcher((runtime) => runtime.dispatchReplyWithDispatcherCore);
-
-/** Dispatches a reply with buffered block support after lazy-loading the runtime dispatcher. */
-export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher = (
-  params,
-) => dispatchBuffered(publicChannelTurn(params));
-
-/** Dispatches a reply through the provider dispatcher after lazy-loading runtime code. */
-export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = (params) =>
-  dispatch(publicChannelTurn(params));
+/** Dispatches a reply through its exact host's lazy provider runtime. */
+export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = dispatch;

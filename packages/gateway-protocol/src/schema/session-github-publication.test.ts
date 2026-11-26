@@ -33,6 +33,17 @@ function rejectsAction(base: object, fields: Record<string, unknown>) {
 }
 
 describe("session GitHub publication protocol", () => {
+  it("accepts bounded issue content, never a caller-selected destination or account", () => {
+    const issue = { ...request("create_issue"), title: "Report", body: "Details" };
+    action.accepts(issue);
+    rejectsAction(issue, {
+      ...foreignTarget,
+      title: "  ",
+      body: "x".repeat(8193),
+      draft: true,
+      profileId: "other",
+    });
+  });
   it("accepts current or explicit PR review requests without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
     action.accepts(review, {

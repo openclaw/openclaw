@@ -38,7 +38,7 @@ function CodePointCount(value) {
 var isBoardSnapshot = (() => {
   let External = [
       /^[a-z0-9-]{1,40}$/u,
-      /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
+      /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^sandboxShellHtml$|^kindLabel$)/u,
       /^[a-z0-9][a-z0-9._-]{0,63}$/u,
       /^[a-z0-9-]{1,40}$/u,
       /^[a-z][a-z0-9-]{0,31}$/u,
@@ -342,6 +342,9 @@ var isBoardSnapshot = (() => {
           (unique_1.sandboxOrigin === void 0 ||
             !("sandboxOrigin" in unique_1) ||
             typeof unique_1.sandboxOrigin == "string") &&
+          (unique_1.sandboxShellHtml === void 0 ||
+            !("sandboxShellHtml" in unique_1) ||
+            typeof unique_1.sandboxShellHtml == "string") &&
           (unique_1.kindLabel === void 0 ||
             !("kindLabel" in unique_1) ||
             (typeof unique_1.kindLabel == "string" &&

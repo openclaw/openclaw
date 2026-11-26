@@ -186,7 +186,6 @@ export function resolveSessionCreateSpawnContext(params: {
   fork?: boolean;
   forkFrom?: "last-completed";
   emitCommandHooks?: boolean;
-  assertRuntimeCurrent?: () => void;
 }): Pick<
   Parameters<typeof createGatewaySession>[0],
   "spawnToolPolicy" | "activeParentFork" | "preparedModelSelection" | "preparedPermissionSelection"
@@ -221,11 +220,11 @@ export function resolveSessionCreateSpawnContext(params: {
         sessionKey: toolCaller.sessionKey,
         assertCurrent: toolCaller.assertCurrent,
       }
-    : runtimeIdentity && params.assertRuntimeCurrent
+    : runtimeIdentity
       ? {
           agentId: normalizeAgentId(runtimeIdentity.agentId),
           sessionKey: runtimeIdentity.sessionKey,
-          assertCurrent: params.assertRuntimeCurrent,
+          assertCurrent: undefined,
         }
       : undefined;
   const requesterSessionKey = normalizeOptionalString(params.creation.requesterSessionKey);

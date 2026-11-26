@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { retainSessionEntryWorkerPublication } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { storageProcessTestEntrypoints } from "../../infra/storage-process-runtime.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -99,6 +101,62 @@ it("keeps the physical shared-store owner through logical-owner updates and clea
       observe.restore();
     }
   }));
+
+it.each(["run-ownership", "control-owner", "membership"] as const)(
+  "keeps ACP control scoped while a %s publication is pending",
+  (change) =>
+    withOpenClawTestState({ label: "acp-control-pending-publication" }, async () => {
+      const scope = await seedControl();
+      const prepared = await prepareAcpSessionControlRead(scope);
+      let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
+      try {
+        const { entry, constraint } = prepared.initialRead;
+        if (!entry || !constraint?.source) {
+          throw new Error("Expected a durable ACP control source");
+        }
+        const { source } = constraint;
+        const { identity } = readOpenClawAgentDatabaseIdentity(
+          openOpenClawAgentDatabase({ agentId: source.agentId, path: source.path }),
+        );
+        if (typeof identity !== "string") {
+          throw new Error("Expected a durable ACP source identity");
+        }
+        publication = retainSessionEntryWorkerPublication({
+          agentId: source.agentId,
+          storePath: source.path,
+          databaseIdentity: identity,
+        });
+        publication.begin(
+          [scope.sessionKey],
+          change === "membership" ? [scope.sessionKey] : [],
+          [],
+          [scope.sessionKey],
+          undefined,
+          new Map([
+            [
+              scope.sessionKey,
+              {
+                ...entry,
+                lifecycleRunId: "successor-run",
+                activeWriterRunId: "successor-writer",
+                ...(change === "control-owner" ? { spawnedBy: "agent:main:successor" } : {}),
+              },
+            ],
+          ]),
+        );
+        if (change === "run-ownership") {
+          expect(() => prepared.assertCurrent(scope.cfg)).not.toThrow();
+        } else {
+          expect(() => prepared.assertCurrent(scope.cfg)).toThrow(/unavailable/);
+        }
+        publication.settle(undefined, false);
+        expect((await prepared.readCurrent(scope.cfg)).session.acp).toMatchObject(meta);
+      } finally {
+        publication?.settle(undefined, false);
+        prepared.release();
+      }
+    }),
+);
 
 it.each(["owner", "lifecycle", "shared-source"] as const)(
   "refuses retained control after same-ID %s replacement",

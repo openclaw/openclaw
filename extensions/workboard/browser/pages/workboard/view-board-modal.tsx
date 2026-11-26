@@ -235,7 +235,6 @@ export function BoardModal(props: {
                 class="settings-input"
                 autofocus
                 required
-                maxlength="120"
                 ref={nameValue}
                 disabled={saving() || !props.canWrite}
                 onInput={(event) => {
@@ -312,25 +311,27 @@ export function BoardModal(props: {
             </button>
           </openclaw-modal-actions>
         </form>
-        <Loading
-          on={completion()}
-          fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
-        >
-          <Errored
-            fallback={(error) => (
-              <WorkboardToast
-                owner={draft()}
-                message={formatUiError(error())}
-                key={completion()}
-                tone="error"
-                outcomeSource
-              />
-            )}
+        {!draft().sessions ? (
+          <Loading
+            on={completion()}
+            fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
           >
-            {completed()}
-            <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
-          </Errored>
-        </Loading>
+            <Errored
+              fallback={(error) => (
+                <WorkboardToast
+                  owner={draft()}
+                  message={formatUiError(error())}
+                  key={completion()}
+                  tone="error"
+                  outcomeSource
+                />
+              )}
+            >
+              {completed()}
+              <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
+            </Errored>
+          </Loading>
+        ) : undefined}
       </>
     </Dialog>
   );
@@ -370,7 +371,6 @@ function SessionsEditor(props: {
                 <input
                   class="settings-input"
                   required
-                  maxlength="60"
                   aria-label={t("workboard.sessionsBoard.columnLabel")}
                   ref={labelValue}
                   onInput={(event) => {
@@ -408,7 +408,6 @@ function SessionsEditor(props: {
                 <textarea
                   class="settings-input"
                   required
-                  maxlength="400"
                   rows="2"
                   aria-label={t("workboard.sessionsBoard.description")}
                   ref={descriptionValue}

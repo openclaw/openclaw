@@ -10,6 +10,7 @@ import {
   createManagedHandoffTestBinding,
 } from "./managed-handoff-isolation.js";
 import { requireNodeTool } from "./node-toolchain.js";
+import { writePrivateUpdateHandoffChildGuard } from "./private-update-handoff-child-guard.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const require = createRequire(import.meta.url);
@@ -277,3 +278,35 @@ it.each(["database-symlink", "database-hardlink", "wal-symlink", "parent-replace
     expect(fs.readFileSync(protectedFile, "utf8")).toBe("unchanged");
   },
 );
+
+it("keeps startup SQLite probes inside the guarded fixture after runner temp relocation", () => {
+  const root = fs.realpathSync(temporary.make("openclaw-handoff-probe-"));
+  const outside = fs.realpathSync(temporary.make("openclaw-handoff-runner-"));
+  const handoff = path.join(root, "handoff");
+  fs.mkdirSync(handoff);
+  const guard = writePrivateUpdateHandoffChildGuard(
+    path.join(handoff, "managed-update-handoffs.sqlite"),
+    handoff,
+  );
+  const child = runNode(
+    [
+      "-e",
+      `
+      const assert = require("node:assert/strict");
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const { tmpdir } = require("node:os");
+      const { DatabaseSync } = require("node:sqlite");
+      const directory = fs.mkdtempSync(path.join(tmpdir(), "openclaw-sqlite-close-"));
+      const db = new DatabaseSync(path.join(directory, "probe.sqlite"));
+      db.exec("CREATE TABLE probe(value)");
+      db.close();
+      assert.throws(() => new DatabaseSync(${JSON.stringify(path.join(outside, "refused.sqlite"))}), /owned fixture/);
+      fs.rmSync(directory, { recursive: true });
+    `,
+    ],
+    guard({ ...resolveServiceManagerEnv(), TMPDIR: outside, TMP: outside, TEMP: outside }),
+  );
+  expect(child.status, child.stderr).toBe(0);
+  expect(fs.readdirSync(outside)).toEqual([]);
+});

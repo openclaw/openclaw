@@ -14,7 +14,8 @@ export type SessionTranscriptAnchorEntry = Pick<
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
-  activePathRelation?: "exact" | "ancestor" | "off-path";
+  /** The requested leaf is the active leaf or one of its ancestors; `null` only when empty. */
+  onActivePath?: boolean;
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;

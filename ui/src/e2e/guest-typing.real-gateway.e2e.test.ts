@@ -210,19 +210,34 @@ suite.define(() => {
           page.getByRole("textbox", { name: "Chat composer", exact: true }),
         );
         // Both real subscribers must be watching before the UI enables ephemeral previews.
-        await expect
-          .poll(() =>
-            evaluateControlUiContext(
-              guest,
-              (app) =>
-                app.gateway
-                  .readPresence?.()
-                  ?.filter((entry) =>
-                    entry.watchedSessions?.includes("agent:main:dashboard:guest-typing"),
-                  ).length ?? 0,
-            ),
-          )
-          .toBeGreaterThanOrEqual(2);
+        await Promise.all(
+          pages.map((page, index) =>
+            expect
+              .poll(() =>
+                evaluateControlUiContext(
+                  page,
+                  (app, otherProfileId) => {
+                    const selfProfileId = app.gateway.snapshot.selfUser?.identity?.id;
+                    const presence =
+                      app.gateway
+                        .readPresence?.()
+                        ?.filter((entry) => entry.reason !== "disconnect") ?? [];
+                    return Boolean(
+                      selfProfileId &&
+                      presence.some((entry) => entry.user?.identity?.id === selfProfileId) &&
+                      presence.some(
+                        (entry) =>
+                          entry.user?.identity?.id === otherProfileId &&
+                          entry.watchedSessions?.includes("agent:main:dashboard:guest-typing"),
+                      ),
+                    );
+                  },
+                  profiles[1 - index]!,
+                ),
+              )
+              .toBe(true),
+          ),
+        );
         await composers[1]!.fill("Staff draft visible to the guest");
         await expect
           .poll(() => guest.locator(".agent-chat__typing-preview-text").textContent())

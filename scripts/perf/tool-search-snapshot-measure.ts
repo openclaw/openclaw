@@ -14,6 +14,7 @@ import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { snapshotToolSearchTargetTranscriptResult } from "../../src/agents/tool-search-transcript.js";
 import { jsonResult } from "../../src/agents/tools/tool-results.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", workload = "table", count = "2000"] = process.argv.slice(2);
 const iterations = Number(count);
@@ -54,12 +55,7 @@ for (let i = 0; i < 100; i++) {
 global.gc?.();
 const inspector = new Session();
 if (mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const load = os.loadavg();
 const cpuStart = process.threadCpuUsage();

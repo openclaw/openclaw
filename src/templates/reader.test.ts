@@ -2,6 +2,7 @@ import { link, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { parseTemplateManifest } from "./schema.js";
@@ -187,4 +188,29 @@ describe("Template source reader", () => {
 
     expectReadError(result, "read_failed");
   });
+
+  it.each([
+    {
+      name: "workspace.bootstrapFiles",
+      workspace: "  bootstrapFiles:\n    HEARTBEAT.md: { source: hb.md }\n",
+    },
+    {
+      name: "workspace.files",
+      workspace: "  files:\n    - { path: HEARTBEAT.md, source: hb.md }\n",
+    },
+  ])(
+    "rejects HEARTBEAT.md that Add cannot import as cron scratch from $name",
+    async ({ workspace }) => {
+      const root = tempDirs.make("openclaw-template-heartbeat-");
+      await writeFile(join(root, "CLAW.md"), markdown(`workspace:\n${workspace}---\n`));
+      const heartbeat = join(root, "hb.md");
+
+      await writeFile(heartbeat, Buffer.alloc(CRON_JOB_SCRATCH_MAX_BYTES, 0x61));
+      expect(await readTemplateManifestFile(root)).toMatchObject({ ok: true });
+      await writeFile(heartbeat, Buffer.alloc(CRON_JOB_SCRATCH_MAX_BYTES + 1, 0x61));
+      expectReadError(await readTemplateManifestFile(root), "heartbeat_too_large");
+      await writeFile(heartbeat, Buffer.from([0x62, 0xff, 0xfe, 0x0a]));
+      expectReadError(await readTemplateManifestFile(root), "heartbeat_invalid");
+    },
+  );
 });

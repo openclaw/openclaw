@@ -205,6 +205,7 @@ it("scopes history, file, reaction, and emoji reads to the trusted workspace", a
     after: undefined,
     threadId: "1712345678.123456",
     messageId: "1712345678.654321",
+    includeAuthorProfiles: true,
   });
   expect(history.details).toMatchObject({
     ok: true,

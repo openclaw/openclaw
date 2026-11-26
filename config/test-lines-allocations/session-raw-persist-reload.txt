@@ -1,2 +1,0 @@
-# Real actor/worker receipt growth and unchanged raw-persistence views at 16/512/4096 entries.
-69

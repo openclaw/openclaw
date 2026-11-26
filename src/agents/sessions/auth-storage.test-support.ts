@@ -12,7 +12,8 @@ import * as authProfileSqlite from "../auth-profiles/sqlite.js";
 import * as authProfileStoreUpdate from "../auth-profiles/store-update.js";
 import type { AuthProfileStore, OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { AuthStorage, type AuthStorageBackend } from "./auth-storage.js";
+import type { AuthStorageBackend } from "./auth-storage-types.js";
+import { AuthStorage } from "./auth-storage.js";
 
 export const stored = (agentDir: string, profileId: string) =>
   loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];

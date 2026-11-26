@@ -13,6 +13,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MATRIX_INBOUND_DEDUPE_TTL_MS,
@@ -36,11 +37,11 @@ import {
 } from "./src/matrix/credentials-state.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
+  openMatrixIdbSnapshotStoreOptions,
   writeMatrixIdbSnapshotJson,
 } from "./src/matrix/crypto-state-store.js";
 import { importInboundDedupeMarkersToIngress } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const CRYPTO = "matrix-crypto-unsafe-state";
 const SYNC = "matrix-sync-cache-json-to-plugin-state";
@@ -154,13 +155,23 @@ describe("matrix doctor contract state migrations", () => {
     fs.mkdirSync(storageRootDir, { recursive: true });
     const markerPath = path.join(storageRootDir, `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`);
     fs.writeFileSync(markerPath, "unsafe\n");
+    await writeMatrixIdbSnapshotJson({
+      storageRootDir,
+      snapshotJson: "[]",
+      databaseCount: 0,
+    });
+    const snapshot = params.context.openPluginStateKeyedStore(
+      openMatrixIdbSnapshotStoreOptions(storageRootDir),
+    );
+    const before = await snapshot.entries();
     expect((await detect(CRYPTO))?.preview).toEqual([
       expect.stringContaining("recovery is never automatic"),
     ]);
     const result = await migrate(CRYPTO);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("remains blocked")]);
-    expect(fs.existsSync(markerPath)).toBe(true);
+    expect(fs.readFileSync(markerPath, "utf8")).toBe("unsafe\n");
+    expect(await snapshot.entries()).toEqual(before);
   });
 
   it.each(["sync-cache", "inbound-dedupe"] as const)(

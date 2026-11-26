@@ -623,6 +623,11 @@ Windows host-wide legacy capture cleanup remains report-only.
   verified offline. Inspect `openclaw gateway status --deep`, stop it through its
   service owner, and retry. On macOS, a loaded LaunchAgent can respawn even when
   disabled and temporarily has no PID; `openclaw gateway stop` unloads it.
+  On Linux, source builds use loaded command locations to prove that their
+  output paths are physically separate from managed Gateways without reading
+  those services’ environment files. Overlapping or unverified locations retain
+  the full inspection and offline-owner checks; changing service-file permissions
+  is not a build prerequisite for a positively separate checkout.
 - `update-ledger-busy`: another process held the state database's write lock
   beyond the update step budget. The command exited successfully without admitting
   a run and left previous history intact. Retry once the Gateway's writes settle.
@@ -646,6 +651,13 @@ Windows host-wide legacy capture cleanup remains report-only.
   confirmed ENOSPC instead of trying older commits; it does not delete shared
   package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
   for staging placement and the older published-updater limitation.
+- `preflight-local-replay-conflict`: a local commit on a dev checkout conflicts
+  with every update candidate that was tried. The failing `preflight-rebase`
+  check names the local commit and the conflicted paths. Rebase the local
+  commits onto the update target and resolve those paths, or drop the commits,
+  then retry. After a conflict the updater skips older candidates whose content
+  at the conflicted paths is unchanged and still tries any candidate that
+  differs there.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: the package-manager install, staging, verification,

@@ -4,6 +4,8 @@ export const SESSION_WATCHDOG_WARNING_MS = 120_000;
 export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
+/** Nested maintenance reports its own timeout first; the reply stop is only its backstop. */
+export const SESSION_WATCHDOG_MAINTENANCE_GRACE_MS = 30_000;
 
 export type OwnedWait = {
   admission?: AdmissionDiagnostics;
@@ -34,7 +36,6 @@ export type SessionWatchdogSnapshot = Readonly<{
   hasActiveAttempt?: boolean;
   semanticProgressAtMs: number;
   lastProgressReason?: string;
-  warningMs: number;
   semanticDeadlineAtMs: number;
   executionDeadlineAtMs?: number;
   cleanupDeadlineAtMs?: number;
@@ -50,7 +51,7 @@ export type SessionWatchdogSnapshot = Readonly<{
   recovery?: { status: "pending" | "blocked" | "settled"; startedAtMs: number; error?: string };
 }>;
 export type SessionWatchdogDecision = Readonly<{
-  action: "observe" | "warn" | "stop" | "expire_cleanup" | "blocked";
+  action: "observe" | "stop" | "expire_cleanup" | "blocked";
   reason: string;
   deadlineAtMs?: number;
 }>;
@@ -102,7 +103,5 @@ export function decideSessionWatchdog(
   if (now >= deadlineAtMs) {
     return { action: "stop", reason: "semantic_stall", deadlineAtMs };
   }
-  return now >= snapshot.semanticProgressAtMs + snapshot.warningMs
-    ? { action: "warn", reason: "no_semantic_progress", deadlineAtMs }
-    : { action: "observe", reason: "progress", deadlineAtMs };
+  return { action: "observe", reason: "progress", deadlineAtMs };
 }

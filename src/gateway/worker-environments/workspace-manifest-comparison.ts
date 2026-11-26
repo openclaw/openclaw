@@ -11,7 +11,11 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  buildCacheInputPaths,
+  workspaceToolCacheHint,
+} from "./workspace-path-exclusions.js";
 
 type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
 const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
@@ -21,7 +25,11 @@ const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
 /** Worker errors preserve messages, not custom fields; these paths are advice, never authority. */
 export function workspaceSizeRecoveryPaths(error: Error): string[] {
   if (error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
-    return [error.message.slice(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX.length)];
+    return [
+      error.message
+        .slice(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX.length)
+        .split("\nCache guidance: ")[0]!,
+    ];
   }
   if (!error.message.startsWith(OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX)) {
     return [];
@@ -220,7 +228,9 @@ export function parseChangedWorkspaceResult(
   let totalBytes = 0;
   for (const entry of entries) {
     if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-      throw new Error(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX + entry.path);
+      throw new Error(
+        OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX + entry.path + workspaceToolCacheHint(entry.path),
+      );
     }
     totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
   }

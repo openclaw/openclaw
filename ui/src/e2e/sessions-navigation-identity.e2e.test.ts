@@ -101,8 +101,8 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}sessions`);
-        await page.getByRole("button", { name: "Search transcripts" }).click();
-        const input = page.getByRole("searchbox", { name: "Search session transcripts" });
+        await page.getByRole("button", { name: "Search chats" }).click();
+        const input = page.getByRole("searchbox", { name: "Search chats" });
         await input.waitFor({ state: "visible" });
         if (!scenario.source) {
           await input.fill("Selected target transcript");

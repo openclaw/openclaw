@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -10,12 +11,14 @@ const enSessionNavigation = {
       sourceHandoffRequired:
         "This is a read-only snapshot. Its authenticated original publisher must run the handoff command from the original conversation before you can continue here.",
       sessionMenu: "External session actions",
+      openOriginal: "Open original",
+      originalUnavailable:
+        "Open original requires a supported paired node, approved link command, and a configured Control UI address. Outbound Gateway sources do not support it.",
       openInOpenClaw: "Open in OpenClaw",
       importToOpenClaw: "Import to OpenClaw",
-      importComplete: "Imported {count} transcript items.",
-      importUnchanged: "The imported transcript is up to date.",
-      importIncomplete:
-        "Imported {count} transcript items. Older history exceeded the import limit.",
+      importComplete: "Imported {count} chat items.",
+      importUnchanged: "The imported chat is up to date.",
+      importIncomplete: "Imported {count} chat items. Older history exceeded the import limit.",
       openImportedSession: "Open imported session",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
@@ -48,10 +51,6 @@ const enSessionNavigation = {
 } satisfies TranslationMap;
 
 export const registerSessionNavigationEnglish = Object.assign(
-  () => {
-    Object.assign(en.chat.catalog, enSessionNavigation.chat.catalog);
-    Object.assign(en.chat.sessionSuggestions, enSessionNavigation.chat.sessionSuggestions);
-    Object.assign(en.chat.sessionRoute, enSessionNavigation.chat.sessionRoute);
-  },
+  () => mergeCatalog(en, enSessionNavigation),
   { catalog: enSessionNavigation },
 );

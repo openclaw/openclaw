@@ -58,16 +58,34 @@ it("retains independent nested lifecycle records after the source entry changes"
     updatedAt: 1,
     providerReview: review,
     pendingWorktree,
+    templateInitialization: {
+      source: { packageName: "synthetic-template", version: "1.0.0" },
+      agentConfig: { name: "Original" },
+      workspaceIdentity: "synthetic-workspace",
+    },
+    owner: { actor: { type: "system" }, assignedBy: { type: "system", label: "Original" } },
   };
   const expected = structuredClone(entry);
   const retained = projectSessionSharingEntry(entry);
 
   review.review.continuation.message = "Changed continuation";
   pendingWorktree.source.id = "replacement-project";
+  entry.templateInitialization!.agentConfig.name = "Changed";
+  entry.owner!.assignedBy!.label = "Changed";
 
-  for (const key of ["providerReview", "pendingWorktree"] as const) {
+  for (const key of [
+    "providerReview",
+    "pendingWorktree",
+    "templateInitialization",
+    "owner",
+  ] as const) {
     expect(retained[key]).toEqual(expected[key]);
   }
+  expect(sessionSharingEntriesEqual(entry, retained)).toBe(false);
+  retained.templateInitialization!.source.version = "2.0.0";
+  retained.owner!.actor.label = "Retained";
+  expect(entry.templateInitialization!.source.version).toBe("1.0.0");
+  expect(entry.owner!.actor.label).toBeUndefined();
 });
 
 it("captures inherited tool policy once and keeps both sides independently mutable", () => {

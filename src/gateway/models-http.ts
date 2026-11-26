@@ -7,7 +7,6 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
-  sendUnauthorized,
 } from "./http-common.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
@@ -60,10 +59,6 @@ export async function handleOpenAiModelsHttpRequest(
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({ ...opts, req, res });
   if (!requestAuth) {
-    return true;
-  }
-  if (!requestAuth.hasCurrentClientAuthority()) {
-    sendUnauthorized(res);
     return true;
   }
 

@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -131,6 +132,22 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     expect(result.imagePaths).toHaveLength(1);
   });
 
+  it("keeps images within the configured imageMaxDimensionPx", async () => {
+    const workspaceDir = imageWorkspace();
+    const imagePath = path.join(workspaceDir, "wide.png");
+    const image = createSolidPngBuffer(1600, 8, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    const prepared = await prepareCliPromptImagePayload({
+      backend: codexImages,
+      prompt: "describe the attachment",
+      workspaceDir,
+      config: { agents: { defaults: { imageMaxDimensionPx: 2400 } } },
+      media: [{ path: imagePath, contentType: "image/png" }],
+    });
+
+    await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+  });
+
   it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
     await expect(
       prepareCliPromptImagePayload({
@@ -190,12 +207,18 @@ describe("writeCliImages", () => {
 
   it("carries exact image-turn correlation beside Claude prompt paths", async () => {
     const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
-    const prepared = await prepareCliPromptImagePayload({
+    const params = {
       backend: { command: "claude", imageArg: "@" },
       prompt: "describe this",
       workspaceDir: "/workspace",
-      images: [pngImage("aW1hZ2U=")],
+      media: readPersistedMediaFacts({ __openclaw: { media: [null] } }),
       imageTurnKey: turnKey,
+    };
+    const textOnly = await prepareCliPromptImagePayload(params);
+    expect(textOnly.prompt).toBe(params.prompt);
+    const prepared = await prepareCliPromptImagePayload({
+      ...params,
+      images: [pngImage(createSolidPngBuffer(1, 1, { r: 0, g: 90, b: 70 }))],
     });
 
     try {
@@ -315,6 +338,74 @@ describe("writeCliImages", () => {
       await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
     } finally {
       envSnapshot.restore();
+    }
+  });
+
+  it("re-sweeps stale workspace images across long-running invocations", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseNow = new Date("2026-11-01T00:00:00Z");
+      vi.setSystemTime(baseNow);
+      const baseNowMs = baseNow.getTime();
+
+      const workspaceDir = tempDirs.make("cli-image-resweep-");
+      const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
+      await fs.mkdir(imageRoot, { recursive: true });
+
+      // First stale file: mtime 8 days ago (beyond the 7-day TTL).
+      // fs.utimes takes seconds (Unix timestamp) while Date.now() is ms, hence /1000.
+      const staleBefore = path.join(imageRoot, "stale-before.png");
+      await fs.writeFile(staleBefore, Buffer.from("fake-stale-before"));
+      const eightDaysAgoMs = baseNowMs - 8 * 24 * 60 * 60 * 1000;
+      await fs.utimes(staleBefore, eightDaysAgoMs / 1000, eightDaysAgoMs / 1000);
+
+      const backend = { command: "test", imagePathScope: "workspace" as const };
+      const image = pngImage("dGVzdA==");
+
+      // First call sweeps, removing staleBefore.
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "hi",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleBefore)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Advance fake time 25h (beyond the 24h recurrence window).
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+
+      // A file written later in the process that would now be 8 days old.
+      const staleAfter = path.join(imageRoot, "stale-after.png");
+      await fs.writeFile(staleAfter, Buffer.from("fake-stale-after"));
+      const afterBaseMs = baseNowMs + 25 * 60 * 60 * 1000;
+      const afterMtimeMs = afterBaseMs - 8 * 24 * 60 * 60 * 1000;
+      await fs.utimes(staleAfter, afterMtimeMs / 1000, afterMtimeMs / 1000);
+
+      // Second call: the 24h window has elapsed, so sweep runs again and removes staleAfter.
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "hi again",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleAfter)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Inside the recurrence window a stale file must survive the next write.
+      // pre-fix (Set guard): every call skips the sweep, so staleWithin survives too;
+      // the throttle direction is what pins the recurrence window rather than "always sweep".
+      const staleWithin = path.join(imageRoot, "stale-within.png");
+      await fs.writeFile(staleWithin, Buffer.from("fake-stale-within"));
+      await fs.utimes(staleWithin, afterMtimeMs / 1000, afterMtimeMs / 1000);
+      vi.advanceTimersByTime(60 * 60 * 1000);
+      await prepareCliPromptImagePayload({
+        backend,
+        prompt: "within window",
+        workspaceDir,
+        images: [image],
+      });
+      await expect(fs.access(staleWithin)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

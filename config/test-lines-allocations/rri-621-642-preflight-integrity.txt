@@ -1,0 +1,3 @@
+# RRI-621/RRI-642: real candidate CLI wrong-role/source rejection, same-output retry,
+# accepted-ID immutability, and raw artifact CLI HTTP 403 diagnostic preservation.
+133

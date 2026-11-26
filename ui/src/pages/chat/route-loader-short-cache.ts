@@ -113,7 +113,10 @@ export function findCachedShortSession(
 ): CachedShortSession | undefined {
   const search = new URLSearchParams(location.search);
   const locationKey = search.get(SESSION_NAVIGATION_KEY_PARAM)?.trim();
-  const handoffKey = consumeSessionNavigationHandoff(context.gateway, location.pathname);
+  const handoffKey = consumeSessionNavigationHandoff(
+    context.gateway,
+    location.pathname,
+  )?.sessionKey;
   const carriedKey = locationKey ?? handoffKey;
   const carriedByCurrentNavigation = Boolean(handoffKey && handoffKey === carriedKey);
   if (carriedKey) {

@@ -16,14 +16,16 @@ import {
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import { logWarn } from "../../logger.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -53,7 +55,6 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     return;
   }
   const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertCaller = caller && captureGatewayToolCallerAssertion();
   const assertToolAllowed = caller?.assertToolAllowed;
   const scope = getPluginRuntimeGatewayRequestScope();
   const registry = scope?.pluginRegistry;
@@ -63,8 +64,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     record &&
     capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
   if (
-    !caller ||
-    !assertCaller ||
+    !caller?.operationalRunInstance ||
     !assertToolAllowed ||
     client?.internal?.pluginRuntimeOwnerId !== "github" ||
     !pluginCurrent
@@ -81,12 +81,11 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
   );
   const signal = AbortSignal.any(signals);
   const assertActive = () => {
-    assertCaller();
     assertToolAllowed(toolName);
     options.sessionMutationCommitGuard?.();
     signal.throwIfAborted();
-    if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
-      throw new Error("GitHub read authority is no longer active.");
+    if (!pluginCurrent()) {
+      throw new Error("The GitHub plugin stopped. Start a new request to retry.");
     }
   };
   try {
@@ -164,11 +163,18 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           scope: params.scope,
         });
         let nextConfig = resolved.cfg;
+        // Clients re-read status for every agent that inherits this identity as soon as
+        // this reply arrives; reply only after the Gateway runs on the written config.
+        const application = createRuntimeConfigWriteApplication(
+          captureGatewayRootWorkAdmissionContinuationScope()?.run,
+        );
+        const writeOptions = attachRuntimeConfigWriteApplication({}, application);
         if (params.mode === "inherit") {
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: params.scope,
             agentId: resolved.agentId,
             expectedIdentity: previousIdentity ?? null,
+            writeOptions,
           });
         } else {
           const gitAuthor = params.gitAuthor
@@ -207,9 +213,17 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
                 agentId: resolved.agentId,
                 identity,
                 expectedIdentity: previousIdentity ?? null,
+                writeOptions,
               });
             },
           });
+        }
+        const applied = application.claimed ? await application.result : "applied";
+        if (applied !== "applied" && applied !== "applied-restart-required") {
+          // The identity is saved; new replies pick it up once the Gateway applies it.
+          logWarn(
+            `tools-github: saved GitHub identity was not applied immediately (${typeof applied === "string" ? applied : applied.status})`,
+          );
         }
         if (previousIdentity?.kind === "oauth") {
           await context.githubOAuthService?.retireProfileAsync(previousIdentity.profileId);

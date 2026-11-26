@@ -18,6 +18,7 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { Message } from "@openclaw/llm-core";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -170,12 +171,7 @@ for (let sample = 0; sample < samples; sample++) {
     gc();
     const inspector = new Session();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 1024,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 1024);
     }
     const durations: number[] = [];
     const cpu = process.threadCpuUsage();

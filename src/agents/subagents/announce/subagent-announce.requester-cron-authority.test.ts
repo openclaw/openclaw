@@ -97,7 +97,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
   const originalCapability = createCronCreatorAuthorityCapability(
     sourceRunId,
     { kind: "unknown" },
-    { source: "control-ui-admin" },
+    { source: "operator" },
   )!;
   await runWithCronCreatorAuthorityCapability(originalCapability, () =>
     withGatewayToolCallerIdentity(
@@ -158,7 +158,6 @@ it("keeps bound automation management after the old cohort is explicitly removed
           sourceSessionKey: child.childSessionKey,
           sourceTool: String(params.sourceTool),
         },
-        hasRestoredCronContinuation: false,
         isOneShotModelRun: false,
       });
       if (admission) {

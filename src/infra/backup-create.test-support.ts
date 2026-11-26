@@ -1,4 +1,4 @@
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import {
   type OpenClawTestState,

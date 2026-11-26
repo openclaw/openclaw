@@ -1,6 +1,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { TtsAutoMode } from "../config/types.tts.js";
-import { TtsAutoSchema } from "../config/zod-schema.core.js";
+import { TtsAutoSchema } from "../config/zod-schema.tts-auto.js";
 
 /** Accepted TTS auto modes from config, prefs, and session-level overrides. */
 export const TTS_AUTO_MODES = new Set<TtsAutoMode>(TtsAutoSchema.options);

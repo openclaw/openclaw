@@ -70,7 +70,7 @@ describe("saved device-token bindings at Gateway start", () => {
     });
     const service = createOpenClawIdService({
       getConfig: () => ({ enabled: false }),
-      getStateDir: () => "/nonexistent/openclaw-id-test",
+      getStateDir: () => claw.stateDir,
       getGatewayServer: () => undefined,
       log: { info: () => {}, warn: () => {} },
       createAuthority: async () => {
@@ -139,7 +139,7 @@ it("hydrates recovery authority locally before tunnel startup and keeps it throu
   const release = createDeferredCore();
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
-    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getStateDir: () => claw.stateDir,
     getGatewayServer: () => {
       throw new Error("recovery must not start a tunnel");
     },
@@ -181,7 +181,7 @@ it("makes concurrent source recovery join the same pending authority load", asyn
   });
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
-    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getStateDir: () => claw.stateDir,
     getGatewayServer: () => undefined,
     log: { info: () => {}, warn: () => {} },
     createAuthority: async () => owner,
@@ -218,7 +218,7 @@ it("keeps a stopped Gateway from observing or publishing after a late cold load"
   const release = createDeferredCore();
   const service = createOpenClawIdService({
     getConfig: () => ({ enabled: true }),
-    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getStateDir: () => claw.stateDir,
     getGatewayServer: () => undefined,
     log: { info: () => {}, warn: () => {} },
     createAuthority: async () => {

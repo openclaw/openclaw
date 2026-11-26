@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import {
@@ -19,6 +19,7 @@ import {
 
 it("samples the actual resident inventory and releases diagnostics with each projection", async () => {
   const enabled = areDiagnosticsEnabledForProcess();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(1);
   setDiagnosticsEnabledForProcess(true);
   let observed:
     | Extract<DiagnosticEventPayload, { type: "sessions.projection.retention" }>
@@ -58,6 +59,7 @@ it("samples the actual resident inventory and releases diagnostics with each pro
       using second = await createTestProjection({ cfg, modelCatalog: [] });
       expect(await sample()).toMatchObject({ projections: 2, entries: 2 });
       expect(observed!.estimatedBytes).toBeGreaterThan(0);
+      const initialBytes = observed!.estimatedBytes;
       const retired = first.selectEntries().map((row) => new WeakRef(row));
       const storePath = first.selectEntries()[0]!.storeTarget.storePath;
       await deleteSessionEntryLifecycle({
@@ -68,6 +70,10 @@ it("samples the actual resident inventory and releases diagnostics with each pro
       });
       await Promise.all([first.ensureMaterialized(), second.ensureMaterialized()]);
       expect(await sample()).toMatchObject({ projections: 2, entries: 0 });
+      expect(observed!.estimatedBytes).toBe(initialBytes);
+      clock.mockReturnValue(300_001);
+      await sample();
+      expect(observed!.estimatedBytes).toBeLessThan(initialBytes);
       await expectCollected(...retired);
       first.dispose();
       expect(await sample()).toMatchObject({ projections: 1, entries: 0 });
@@ -83,6 +89,7 @@ it("samples the actual resident inventory and releases diagnostics with each pro
       expect(await sample()).toBeUndefined();
     });
   } finally {
+    clock.mockRestore();
     stop();
     setDiagnosticsEnabledForProcess(enabled);
   }

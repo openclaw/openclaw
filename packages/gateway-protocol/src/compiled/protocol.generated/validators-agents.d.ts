@@ -40,6 +40,7 @@ export {
   isSkillsUploadChunkParams,
   isSkillsUploadCommitParams,
   isSkillsUpdateParams,
+  isSkillsCategoriesParams,
   isSkillsSearchParams,
   isSkillsDetailParams,
   isSkillsWorkshopListParams,
@@ -52,4 +53,7 @@ export {
   isSkillsSkillCardParams,
   isSkillsFileGetParams,
   isModelsProbeParams,
+  isToolUsageStatusParams,
+  isToolUsageImportParams,
+  isToolUsageResetParams,
 } from "./predicates.js";

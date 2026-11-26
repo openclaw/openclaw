@@ -26,6 +26,20 @@ enum TestProcessSupport {
         return kill(pid, 0) == -1 && errno == ESRCH
     }
 
+    /// Reaping is asynchronous, so the process can still be visible for a moment
+    /// after `run` returns.
+    static func waitUntilGoneSynchronously(_ pid: pid_t) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            errno = 0
+            if kill(pid, 0) == -1, errno == ESRCH {
+                return true
+            }
+            usleep(10000)
+        }
+        return false
+    }
+
     static func waitUntilGone(
         _ pid: pid_t,
         sourceLocation: SourceLocation = #_sourceLocation) async throws -> Bool

@@ -53,15 +53,21 @@ it("reveals identity and following settings before preferences finish, then enab
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.self", {});
       expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada");
+      expect(page.querySelector("#settings-profile-access")).toBeNull();
       expect(page.querySelector("openclaw-model-accounts")).toBeNull();
       expect(page.querySelector("button.settings-row--nav")).toBeNull();
     });
     identity.resolve({ profile: modelAccountProfile });
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.prefs.get", {
-        keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+        keys: [
+          GIT_COAUTHOR_PREFERENCE_KEY,
+          "github.prAttribution.enabled",
+          "git.coauthor.organization",
+        ],
       });
       expect(page.textContent).toContain("ada@example.test");
+      expect(page.querySelector("#settings-profile-access")).not.toBeNull();
       expect(page.querySelector("openclaw-model-accounts")).not.toBeNull();
       expect(page.querySelector("button.settings-row--nav")?.textContent).toContain(
         "Usage statistics",

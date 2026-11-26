@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +11,7 @@ const survivorLanes = ["published-upgrade-survivor", "update-migration"];
 const isSurvivorLane = (lane) =>
   survivorLanes.some((name) => lane === name || lane.startsWith(`${name}-`));
 
-function probeBaseline(baseline) {
+async function probeBaseline(baseline) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-baseline-check-"));
   const prefix = path.join(root, "prefix");
   const config = path.join(root, "openclaw.json");
@@ -44,13 +44,29 @@ function probeBaseline(baseline) {
       // synthetic setting to exercise scenario setup without starting a Gateway.
       [cli, ["config", "set", "gateway.mode", "local"], 60_000],
     ]) {
-      const result = spawnSync(command, args, {
-        cwd: root,
-        env,
-        encoding: "utf8",
-        timeout,
-        killSignal: "SIGKILL",
-        maxBuffer: 1024 * 1024,
+      const result = await new Promise((resolve) => {
+        const child = execFile(
+          command,
+          args,
+          {
+            cwd: root,
+            env,
+            encoding: "utf8",
+            timeout,
+            killSignal: "SIGKILL",
+            maxBuffer: 1024 * 1024,
+          },
+          (error, stdout, stderr) =>
+            resolve({
+              // Numeric exits are baseline failures, not command launch failures.
+              error: error && typeof error.code !== "number" ? error : undefined,
+              status: child.exitCode,
+              signal: child.signalCode,
+              stdout,
+              stderr,
+            }),
+        );
+        child.stdin.end();
       });
       const label = command === "npm" ? "npm install" : `openclaw ${args.join(" ")}`;
       const error = [result.error?.message, result.stderr, result.stdout]
@@ -79,7 +95,7 @@ function probeBaseline(baseline) {
   }
 }
 
-export function checkUpgradeSurvivorBaselines(
+export async function checkUpgradeSurvivorBaselines(
   groups,
   { evidenceDir, baselines, baseline, scenarios },
 ) {
@@ -105,10 +121,20 @@ export function checkUpgradeSurvivorBaselines(
     }
   }
   mkdirSync(evidenceDir, { recursive: true });
-  const results = [...selections.values()].map((selection) => {
-    console.error(`Checking published upgrade baseline ${selection.baseline}`);
-    return Object.assign(selection, probeBaseline(selection.baseline));
-  });
+  const results = [];
+  const selected = [...selections.values()];
+  // Keep the existing runner and isolated homes; cap installs at two rather
+  // than multiplying registry traffic and decompression across every baseline.
+  for (let index = 0; index < selected.length; index += 2) {
+    results.push(
+      ...(await Promise.all(
+        selected.slice(index, index + 2).map(async (selection) => {
+          console.error("Checking published upgrade baseline " + selection.baseline);
+          return Object.assign(selection, await probeBaseline(selection.baseline));
+        }),
+      )),
+    );
+  }
   writeFileSync(
     path.join(evidenceDir, "summary.json"),
     `${JSON.stringify({ baselines: results }, null, 2)}\n`,

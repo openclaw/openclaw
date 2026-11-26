@@ -1,5 +1,5 @@
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
-import type { TranscriptsSummary } from "./summary.js";
+import type { TranscriptDisplayTurn } from "./speaker-labels.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
 
 export type TranscriptReadEntry = {
   session: TranscriptSessionDescriptor;
@@ -19,11 +19,13 @@ export type TranscriptReadNotes = {
 };
 
 export type TranscriptSummarySnapshot = {
+  hasSpeakerAliases?: boolean;
   inputRevision: string;
   nextSequence: number;
   stoppedAt?: string;
   summaryRevision: string;
-  utterances: TranscriptUtterance[];
+  turns: TranscriptDisplayTurn[];
+  utteranceCount: number;
 };
 
 export type TranscriptSummaryWriteGuard = Pick<

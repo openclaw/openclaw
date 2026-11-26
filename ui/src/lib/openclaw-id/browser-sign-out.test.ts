@@ -55,6 +55,55 @@ async function browser(initial = true) {
   return { account, storage, documentWindow, assign, popup };
 }
 
+it.each([
+  {
+    screenX: 100,
+    screenY: 40,
+    availWidth: 1920,
+    availHeight: 1080,
+    expected: "popup,width=520,height=720,left=480,top=130",
+  },
+  {
+    screenX: -1500,
+    screenY: -1000,
+    availWidth: 1920,
+    availHeight: 1080,
+    expected: "popup,width=520,height=720,left=-1120,top=-910",
+  },
+  {
+    screenX: 0,
+    screenY: 0,
+    availWidth: 400,
+    availHeight: 600,
+    expected: "popup,width=400,height=600,left=0,top=0",
+  },
+])(
+  "reserves a centered sign-in popup before the Gateway read ($screenX, $screenY)",
+  async (geometry) => {
+    const { account, documentWindow, popup } = await browser(false);
+    Object.assign(documentWindow, {
+      screenX: geometry.screenX,
+      screenY: geometry.screenY,
+      outerWidth: Math.min(1280, geometry.availWidth),
+      outerHeight: Math.min(900, geometry.availHeight),
+      screen: { availWidth: geometry.availWidth, availHeight: geometry.availHeight },
+    });
+    const open = vi.spyOn(window, "open");
+    const request = vi.fn().mockImplementation(() => {
+      expect(open).toHaveBeenCalledWith("about:blank", "_blank", geometry.expected);
+      expect(popup).toHaveProperty("opener", null);
+      return Promise.reject(new Error("synthetic authority failure"));
+    });
+    // SAFETY: the sign-in failure only exercises the Gateway request method.
+    const client = { request } as unknown as GatewayBrowserClient;
+    await expect(account.signInWithOpenClawId({ client, basePath: "" })).rejects.toThrow(
+      "synthetic authority failure",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(popup.close).toHaveBeenCalledTimes(1);
+  },
+);
+
 it("local sign-out immediately clears the account and navigates to safe issuer confirmation", async () => {
   const { account, storage, assign } = await browser();
   const observed = vi.fn();
@@ -127,6 +176,64 @@ it("clears local account even with malformed issuer metadata and no secure-conte
     message: expect.stringContaining("could not finish"),
   });
 });
+
+it.each([false, true])(
+  "completes native sign-in in the app without a browser popup (cancelled=%s)",
+  async (cancelled) => {
+    const { account, documentWindow, storage } = await browser(false);
+    const authorizationUrl = "https://id.example.test/authorize?state=native-state";
+    const postMessage = vi.fn(async () => {
+      if (cancelled) {
+        throw new Error("Sign-in was cancelled.");
+      }
+      return { state: "native-state", code: "native-code", error: null };
+    });
+    Object.assign(documentWindow, {
+      webkit: { messageHandlers: { openclawIdSignIn: { postMessage } } },
+    });
+    const open = vi.spyOn(window, "open");
+    const request = vi.fn(async (_method: string, params: { action: string }) =>
+      params.action === "account_begin"
+        ? { authorizationUrl, state: "native-state" }
+        : { account: signedIn, idToken: signedIn.idToken },
+    );
+    vi.useFakeTimers();
+    Object.assign(documentWindow, { setTimeout, clearTimeout });
+    try {
+      const pending = account
+        .signInWithOpenClawId({
+          client: { request } as unknown as GatewayBrowserClient,
+          basePath: "",
+        })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+        );
+      // Settle the old, broken browser callback path too: no real ten-minute wait or leaked timer.
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(postMessage).toHaveBeenCalledExactlyOnceWith({ authorizationUrl });
+      expect(open).not.toHaveBeenCalled();
+      if (cancelled) {
+        expect(result).toEqual({ error: "Sign-in was cancelled." });
+        expect(account.openClawIdAccount()).toBeNull();
+        expect(request).toHaveBeenCalledTimes(1);
+      } else {
+        expect(result).toEqual({ value: signedIn });
+        expect(account.openClawIdAccount()).toEqual(signedIn);
+        expect(JSON.parse(storage.getItem(ACCOUNT)!)).toEqual(signedIn);
+        expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+          action: "account_complete",
+          state: "native-state",
+          code: "native-code",
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("rejects retained and delayed Make reachable link-code requests after another tab signs out", async () => {
   const { account, storage } = await browser();

@@ -28,7 +28,7 @@ export function renderTelegramMiniAppPage(params: {
 <body>
   <main>
     <h1>OpenClaw</h1>
-    <p id="status">Opening Control UI...</p>
+    <p id="status">Opening OpenClaw...</p>
   </main>
   <script nonce="${escapeHtml(params.scriptNonce)}">
     const accountId = ${JSON.stringify(params.accountId)};
