@@ -12,6 +12,7 @@ import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
+import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
 import { createTypingSignaler } from "../../auto-reply/reply/typing-mode.js";
 import {
@@ -31,6 +32,8 @@ import {
   beginReplyMessageInjectionTarget,
   captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.message-injection.js";
+import * as joinObservation from "../../sessions/session-controller.message-join-observation.js";
+import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -494,6 +497,7 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
     });
     context.workspaceDir = root;
     context.cwd = root;
+    const observe = vi.spyOn(joinObservation, "captureReplyMessageJoinObservation");
     // Same binding CLI preparation gives a direct child turn.
     using callerAuthority = captureCliRunToolAuthority(params, {
       agentId: "main",
@@ -569,6 +573,45 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
       });
     try {
       await ready.promise;
+      // A new message from the requester continues the running turn; another person's does not.
+      const continueAs = async (operatorProfileId: string) => {
+        const delivery = prepareSteeringDelivery({ agentId: "main", assertCurrent() {} });
+        try {
+          const join = await prepareReplyMessageContinuation({
+            target: expectDefined(captureCurrentReplyMessageInjectionTarget(childKey), "target"),
+            delivery,
+            assertCurrent() {},
+            input: {
+              kind: "continuation",
+              caller: {
+                sessionKey: childKey,
+                operatorAuthority: createTestOperatorAuthority({
+                  ...operatorAuthority,
+                  profileId: operatorProfileId,
+                }),
+                messageProvider: "webchat",
+                originatingChannel: "webchat",
+                spawnedBy: requesterKey,
+                senderIsOwner: false,
+                disableTools: false,
+                inputProvenance: { kind: "external_user" },
+              },
+              config,
+              executionSelection: observe.mock.results[0]?.value.executionSelection,
+              selectedRoute: { provider: params.provider, model: context.modelId },
+              fallbackAvailability: { kind: "none_configured", source: "inherited" },
+            },
+          });
+          if (join.kind === "prepared") {
+            join.release();
+          }
+          return join;
+        } finally {
+          delivery.release();
+        }
+      };
+      expect((await continueAs("owner")).kind).toBe("prepared");
+      expect((await continueAs("guest")).kind).not.toBe("prepared");
       await expect(steer("guidance")).resolves.toMatchObject({ status: "accepted" });
       expect(await readInputs()).toEqual(["initial", "guidance"]);
       await expect(
