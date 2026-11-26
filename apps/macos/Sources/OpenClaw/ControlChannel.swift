@@ -403,7 +403,11 @@ final class ControlChannel {
     @discardableResult
     private func reportFailure(_ error: Error, generation: UInt64) -> String {
         _ = self.synchronizeRouteGeneration()
-        let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+        let message = Self.friendlyGatewayMessage(
+            error,
+            configRoot: OpenClawConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
         let issue = GatewayCompatibilityIssue(error: error)
         self.logger.error("control channel operation failed \(message, privacy: .public)")
         if issue != nil, self.reconcileCurrentConnection(generation: generation) { return message }
@@ -432,7 +436,21 @@ final class ControlChannel {
         return message
     }
 
-    static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
+    static let storedGatewayTokenMessage =
+        "The macOS app cannot read the local Gateway token from its configured secret source. "
+            + "Review the Gateway authentication setup on this Mac."
+
+    /// True when the control channel is degraded with the stored-token message.
+    static func isStoredGatewayTokenFailure(_ state: ConnectionState) -> Bool {
+        state == .degraded(Self.storedGatewayTokenMessage)
+    }
+
+    static func friendlyGatewayMessage(
+        _ error: Error,
+        configRoot: [String: Any],
+        env: [String: String] = [:],
+        launchdSnapshot: @autoclosure () -> LaunchAgentPlistSnapshot? = nil) -> String
+    {
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
         }
@@ -441,11 +459,19 @@ final class ControlChannel {
             return issue.message
         }
 
+        let mode = ConnectionModeResolver.resolve(root: configRoot).mode
+
         if let authIssue = RemoteGatewayAuthIssue(error: error) {
+            if authIssue == .tokenRequired, mode == .local {
+                return GatewayEndpointStore.localTokenIsUnreadableSecretRef(
+                    root: configRoot,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot())
+                    ? Self.storedGatewayTokenMessage
+                    : "\(authIssue.title)."
+            }
             return authIssue.statusMessage
         }
-
-        let mode = ConnectionModeResolver.resolve(root: configRoot).mode
         let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let localPort = mode == .remote
             ? RemotePortTunnel.localPort(root: configRoot)

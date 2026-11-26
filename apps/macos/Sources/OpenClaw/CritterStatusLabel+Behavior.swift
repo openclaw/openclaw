@@ -362,6 +362,7 @@ extension CritterStatusLabel {
             return GatewayConnectionPresentation(state: controlState).needsAttention
         case .local:
             guard !isSleeping else { return false }
+            if ControlChannel.isStoredGatewayTokenFailure(controlState) { return true }
             switch gatewayStatus {
             case .failed, .stopped:
                 return true
@@ -375,6 +376,9 @@ extension CritterStatusLabel {
         if self.connectionMode == .remote,
            GatewayConnectionPresentation(state: self.controlChannelState).needsAttention
         {
+            return .red
+        }
+        if self.connectionMode == .local, ControlChannel.isStoredGatewayTokenFailure(self.controlChannelState) {
             return .red
         }
         switch self.gatewayStatus {

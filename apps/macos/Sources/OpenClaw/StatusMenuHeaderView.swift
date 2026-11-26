@@ -220,6 +220,11 @@ struct StatusMenuHeaderView: View {
         {
             lines.append((failure, nil, .red))
         }
+        if self.state.connectionMode == .local,
+           ControlChannel.isStoredGatewayTokenFailure(self.controlChannel.state)
+        {
+            lines.append((ControlChannel.storedGatewayTokenMessage, nil, .red))
+        }
         if self.state.connectionMode == .remote {
             let presentation = GatewayConnectionPresentation(state: self.controlChannel.state)
             if presentation.tone != .healthy {

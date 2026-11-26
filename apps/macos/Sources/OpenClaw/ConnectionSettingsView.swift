@@ -192,7 +192,10 @@ struct ConnectionSettingsView: View {
     }
 
     private var localGatewayFailure: String? {
-        self.state.connectionMode == .local ? self.gatewayManager.lastFailureReason : nil
+        guard self.state.connectionMode == .local else { return nil }
+        if let failure = self.gatewayManager.lastFailureReason { return failure }
+        return ControlChannel.isStoredGatewayTokenFailure(ControlChannel.shared.state)
+            ? ControlChannel.storedGatewayTokenMessage : nil
     }
 
     private var controlStatusLine: String {

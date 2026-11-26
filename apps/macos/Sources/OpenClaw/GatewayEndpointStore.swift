@@ -203,6 +203,24 @@ actor GatewayEndpointStore {
         }
     }
 
+    /// True when the local Gateway needs a shared token that is a non-env SecretRef, which this app cannot resolve.
+    static func localTokenIsUnreadableSecretRef(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?) -> Bool
+    {
+        guard self.localAuthSurface(root: root, env: env, launchdSnapshot: launchdSnapshot) == "token",
+              let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any],
+              let ref = auth["token"] as? [String: Any],
+              ref.count == 3,
+              (ref["provider"] as? String)?.nonEmpty != nil,
+              (ref["id"] as? String)?.nonEmpty != nil,
+              let source = ref["source"] as? String
+        else { return false }
+        return source == "file" || source == "exec" || source == "store"
+    }
+
     private static func localAuthMode(root: [String: Any]) -> String? {
         let gateway = root["gateway"] as? [String: Any]
         let auth = gateway?["auth"] as? [String: Any]
