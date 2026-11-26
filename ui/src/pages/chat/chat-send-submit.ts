@@ -115,7 +115,9 @@ export async function handleSendChat(
   }
   if (
     isInitialChatHistoryUnavailable(host) &&
-    (opts?.intent || !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage))
+    (opts?.intent ||
+      (!opts?.resumeQueuedMessageEditId &&
+        !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage)))
   ) {
     return undefined;
   }
