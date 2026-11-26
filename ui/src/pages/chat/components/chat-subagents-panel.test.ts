@@ -225,7 +225,15 @@ it.each([false, true])(
         hasActiveRun: false,
         activeRunIds: [],
       },
-      child("unknown"),
+      { ...child("unknown"), activeModel: " ", modelDisplayName: " ", model: " " },
+      {
+        ...child("rerouted"),
+        model: "shared-id",
+        modelProvider: "first",
+        modelDisplayName: "First provider's model",
+        activeModel: "shared-id",
+        activeModelProvider: "second",
+      },
     ];
     const f = mountRows(() => rows, mobile);
     await f.waitForCount(openSelector(mobile), rows.length);
@@ -237,6 +245,8 @@ it.each([false, true])(
     expect(text(rows[1])).not.toContain("Model B");
     expect(text(rows[2])).toContain("model-d");
     expect(text(rows[3])).not.toContain("·");
+    expect(text(rows[4])).toContain("shared-id");
+    expect(text(rows[4])).not.toContain("First provider's model");
   },
 );
 

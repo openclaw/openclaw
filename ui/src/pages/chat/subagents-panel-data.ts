@@ -550,14 +550,15 @@ export class SubagentsPanelData {
         session,
         sessionAbortable: true,
       }).abort;
+      const activeModel = session.activeModel?.trim();
+      const selectedModel = session.model?.trim();
       return {
         session,
         modelLabel:
-          session.activeModel &&
-          (session.activeModel !== session.model ||
-            session.activeModelProvider !== session.modelProvider)
-            ? session.activeModel
-            : session.modelDisplayName || session.model,
+          activeModel &&
+          (activeModel !== selectedModel || session.activeModelProvider !== session.modelProvider)
+            ? activeModel
+            : session.modelDisplayName?.trim() || selectedModel || undefined,
         depth: this.depths.get(session.key) ?? 0,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
         activity:
