@@ -99,6 +99,7 @@ struct GatewayChildSupervisorTests {
             #expect(error.localizedDescription.contains("Gateway log file"))
             #expect(error.localizedDescription.contains(logURL.path))
             #expect(error.localizedDescription.contains(POSIXError(.EACCES).localizedDescription))
+            #expect(error.localizedDescription.contains("(POSIX \(EACCES))\n"))
         }
         await supervisor.stop()
     }

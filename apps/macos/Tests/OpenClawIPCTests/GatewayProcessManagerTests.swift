@@ -395,7 +395,7 @@ struct GatewayProcessManagerTests {
     }
 
     @Test(arguments: [false, true])
-    func `app-hosted log setup failure names the log target instead of Bun`(blockLogFolder: Bool) async throws {
+    func `app-hosted log setup failure reports the target and system error code`(blockLogFolder: Bool) async throws {
         let port = try self.availableGatewayPort()
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -438,8 +438,17 @@ struct GatewayProcessManagerTests {
             #expect(manager.log.contains("[gateway] \(reason)\n"))
 
             let message = try #require(capture.messages.withLock { $0.first })
-            let cause = blockLogFolder ? "Cocoa " : "POSIX \(EISDIR)"
-            #expect(message.hasPrefix("gateway child launch failed: could not \(step) (\(cause)"))
+            let prefix = "gateway child launch failed: could not \(step) ("
+            try #require(message.hasPrefix(prefix) && message.hasSuffix(")"))
+            let code = message.dropFirst(prefix.count).dropLast()
+            if blockLogFolder {
+                // Foundation may use a different Cocoa code depending on the filesystem error it wraps.
+                try #require(code.hasPrefix("Cocoa "))
+                #expect(Int(code.dropFirst("Cocoa ".count)) != nil)
+            } else {
+                #expect(code == "POSIX \(EISDIR)")
+            }
+            #expect(reason.contains("(\(code))\n"))
             #expect(!message.contains(root.path))
         }
     }
