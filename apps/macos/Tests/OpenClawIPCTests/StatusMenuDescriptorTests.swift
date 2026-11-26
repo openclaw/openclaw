@@ -36,6 +36,17 @@ struct StatusMenuDescriptorTests {
         ])
     }
 
+    @Test func `local credential help is a native action next to the issue`() {
+        let withIssue = StatusMenuDescriptor.build(from: .init(
+            connection: .degraded, hasLocalGatewayCredentialIssue: true))
+        let withoutIssue = StatusMenuDescriptor.build(from: .init(connection: .degraded))
+
+        #expect(Self.entries(in: "header", descriptor: withIssue).map(\.id) == [
+            "header", "action.localGatewayCredentialHelp",
+        ])
+        #expect(Self.entries(in: "header", descriptor: withoutIssue).map(\.id) == ["header"])
+    }
+
     @Test func `connection states replace sessions with visible explanations`() {
         let states: [(StatusMenuDescriptor.Connection, String)] = [
             (.unconfigured, "Gateway not configured"),

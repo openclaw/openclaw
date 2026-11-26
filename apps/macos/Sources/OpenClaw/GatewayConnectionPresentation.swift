@@ -40,6 +40,50 @@ enum GatewayConnectionTone: Equatable {
     case attention
 }
 
+@MainActor
+struct LocalGatewayConnectionPresentation {
+    static let credentialHelpURL = URL(string: "https://github.com/openclaw/openclaw/issues/141413")!
+    static let credentialHelpTitle = String(localized: "View known Gateway issue")
+
+    struct CredentialIssue {
+        let message: String
+        let helpURL: URL
+    }
+
+    enum CredentialHelpPlacement: Equatable {
+        case connectionStatus
+        case healthCheck
+    }
+
+    let credentialIssue: CredentialIssue?
+    let readinessFailure: String?
+
+    var hasFailure: Bool { self.credentialIssue != nil || self.readinessFailure != nil }
+    var offersDashboardSettings: Bool { self.credentialIssue == nil }
+
+    init?(mode: AppState.ConnectionMode, state: ControlChannel.ConnectionState, readinessFailure: String?) {
+        guard mode == .local else { return nil }
+        let credentialIssue = ControlChannel.isStoredGatewayTokenFailure(state)
+            ? CredentialIssue(
+                message: ControlChannel.storedGatewayTokenMessage,
+                helpURL: Self.credentialHelpURL)
+            : nil
+        self.credentialIssue = credentialIssue
+        self.readinessFailure = readinessFailure == credentialIssue?.message ? nil : readinessFailure
+    }
+
+    func duplicatesCredentialIssue(_ reason: String?) -> Bool {
+        // Health requests use the same control channel and can report the same failure verbatim.
+        guard let reason else { return false }
+        return reason == self.credentialIssue?.message
+    }
+
+    func credentialHelpPlacement(healthFailure: String?) -> CredentialHelpPlacement? {
+        guard self.credentialIssue != nil else { return nil }
+        return self.duplicatesCredentialIssue(healthFailure) ? .healthCheck : .connectionStatus
+    }
+}
+
 struct GatewayConnectionPresentation: Equatable {
     let statusLine: String
     let generalSubtitle: String

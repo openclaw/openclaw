@@ -5,6 +5,7 @@ struct StatusMenuDescriptor {
     struct Snapshot {
         var isPaused = false
         var connection: Connection = .connected
+        var hasLocalGatewayCredentialIssue = false
         var quickChatEnabled = false
         var debugEnabled = false
         var updateReady = false
@@ -84,6 +85,7 @@ struct StatusMenuDescriptor {
         case allSessions
         case settings
         case connection
+        case localGatewayCredentialHelp
         case debug
         case about
         case quit
@@ -101,7 +103,11 @@ struct StatusMenuDescriptor {
     var sections: [Section]
 
     static func build(from snapshot: Snapshot) -> StatusMenuDescriptor {
-        var sections = [Section(id: "header", entries: [Entry(.header)])]
+        var header = [Entry(.header)]
+        if snapshot.hasLocalGatewayCredentialIssue {
+            header.append(Entry(.action(.localGatewayCredentialHelp)))
+        }
+        var sections = [Section(id: "header", entries: header)]
         sections.append(self.sessionSection(from: snapshot))
         sections.append(self.actionSection(from: snapshot))
         sections.append(self.summarySection(from: snapshot))

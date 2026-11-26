@@ -79,9 +79,16 @@ struct StatusMenuHeaderView: View {
     /// operator can act on, so the header is stable while nothing is wrong.
     @ViewBuilder
     private var statusSummary: some View {
-        let problems = self.problemLines
-        if !problems.isEmpty {
+        let local = LocalGatewayConnectionPresentation(
+            mode: self.state.connectionMode,
+            state: self.controlChannel.state,
+            readinessFailure: GatewayProcessManager.shared.lastFailureReason)
+        let problems = self.problemLines(local: local)
+        if local?.credentialIssue != nil || !problems.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
+                if let issue = local?.credentialIssue {
+                    self.statusLine(label: issue.message, color: .red)
+                }
                 ForEach(problems.indices, id: \.self) { index in
                     let problem = problems[index]
                     self.statusLine(
@@ -211,13 +218,13 @@ struct StatusMenuHeaderView: View {
     /// Operator-actionable trouble only. Healthy, refreshing, pending, and
     /// activity states intentionally produce nothing - the menu stays quiet
     /// and stable instead of narrating routine churn.
-    private var problemLines: [(label: String, diagnostic: String?, color: Color)] {
+    private func problemLines(
+        local: LocalGatewayConnectionPresentation?) -> [(label: String, diagnostic: String?, color: Color)]
+    {
         guard self.state.connectionMode != .unconfigured else { return [] }
         var lines: [(label: String, diagnostic: String?, color: Color)] = []
 
-        if self.state.connectionMode == .local,
-           let failure = GatewayProcessManager.shared.lastFailureReason
-        {
+        if let failure = local?.readinessFailure {
             lines.append((failure, nil, .red))
         }
         if self.state.connectionMode == .remote {
@@ -233,7 +240,9 @@ struct StatusMenuHeaderView: View {
         case .linkingNeeded:
             lines.append((String(localized: "Login required"), nil, .red))
         case let .degraded(reason):
-            lines.append((self.healthStore.degradedSummary ?? reason, nil, .orange))
+            let message = self.healthStore.degradedSummary ?? reason
+            if local?.duplicatesCredentialIssue(message) == true { break }
+            lines.append((message, nil, .orange))
         }
 
         if let macNodeStatus = self.macNodeStatus {

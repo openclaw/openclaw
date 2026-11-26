@@ -275,6 +275,8 @@ final class StatusMenuRenderer: NSObject {
             (String(localized: "Settings…"), "gearshape")
         case .connection:
             (String(localized: "Connection…"), "point.3.connected.trianglepath.dotted")
+        case .localGatewayCredentialHelp:
+            (LocalGatewayConnectionPresentation.credentialHelpTitle, "questionmark.circle")
         case .debug:
             (String(localized: "Debug"), "ladybug")
         case .about:
@@ -336,6 +338,8 @@ final class StatusMenuRenderer: NSObject {
             AppNavigationActions.openSettings()
         case .connection:
             AppNavigationActions.openConnection()
+        case .localGatewayCredentialHelp:
+            AppActivation.shared.open(LocalGatewayConnectionPresentation.credentialHelpURL)
         case .about:
             AppNavigationActions.openAbout()
         case .quit:

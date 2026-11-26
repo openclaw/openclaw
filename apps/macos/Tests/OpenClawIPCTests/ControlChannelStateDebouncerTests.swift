@@ -342,4 +342,78 @@ struct ControlChannelGatewayMessageTests {
         #expect(message.contains("check that the gateway is running"))
         #expect(!message.contains("SSH"))
     }
+
+    private static let tokenMissing = GatewayConnectAuthError(
+        message: "token missing",
+        detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue,
+        canRetryWithDeviceToken: false)
+
+    private static func localRoot(token: Any, authMode: String? = "token") -> [String: Any] {
+        var auth: [String: Any] = ["token": token]
+        if let authMode { auth["mode"] = authMode }
+        return ["gateway": ["mode": "local", "auth": auth]]
+    }
+
+    @Test(arguments: ["store", "file", "exec"])
+    func `local token_missing with a protected secret ref explains why the app cannot authenticate`(source: String) {
+        let root = Self.localRoot(token: ["source": source, "provider": "default", "id": "gateway-token"])
+
+        let message = ControlChannel.friendlyGatewayMessage(Self.tokenMissing, configRoot: root)
+
+        #expect(message == ControlChannel.storedGatewayTokenMessage)
+        #expect(!message.contains("gateway-token"))
+    }
+
+    @Test(arguments: [true, false])
+    func `implicit local auth follows the LaunchAgent rather than the app environment`(serviceHasPassword: Bool) {
+        let root = Self.localRoot(
+            token: ["source": "store", "provider": "default", "id": "test-token-ref"],
+            authMode: nil)
+        let env = serviceHasPassword ? [:] : ["OPENCLAW_GATEWAY_PASSWORD": "dummy-app-password"]
+        let service = LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: serviceHasPassword ? ["OPENCLAW_GATEWAY_PASSWORD": "dummy-service-password"] : [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: serviceHasPassword ? "dummy-service-password" : nil)
+
+        let message = ControlChannel.friendlyGatewayMessage(
+            Self.tokenMissing,
+            configRoot: root,
+            env: env,
+            launchdSnapshot: service)
+
+        let expected = serviceHasPassword
+            ? "This gateway requires an auth token."
+            : ControlChannel.storedGatewayTokenMessage
+        #expect(message == expected)
+    }
+
+    @Test func `local token_missing keeps the generic message when the app can read the token`() {
+        let envRef: [String: Any] = ["source": "env", "provider": "default", "id": "OPENCLAW_GATEWAY_TOKEN"]
+        for token in [envRef as Any, "plain-token" as Any] {
+            let message = ControlChannel.friendlyGatewayMessage(
+                Self.tokenMissing,
+                configRoot: Self.localRoot(token: token))
+
+            #expect(message == "This gateway requires an auth token.")
+        }
+    }
+
+    @Test func `remote token_missing ignores a local stored secret ref`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "auth": ["mode": "token", "token": ["source": "store", "provider": "default", "id": "t"]],
+                "remote": ["transport": "direct", "url": "wss://gateway.example:9443"],
+            ],
+        ]
+
+        let message = ControlChannel.friendlyGatewayMessage(Self.tokenMissing, configRoot: root)
+
+        #expect(message == RemoteGatewayAuthIssue.tokenRequired.statusMessage)
+    }
 }

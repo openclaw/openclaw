@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -96,6 +97,33 @@ struct CritterStatusBeatsTests {
             connectionMode: .remote,
             controlState: .connected,
             gatewayStatus: gatewayStatus,
+            isPaused: false,
+            isSleeping: false))
+    }
+
+    @Test func `local stored token failure raises attention while other local degradation stays quiet`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "local",
+                "auth": ["mode": "token", "token": ["source": "store", "provider": "default", "id": "t"]],
+            ],
+        ]
+        let tokenMissing = GatewayConnectAuthError(
+            message: "token missing",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue,
+            canRetryWithDeviceToken: false)
+        let stored = ControlChannel.friendlyGatewayMessage(tokenMissing, configRoot: root)
+
+        #expect(CritterStatusLabel.needsAttention(
+            connectionMode: .local,
+            controlState: .degraded(stored),
+            gatewayStatus: .running(details: nil),
+            isPaused: false,
+            isSleeping: false))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .local,
+            controlState: .degraded("Cannot reach gateway"),
+            gatewayStatus: .running(details: nil),
             isPaused: false,
             isSleeping: false))
     }
