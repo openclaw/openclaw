@@ -772,6 +772,11 @@ export function isChatToolTitlesParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatToolTitlesParamsSchema
 >;
+export function isChatPendingInputsOwnParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatPendingInputsOwnParamsSchema
+>;
 export function isChatPendingInputsDismissParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1833,6 +1838,11 @@ export function isSessionsCatalogListParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsCatalogListParamsSchema
 >;
+export function isSessionsCatalogRouteParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsCatalogRouteParamsSchema
+>;
 export function isSessionsCatalogReadParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1967,6 +1977,11 @@ export function isSessionMemberAddParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionMemberAddParamsSchema
+>;
+export function isSessionMemberSetAccessParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionMemberSetAccessParamsSchema
 >;
 export function isSessionMemberRemoveParams(
   value: unknown,
@@ -2561,6 +2576,11 @@ export function isTemplatesDraftsSaveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TemplatesDraftsSaveParamsSchema
+>;
+export function isTemplatesDraftsSignInParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").TemplatesDraftsSignInParamsSchema
 >;
 export function isTemplatesDraftsReviewParams(
   value: unknown,

@@ -108,7 +108,9 @@ export type Role = { name: string; requiresSandbox: boolean } & (
   | { defined: false }
   | {
       defined: true;
-      sessions: "none" | "view" | "suggest" | "write";
+      sessions: "none" | "invited" | "view" | "suggest" | "write";
+      maxInvitedAccess?: "read" | "suggest" | "send";
+      invitedPermission?: "read-only" | "guarded" | "workspace" | "full";
       admin: boolean;
       /** Present on the owner's People data for roles that require a sandbox. */
       sandbox?: RoleSandboxReadiness;

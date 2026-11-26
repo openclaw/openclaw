@@ -333,72 +333,64 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
   }
 });
 
-it.each([true, false])(
-  "records a retired cron follow-up without replay (automation=%s)",
-  (automation) =>
-    withOpenClawTestState({ label: "withheld-cron-followup" }, async (fixture) => {
-      setRuntimeConfigSnapshot({});
-      const target = {
-        agentId: "main",
-        sessionKey: "agent:main:withheld-cron",
-        sessionId: "withheld-cron",
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const storePath = fixture.statePath("cron", "jobs.json");
-      const job = makeCronJob({ agentId: target.agentId });
-      await saveCronStore(storePath, { version: 1, jobs: [job] });
-      const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
-      const { state: cron } = createCronServiceWithStateForTest(cronTestDeps({ storePath }));
-      const queued = createQueueTestRun({ prompt: "Continue the cron goal" }, target);
-      const marker = markCronJobActive(job.id);
-      const fence = createCronCompletionDeliveryFence({
-        state: cron,
-        job,
-        handle: receipt,
-        activeJobMarker: marker,
-        signal: new AbortController().signal,
-      });
-      // Goals retain automation data; background session events retain only its authority.
-      if (automation) {
-        queued.run.scheduledAutomation = {
-          ...TEST_SCHEDULED_TURN,
-          job,
-          deliveryAttemptFence: fence,
-        };
-      }
-      queued.operatorAuthority = createTestOperatorAuthority({
-        profileId: "guest",
-        scopes: ["operator.write"],
-        assertCurrent: fence.assertCurrent,
-      });
-      clearCronJobActive(job.id, marker);
+it("records a retired cron follow-up without replay", () =>
+  withOpenClawTestState({ label: "withheld-cron-followup" }, async (fixture) => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:withheld-cron",
+      sessionId: "withheld-cron",
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const job = makeCronJob({ agentId: target.agentId });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
+    const { state: cron } = createCronServiceWithStateForTest(cronTestDeps({ storePath }));
+    const queued = createQueueTestRun({ prompt: "Continue the cron goal" }, target);
+    const marker = markCronJobActive(job.id);
+    const fence = createCronCompletionDeliveryFence({
+      state: cron,
+      job,
+      handle: receipt,
+      activeJobMarker: marker,
+      signal: new AbortController().signal,
+    });
+    queued.run.scheduledAutomation = {
+      ...TEST_SCHEDULED_TURN,
+      job,
+      deliveryAttemptFence: fence,
+    };
+    queued.operatorAuthority = createTestOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+    });
+    clearCronJobActive(job.id, marker);
 
-      await createFollowupRunner({
-        typing: createMockTypingController(),
-        typingMode: "never",
-        defaultModel: "gpt-test",
-      })(queued);
+    await createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "never",
+      defaultModel: "gpt-test",
+    })(queued);
 
-      expect(queued.operatorAuthority.signal?.aborted).toBe(true);
-      expect(
-        readCronRunHistoryPageForTests({ storeKey: receipt.storeKey, jobId: job.id }).entries,
-      ).toContainEqual(
-        expect.objectContaining({
-          status: "error",
-          delivered: false,
-          deliveryStatus: "not-delivered",
-          error: "cron delivery owner retired",
-          sessionKey: target.sessionKey,
-        }),
-      );
-      expect(
-        await readLatestSessionTranscriptReport(target, ["run-failed-before-reply"]),
-      ).toMatchObject({
-        ok: true,
-        value: {
-          content: "withheld: cron delivery owner retired",
-        },
-      });
-      expect(fence.assertCurrent).toThrow("cron delivery owner retired");
-    }),
-);
+    expect(
+      readCronRunHistoryPageForTests({ storeKey: receipt.storeKey, jobId: job.id }).entries,
+    ).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        delivered: false,
+        deliveryStatus: "not-delivered",
+        error: "cron delivery owner retired",
+        sessionKey: target.sessionKey,
+      }),
+    );
+    expect(
+      await readLatestSessionTranscriptReport(target, ["run-failed-before-reply"]),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        content: "withheld: cron delivery owner retired",
+      },
+    });
+    expect(fence.assertCurrent).toThrow("cron delivery owner retired");
+  }));

@@ -74,7 +74,7 @@ export type MediaAttachmentDisposition =
   | { kind: "capability-disabled" }
   | { kind: "no-model" }
   | { kind: "scope-denied" }
-  | { kind: "failed"; reason?: string; status?: number; code?: string };
+  | { kind: "failed"; reason?: string; status?: number; code?: string; apiKeyRequired?: string };
 
 export type MediaAttachmentProcessing = "completed" | "omitted";
 

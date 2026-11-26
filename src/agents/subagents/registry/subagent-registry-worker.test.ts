@@ -36,6 +36,7 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { collectForRetentionCheck } from "../../../test-utils/retention.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
@@ -840,7 +841,10 @@ it("releases serialized payloads while their immutable registry rows remain resi
   const resident = subagentRuns.get("binding-retention")!;
   const expected = codec.bindSubagentRunRecord(resident);
   const binding = weak(bindImmutableSubagentRun(resident));
-  await expectCollected(weakControl(), binding);
+  // Hosted and isolated Node can collect the unowned control before the binding.
+  // Use the bounded collection phase; the resident row must not keep the binding alive.
+  await collectForRetentionCheck("registry-serialized-binding");
+  expect(binding.deref()).toBeUndefined();
   expect(subagentRuns.get(resident.runId)).toBe(resident);
   expect(bindImmutableSubagentRun(resident)).toEqual(expected);
   using worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");

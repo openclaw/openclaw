@@ -32,8 +32,15 @@ import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import {
   prepareSqliteWorkerActorContext,
   captureSqliteWorkerCreationPaths,
+  publishSqliteWorkerWalCheckpoint,
 } from "./sqlite-worker-broker-admission.js";
-import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
+import type {
+  Actor,
+  CompletedSqliteWorkerOutcome,
+  Job,
+  Slot,
+  SqliteWorkerReplyOwner,
+} from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   retainSqliteWorkerErrorCode,
@@ -330,27 +337,9 @@ function decodeSqliteWorkerCleanupError(payload: OpenClawStateWorkerErrorPayload
   return hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
 }
 
-export type CompletedSqliteWorkerOutcome = { value: unknown } | { error: unknown };
-
-export type SqliteWorkerReplyOwner = {
-  fail(
-    reason: unknown,
-    currentError?: Error,
-    openOutcome?: "refused-before-agent-open",
-    completed?: CompletedSqliteWorkerOutcome,
-  ): void;
-  finish(
-    job: Job,
-    error?: unknown,
-    value?: unknown,
-    settlement?: SqliteWorkerOperationSettlement,
-  ): void | Promise<void>;
-  dispatch(): void;
-};
-
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & {
-    actors: ReadonlySet<Pick<Actor, "id" | "closeReceipt" | "openDispatch">>;
+    actors: ReadonlySet<Pick<Actor, "id" | "identity" | "closeReceipt" | "openDispatch">>;
     worker: Pick<Slot["worker"], "postMessage">;
   },
   reply: SqliteWorkerReply,
@@ -387,6 +376,7 @@ export function receiveSqliteWorkerReply(
   if (job.observation.timing && reply.timing) {
     Object.assign(job.observation.timing, reply.timing, { replyReceived: performance.now() });
   }
+  publishSqliteWorkerWalCheckpoint(job, slot.actors, reply.walCheckpoint);
   if (!reply.ok) {
     const admission = job.operationAdmission?.admission;
     if (reply.cleanupFailure && job.custody.dispatched && !reply.retire) {

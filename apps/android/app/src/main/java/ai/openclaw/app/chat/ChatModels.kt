@@ -477,6 +477,8 @@ data class ChatSessionEntry(
   val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val snoozedUntil: Long? = null,
   val snoozedAt: Long? = null,
+  // Gateway-to-handset offset at receipt. Local presentation only; never patch the wire deadline.
+  val snoozeClockOffsetMs: Long = 0L,
   val hasSnoozedUntilMetadata: Boolean = snoozedUntil != null,
   val hasSnoozedAtMetadata: Boolean = snoozedAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
@@ -534,7 +536,9 @@ data class ChatSessionEntry(
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 ) {
-  fun isSnoozed(nowMs: Long): Boolean = snoozedUntil?.let { it > nowMs } == true
+  val localSnoozeWakeMs: Long? get() = snoozedUntil?.let { it + snoozeClockOffsetMs }
+
+  fun isSnoozed(nowMs: Long): Boolean = localSnoozeWakeMs?.let { it > nowMs } == true
 }
 
 // Match Gateway precedence: terminal status wins; only missing live flags use historical status.
@@ -556,6 +560,7 @@ internal data class ChatSessionPatch(
   val clearLabel: Boolean = false,
   val category: String? = null,
   val clearCategory: Boolean = false,
+  /** Handset-clock wake time; the controller converts it with the connection's Gateway clock sample. */
   val snoozedUntil: Long? = null,
   val clearSnooze: Boolean = false,
   val color: String? = null,

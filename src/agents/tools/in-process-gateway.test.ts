@@ -317,7 +317,6 @@ describe("trusted in-process Gateway session creation", () => {
           operatorAuthority: createTestOperatorAuthority({
             profileId: "operator",
             scopes: ["operator.write"],
-            assertCurrent: () => {},
           }),
         },
         () =>

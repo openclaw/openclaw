@@ -16,6 +16,7 @@ import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -258,7 +259,7 @@ it("offers Linux machine classes when the applied target is unset and the catalo
   }
 });
 
-it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+it("keeps profile inputs through catalog registration, refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
@@ -303,6 +304,11 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
       ),
     );
     change(lifetime, "9h");
+    // Another lazy catalog can publish without changing this field's translations.
+    registerEnglishCatalog(() => {});
+    await waitForSolid(() =>
+      expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime),
+    );
     const refresh = async (nextHash: string) => {
       const pending = createDeferred<EnvironmentsListResult>();
       response = pending.promise;
@@ -640,7 +646,9 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       ),
     );
     change(lifetime, "9h");
-    click(page, "Save");
+    const save = actionButton(page, "Save");
+    save.click();
+    save.click();
     await waitForSolid(() => {
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
@@ -653,6 +661,16 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+    gatewayHarness.publish(false, client, null);
+    gatewayHarness.publish(
+      true,
+      client,
+      gatewayHelloForMethods(["config.patch", "environments.list"]),
+    );
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.textContent).toContain("Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
 
     pending = createDeferred<unknown>();
     click(page, "Save");

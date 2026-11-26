@@ -6,6 +6,7 @@ import { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../c
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
@@ -38,6 +39,7 @@ import {
   resolveCommandReplyExpectation,
   resolveCompletionInputReplyExpectation,
 } from "../../reply-completion.js";
+import { readRetainedRequesterToolCaller } from "../../tools/gateway-caller-context.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -117,6 +119,12 @@ async function sendSubagentAnnounceDirectlyBound(
     );
     const requesterEntry = requester.entry;
     const requesterAgentId = requester.agentId;
+    const operatorAuthority =
+      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+    const participating = operatorAuthority?.participationCeiling !== undefined;
+    if (participating) {
+      operatorAuthority.signal?.throwIfAborted();
+    }
     const requesterSessionId = requesterEntry?.sessionId;
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
@@ -235,7 +243,8 @@ async function sendSubagentAnnounceDirectlyBound(
       : requiresMessageToolDelivery
         ? "message_tool_only"
         : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      !participating && deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -247,6 +256,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // A public completion steers once into the requester's running turn. Ordinary
     // rejection leaves its input queued for the dispatch below.
     if (
+      !participating &&
       !parentOnly &&
       !params.requireDirectDelivery &&
       params.expectsCompletionMessage &&
@@ -431,6 +441,7 @@ async function sendSubagentAnnounceDirectlyBound(
         throw new SourceOwnerChangedError();
       }
       directAnnounceResponse = await runAnnounceAgentCall({
+        agentToolCaller: readRetainedRequesterToolCaller(),
         agentParams: directAgentParams,
         subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,

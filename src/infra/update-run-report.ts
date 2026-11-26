@@ -21,6 +21,8 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { resolveUpdateRunVerifiedServingVersion } from "./update-run-notice.js";
+import { formatUpdateRunOmittedSteps } from "./update-run-omission.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -28,6 +30,7 @@ import {
   UPDATE_RUN_REPAIRED_STEP,
   type UpdateRunRecord,
 } from "./update-run-record.js";
+import { prependUpdateRunCause } from "./update-run-report-cause.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -117,24 +120,6 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
   return health.kind === "responding"
     ? `Current health: Gateway answered on the recorded port (${bounded(health.version, 120)}).`
     : "Current health unavailable; saved verification describes the update attempt only.";
-}
-
-/** Serving observation is independent of permission to restart or roll back. */
-export function resolveUpdateRunVerifiedServingVersion(
-  verification: UpdateRunRecord["verification"],
-  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
-): string | undefined {
-  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
-    return undefined;
-  }
-  const { recovery } = verification;
-  return recovery?.serviceRestartSafe && recovery.service === "healthy"
-    ? recovery.version
-    : verification.versionMatch &&
-        (verification.coreReady ?? verification.readyz) &&
-        verification.settled
-      ? verification.runningVersion
-      : undefined;
 }
 
 /** Public-report callers redact identifiers before using this shared formatter. */
@@ -375,7 +360,11 @@ export function renderUpdateRunReport(
   const markdownLimit = opts.markdownLimit ?? 1500;
   // Successful activation must not bury recovery constraints behind snapshot inventory.
   // Failed runs keep their failure diagnostics ahead of warnings in the short report.
-  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
+  const omission = formatUpdateRunOmittedSteps(run.steps);
+  const lines: string[] = [
+    ...(omission ? [omission] : []),
+    ...(run.status === "succeeded" ? warnings : []),
+  ];
   if (
     currentHealth &&
     (currentHealth.kind === "responding" ||
@@ -597,10 +586,7 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
-  // The terminal record owner stamps the cause; the Control UI loads this renderer.
-  if (run.status !== "succeeded" && run.origin.cause && run.origin.cause !== "unknown") {
-    lines.unshift(`Cause: ${run.origin.cause}`);
-  }
+  prependUpdateRunCause(run, lines);
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
   const repaired = repairedDetail ? [`Repaired update: ${repairedDetail}`] : [];
   const repairedLead = repaired.map((line) => bounded(line, 300));
@@ -612,7 +598,7 @@ export function renderUpdateRunReport(
     const lead = bounded([headline, ...repairedLead, ...steps].join("\n"), 1100);
     return {
       headline,
-      lines: [...repaired, ...steps],
+      lines: [...repaired, ...steps, ...(omission ? [omission] : [])],
       markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
     };
   }

@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { SkillStatusReport } from "../../api/types.ts";
+import type { FastMode, SkillStatusReport } from "../../api/types.ts";
 import { resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   currentConfigObject,
@@ -38,6 +38,22 @@ export function createAgentConfigActions(params: {
       }
     });
   }
+  function setFallbacks(
+    agentId: string,
+    field: "model" | "utilityModel",
+    fallbacks: string[] | null,
+  ) {
+    return edit(agentId, fallbacks !== null, (config, target) => {
+      stage(
+        config,
+        [...target.path, field],
+        modelShape(
+          existingModelParts(target.entry[field]).primary,
+          fallbacks === null ? null : normalizeStringEntries(fallbacks),
+        ),
+      );
+    });
+  }
   return {
     models: {
       onModelChange: (agentId: string, modelId: string | null) => {
@@ -62,29 +78,33 @@ export function createAgentConfigActions(params: {
       onUtilityModelChange: (agentId: string, modelId: string | null) =>
         edit(agentId, modelId !== null, (config, target) => {
           const { fallbacks } = existingModelParts(target.entry.utilityModel);
+          stage(config, [...target.path, "utilityModel"], modelShape(modelId, fallbacks));
+        }),
+      // null inherits agents.defaults.subagents.model; own fallbacks and sibling settings survive.
+      onSubagentModelChange: (agentId: string, modelId: string | null) =>
+        edit(agentId, modelId !== null, (config, target) => {
+          const subagents = asNullableRecord(target.entry.subagents);
+          const { fallbacks } = existingModelParts(subagents?.model);
+          const model = modelShape(modelId, fallbacks);
+          const siblings = Object.keys(subagents ?? {}).some((key) => key !== "model");
           stage(
             config,
-            [...target.path, "utilityModel"],
-            fallbacks
-              ? { ...(modelId === null ? {} : { primary: modelId }), fallbacks }
-              : (modelId ?? undefined),
+            [...target.path, "subagents", ...(model === undefined && !siblings ? [] : ["model"])],
+            model,
           );
         }),
       onThinkingDefaultChange: (agentId: string, level: string | null) =>
         edit(agentId, level !== null, (config, target) =>
           stage(config, [...target.path, "thinkingDefault"], level ?? undefined),
         ),
-      onModelFallbacksChange: (agentId: string, fallbacks: string[]) =>
-        edit(agentId, true, (config, target) => {
-          stage(
-            config,
-            [...target.path, "model"],
-            modelShape(
-              existingModelParts(target.entry.model).primary,
-              normalizeStringEntries(fallbacks),
-            ),
-          );
-        }),
+      onFastModeDefaultChange: (agentId: string, mode: FastMode | null) =>
+        edit(agentId, mode !== null, (config, target) =>
+          stage(config, [...target.path, "fastModeDefault"], mode ?? undefined),
+        ),
+      onModelFallbacksChange: (agentId: string, fallbacks: string[] | null) =>
+        setFallbacks(agentId, "model", fallbacks),
+      onUtilityFallbacksChange: (agentId: string, fallbacks: string[] | null) =>
+        setFallbacks(agentId, "utilityModel", fallbacks),
     },
     tools: {
       onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) =>
@@ -145,11 +165,9 @@ function stage(config: RuntimeConfigCapability, path: Array<string | number>, va
 
 // Keep bare strings, fallback-only overrides, and explicit empty fallback chains.
 function modelShape(primary: string | null, fallbacks: unknown[] | null) {
-  return !primary && !fallbacks
-    ? undefined
-    : primary && fallbacks
-      ? { primary, fallbacks }
-      : primary || { fallbacks };
+  return fallbacks
+    ? { ...(primary !== null ? { primary } : {}), fallbacks }
+    : (primary ?? undefined);
 }
 
 function existingModelParts(existing: unknown): {
@@ -157,11 +175,11 @@ function existingModelParts(existing: unknown): {
   fallbacks: unknown[] | null;
 } {
   if (typeof existing === "string") {
-    return { primary: existing.trim() || null, fallbacks: null };
+    return { primary: existing, fallbacks: null };
   }
   const record = asNullableRecord(existing);
   return {
-    primary: typeof record?.primary === "string" ? record.primary.trim() || null : null,
+    primary: typeof record?.primary === "string" ? record.primary : null,
     fallbacks: Array.isArray(record?.fallbacks) ? record.fallbacks : null,
   };
 }

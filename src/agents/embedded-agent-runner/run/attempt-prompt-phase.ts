@@ -1,4 +1,5 @@
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { resolveMaxTokensParam } from "@openclaw/ai/transports";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -43,8 +44,12 @@ import {
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import { boundForkWorkingContext } from "./fork-working-context.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
+import {
+  resolveCurrentUserTurnContextKey,
+  sessionMessagesContainIdempotencyKey,
+} from "./pre-persisted-user-turn.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import {
   createRequestBoundaryCompaction,
@@ -379,12 +384,15 @@ export async function runEmbeddedAttemptPromptPhase(
           tools: activeSession.agent.state.tools,
         });
     let compactionRequestBudget: CompactionRequestBudget | undefined;
+    let forkHistoryBounded = false;
     if (!state.skipPromptSubmission) {
       const userTurnRecorder = attempt.userTurnTranscriptRecorder;
-      const pendingUserIdempotencyKey =
+      const pendingUserIdempotencyKey = resolveCurrentUserTurnContextKey(
+        activeSession.messages,
         attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
           ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
-          : undefined;
+          : undefined,
+      );
       const foregroundBudget = {
         contextWindow: promptContext.contextTokenBudget,
         reserveTokens,
@@ -418,13 +426,32 @@ export async function runEmbeddedAttemptPromptPhase(
         pendingUserIdempotencyKey,
       });
       attempt.onCompactionRequestBudget?.(compactionRequestBudget);
+      if (preparedStreamRuntime.history.explicitChatFork) {
+        const history = boundForkWorkingContext(
+          activeSession.messages,
+          compactionRequestBudget,
+          Math.min(
+            attempt.model.maxTokens,
+            resolveMaxTokensParam(effectiveExtraParams) ?? attempt.model.maxTokens,
+          ),
+          promptContext.projectHistoryForCurrentPrompt(activeSession.messages),
+        );
+        if (history !== activeSession.messages) {
+          forkHistoryBounded = true;
+          activeSession.agent.state.messages = history;
+          sessionRuntimeState.prePromptMessageCount = history.length;
+          promptContext.hookMessagesForCurrentPrompt = promptContext.projectHistoryForCurrentPrompt(
+            [...history, ...pendingContextMessages],
+          );
+        }
+      }
     }
 
     state = await prepareEmbeddedAttemptPromptPreflight({
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
       providerCompactionAtRequestBoundary,
-      contextEnginePromptAuthority,
+      contextEnginePromptAuthority: forkHistoryBounded ? "assembled" : contextEnginePromptAuthority,
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(unwindowedContextEngineMessagesForPrecheck

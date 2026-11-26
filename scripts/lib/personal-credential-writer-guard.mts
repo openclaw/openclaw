@@ -550,10 +550,17 @@ const nativeSdkExports = new Map<string, readonly string[]>([
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
   ...publicationWriters,
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
-    key(sessionMembers, name),
-    [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
-  ]),
+  ...["addSessionMember", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, string[]] => [
+      key(sessionMembers, name),
+      [
+        key(
+          "src/config/sessions/session-sharing-store.worker.ts",
+          "bindSqliteWorkerBackend/execute",
+        ),
+      ],
+    ],
+  ),
   [
     key(sessionMembers, "addSessionMemberInTransaction"),
     [
@@ -737,10 +744,9 @@ const sinks = new Map<string, number>([
     ),
     2,
   ],
-  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
-    key(sessionMembers, name),
-    1,
-  ]),
+  ...["addSessionMemberInTransaction", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, number] => [key(sessionMembers, name), 1],
+  ),
   ...[
     "clearSessionCollaborationForKey",
     "copySessionNodeArtifactsForRepair",
@@ -801,6 +807,8 @@ const sinks = new Map<string, number>([
     1,
   ],
   [key("src/secrets/store/secret-store-github-handoff.worker.ts", "githubSetup.consume"), 1],
+  // One writeAdmitted upsert. The registry-derived name cannot select another identity secret.
+  [key("src/secrets/store/secret-store-clawhub-template.worker.ts", "templateClawHub.write"), 1],
   // Purge removes already-deleted rows and expiring GitHub handoffs, never live credentials.
   [
     key(
@@ -922,6 +930,10 @@ function conflictUpdateMayIncludeAuthKey(
 }
 
 const credentialCommandOwners = new Map([
+  [
+    "templateClawHub.write",
+    key("src/secrets/store/secret-store-clawhub-template.ts", "savePersonalTemplateClawHubToken"),
+  ],
   [
     "machineState.write",
     key("src/state/config-machine-state-async.ts", "writeConfigMachineStateAsync"),

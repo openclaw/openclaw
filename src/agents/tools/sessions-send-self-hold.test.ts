@@ -890,7 +890,6 @@ it.each([false, true])(
         );
         expect(handoffs).toHaveBeenCalledOnce();
         invalidateGatewayDeviceRevocation(context, "bob", "operator");
-        expect(() => bob.source.authority.assertCurrent()).not.toThrow();
         await expect(
           prepareGatewayOperatorRunAuthority({
             client: bob.client,
@@ -898,7 +897,6 @@ it.each([false, true])(
             hasCurrentClientAuthority: bob.device.isCurrent,
           }),
         ).rejects.toThrow("Gateway request could not start. Reconnect and try again.");
-        expect(() => alice.source.authority.assertCurrent()).not.toThrow();
         release();
         consumer.release();
         settled.resolve({ kind: "applied", committed: true, unavailablePluginIds: [] });

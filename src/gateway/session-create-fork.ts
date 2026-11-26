@@ -2,8 +2,9 @@ import { prepareSessionForkFromParent } from "../auto-reply/reply/session-fork.j
 import type { SessionEntry } from "../config/sessions.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { isExplicitChatFork } from "../config/sessions/session-entry-lineage.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
-import { resolveSessionForkMaxTokens } from "./session-create-model-selection.js";
+import { resolveSessionForkAdmission } from "./session-create-model-selection.js";
 import type {
   CreateGatewaySessionParams,
   PreparedGatewaySessionLifecycle,
@@ -13,7 +14,10 @@ import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 /** Prepare the selected source history under the destination's creation and workspace custody. */
 export async function prepareGatewaySessionFork(params: {
-  request: Pick<CreateGatewaySessionParams, "cfg" | "forkFrom" | "loadGatewayModelCatalogSnapshot">;
+  request: Pick<
+    CreateGatewaySessionParams,
+    "cfg" | "creation" | "spawnDepth" | "forkFrom" | "loadGatewayModelCatalogSnapshot"
+  >;
   target: GatewaySessionStoreTarget;
   entry: SessionEntry;
   existingEntry?: SessionEntry;
@@ -23,14 +27,19 @@ export async function prepareGatewaySessionFork(params: {
   creationOperation?: SessionEntryCreationOperation;
 }) {
   const { request, target, parent, commitGuard, creationOperation } = params;
-  const maxTokens = await resolveSessionForkMaxTokens({
+  const admission = await resolveSessionForkAdmission({
+    explicitChatFork: isExplicitChatFork(
+      target.canonicalKey,
+      request.creation?.via,
+      request.spawnDepth,
+    ),
     cfg: request.cfg,
     agentId: target.agentId,
     sessionKey: target.canonicalKey,
     entry: params.entry,
     loadGatewayModelCatalogSnapshot: request.loadGatewayModelCatalogSnapshot,
   });
-  // Size admission and copying select the same completed prefix, even with an active tail.
+  // Copy the selected branch (or completed prefix) regardless of the next prompt window.
   const forkFromParent = async (assertSourceCurrent?: () => void) =>
     await prepareSessionForkFromParent({
       parentEntry: parent.entry,
@@ -46,7 +55,7 @@ export async function prepareGatewaySessionFork(params: {
       parentSessionKey: parent.target.canonicalKey,
       sessionKey: target.canonicalKey,
       storePath: parent.target.storePath,
-      ...(maxTokens ? { maxTokens } : {}),
+      ...admission,
       // Cross-agent forks still write the transcript into the destination's store.
       targetStorePath: target.storePath,
       ...(request.forkFrom ? { forkFrom: request.forkFrom } : {}),

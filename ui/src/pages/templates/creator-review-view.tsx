@@ -6,6 +6,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
+import { TemplateCreatorSignInCard } from "./creator-sign-in-card.tsx";
 import { TemplateReviewCard } from "./template-review-card.tsx";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
@@ -29,7 +30,17 @@ function cardStatus(state: TemplateCreator) {
   return "unpublished";
 }
 
-export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: CreatorView }) {
+type ReviewProps = { flow: TemplateCreator; view: CreatorView };
+
+export function TemplateCreatorReviewView(props: ReviewProps) {
+  return (
+    <Show when={props.view.read().signIn} fallback={<TemplatePublishCard {...props} />}>
+      {(signIn) => <TemplateCreatorSignInCard state={signIn()} flow={props.flow} />}
+    </Show>
+  );
+}
+
+function TemplatePublishCard(props: ReviewProps) {
   const state = () => props.view.read();
   const review = () => state().review;
   const byline = (publisher: string) => t("templatesDraft.byCreator", { creator: "@" + publisher });

@@ -6,6 +6,10 @@ import {
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getGatewayRestartDrainSignal,
+  getGatewayShutdownCleanupSignal,
+} from "../process/gateway-work-admission.js";
 import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
@@ -60,12 +64,16 @@ export function presentSessionRowTranscriptFields(
   };
 }
 
-/** Optional transcript facts are published by the resident row owner. */
-export async function backfillSessionRowTranscriptFields(
-  params: BackfillParams,
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
+/**
+ * Optional transcript facts are published by the resident row owner. Every read stops once the
+ * Gateway drains or closes, so work that ends during shutdown cannot reopen a sealed store.
+ */
+export async function backfillSessionRowTranscriptFields(params: BackfillParams) {
+  const signal = AbortSignal.any([
+    getGatewayRestartDrainSignal(),
+    getGatewayShutdownCleanupSignal(),
+  ]);
+  signal.throwIfAborted();
   const { model: _model, sessionEntry: _sessionEntry, ...input } = params;
   const options = toDatabaseOptions(
     resolveSqliteTranscriptReadScope({
@@ -78,7 +86,7 @@ export async function backfillSessionRowTranscriptFields(
     (error: unknown) => err<never, unknown>(error),
   );
   const source = createSessionWorkerExecutionSource(
-    () => signal?.throwIfAborted(),
+    () => signal.throwIfAborted(),
     "Session row backfill retired",
   );
   try {

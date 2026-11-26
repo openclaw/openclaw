@@ -165,7 +165,6 @@ import { parseArgs } from "node:util";
 import { deserialize, getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
 import { inflateRawSync, zstdDecompressSync } from "node:zlib";
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
@@ -2321,7 +2320,6 @@ measurement: try {
       sessionKey,
       workspaceDir: canonical,
       sandbox,
-      assertCurrent: authority?.assertCurrent,
       signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
@@ -2341,54 +2339,6 @@ measurement: try {
       captured?.release();
     }
   };
-  let sourceAuthorityProof: unknown;
-  if (values["source-authority"]) {
-    const original = await captureSource();
-    let revoked = false;
-    const errors: string[] = [];
-    const recordRevocation = (error: unknown) => {
-      const causes = collectNestedErrorCandidates(error);
-      errors.push(...causes.map(String));
-      return (
-        original.authority.signal?.aborted === true &&
-        causes.includes(original.authority.signal.reason)
-      );
-    };
-    try {
-      await assert.rejects(
-        withDiagnosticsTimelineObserver(
-          (name) => {
-            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
-              revoked = true;
-              deviceRuntime!.invalidateGatewayDeviceRevocation(
-                authorityContext,
-                "synthetic-source",
-                "operator",
-              );
-            }
-            return undefined;
-          },
-          () => prepareWithAuthority(original.authority),
-        ),
-        recordRevocation,
-      );
-      assert(revoked, "Revocation must occur inside real workspace reconciliation");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        assert.throws(original.authority.assertCurrent, recordRevocation);
-        await prepareWorkspace();
-      }
-      sourceAuthorityProof = {
-        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
-        staleAssertionsRejected: 3,
-        freshPreparationsCompleted: 3,
-        errors,
-        abortReason: String(original.authority.signal?.reason),
-        boundary: "real operator/source and sandbox preparation owners; no WS or model",
-      };
-    } finally {
-      original.release();
-    }
-  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -3408,7 +3358,6 @@ measurement: try {
     reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
     mutationSamples: mutationObserver ? [...mutationObserver.samples] : undefined,
     reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
-    sourceAuthorityProof,
     operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop

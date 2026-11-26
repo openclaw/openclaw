@@ -16,6 +16,7 @@ import {
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunDelegatedAuthority,
@@ -30,6 +31,7 @@ import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-erro
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 import {
   createOperationalRunInstanceRef,
@@ -64,27 +66,16 @@ const operatorAuthorityIssuers = resolveGlobalSingleton(
 export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
-  const check = source.assertCurrent;
-  const revocation = new AbortController();
-  const signal = source.signal
-    ? AbortSignal.any([source.signal, revocation.signal])
-    : revocation.signal;
-  const assertCurrent = composeSessionSourceAssertion(
-    [check],
-    scopeOperatorAccessDecisions((assertSource: () => void) => {
-      signal.throwIfAborted();
-      try {
-        assertSource();
-      } catch (error) {
-        if (!isOperatorAuthorityUnavailable(error)) {
-          revocation.abort(error);
-        }
-        throw error;
-      }
-    }),
-    { synchronousCheck: true },
-  );
   const readCurrentRoleFacts = source.readCurrentRoleFacts;
+  const recoverySnapshot =
+    source.participationCeiling && source.recoverySnapshot
+      ? normalizeGatewayOperatorRecoverySnapshot({
+          ...source.recoverySnapshot,
+          version: 2,
+          participationCeiling: source.participationCeiling,
+          scopes: intersectOperatorScopes(source.recoverySnapshot.scopes, source.scopes),
+        })
+      : source.recoverySnapshot;
   const authority = Object.freeze({
     profileId: source.profileId,
     canonicalIdentity:
@@ -107,30 +98,35 @@ export function createAdmittedRunOperatorAuthority(
         principal: Object.freeze({ ...source.ingress.principal }),
         scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
       }),
-    recoverySnapshot: source.recoverySnapshot
-      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+    recoverySnapshot: recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(recoverySnapshot))
       : undefined,
-    recoverySnapshotUnavailableReason: source.recoverySnapshotUnavailableReason,
+    recoverySnapshotUnavailableReason:
+      source.recoverySnapshot && !recoverySnapshot
+        ? ("decode-failed" as const)
+        : source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
           modelPolicy: source.channelRecoverySource.modelPolicy,
         })
       : undefined,
+    channelOwner: source.channelOwner && Object.freeze({ ...source.channelOwner }),
     scopes: Object.freeze([...source.scopes]),
-    requesterOwner: source.requesterOwner,
+    grant: source.grant,
+    participationCeiling: source.participationCeiling
+      ? freezeJsonSnapshot(structuredClone(source.participationCeiling))
+      : undefined,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
     source: source.source ?? {},
     invocation: source.invocation,
-    signal,
+    signal: source.signal,
     retain: source.retain,
-    onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent,
     readCurrentRoleFacts,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
@@ -207,7 +203,7 @@ export function assertOperatorAccessProgramAllowed(
   }
 }
 
-/** Keeps one selected model current without revoking other work from the same source. */
+/** Keeps one selected model bound to the admitted policy until release or Stop. */
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
@@ -234,34 +230,15 @@ export function bindOperatorModelExecution(
       throw mapError(new Error("This agent run is no longer active. Start a new turn to retry."));
     }
     revoked.signal.throwIfAborted();
-    try {
-      assertModelAllowed();
-    } catch (error) {
-      const failure = mapError(error);
-      if (!isOperatorAuthorityUnavailable(error)) {
-        revoked.abort(failure);
-      }
-      throw failure;
-    }
-  };
-  const recheck = () => {
-    try {
-      assertCurrent();
-    } catch {
-      // The latched signal owns cancellation; notification must reach other executions.
-    }
   };
   const onSourceAbort = () => revoked.abort(mapError(authority.signal?.reason));
   authority.signal?.addEventListener("abort", onSourceAbort, { once: true });
-  const unsubscribe = authority.onModelPolicyChanged?.(recheck);
-  recheck();
   return {
     signal: revoked.signal,
     assertCurrent,
     release: () => {
       if (!released) {
         released = true;
-        unsubscribe?.();
         authority.signal?.removeEventListener("abort", onSourceAbort);
         releaseAuthority?.();
       }

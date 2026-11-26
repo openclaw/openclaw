@@ -41,6 +41,7 @@ import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
+import { prepareRunSessionPermissionPolicy } from "../session-permission-policy.js";
 import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
@@ -95,13 +96,24 @@ export async function buildPreparedCompactionRuntime(
     effectiveCwd,
     sessionAgentId,
   } = prepared;
+  const participationCeiling = params.pluginExecutionAuthority?.participationCeiling;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
-  const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
-  const sessionPermissionPolicy = mode
-    ? { mode, root: root ?? (await fs.realpath(resolvedWorkspace)) }
-    : undefined;
+  const root =
+    participationCeiling?.source?.root ?? params.sessionRoot ?? params.sessionEntry?.sessionRoot;
+  const sessionPermissionPolicy =
+    mode || participationCeiling
+      ? await prepareRunSessionPermissionPolicy({
+          mode,
+          root: root ?? (await fs.realpath(resolvedWorkspace)),
+          pluginExecutionAuthority: params.pluginExecutionAuthority,
+          config: params.config,
+          agentId: sessionAgentId,
+          sandboxAvailable: sandbox?.enabled === true,
+          execOverrides: params.execOverrides,
+        })
+      : undefined;
   const execOverrides = sessionPermissionPolicy
     ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
     : params.execOverrides;
@@ -252,6 +264,7 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       requesterOrigin: params.requesterOrigin,
       operatorProfileId: params.operatorProfileId,
+      pluginExecutionAuthority: params.pluginExecutionAuthority,
       conversationId: params.conversationId,
       messageThreadId: params.messageThreadId,
       memberRoleIds: params.memberRoleIds,

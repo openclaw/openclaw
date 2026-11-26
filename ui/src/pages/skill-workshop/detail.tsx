@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Errored, For, Loading, Show } from "solid-js";
+import { parseFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -89,12 +90,14 @@ export function Detail(props: {
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
+    const catalogDescription = target().versionId ? undefined : skill()?.description;
+    if (catalogDescription) {
+      return catalogDescription;
+    }
     const current = viewer();
-    const own =
-      current.result && current.target.filePath === "SKILL.md"
-        ? splitFrontmatter(current.result.content).description
-        : undefined;
-    return target().versionId ? own : skill()?.description || own;
+    return current.result && current.target.filePath === "SKILL.md"
+      ? parseFrontmatterBlock(current.result.content).description
+      : undefined;
   });
   const byline = () => {
     const created = history().findLast((entry) => entry.action === "create");
@@ -437,17 +440,19 @@ function FileContent(props: { reads: WorkshopReads }) {
     <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
       <Errored fallback={(error) => <LoadState error={error()} />}>
         <Show when={props.reads.viewer()}>
-          {(viewer) =>
-            viewer().target.filePath.endsWith(".md") ? (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={viewer().result.content}
-                options={{ mode: "document" }}
-              />
-            ) : (
-              <pre class="sw-file">{viewer().result.content}</pre>
-            )
-          }
+          {(viewer) => (
+            <>
+              {viewer().target.filePath.endsWith(".md") ? (
+                <MarkdownHtml
+                  class="sw-markdown chat-text"
+                  markdown={viewer().result.content}
+                  options={{ mode: "document" }}
+                />
+              ) : (
+                <pre class="sw-file">{viewer().result.content}</pre>
+              )}
+            </>
+          )}
         </Show>
       </Errored>
     </Loading>

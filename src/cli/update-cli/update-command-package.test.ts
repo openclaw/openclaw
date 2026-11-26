@@ -780,12 +780,8 @@ it.each([{ reason: "requester-revoked" }] as const)(
     let resultPath: string | undefined;
     mockDoctor(async (_argv, options) => {
       assert(typeof options === "object");
-      if (expectedDoctorTimeoutMs === undefined) {
-        expect(options.timeoutMs).toBeUndefined();
-      } else {
-        expect(options.timeoutMs).toBeGreaterThan(0);
-        expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
-      }
+      expect(options.timeoutMs).toBeGreaterThan(0);
+      expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
       resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
       assert(resultPath);
       await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
@@ -798,7 +794,7 @@ it.each([{ reason: "requester-revoked" }] as const)(
     });
     expect(result).toMatchObject({
       status: "error",
-      reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+      reason,
       failedStep: {
         name: "openclaw doctor",
         exitCode: 1,

@@ -23,7 +23,6 @@ function operator() {
   return createTestOperatorAuthority({
     profileId: "image-reader",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow: ["test-provider/allowed", "test-provider/backup"] },
@@ -60,7 +59,6 @@ describe("operator model policy on image fallback", () => {
         : createTestOperatorAuthority({
             profileId: "staff-reader",
             scopes: ["operator.write"],
-            assertCurrent: () => {},
           });
       await expect(
         runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),

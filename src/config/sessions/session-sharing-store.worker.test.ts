@@ -66,6 +66,7 @@ import {
   addSessionMember,
   readSessionMembersInWorker,
   removeSessionMember,
+  setSessionMemberAccess,
 } from "./session-sharing-store.js";
 import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
@@ -217,6 +218,53 @@ async function call(
   });
   return responses;
 }
+
+it("owns membership snapshot preconditions without a separate transcript pin", async () => {
+  await withState(async () => {
+    await captureRuntimeConfigAsyncReader()();
+    const scope = mainScope("membership-precondition");
+    const entry = {
+      sessionId: "original",
+      updatedAt: 1,
+      createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
+    };
+    await upsertSessionEntryCore(scope, entry);
+    const precondition = {
+      sessionId: entry.sessionId,
+      createdActor: entry.createdActor,
+      visibility: undefined,
+      incognito: undefined,
+    };
+    await addSessionMember(scope, { ...memberRow("guest", 2), expectedEntry: precondition });
+    await setSessionMemberAccess(scope, {
+      identityId: "guest",
+      access: "send",
+      expectedEntry: precondition,
+    });
+    for (const changed of [
+      { sessionId: "different" },
+      { createdActor: { ...entry.createdActor, id: "other" } },
+      { visibility: "read-only" as const },
+      { incognito: true as const },
+    ]) {
+      const stale = { ...precondition, ...changed };
+      await expect(
+        addSessionMember(scope, {
+          ...memberRow("other", 3),
+          expectedEntry: stale,
+        }),
+      ).rejects.toThrow("session ownership changed before sharing mutation");
+      await expect(
+        setSessionMemberAccess(scope, {
+          identityId: "guest",
+          access: "read",
+          expectedEntry: stale,
+        }),
+      ).rejects.toThrow("session ownership changed before sharing mutation");
+    }
+    expect(await readMembers(scope)).toEqual([{ ...memberRow("guest", 2), access: "send" }]);
+  });
+});
 
 it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
   await withState(async (state) => {

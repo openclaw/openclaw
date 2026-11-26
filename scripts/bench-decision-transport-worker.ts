@@ -9,6 +9,7 @@ import type { ProviderDecisionOutcomeV2 } from "../src/decisions/provider-outcom
 import type { DecisionProviderV2 } from "../src/decisions/provider-types.js";
 import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
 import type { DecisionBatch, DecisionBatchResult } from "../src/decisions/types.js";
+import { decideTurnGrant } from "../src/gateway/operator-admission.js";
 import type { OpenClawPluginApi } from "../src/plugins/types.js";
 import { parseBenchmarkInteger, runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
 
@@ -385,8 +386,8 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
     canonicalIdentity: null,
     profileId: "benchmark-operator",
     scopes: ["operator.write"],
+    grant: decideTurnGrant(["operator.write"]),
     signal: lifetime.signal,
-    assertCurrent: () => lifetime.signal.throwIfAborted(),
     modelPolicy: prepareOperatorModelPolicy({
       cfg: config,
       policy: { sourceAgent: "main", allow: ["fixture/fixture-v1"] },
@@ -483,7 +484,7 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
               rubricVersion: "1",
               timeoutMs: 10_000,
               signal: lifetime.signal,
-              assertCurrent: authority.assertCurrent,
+              assertCurrent: () => lifetime.signal.throwIfAborted(),
             },
             builder.registry,
             config,

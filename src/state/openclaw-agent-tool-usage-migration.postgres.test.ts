@@ -45,6 +45,10 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
         schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
+      // v42/v43 are strict; v44 only adds nullable member access.
+      expect(upgraded.prepare("SELECT min_reader FROM openclaw_schema_meta").get()).toEqual({
+        min_reader: 43,
+      });
       expect(readAgentToolUsageInDatabase(upgraded, 100).rows).toEqual([]);
       upgraded.runTransaction(() => {
         const state = beginAgentToolUsageInDatabase(upgraded, 100, "synthetic-live-run");
@@ -77,9 +81,7 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
         expect(readAgentToolUsageInDatabase(upgraded, later).rows).toEqual([]);
       });
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(
-        new RegExp(`newer|version.*${OPENCLAW_AGENT_SCHEMA_VERSION}`, "iu"),
-      );
+      expect(() => fixture.open(source)).toThrow(/minimum reader 43; this build supports 41/iu);
     });
   });
 });

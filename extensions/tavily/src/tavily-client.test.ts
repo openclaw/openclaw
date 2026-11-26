@@ -266,6 +266,7 @@ it("closes and bounds extract rows, images, failed URLs, and hostile errors", as
   const failures = result.failedResults as Array<Record<string, unknown>>;
   expect(rows).toHaveLength(20);
   const imageCount = rows.reduce((count, row) => count + (row.images?.length ?? 0), 0);
+  expect(rows[0]?.images).toContainEqual(expect.stringContaining("https://images.test/image"));
   expect(imageCount).toBeLessThanOrEqual(20);
   expect(failures).toHaveLength(19);
   const keys = failures.map((failure) => Object.keys(failure).toSorted().join(","));

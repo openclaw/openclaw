@@ -203,7 +203,6 @@ it("imports null-assigned saved member work and admits it under current policy",
         try {
           expect(restored.authority.profileId).toBe(profile.id);
           expect(restored.authority.scopes).toEqual(["operator.write"]);
-          expect(restored.authority.assertCurrent).not.toThrow();
         } finally {
           restored.release();
         }

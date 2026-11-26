@@ -263,7 +263,8 @@ export function addressedSession(
   }
   const row = rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, key));
   if (
-    call.name.trim().toLowerCase() === "sessions_history" &&
+    (call.name.trim().toLowerCase() === "sessions_history" ||
+      call.name.trim().toLowerCase() === "sessions_send") &&
     !(
       row &&
       [row.label, row.displayName, row.derivedTitle].some(

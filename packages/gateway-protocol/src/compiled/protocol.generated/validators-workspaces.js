@@ -5,6 +5,7 @@ export {
   isTemplatesDraftsCreateParams,
   isTemplatesDraftsReadParams,
   isTemplatesDraftsSaveParams,
+  isTemplatesDraftsSignInParams,
   isTemplatesDraftsReviewParams,
   isTemplatesDraftsPublishParams,
   isTemplatesCatalogSearchResult,

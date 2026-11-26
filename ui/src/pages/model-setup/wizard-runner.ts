@@ -22,18 +22,11 @@ import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardStartMethod,
   type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
-
-export type ModelSetupWizardStartMethod =
-  | "mcp.authLogin"
-  | "models.authLogin"
-  | "openclaw.setup.auth.start"
-  | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start"
-  | "openclaw.setup.runtime.start";
 
 export type ModelSetupWizardCompletion = {
   startMethod: ModelSetupWizardStartMethod;
@@ -51,6 +44,8 @@ export type WizardRunnerOptions = {
   onChange: (state: ModelSetupWizardState) => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
   onSessionMissing?: () => void;
+  /** Settles a failed `wizard.next`, such as a sign-in the Gateway lost; rejects to keep the failure. */
+  readLostSession?: (error: unknown) => Promise<WizardNextResult>;
   onStart?: (
     method: ModelSetupWizardStartMethod,
     activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
@@ -492,11 +487,18 @@ export class ModelSetupWizardRunner {
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
     while (true) {
-      const result = await client.request<WizardNextResult>(
-        "wizard.next",
-        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
-        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-      );
+      const result = await client
+        .request<WizardNextResult>(
+          "wizard.next",
+          { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+          { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+        )
+        .catch(async (error: unknown) => {
+          if (!this.options.readLostSession) {
+            throw error;
+          }
+          return await this.options.readLostSession(error);
+        });
       if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
         return null;
       }

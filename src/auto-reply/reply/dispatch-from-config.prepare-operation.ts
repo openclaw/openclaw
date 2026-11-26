@@ -20,7 +20,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
 import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
-import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
+import {
+  markCommandReplyForDelivery,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -70,7 +74,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   const input = readReplySourceInput(params.replyOptions);
   const assertRequestCurrent = () => {
     params.replyOptions?.assertChannelAuthority?.();
-    input?.sourceAdapter?.authority?.assertCurrent();
+    input?.sourceAdapter?.authority?.assertCurrent?.();
     params.replyOptions?.internalEventExecution?.assertCurrent?.();
     if (isPreDispatchOperationAborted() || input?.retirementRequested) {
       throw new DispatchReplyOperationAbortedError();
@@ -139,6 +143,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (!suppressDelivery && fast.payload) {
+      const contextFreeCommand = fast.logKind === "fast_approve";
+      if (contextFreeCommand) {
+        setReplyPayloadMetadata(fast.payload, { commandReply: true, contextFreeCommand: true });
+      }
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
       const modelSelection = selectedModel && {
         ...selectedModel,
@@ -165,6 +173,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               expectedSessionId: sessionStoreEntry.entry?.sessionId,
               commandText: ctx.commandText,
               commandId,
+              ...(contextFreeCommand ? { contextFreeCommand: true as const } : {}),
               text: fast.payload.text,
               preferText: true,
               idempotencyKey: `${fast.logKind}:${commandId}`,

@@ -10,23 +10,16 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
-OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
-`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
-OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
-ids do not match.
+OpenClaw adds the legacy behavior contract and optional friendly style only to
+GPT-5 prompts. GPT-6 models, including Astra and Sol, receive the shared
+OpenClaw instructions without either addition. The same rule applies to bare
+and provider-qualified model IDs. The OpenAI plugin setting below controls
+the friendly style on OpenAI-family GPT-5 routes.
 
-The native Codex app-server harness does not receive the persona/tool-
-discipline behavior contract or the friendly interaction-style overlay through
-developer instructions; native Codex keeps Codex-owned base, model, and
-project-doc behavior, and OpenClaw disables Codex's built-in personality for
-native threads so agent workspace personality files stay authoritative.
-OpenClaw contributes only runtime context to native Codex threads: channel
-delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
-OpenClaw skills. The heartbeat-guidance text from this same contribution is the
-one exception: native Codex heartbeat turns do get it, injected as dedicated
-collaboration instructions rather than through the shared prompt-contribution
-hook.
+Ordinary native Codex threads also use OpenClaw's assembled base instructions.
+If you supply your own Codex base instructions, OpenClaw keeps them and sends
+its policy in developer instructions instead. Neither placement changes which
+models receive the GPT-5 contribution.
 
 The GPT-5 contribution adds a tagged behavior contract for persona
 persistence, execution safety, tool discipline, output shape, completion
@@ -185,8 +178,12 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     For the embedded OpenClaw runtime, the Control UI uses provider model and
     route limits when offering Standard, Fast, and Ultrafast. This works for
     auth profiles, environment keys, and provider config (including SecretRefs).
-    Models limited to Standard or Fast keep those restrictions. Custom endpoints
-    and ChatGPT account catalogs retain their own tier policy.
+    With an OpenAI API key, OpenClaw also reads each model's tiers from the same
+    account model listing Codex uses for that key, and offers only those: for
+    example, GPT-6 Cyber advertises no Fast or Ultrafast tier, so the picker
+    shows Standard only. When that listing is unavailable, every tier stays
+    offered. Models limited to Standard or Fast keep those restrictions. Custom
+    endpoints and ChatGPT account catalogs retain their own tier policy.
 
     If a response to an Ultrafast request echoes a different `service_tier`,
     OpenClaw records a temporary observation for that credential, model, and route.
@@ -200,12 +197,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     tool activity, or active-response steering, OpenClaw automatically retries
     that request at a slower tier: Ultrafast → Fast → Standard. The hint records
     that recovery without changing saved preferences. After two consecutive
-    Ultrafast rejections in the same run and account/model route, later model
-    requests use Fast directly for ten minutes or twenty model requests,
-    whichever ends first. The next Ultrafast request probes the tier again: a
-    rejection renews the cooldown, while a successful Ultrafast request resets
-    the rejection count. A new run starts fresh. A successful response served at
-    a different tier does not itself trigger a cooldown.
+    Ultrafast rejections for the same account/model route, later model requests
+    on that route, including later turns and runs, use Fast directly for ten
+    minutes or twenty model requests, whichever ends first. The next Ultrafast
+    request probes the tier again: a rejection renews the cooldown, while a
+    successful Ultrafast request resets the rejection count. The cooldown is
+    kept in memory and starts fresh after a Gateway restart. A successful
+    response served at a different tier does not itself trigger a cooldown.
 
     The cooldown also applies to explicit Ultrafast request overrides; other
     tiers remain as configured. OpenClaw does not retry tier errors after

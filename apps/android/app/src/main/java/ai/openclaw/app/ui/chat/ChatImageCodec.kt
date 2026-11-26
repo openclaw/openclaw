@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.node.JpegSizeLimiter
 import ai.openclaw.app.normalizeSharedAttachmentMimeType
 import ai.openclaw.app.sharedAttachmentKindForMimeType
+import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentResolver
 import android.graphics.Bitmap
@@ -147,7 +148,7 @@ private fun sharedAttachmentFileName(
   return raw
     .replace(Regex("[\\p{Cc}/\\\\]"), "_")
     .trim()
-    .take(128)
+    .takeUtf16Safe(128)
     .ifEmpty { "attachment" }
 }
 
