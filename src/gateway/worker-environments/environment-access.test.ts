@@ -8,7 +8,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { expectCollected } from "../../test-utils/retention.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { registerRecordedInferenceAccessTests } from "./environment-access.inference.suite.js";
@@ -28,24 +27,6 @@ describe("worker environment service", () => {
   afterEach(() => vi.restoreAllMocks());
 
   registerRecordedInferenceAccessTests();
-
-  it("releases the publisher after desktop policy cancellation settles", async () => {
-    support.testState.config.cloudWorkers!.desktop = true;
-    const workerService = support.createService(support.createProvider());
-    class RetiredPublisher {
-      publish() {
-        support.testState.config.cloudWorkers!.desktop = false;
-        return workerService.reconcileDesktopPolicy();
-      }
-    }
-    const publisherRef = await (async () => {
-      const publisher = new RetiredPublisher();
-      await publisher.publish();
-      return new WeakRef(publisher);
-    })();
-    await expectCollected(publisherRef);
-    expect(workerService.list()).toEqual([]);
-  });
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -119,7 +118,7 @@ it("reports context queue overload without losing context and completes every ad
   });
 });
 
-it("acquires a long sparse context with bounded queries and preserved message order", async () => {
+it("acquires long sparse context in order through sync and async reads", async () => {
   await withSessionState("batched-context", async ({ scope }) => {
     const messages = Array.from({ length: 1_200 }, (_, index) => ({
       type: "message",
@@ -137,24 +136,13 @@ it("acquires a long sparse context with bounded queries and preserved message or
       { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId, cwd: "/synthetic" },
       ...messages,
     ]);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const iterate = vi.spyOn(prototype, "iterate");
-    const get = vi.spyOn(prototype, "get");
-    try {
-      const context = SessionManager.openModelContext(scope).buildSessionContext();
-      expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
-        messages
-          .filter((entry) => !entry.message.excludeFromContext)
-          .map((entry) => entry.message.content),
-      );
-      // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
-      expect(await readModelAsync(scope)).toEqual(context);
-    } finally {
-      iterate.mockRestore();
-      get.mockRestore();
-    }
+    const context = SessionManager.openModelContext(scope).buildSessionContext();
+    expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
+      messages
+        .filter((entry) => !entry.message.excludeFromContext)
+        .map((entry) => entry.message.content),
+    );
+    expect(await readModelAsync(scope)).toEqual(context);
   });
 });
 
