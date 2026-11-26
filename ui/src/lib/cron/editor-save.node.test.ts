@@ -389,7 +389,6 @@ it.each(["create", "edit"] as const)(
       state.cronForm = {
         ...state.cronForm,
         name: "Synthetic default timing",
-        enabled: false,
         scheduleKind: "cron",
         cronExpr: "0 7 * * *",
         cronTz: "UTC",
