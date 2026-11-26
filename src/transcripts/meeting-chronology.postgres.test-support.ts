@@ -188,9 +188,8 @@ if (parentPort) {
       return { selectors: result.entries.map((entry) => entry.selector), hasMore: result.hasMore };
     };
     const speakers =
-      queryTranscriptReadEntries(postgresDb, { limit: 20 }).entries.find(
-        (entry) => entry.sessionId === speakerSession.sessionId,
-      )?.participants ?? [];
+      queryTranscriptReadEntries(postgresDb, { session: speakerSession, limit: 1 }).entries[0]
+        ?.participants ?? [];
     assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
     port.postMessage({
       threadId,
