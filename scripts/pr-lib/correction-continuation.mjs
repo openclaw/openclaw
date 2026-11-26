@@ -5,7 +5,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { incomingReview } from "./incoming-review.mjs";
-import { readRegular, requireCheckout, requireOperationOwner } from "./preparation-state.mjs";
+import {
+  evidenceReplay,
+  readRegular,
+  requireCheckout,
+  requireOperationOwner,
+} from "./preparation-state.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const executable = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git";
@@ -41,12 +46,11 @@ function inventory(archive) {
   if (!fs.lstatSync(archive).isDirectory()) {
     throw new Error("Missing retained preparation evidence.");
   }
-  return Object.fromEntries(
-    fs
-      .readdirSync(archive)
-      .toSorted()
-      .map((name) => [name, digest(readRegular(join(archive, name)))]),
-  );
+  const names = fs.readdirSync(archive).toSorted();
+  if (evidenceReplay.directories) {
+    evidenceReplay.directories[archive] = names;
+  }
+  return Object.fromEntries(names.map((name) => [name, digest(readRegular(join(archive, name)))]));
 }
 
 function same(left, right, message) {
@@ -128,7 +132,13 @@ function publicationBaseline(request, main) {
   ).trim();
 }
 
-function validateRequest(request, main, proofBaseline, freshDirectory = ".local") {
+function validateRequest(
+  request,
+  main,
+  proofBaseline,
+  freshDirectory = ".local",
+  preparing = false,
+) {
   const { pr, head, tree, incoming, review, receipt, receiptOid, archive } = request;
   if (
     request.version !== 1 ||
@@ -140,7 +150,13 @@ function validateRequest(request, main, proofBaseline, freshDirectory = ".local"
   ) {
     throw new Error("Invalid correction continuation identity.");
   }
-  same(inventory(archive), request.archiveFiles, "Retained continuation evidence changed.");
+  if (preparing) {
+    if (!proofBaseline || archive !== ".local" || request.archiveFiles !== null) {
+      throw new Error("Invalid live baseline preparation inputs.");
+    }
+  } else {
+    same(inventory(archive), request.archiveFiles, "Retained continuation evidence changed.");
+  }
   same(
     publicationLineage(request),
     request.lineage ?? null,
@@ -244,8 +260,14 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
 
 // Baseline proof admission composes the existing continuation owner without
 // installing its context or granting ordinary continuation a signature waiver.
-export function baselineProofContinuation(request, main, baseline, directory = ".local") {
-  return validateRequest(request, main, baseline, directory);
+export function baselineProofContinuation(
+  request,
+  main,
+  baseline,
+  directory = ".local",
+  preparing = false,
+) {
+  return validateRequest(request, main, baseline, directory, preparing);
 }
 
 export function baselineProofContinuationRequest(
@@ -257,7 +279,11 @@ export function baselineProofContinuationRequest(
   receipt,
   receiptOid,
   archive,
+  preparing = false,
 ) {
+  if (preparing && archive !== ".local") {
+    throw new Error("Invalid live baseline preparation directory.");
+  }
   const request = {
     version: 1,
     pr,
@@ -268,7 +294,7 @@ export function baselineProofContinuationRequest(
     receipt,
     receiptOid,
     archive,
-    archiveFiles: inventory(archive),
+    archiveFiles: preparing ? null : inventory(archive),
     fresh: Object.fromEntries(
       freshNames.map((name) => [name, digest(readRegular(join(archive, name)))]),
     ),

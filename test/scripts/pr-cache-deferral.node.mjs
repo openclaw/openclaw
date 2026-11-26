@@ -28,9 +28,13 @@ function fixture(t, value) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, HOME: root, TMPDIR: root, TMP: root, TEMP: root };
   for (const key of Object.keys(env)) {
-    if (key.startsWith("OPENCLAW_PR_")) delete env[key];
+    if (key.startsWith("OPENCLAW_PR_")) {
+      delete env[key];
+    }
   }
-  if (value !== undefined) env[flag] = value;
+  if (value !== undefined) {
+    env[flag] = value;
+  }
   return { root, env };
 }
 
@@ -55,7 +59,9 @@ async function operation() {
   let collecting = false;
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function (sql) {
-    if (collecting && sql === "SELECT * FROM pending_lifetimes") collectionQueries++;
+    if (collecting && sql === "SELECT * FROM pending_lifetimes") {
+      collectionQueries++;
+    }
     return prepare.call(this, sql);
   };
   const spawn = childProcess.spawnSync;
@@ -125,10 +131,20 @@ await import(${JSON.stringify(pathToFileURL(materializer).href)});
 `,
     );
     const bootstrap = readFileSync("scripts/pr", "utf8")
-      .split("<<'EOF_TOOLING'\n")[1]
-      .split("\nEOF_TOOLING")[0];
+      .split("<<'EOF_WRAPPER_GIT'\n")[1]
+      .split("\nEOF_WRAPPER_GIT")[0];
     const refused = run(
-      ["--input-type=module", "-", refusingHelper, process.env.HOME, destination, "", owner],
+      [
+        "--input-type=module",
+        "-",
+        "git",
+        "materialize-dependencies",
+        process.env.HOME,
+        "",
+        refusingHelper,
+        destination,
+        owner,
+      ],
       {
         ...process.env,
         OPENCLAW_PR_GIT: "git",
@@ -207,8 +223,9 @@ if (process.argv[2] === "operation") {
           : [owner, "collect"],
         f.env,
       );
-      if (value === "1") succeeded(result);
-      else {
+      if (value === "1") {
+        succeeded(result);
+      } else {
         assert.notEqual(result.status, 0);
         assert.match(
           result.stderr,
@@ -280,7 +297,9 @@ if (process.argv[2] === "operation") {
           }
           succeeded(run([self, "operation", mode, anchor], f.env, { stdio }));
         } finally {
-          if (leaseFd !== undefined) closeSync(leaseFd);
+          if (leaseFd !== undefined) {
+            closeSync(leaseFd);
+          }
           closeSync(fd);
         }
       },

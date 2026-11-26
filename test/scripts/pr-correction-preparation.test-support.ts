@@ -15,12 +15,21 @@ export function createCapturedHashProbe(root: string, write = false) {
   writeFileSync(
     probe,
     `#!/usr/bin/env python3
-import json,os,struct,sys,subprocess
+import json,os,signal,struct,sys,subprocess
 args=sys.argv[1:]
 if args == ${JSON.stringify(args)}:
  captured=sys.stdin.buffer.read()
  with open(${JSON.stringify(calls)},'a+') as record:
   record.seek(0); count=len(record.readlines()); record.write(str(len(captured))+'\\n')
+ held=()
+ if os.environ.get('CHECK_HASH_LIFETIME'):
+  held=(7,10)
+  for fd in [7,10]:
+   assert os.fstat(fd).st_ino == os.stat(os.environ['HASH_HELD_'+str(fd)]).st_ino
+  for fd in [8,9]:
+   try: os.fstat(fd)
+   except OSError: pass
+   else: raise AssertionError('creator/review authority leaked to Git')
  if os.environ.get('HASH_SEQUENCE'):
   sequence=json.load(open(os.environ['HASH_SEQUENCE']))
   if count+1 < len(sequence):
@@ -29,7 +38,20 @@ if args == ${JSON.stringify(args)}:
    open('.local/correction-review.json','wb').write(value)
  if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
- sys.exit(subprocess.run([${JSON.stringify(git)},*args],input=captured).returncode)
+ if os.environ.get('SIGNAL_HASH'):
+  sys.stderr.write('fixture Git hash intentional SIGTERM\\n'); sys.stderr.flush()
+  os.kill(os.getpid(),signal.SIGTERM)
+ mode=os.environ.get('HASH_PROBE_OUTPUT')
+ if mode:
+  result=subprocess.run([${JSON.stringify(git)},*args],input=captured,stdout=subprocess.PIPE,pass_fds=held)
+  if result.returncode: sys.exit(result.returncode)
+  lines=result.stdout.splitlines()
+  if mode == 'missing': lines=lines[:-1]
+  elif mode == 'extra': lines += lines[:1]
+  elif mode == 'invalid': lines[0]=b'not-an-oid'
+  sys.stdout.buffer.write(b'\\n'.join(lines)+b'\\n')
+  sys.exit(0)
+ sys.exit(subprocess.run([${JSON.stringify(git)},*args],input=captured,pass_fds=held).returncode)
 os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
 `,
   );

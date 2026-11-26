@@ -44,10 +44,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const lifetime = pathToFileURL(resolve("scripts/pr-lib/cache-lifetime.mjs")).href;
 
-function bootstrapSource() {
-  return readFileSync("scripts/pr", "utf8")
-    .split("<<'EOF_TOOLING'\n")[1]!
-    .split("\nEOF_TOOLING")[0]!;
+function dependencyIdentitySource() {
+  const wrapper = readFileSync("scripts/pr", "utf8");
+  return (
+    'import { createHash } from "node:crypto";\nimport { readFileSync } from "node:fs";\n' +
+    wrapper.slice(
+      wrapper.indexOf("function dependencyKey("),
+      wrapper.indexOf("function dependencyIdentity("),
+    ) +
+    "process.stdout.write(dependencyKey(...JSON.parse(readFileSync(process.argv[2], 'utf8'))));"
+  );
 }
 
 function dependencyIdentityFixture() {
@@ -117,10 +123,7 @@ function dependencyIdentityFixture() {
         resolve("scripts/pr-lib/cache-lifetime.mjs"),
       ],
       {
-        input: bootstrapSource().replace(
-          "materializeDependencies(...process.argv.slice(2));",
-          "process.stdout.write(dependencyKey(...JSON.parse(readFileSync(process.argv[2], 'utf8'))));",
-        ),
+        input: dependencyIdentitySource(),
         encoding: "utf8",
       },
     );

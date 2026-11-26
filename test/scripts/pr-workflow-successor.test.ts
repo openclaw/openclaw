@@ -642,6 +642,9 @@ describePosix("pending-proof correction publication", () => {
       expect(receipt).toContain(`PUSH_REVIEW_OID=${f.reviewOid()}\n`);
       expect(receipt).toContain("PUSH_PURPOSE=proof\n");
       expect(receipt).toContain("PUSH_PENDING_FINDINGS=I1\n");
+      // Repeating publication revalidates the published OID without rewriting
+      // its retained proof receipt.
+      expect(f.head).not.toBe(f.incoming);
       expectExit(f.run("prepare-publish-for-proof"), 0);
       expect(f.readLocal("prepare-push-result.env").toString()).toBe(receipt);
       // A forged gate stamp cannot turn a proof-only review into landing authority.
