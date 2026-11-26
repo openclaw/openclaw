@@ -514,16 +514,22 @@ it("uses an explicitly ready live catalog order across entries and route variant
   const entries = ["second", "first", "new"].map((id) =>
     row("demo", id, { api: "openai-responses" }),
   );
-  const modelOrder = ["second", "new", "first", "absent"];
+  const modelOrder = ["second", "second", "new", "first", "absent"];
+  const traversals = vi.spyOn(modelOrder, Symbol.iterator);
   const snapshot = await build({
     entries,
     metadataSnapshot: manifestSnapshot,
-    providerOutcomes: [{ provider: "demo", status: "ready", modelOrder }],
+    providerOutcomes: [
+      { provider: "demo", status: "ready", modelOrder: ["first"] },
+      { provider: " DEMO ", status: "ready", modelOrder },
+    ],
   });
 
+  expect(traversals).toHaveBeenCalledTimes(1);
   expect(snapshot.entries.map(({ id }) => id)).toEqual(["second", "new", "first"]);
   expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second", "new", "first"]);
   expect(snapshot.entries.map(({ providerOrder }) => providerOrder)).toEqual([0, 1, 2]);
+  expect(snapshot.entries[0]).not.toBe(snapshot.routeVariants[0]);
   expect(snapshot.entries).toHaveLength(entries.length);
 
   const withoutOptIn = await build({ entries, metadataSnapshot: manifestSnapshot });

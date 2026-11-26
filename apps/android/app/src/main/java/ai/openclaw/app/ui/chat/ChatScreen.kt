@@ -303,12 +303,15 @@ private enum class ChatComposerPickerPage { Models, Permissions }
 internal object ChatUserMessageDisclosurePolicy {
   const val collapsedLineLimit = 12
   const val collapsedCharacterLimit = 700
+  private val loneCarriageReturn = Regex("""\r(?!\n)""")
 
   fun collapsedPreview(text: String): String? {
     var end = minOf(text.length, collapsedCharacterLimit)
     var lineCount = 1
     for (index in 0 until end) {
-      if (text[index] != '\n') continue
+      val char = text[index]
+      if (char != '\r' && char != '\n') continue
+      if (char == '\n' && index > 0 && text[index - 1] == '\r') continue
       if (lineCount == collapsedLineLimit) {
         end = index
         break
@@ -320,7 +323,8 @@ internal object ChatUserMessageDisclosurePolicy {
     val boundaries = BreakIterator.getCharacterInstance(Locale.ROOT)
     boundaries.setText(text.substring(0, text.offsetByCodePoints(end, 1)))
     if (!boundaries.isBoundary(end)) end = boundaries.preceding(end)
-    return text.substring(0, end).trimEnd() + "…"
+    // Compose Text needs LF to display a lone CR as a line break in the folded preview.
+    return text.substring(0, end).trimEnd().replace(loneCarriageReturn, "\n") + "…"
   }
 }
 

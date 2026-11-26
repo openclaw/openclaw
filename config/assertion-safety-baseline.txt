@@ -1952,7 +1952,7 @@ src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2
 src/meeting-bot/platform-adapter.ts	7
-src/meeting-bot/plugin-entry.ts	5
+src/meeting-bot/plugin-entry.ts	3
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
 src/meeting-bot/runtime-facade.ts	4

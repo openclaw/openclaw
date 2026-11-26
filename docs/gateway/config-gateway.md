@@ -398,7 +398,8 @@ Reload debounce and in-flight operation deferral are no longer configurable and 
   and ancestors, bounded by total host RAM. Without a finite readable limit,
   total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
   `memory.high`, swap and current free memory do not select
-  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+  the profile. The Gateway reports the runtime's available parallelism as the CPU count.
+  On Linux, Node.js can account for both CPU affinity and the cgroup CPU quota.
 - Changing the setting requires a Gateway restart.
 
 `standard` keeps the existing worker layout. `lean` runs the first worker of each core
