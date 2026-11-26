@@ -130,7 +130,8 @@ extension OpenClawChatViewModel {
         in sessionKey: String,
         canonicalSessionKey: String? = nil,
         agentID: String? = nil,
-        sessionRoutingContract: String? = nil) async -> String?
+        sessionRoutingContract: String? = nil,
+        preferenceWaitLimit: Duration? = nil) async -> String?
     {
         let target = self.sessionSettingsPatchTarget(
             in: sessionKey,
@@ -139,7 +140,7 @@ extension OpenClawChatViewModel {
             sessionRoutingContract: sessionRoutingContract)
         let hadPendingMutation = (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0
         let failureRevision = self.capabilityPatchFailureRevisionsByTarget[target, default: 0]
-        await self.waitForPendingSessionSettings(for: target)
+        await self.waitForPendingSessionSettings(for: target, atMost: preferenceWaitLimit)
         guard hadPendingMutation,
               self.capabilityPatchFailureRevisionsByTarget[target, default: 0] != failureRevision
         else { return nil }

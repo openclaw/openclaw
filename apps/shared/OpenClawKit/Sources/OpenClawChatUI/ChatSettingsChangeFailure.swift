@@ -13,39 +13,10 @@ struct OptimisticSettingsLane {
     var modelBaselineSelectionID: String?
 }
 
-/// Resumes a continuation once, whichever of two waits finishes first.
-@MainActor
-final class ChatResumeOnce {
-    var continuation: CheckedContinuation<Void, Never>?
-
-    func resume() {
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-}
-
 extension OpenClawChatViewModel {
     /// How long a send waits for a model or speed save in flight. The person's message is already on
     /// screen while it waits, and one save on a healthy connection takes well under this.
     static let settingsFlushBeforeSend: Duration = .milliseconds(1500)
-
-    /// Waits for pending effort, speed and model saves, but never longer than `bound`: a send goes out
-    /// on time, and a save that is still running applies from the next message.
-    func waitForPendingSessionSettings(for target: ModelPatchTarget, atMost bound: Duration) async {
-        guard (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0 else { return }
-        let once = ChatResumeOnce()
-        await withCheckedContinuation { continuation in
-            once.continuation = continuation
-            Task { @MainActor in
-                await self.waitForPendingSessionSettings(for: target)
-                once.resume()
-            }
-            Task { @MainActor in
-                try? await Task.sleep(for: bound)
-                once.resume()
-            }
-        }
-    }
 
     /// One quiet retry for a settings save: a busy or reconnecting server often answers the second time.
     static func retryingOnce<T>(_ operation: () async throws -> T) async throws -> T {

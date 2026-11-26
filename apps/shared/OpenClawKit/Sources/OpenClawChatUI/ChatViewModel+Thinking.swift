@@ -50,7 +50,11 @@ extension OpenClawChatViewModel {
             level: next,
             isExplicit: !clearsOverride))
         self.reconcileThinkingPreferenceRequests()
-        enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
+        enqueueSessionSettingsPatch(
+            requestID: requestID,
+            target: target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             guard let self else { return }
             // Latest wins: a level that a newer pick replaced before its turn is never sent.
             guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else {

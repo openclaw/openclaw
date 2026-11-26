@@ -427,7 +427,7 @@ public final class OpenClawChatViewModel {
     var capabilityPatchFailureMessagesByTarget: [ModelPatchTarget: String] = [:]
     var confirmedCapabilityToolOverridesByTarget: [ModelPatchTarget: ToolOverridesState] = [:]
     var settingsPatchRevisionsByTarget: [ModelPatchTarget: UInt64] = [:]
-    private var settingsPatchWaitersByTarget: [ModelPatchTarget: [CheckedContinuation<Void, Never>]] = [:]
+    private var settingsPatchWaitersByTarget: [ModelPatchTarget: [UUID: CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
@@ -522,6 +522,7 @@ public final class OpenClawChatViewModel {
         let requestID: UInt64
         let routeLeaseTask: Task<OpenClawChatSessionSettingsRouteLease?, Never>
         let task: Task<Void, Never>
+        let requiredBeforeSend: Task<Void, Never>?
     }
 
     private struct BootstrapContext {
@@ -802,9 +803,14 @@ public final class OpenClawChatViewModel {
               self.canSelectModel(selectionID),
               let request = reserveModelSelection(selectionID)
         else { return }
-        enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
+        enqueueSessionSettingsPatch(
+            requestID: request.id,
+            target: request.target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             // Latest wins: a model that a newer pick replaced before its turn is never sent.
-            guard let self, request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
+            guard let self,
+                  request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
             await self.performSelectModel(request, routeLease: routeLease)
         }
     }
@@ -1477,6 +1483,7 @@ extension OpenClawChatViewModel {
     func enqueueSessionSettingsPatch(
         requestID: UInt64,
         target: ModelPatchTarget,
+        mayFinishAfterSend: Bool = false,
         operation: @escaping @MainActor (OpenClawChatSessionSettingsRouteLease?) async -> Void)
     {
         let rosterOwner = self.sidebarData
@@ -1508,7 +1515,8 @@ extension OpenClawChatViewModel {
         self.settingsPatchTailsByTarget[target] = SettingsPatchTail(
             requestID: requestID,
             routeLeaseTask: routeLeaseTask,
-            task: task)
+            task: task,
+            requiredBeforeSend: mayFinishAfterSend ? previousPatchTail?.requiredBeforeSend : task)
     }
 
     private func endSettingsPatch(for target: ModelPatchTarget) {
@@ -1525,19 +1533,28 @@ extension OpenClawChatViewModel {
             self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
             self.acceptedFastModesByTarget.removeValue(forKey: target)
             self.clearOptimisticSettingsLane(for: target)
-            let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
-            for waiter in waiters {
-                waiter.resume()
-            }
+            self.settingsPatchWaitersByTarget.removeValue(forKey: target)?.values.forEach { $0.resume() }
             return
         }
         self.inFlightSettingsPatchCountsByTarget[target] = remaining
     }
 
-    func waitForPendingSessionSettings(for target: ModelPatchTarget) async {
-        guard (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0 else { return }
+    func waitForPendingSessionSettings(for target: ModelPatchTarget, atMost bound: Duration? = nil) async {
+        guard self.inFlightSettingsPatchCountsByTarget[target] != nil else { return }
+        let id = UUID()
+        let timeout = bound.map { bound in
+            Task {
+                try await Task.sleep(for: bound)
+                self.settingsPatchWaitersByTarget[target]?.removeValue(forKey: id)?.resume()
+            }
+        }
         await withCheckedContinuation { continuation in
-            self.settingsPatchWaitersByTarget[target, default: []].append(continuation)
+            self.settingsPatchWaitersByTarget[target, default: [:]][id] = continuation
+        }
+        timeout?.cancel()
+        if bound != nil {
+            // Preferences may settle after a live send. Permission and tool changes may not.
+            await self.settingsPatchTailsByTarget[target]?.requiredBeforeSend?.value
         }
     }
 

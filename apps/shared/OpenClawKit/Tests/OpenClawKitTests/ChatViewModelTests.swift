@@ -8404,6 +8404,7 @@ struct ChatViewModelTests {
             sessionSettingsPatchHook: { patch in
                 guard patch.permissionMode == .some(.guarded) else { return nil }
                 await patchStarted.open()
+                try await Task.sleep(for: OpenClawChatViewModel.settingsFlushBeforeSend + .milliseconds(200))
                 throw NSError(
                     domain: "ChatViewModelTests",
                     code: 1,
@@ -10453,12 +10454,13 @@ struct ChatViewModelTests {
         #expect(modelPickerStore.recents == ["openai/gpt-5.4-pro"])
     }
 
-    @Test func `distinct model patches are serialized in selection order`() async throws {
+    @Test func `quick model changes send only the latest after the one in flight`() async throws {
         let firstPatchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = sessionsResponse(sessionEntry(key: "main", updatedAt: now, model: nil))
         let models = [
             modelChoice(id: "gpt-first", name: "First", provider: "openai"),
+            modelChoice(id: "gpt-middle", name: "Middle", provider: "openai"),
             modelChoice(id: "gpt-second", name: "Second", provider: "openai"),
         ]
         let (transport, vm) = await makeViewModel(
@@ -10476,13 +10478,14 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run {
-            vm.selectModel("openai/gpt-first")
-            vm.selectModel("openai/gpt-second")
-        }
+        await MainActor.run { vm.selectModel("openai/gpt-first") }
         await transport.waitForState { $0.patchedModels.count >= 1 }
-        #expect(await transport.patchedModels() == ["openai/gpt-first"])
-        try await Task.sleep(for: .milliseconds(50))
+        await MainActor.run {
+            vm.selectModel("openai/gpt-middle")
+            #expect(vm.modelSelectionID == "openai/gpt-middle")
+            vm.selectModel("openai/gpt-second")
+            #expect(vm.modelSelectionID == "openai/gpt-second")
+        }
         #expect(await transport.patchedModels() == ["openai/gpt-first"])
 
         await firstPatchGate.open()
@@ -10622,10 +10625,11 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
-        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro", "openai/gpt-5.4-pro"])
     }
 
     @Test func `two failed queued model patches restore the confirmed model`() async throws {
+        let firstPatchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = sessionsResponse(
             sessionEntry(
@@ -10644,6 +10648,7 @@ struct ChatViewModelTests {
             modelResponses: [models],
             setSessionModelHook: { model in
                 guard model == "openai/gpt-first" || model == "openai/gpt-second" else { return }
+                if model == "openai/gpt-first" { await firstPatchGate.wait() }
                 throw NSError(
                     domain: "test",
                     code: 1,
@@ -10651,23 +10656,20 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run {
-            vm.selectModel("openai/gpt-first")
-            vm.selectModel("openai/gpt-second")
-        }
+        await MainActor.run { vm.selectModel("openai/gpt-first") }
+        await transport.waitForState { $0.patchedModels.count == 1 }
+        await MainActor.run { vm.selectModel("openai/gpt-second") }
+        await firstPatchGate.open()
 
         await vm.waitForPendingSessionSettings(in: "main")
-        #expect(await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"])
+        let failedAttempts = ["openai/gpt-first", "openai/gpt-first", "openai/gpt-second", "openai/gpt-second"]
+        #expect(await transport.patchedModels() == failedAttempts)
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-original")
         #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-original")
 
         await MainActor.run { vm.selectModel("openai/gpt-first") }
         await vm.waitForPendingSessionSettings(in: "main")
-        #expect(await transport.patchedModels() == [
-            "openai/gpt-first",
-            "openai/gpt-second",
-            "openai/gpt-first",
-        ])
+        #expect(await transport.patchedModels() == failedAttempts + ["openai/gpt-first", "openai/gpt-first"])
     }
 
     @Test @MainActor func `switch session notifies session changed callback`() async throws {
@@ -12602,7 +12604,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `send reapplies thinking gate after model patch rollback`() async throws {
-        let modelPatchGate = SessionSubscribeGate()
+        let modelPatchGate = AsyncGate()
         let history = historyPayload(sessionId: "sess-main")
         let sessions = sessionsResponse(
             sessionEntry(
@@ -12636,15 +12638,16 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" })
         #expect(await MainActor.run { !vm.showsThinkingPicker })
         await MainActor.run { vm.selectModel("openai/reasoning-model") }
-        await modelPatchGate.waitUntilBlocked()
+        await transport.waitForState { $0.patchedModels.count == 1 }
         #expect(await MainActor.run { vm.showsThinkingPicker })
         #expect(await transport.patchedModels() == ["openai/reasoning-model"])
 
         let send = await sendUserMessage(vm, text: "send after rollback")
         await waitForObservedState { vm.isSending }
         #expect(await transport.sentThinkingLevels().isEmpty)
-        await modelPatchGate.release()
+        await modelPatchGate.open()
         await send?.value
+        #expect(await transport.patchedModels() == ["openai/reasoning-model", "openai/reasoning-model"])
         #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" && !vm.showsThinkingPicker })
         #expect(await transport.sentThinkingLevels() == ["off"])
 
@@ -12963,7 +12966,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `a send waits for a slow settings save only up to its bound`() async throws {
-        let (_, vm) = await makeViewModel(
+        let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayloadWithoutRunState()],
             setSessionThinkingHook: { level in
                 if level == "medium" {
@@ -12973,11 +12976,11 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         await MainActor.run { vm.selectThinkingLevel("medium") }
-        let started = ContinuousClock.now
-        await vm.waitForPendingSessionSettings(
-            for: MainActor.run { vm.currentModelPatchTarget() },
-            atMost: .milliseconds(100))
-        #expect(ContinuousClock.now - started < .seconds(2))
+        await transport.waitForState { $0.patchedThinkingLevels.count == 1 }
+        let send = try #require(await sendUserMessage(vm, text: "while effort saves"))
+        await send.value
+        #expect(await transport.sentThinkingLevels() == ["medium"])
+        #expect(await MainActor.run { vm.isUpdatingSessionSettings })
     }
 
     @Test func `default settings patch returns accepted thinking state`() async throws {
@@ -13393,7 +13396,7 @@ struct ChatViewModelTests {
         await firstPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
 
-        #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
+        #expect(await transport.patchedThinkingLevels() == ["medium", "high", "high"])
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
         #expect(await MainActor.run { vm.preferredThinkingLevel } == "medium")
         #expect(await MainActor.run { vm.prefersExplicitThinkingLevel })
@@ -14095,7 +14098,7 @@ struct ChatViewModelTests {
         await modelPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
 
-        #expect(await transport.patchedThinkingLevels() == ["high"])
+        #expect(await transport.patchedThinkingLevels() == ["high", "high"])
         #expect(await MainActor.run { vm.preferredThinkingLevel } == "off")
         #expect(await MainActor.run { vm.thinkingLevel } == "off")
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevel } == "off")

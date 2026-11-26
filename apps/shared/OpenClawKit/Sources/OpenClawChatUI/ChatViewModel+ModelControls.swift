@@ -614,7 +614,11 @@ extension OpenClawChatViewModel {
             sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.optimisticSettingsLanes[target, default: .init()].latestFastModeRequestID = requestID
-        self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
+        self.enqueueSessionSettingsPatch(
+            requestID: requestID,
+            target: target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             guard let self else { return }
             // Latest wins: a speed that a newer pick replaced before its turn is never sent.
             guard requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID else { return }
