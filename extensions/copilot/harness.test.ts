@@ -153,6 +153,7 @@ function isolated(
   const session = {
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
+    rpc: { remote: { disable: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) } },
     sendAndWait: vi.fn().mockResolvedValue({ type: "assistant.message", data }),
   };
   const createSession = vi.fn().mockResolvedValue(session);
@@ -289,6 +290,29 @@ describe("Copilot harness", () => {
     expect(mocks.attempt).not.toHaveBeenCalled();
   });
 
+  it.each(["standard", "high", "max"])(
+    "uses the Fusion %s tier for isolated completions",
+    async (fusionTier) => {
+      const f = isolated({ content: "Four.", messageId: "fusion-answer" });
+      const result = await f.complete({
+        modelId: "fusion",
+        authorization: {
+          ...ISOLATED.authorization,
+          model: { ...ISOLATED.authorization.model, id: "fusion" },
+        },
+        config: {
+          agents: {
+            defaults: { models: { "github-copilot/fusion": { params: { fusionTier } } } },
+          },
+        },
+      });
+      expect(result?.assistant.content).toEqual([{ type: "text", text: "Four." }]);
+      expect(f.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "fusion", capi: { fusionTier } }),
+      );
+    },
+  );
+
   it("uses a fresh, capability-free isolated native session", async () => {
     const f = isolated({ content: "Four.", messageId: "message-1" });
     const reply = await f.complete({ streamParams: { maxTokens: 800, temperature: 0.2 } });
@@ -376,6 +400,30 @@ describe("Copilot harness", () => {
     },
   );
 
+  it("waits for remote export to be disabled before isolated inference", async () => {
+    const f = isolated();
+    const entered = createDeferred<void>();
+    const disabled = createDeferred<void>();
+    f.session.rpc.remote.disable.mockImplementation(() => {
+      entered.resolve();
+      return disabled.promise;
+    });
+    const pending = f.complete();
+    await entered.promise;
+    expect(f.session.sendAndWait).not.toHaveBeenCalled();
+    disabled.resolve();
+    await pending;
+    expect(f.session.sendAndWait).toHaveBeenCalledOnce();
+  });
+
+  it("does not send isolated prompts when disabling remote export fails", async () => {
+    const f = isolated();
+    f.session.rpc.remote.disable.mockRejectedValue(new Error("remote export remains active"));
+    await expect(f.complete()).rejects.toThrow("remote export remains active");
+    expect(f.session.sendAndWait).not.toHaveBeenCalled();
+    expect(f.session.disconnect).toHaveBeenCalledOnce();
+  });
+
   it.each(["client acquisition", "session creation"] as const)(
     "rechecks authority after %s and cleans rejected resources",
     async (stage) => {
@@ -425,25 +473,19 @@ describe("Copilot harness", () => {
     },
   );
 
-  it("does not send when cancellation wins the send boundary", async () => {
+  it("does not send when cancelled after disabling remote export", async () => {
     const controller = new AbortController();
-    let registrations = 0;
-    const add = controller.signal.addEventListener.bind(controller.signal);
-    vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
-      add(...args);
-      if (++registrations === 5) {
-        queueMicrotask(() => controller.abort(new Error("cancelled at send boundary")));
-      }
-    });
     const f = isolated();
+    f.session.rpc.remote.disable.mockImplementation(async () => {
+      controller.abort(new Error("cancelled before send"));
+    });
     f.session.sendAndWait.mockReset();
     await expect(f.complete({ abortSignal: controller.signal })).rejects.toThrow(
-      "cancelled at send boundary",
+      "cancelled before send",
     );
     await flush();
-    expect(registrations).toBe(5);
+    expect(f.session.rpc.remote.disable).toHaveBeenCalledOnce();
     expect(f.session.sendAndWait).not.toHaveBeenCalled();
-    expect(f.session.abort).toHaveBeenCalledOnce();
     expect(f.session.disconnect).toHaveBeenCalledOnce();
   });
 
@@ -755,6 +797,18 @@ describe("Copilot harness", () => {
       await close();
       clear();
     }
+  });
+
+  it("resumes the same Fusion tier and starts fresh when the tier changes", async () => {
+    const f = fixture();
+    const model = { provider: "github-copilot", id: "fusion", params: { fusionTier: "high" } };
+    nextSession("fusion-high");
+    await f.run({ model });
+    nextSession("fusion-high");
+    await f.run({ model });
+    expect(replay(1)?.sdkSessionId).toBe("fusion-high");
+    await f.run({ model: { ...model, params: { fusionTier: "max" } } });
+    expect(replay(2)?.sdkSessionId).toBeUndefined();
   });
 
   it("fingerprints BYOK URLs and invalidates changed request auth", async () => {

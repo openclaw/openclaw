@@ -100,6 +100,33 @@ the harness, or on a provider to route every model under that provider.
 account- and organization-policy-dependent; confirm your authenticated
 Copilot CLI actually exposes a model before pinning it.
 
+### Copilot Fusion
+
+Route `github-copilot/fusion` through the Copilot runtime and set its tier in
+the model's `params`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "github-copilot/fusion",
+      models: {
+        "github-copilot/fusion": {
+          agentRuntime: { id: "copilot" },
+          params: { fusionTier: "high" },
+        },
+      },
+    },
+  },
+}
+```
+
+`fusionTier` accepts `"standard"` (the default), `"high"`, or `"max"`.
+It controls Copilot's model routing, separately from `reasoningEffort`.
+Changing the tier starts a fresh SDK session. New, resumed, and isolated
+completion sessions all receive the selected tier. Fusion availability remains
+subject to your Copilot account and organization policies.
+
 ## Supported providers
 
 The harness supports the standard `github-copilot` provider (owned by
