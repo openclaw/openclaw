@@ -47,6 +47,32 @@ function run(ts: number, jobId: string, summary: string) {
 }
 
 suite.define(() => {
+  it("reopens the same automation link after a failed read and page reload", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const job = cronJob("garden-inventory", "Weekly garden inventory");
+      const match = { id: job.id };
+      const gateway = await installCronGateway(page, {
+        "cron.get": {
+          __mockError: { code: "UNAVAILABLE", message: "Online store is unavailable" },
+        },
+      });
+      const url = `${suite.server.baseUrl}cron?job=${job.id}`;
+      await page.goto(url);
+      await gateway.waitForRequest("cron.get", { match });
+      const error = page.locator("openclaw-cron-page .callout.danger");
+      const message = (await error.textContent())?.trim();
+      expect(page.url()).toBe(url);
+      await gateway.setMethodResponse("cron.get", job);
+      await page.reload();
+      // The mock's request history is tied to the document, so this is a fresh exact read.
+      await gateway.waitForRequest("cron.get", { match });
+      await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(job.name);
+      expect(page.url()).toBe(url);
+      expect(await error.count()).toBe(0);
+      expect(message).toBe("Couldn’t open this automation. Reload this page to try again.");
+    });
+  });
+
   it.each(
     (["saved", "conflict", "error"] as const).flatMap((outcome) => [
       { navigation: "same editor", goBack: false, outcome },

@@ -776,6 +776,7 @@ const enSettings = {
     testProvider: "Test {provider}",
     testing: "Searching…",
     query: "Search query",
+    queryTooLong: "Shorten the search query to {limit} characters or fewer.",
     queryPlaceholder: "What would you like to find?",
     queryDefault: "OpenClaw documentation",
     success: "Search succeeded",

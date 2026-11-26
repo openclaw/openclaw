@@ -46,8 +46,9 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  /** The hosted catalog these rows were planned with; a newer publication replans them. */
-  remoteCatalog: ReturnType<typeof getActiveRemoteModelCatalog>;
+  // The config can outlive the remote snapshot; cached rows do not own that snapshot.
+  // Use null for absence so a collected snapshot and a no-overlay plan cannot compare equal.
+  remoteCatalog: WeakRef<NonNullable<ReturnType<typeof getActiveRemoteModelCatalog>>> | null;
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
@@ -230,7 +231,12 @@ function loadManifestModelCatalogRows(
   }
   const remoteCatalog = getActiveRemoteModelCatalog(config);
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot && cached.remoteCatalog === remoteCatalog) {
+  if (
+    cached?.snapshot === snapshot &&
+    (remoteCatalog
+      ? cached.remoteCatalog?.deref() === remoteCatalog
+      : cached.remoteCatalog === null)
+  ) {
     return cached.rows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
@@ -261,7 +267,11 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, remoteCatalog, rows });
+  manifestModelCatalogCache.set(config, {
+    snapshot,
+    remoteCatalog: remoteCatalog ? new WeakRef(remoteCatalog) : null,
+    rows,
+  });
   return rows;
 }
 
