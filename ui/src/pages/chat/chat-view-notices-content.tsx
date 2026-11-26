@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -15,6 +15,7 @@ import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -41,6 +42,49 @@ registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
+registerChatSessionEnglish();
+
+export function NativeRecoveryNotice(props: { onResume?: () => Promise<void> }) {
+  const [pending, setPending] = createSignal(false);
+  let resuming = false;
+  const resume = async () => {
+    if (resuming || !props.onResume) {
+      return;
+    }
+    resuming = true;
+    setPending(true);
+    try {
+      await props.onResume();
+    } finally {
+      resuming = false;
+      setPending(false);
+    }
+  };
+  return (
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-native-recovery"
+      role="status"
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+        <Icon name="alertTriangle" />
+      </span>
+      <div class="chat-composer-neighbor-card__copy">
+        <strong>{t("chat.nativeRecovery.title")}</strong>
+        <span>{t("chat.nativeRecovery.body")}</span>
+      </div>
+      <Show when={props.onResume}>
+        <button
+          type="button"
+          class="btn btn--sm"
+          disabled={pending()}
+          onClick={() => void resume()}
+        >
+          {t(pending() ? "chat.nativeRecovery.resuming" : "chat.nativeRecovery.resume")}
+        </button>
+      </Show>
+    </div>
+  );
+}
 
 function workspaceConflictGitCommands(
   conflict: WorkspaceResultConflict,
