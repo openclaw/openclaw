@@ -41,16 +41,25 @@ const personalChat = { conversationType: "personal", conversationId: "a:bf-dm-id
 type ContentParams = Parameters<typeof prepareMSTeamsInboundContent>[0];
 type ContentOptions = Partial<
   Omit<ContentParams, "entry" | "resolveTeamAadGroupId" | "mediaMaxBytes" | "tokenProvider" | "log">
-> & { attachments?: MSTeamsAttachmentLike[]; serviceUrl?: string };
+> & {
+  attachments?: MSTeamsAttachmentLike[];
+  serviceUrl?: string;
+  channelData?: Record<string, unknown>;
+};
 
-function prepare({ attachments = markedHtml, serviceUrl, ...options }: ContentOptions = {}) {
+function prepare({
+  attachments = markedHtml,
+  serviceUrl,
+  channelData = { channel: { id: "19:channel-thread@thread.tacv2" } },
+  ...options
+}: ContentOptions = {}) {
   return prepareMSTeamsInboundContent({
     entry: {
       context: createTurnContext({
         type: "message",
         id: "msg-1",
         serviceUrl,
-        channelData: { channel: { id: "19:channel-thread@thread.tacv2" } },
+        channelData,
       }),
       rawText: options.rawBody ?? "hello",
       text: options.rawBody ?? "hello",
@@ -163,5 +172,56 @@ describe("Teams inbound content", () => {
     await prepare(personalChat);
     expect(botFramework).not.toHaveBeenCalled();
     expect(graph).not.toHaveBeenCalled();
+  });
+
+  describe("personal chat whose activity carries no attachment entry", () => {
+    const graphChat = "19:dm-chat@unq.gbl.spaces";
+    const dmWithoutFile = {
+      ...personalChat,
+      attachments: [],
+      serviceUrl: bfUrl,
+      channelData: { tenant: { id: "tenant-1" }, chat: { id: graphChat } },
+    } satisfies ContentOptions;
+
+    it("recovers the file from Graph by channelData.chat.id", async () => {
+      graph.mockResolvedValue({ media: [pdf] });
+      expect(await prepare({ ...dmWithoutFile, graphMediaFallback: true })).toEqual({
+        agentBody: "hello",
+        inboundMedia: [pdf],
+      });
+      expect(graph).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          messageUrl: `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(graphChat)}/messages/msg-1`,
+        }),
+      );
+      expect(botFramework).not.toHaveBeenCalled();
+    });
+
+    it("keeps a file-only message instead of dropping it as empty", async () => {
+      graph.mockResolvedValue({ media: [pdf] });
+      expect(
+        await prepare({ ...dmWithoutFile, graphMediaFallback: true, rawBody: "" }),
+      ).toEqual({ agentBody: "", inboundMedia: [pdf] });
+    });
+
+    it.each<[string, ContentOptions]>([
+      ["graphMediaFallback off", { ...dmWithoutFile }],
+      ["no Graph chat id", { ...dmWithoutFile, graphMediaFallback: true, channelData: {} }],
+      [
+        "a chat id that is not a Graph chat",
+        { ...dmWithoutFile, graphMediaFallback: true, channelData: { chat: { id: "a:bf-dm-id" } } },
+      ],
+    ])("does not query Graph with %s", async (_name, options) => {
+      expect(await prepare(options)).toEqual({ agentBody: "hello", inboundMedia: [] });
+      expect(graph).not.toHaveBeenCalled();
+    });
+
+    it("leaves attachment markers on the Bot Framework path", async () => {
+      botFramework.mockResolvedValue({ media: [pdf], attachmentCount: 1 });
+      const result = await prepare({ ...dmWithoutFile, attachments: markedHtml, graphMediaFallback: true });
+      expect(botFramework).toHaveBeenCalledTimes(1);
+      expect(graph).not.toHaveBeenCalled();
+      expect(result?.inboundMedia).toEqual([pdf]);
+    });
   });
 });

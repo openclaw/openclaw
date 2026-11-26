@@ -30,6 +30,8 @@ type MSTeamsActivity = {
     team?: { id?: string; aadGroupId?: string; name?: string };
     channel?: { id?: string; name?: string };
     tenant?: { id?: string };
+    /** The Graph chat this activity belongs to; for a personal chat it differs from conversation.id. */
+    chat?: { id?: string };
     [key: string]: unknown;
   };
   attachments?: Array<{

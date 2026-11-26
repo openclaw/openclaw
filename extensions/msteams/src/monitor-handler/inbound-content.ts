@@ -34,7 +34,13 @@ export async function prepareMSTeamsInboundContent(params: {
   log: MSTeamsMessageHandlerDeps["log"];
 }) {
   const activity = params.entry.context.activity;
+  const personalGraphChatId = resolveMSTeamsPersonalGraphChatId({
+    conversationId: params.conversationId,
+    graphChatId: activity.channelData?.chat?.id,
+    graphMediaFallback: params.graphMediaFallback,
+  });
   const mayRecoverGraphMedia =
+    Boolean(personalGraphChatId) ||
     Boolean(params.htmlSummary?.attachmentIds.length) ||
     shouldAttemptMSTeamsGraphMediaFallback({
       conversationType: params.conversationType,
@@ -66,8 +72,9 @@ export async function prepareMSTeamsInboundContent(params: {
         });
 
         if (!hasMaterializedMedia(mediaList)) {
-          // Explicit attachment markers remain the fallback gate for personal chats.
-          // Channel and group-chat activities can omit them while Graph holds a file.
+          // Channel and group-chat activities can omit attachment markers while Graph holds a
+          // file. A personal chat with markers uses the Bot Framework endpoint below; one without
+          // any can still hold a Graph file (see resolveMSTeamsPersonalGraphChatId).
           const attachmentIds = extractMSTeamsHtmlAttachmentIds(params.entry.attachments);
           const hasHtmlFileAttachment = attachmentIds.length > 0;
           const shouldFetchGraphMessage =
@@ -104,14 +111,16 @@ export async function prepareMSTeamsInboundContent(params: {
             }
           }
 
-          if (shouldFetchGraphMessage && !isBotFrameworkPersonalChat) {
+          const graphChatId =
+            isBotFrameworkPersonalChat && !hasHtmlFileAttachment ? personalGraphChatId : undefined;
+          if ((shouldFetchGraphMessage && !isBotFrameworkPersonalChat) || graphChatId) {
             const graphTeamAadGroupId =
               params.conversationType.trim().toLowerCase() === "channel" && !params.teamAadGroupId
                 ? await params.resolveTeamAadGroupId(deadline)
                 : params.teamAadGroupId;
             const messageUrl = buildMSTeamsGraphMessageUrl({
               conversationType: params.conversationType,
-              conversationId: params.conversationId,
+              conversationId: graphChatId ?? params.conversationId,
               messageId: activity.id,
               threadRootMessageId: params.conversationMessageId ?? activity.replyToId,
               teamAadGroupId: graphTeamAadGroupId,
@@ -191,6 +200,23 @@ export async function prepareMSTeamsInboundContent(params: {
   }
 
   return { agentBody, inboundMedia };
+}
+
+// Bot Framework can deliver a personal-chat file with no attachment entry at all (seen from the
+// Teams iOS app), while Graph holds the file on the chat message. A Bot Framework DM ID cannot
+// address Graph, but channelData.chat.id names the same chat there, and the activity ID is the
+// Graph message ID. Only with graphMediaFallback on: Teams gives no other sign that a file is
+// missing, so each such personal message costs one Graph message read.
+function resolveMSTeamsPersonalGraphChatId(params: {
+  conversationId: string;
+  graphChatId?: string;
+  graphMediaFallback?: boolean;
+}): string | undefined {
+  if (params.graphMediaFallback !== true || !isBotFrameworkPersonalChatId(params.conversationId)) {
+    return undefined;
+  }
+  const chatId = params.graphChatId?.trim();
+  return chatId?.startsWith("19:") ? chatId : undefined;
 }
 
 function shouldAttemptMSTeamsGraphMediaFallback(params: {
