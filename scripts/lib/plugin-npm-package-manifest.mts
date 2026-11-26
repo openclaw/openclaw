@@ -968,7 +968,7 @@ function readGeneratedBundledChannelConfigEntries(source: string): unknown {
   const packedMatch =
     rowsMatch ??
     source.match(/const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = (\[[\s\S]*?\])\.join\(""\);/u);
-  if (!packedMatch) {
+  if (!packedMatch?.[1]) {
     return undefined;
   }
   try {

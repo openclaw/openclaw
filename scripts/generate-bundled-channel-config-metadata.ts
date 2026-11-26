@@ -222,7 +222,11 @@ const decodedChannels: BundledChannelConfigMetadata[] = [];
 
 function readChannel(index: number): BundledChannelConfigMetadata {
   packedRows ??= loadPackedChannelRows();
-  return (decodedChannels[index] ??= JSON.parse(packedRows[index].join("")) as BundledChannelConfigMetadata);
+  const chunks = packedRows[index];
+  if (!chunks) {
+    throw new Error("Missing generated channel metadata row: " + index);
+  }
+  return (decodedChannels[index] ??= JSON.parse(chunks.join("")) as BundledChannelConfigMetadata);
 }
 
 export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA: readonly BundledChannelConfigMetadata[] = [

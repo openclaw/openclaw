@@ -3,8 +3,10 @@ import { validateConfigObjectRawWithPlugins } from "./validation.js";
 
 const reads = vi.hoisted(() => new Set<string>());
 vi.mock(import("./bundled-channel-config-metadata.generated.js"), async (importOriginal) => {
-  const { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA: entries } = await importOriginal();
+  const original = await importOriginal();
+  const entries = original.GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA;
   return {
+    ...original,
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA: entries.map(
       (entry) =>
         new Proxy(entry, {
