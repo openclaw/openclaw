@@ -4,11 +4,29 @@
 // before the conversion keep naming this tree and reach the current release through it.
 // A tree inside the releases directory never forwards (it is what the launcher starts).
 // Reinstalling the package replaces the tree and drops the marker, so it runs itself again.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const FORWARDED_ENV = "OPENCLAW_RELEASE_LAUNCHER_FORWARDED";
+
+function rootControlsLauncherPath(launcher) {
+  if (!path.isAbsolute(launcher) || path.normalize(launcher) !== launcher) {
+    return false;
+  }
+  let current = launcher;
+  for (;;) {
+    const stat = lstatSync(current);
+    if (stat.uid !== 0 || (!stat.isSymbolicLink() && (stat.mode & 0o022) !== 0)) {
+      return false;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return true;
+    }
+    current = parent;
+  }
+}
 
 function readLauncher(root) {
   for (const marker of [
@@ -18,6 +36,17 @@ function readLauncher(root) {
     try {
       const launcher = readFileSync(marker, "utf8").trim();
       if (launcher && existsSync(launcher)) {
+        if (process.geteuid?.() === 0) {
+          // Root only loads launchers whose paths are controlled by root.
+          if (!rootControlsLauncherPath(launcher)) {
+            return null;
+          }
+          const canonical = realpathSync(launcher);
+          if (canonical !== launcher && !rootControlsLauncherPath(canonical)) {
+            return null;
+          }
+          return canonical;
+        }
         return launcher;
       }
     } catch {}
