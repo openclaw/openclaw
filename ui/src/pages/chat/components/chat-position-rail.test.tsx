@@ -3,7 +3,7 @@
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubSettledAnimationFrames } from "../chat-view.test-helpers.ts";
 import {
   mountChatThread as mountThread,
@@ -149,11 +149,6 @@ function observeBubbles() {
   );
   return observed;
 }
-const settleFrames = () =>
-  new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(() => {
@@ -661,6 +656,12 @@ describe("conversation position rail", () => {
   );
 
   it("keeps the focused run marker through streaming and retargets its persisted answer", async () => {
+    const flushFrame = stubSettledAnimationFrames();
+    const commitLayout = async () => {
+      flush();
+      await Promise.resolve();
+      flushFrame();
+    };
     const observed = observeBubbles();
 
     const user = message("question", "user", "Review the card", 1, "stream-run");
@@ -690,12 +691,13 @@ describe("conversation position rail", () => {
     const marks = part(container, "marks")!;
     measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
-    // Observer registration follows settled refs and queued layout, not a fixed frame budget.
-    await waitForSolid(() => expect(observed.has(streamBubble)).toBe(true));
+    // The rail publishes observer targets in the frame after measured layout.
+    flushFrame();
+    expect(observed.has(streamBubble)).toBe(true);
     const queryBubbles = vi.spyOn(root, "querySelectorAll");
     props.stream = "Draft **updated** response";
     rerender();
-    await settleFrames();
+    flushFrame();
     expect(streamBubble.querySelector("strong")?.textContent).toBe("updated");
     expect(provisional.getAttribute("aria-description")).toContain("Draft updated response");
     expect(
@@ -703,7 +705,7 @@ describe("conversation position rail", () => {
     ).toEqual([]);
     provisional.click();
     // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
-    await settleFrames();
+    await commitLayout();
     expect(streamBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
     props.messages = [
       user,
@@ -717,9 +719,10 @@ describe("conversation position rail", () => {
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
     // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
-    await waitForSolid(() => expect(observed.has(persistedBubble)).toBe(true));
+    flushFrame();
+    expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
-    await settleFrames();
+    await commitLayout();
     expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
     expect(markers()).toHaveLength(2);
   });
