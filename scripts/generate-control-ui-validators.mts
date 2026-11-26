@@ -265,7 +265,12 @@ async function main() {
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
     // Share repeated shapes only within each existing lazy boundary.
-    const shareSchemaFunctions = ["activity", "approvals", "session-input"].includes(group);
+    const shareSchemaFunctions = [
+      "activity",
+      "approvals",
+      "session-input",
+      "file-reference",
+    ].includes(group);
     const compiled = await compileStandaloneValidators(
       selected.map(([name, schema]) => ({
         name: `is${name}`,

@@ -145,8 +145,8 @@ export function ComposerFileReferences(props: {
               total: String(read().commandCount),
             })}
           </p>
-          <label>
-            {t("chat.fileReferences.query")}
+          <label class="field">
+            <span>{t("chat.fileReferences.query")}</span>
             <input
               type="text"
               value={read().query}

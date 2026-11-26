@@ -1589,45 +1589,18 @@
 
 .composer-file-references {
   padding: 6px 12px;
-  font-size: var(--font-size-sm);
 }
 
-.composer-file-references__option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.composer-file-references__review {
-  margin-block-start: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  max-height: 55vh;
-  overflow-y: auto;
-}
-
-.composer-file-references__review input[type="text"] {
-  display: block;
-  width: 100%;
-  margin-block: 6px;
-}
-
-.composer-file-references__candidates {
-  margin-block: 8px;
-  padding: 0;
-  border: 0;
-}
-
-.composer-file-references__candidate {
-  padding: 8px;
-  border-block-end: 1px solid var(--border);
-}
-
+.composer-file-references__option,
 .composer-file-references__candidate label {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+}
+
+.composer-file-references__review {
+  max-height: 55vh;
+  overflow-y: auto;
 }
 
 .composer-file-references__candidate bdi,
@@ -1637,7 +1610,6 @@
 }
 
 .chat-composer-file-reference {
-  display: inline;
   padding-inline: 3px;
   border: 1px solid var(--border);
   border-radius: 4px;

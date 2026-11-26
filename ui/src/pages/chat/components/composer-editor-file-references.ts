@@ -215,14 +215,15 @@ export function mountFileReferenceComposerEditor(
             : item,
         ),
         ...inserted.map((item) => ({
-          reference: item.reference,
           start: item.start + request.from,
           end: item.end + request.from,
+          reference: item.reference,
         })),
       ].toSorted((left, right) => left.start - right.start);
       const text =
         current.text.slice(0, request.from) + request.text + current.text.slice(request.to);
-      if (!readComposerFileReferences(text, nextReferences)) {
+      const canonicalReferences = readComposerFileReferences(text, nextReferences);
+      if (!canonicalReferences) {
         return reject();
       }
       // Reentrant callbacks already see an uncertain receipt. No retry can insert again.
@@ -231,14 +232,14 @@ export function mountFileReferenceComposerEditor(
       try {
         editor.view.dispatch({
           changes: { from: request.from, to: request.to, insert: request.text },
-          effects: restoreFileReferences.of(nextReferences),
+          effects: restoreFileReferences.of(canonicalReferences),
           annotations: isolateHistory.of("full"),
           selection: { anchor: request.from + request.text.length },
           userEvent: "input.file-reference",
         });
         if (
           editor.view.state.doc.toString() === text &&
-          JSON.stringify(readReferences(editor.view.state)) === JSON.stringify(nextReferences)
+          JSON.stringify(readReferences(editor.view.state)) === JSON.stringify(canonicalReferences)
         ) {
           receipt.status = "committed";
         }

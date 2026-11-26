@@ -122,7 +122,11 @@ export function commitComposerDraft(
     return;
   }
   getChatComposerState(props.paneId).editRevision += 1;
-  props.onDraftChange(value, selected, references);
+  if (references === undefined) {
+    props.onDraftChange(value, selected);
+  } else {
+    props.onDraftChange(value, selected, references);
+  }
 }
 
 /** Enter before the session is ready submits this exact draft once the composer can. */
