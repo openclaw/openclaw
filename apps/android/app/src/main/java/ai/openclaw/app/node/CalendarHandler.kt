@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
 import java.util.TimeZone
 
@@ -240,8 +241,8 @@ class CalendarHandler internal constructor(
 
   private fun parseEventsRequest(paramsJson: String?): CalendarEventsRequest? {
     val params = if (paramsJson.isNullOrBlank()) null else parseJsonParamsObject(paramsJson) ?: return null
-    val start = parseISO(parseJsonString(params, "startISO"))
-    val end = parseISO(parseJsonString(params, "endISO"))
+    val start = parseInstant(parseJsonString(params, "startISO"))
+    val end = parseInstant(parseJsonString(params, "endISO"))
     val resolvedStart = start ?: Instant.now()
     val resolvedEnd = end ?: resolvedStart.plus(7, ChronoUnit.DAYS)
     // Keep model-driven calendar reads bounded.
@@ -255,17 +256,17 @@ class CalendarHandler internal constructor(
 
   private fun parseAddRequest(paramsJson: String?): CalendarAddRequest? {
     val params = parseJsonParamsObject(paramsJson) ?: return null
-    val startAt = parseOffsetDateTime((params["startISO"] as? JsonPrimitive)?.content) ?: return null
-    val endAt = parseOffsetDateTime((params["endISO"] as? JsonPrimitive)?.content) ?: return null
-    var start = startAt.toInstant()
-    var end = endAt.toInstant()
+    val rawStart = (params["startISO"] as? JsonPrimitive)?.content
+    val rawEnd = (params["endISO"] as? JsonPrimitive)?.content
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
-    if (isAllDay && end > start) {
-      // Android stores all-day events as UTC midnights. Keep the calendar date the caller wrote,
-      // so "2026-07-05T00:00:00+10:00" stays July 5 instead of falling back to July 4 in UTC.
-      start = startAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
-      end = maxOf(endAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant(), start.plus(1, ChronoUnit.DAYS))
-    }
+    val (start, end) =
+      if (isAllDay) {
+        parseAllDayRange(rawStart, rawEnd) ?: return null
+      } else {
+        val start = parseInstant(rawStart) ?: return null
+        val end = parseInstant(rawEnd) ?: return null
+        start to end
+      }
     return CalendarAddRequest(
       title = parseJsonString(params, "title")?.trim().orEmpty(),
       startMs = start.toEpochMilli(),
@@ -279,7 +280,27 @@ class CalendarHandler internal constructor(
     )
   }
 
-  private fun parseISO(raw: String?): Instant? = parseOffsetDateTime(raw)?.toInstant()
+  private fun parseAllDayRange(rawStart: String?, rawEnd: String?): Pair<Instant, Instant>? {
+    val startAt = parseOffsetDateTime(rawStart) ?: return null
+    val endAt = parseOffsetDateTime(rawEnd) ?: return null
+    if (!endAt.isAfter(startAt)) return startAt.toInstant() to endAt.toInstant()
+    // Android stores all-day events as UTC midnights. Keep the calendar date the caller wrote,
+    // so "2026-07-05T00:00:00+10:00" stays July 5 instead of falling back to July 4 in UTC.
+    val start = startAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+    val end = endAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+    return start to maxOf(end, start.plus(1, ChronoUnit.DAYS))
+  }
+
+  private fun parseInstant(raw: String?): Instant? {
+    val value = raw?.trim().orEmpty()
+    if (value.isEmpty()) return null
+    return try {
+      Instant.parse(value)
+    } catch (_: DateTimeParseException) {
+      // Older Android releases require OffsetDateTime for numeric offsets.
+      parseOffsetDateTime(value)?.toInstant()
+    }
+  }
 
   private fun parseOffsetDateTime(raw: String?): OffsetDateTime? {
     val value = raw?.trim().orEmpty()
