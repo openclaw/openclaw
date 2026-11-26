@@ -9,10 +9,12 @@ import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rp
 
 vi.mock("../cron/active-jobs.js", () => ({
   getActiveCronJobCount: vi.fn(() => 2),
+  listActiveCronJobHolders: vi.fn(() => ["job=a", "job=b"]),
 }));
 
 vi.mock("../cron/service/active-run-cancellation.js", () => ({
   getSuspensionVisibleCronTaskRunCount: vi.fn(() => 4),
+  listSuspensionVisibleCronTaskRunHolders: vi.fn(() => ["task job=a"]),
 }));
 
 afterEach(() => {
@@ -51,6 +53,7 @@ it("filters completed chat entries while retaining persistence and watcher block
   const inspectors = createGatewayServerActiveWorkInspectors(context);
 
   expect(inspectors.getCronRuns?.()).toBe(5);
+  expect(inspectors.getCronRunHolders?.()).toEqual(["job=a", "job=b", "scheduler=1"]);
   expect(inspectors.getChatRuns?.()).toBe(1);
   expect(inspectors.getQueuedTurns?.()).toBe(2);
   expect(inspectors.getTerminalPersistence?.()).toBe(1);

@@ -1,6 +1,9 @@
 // Adapts controller-owned sources and terminal state to the shared activity inspector.
-import { getActiveCronJobCount } from "../cron/active-jobs.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
+import { getActiveCronJobCount, listActiveCronJobHolders } from "../cron/active-jobs.js";
+import {
+  getSuspensionVisibleCronTaskRunCount,
+  listSuspensionVisibleCronTaskRunHolders,
+} from "../cron/service/active-run-cancellation.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
@@ -39,6 +42,16 @@ export function createGatewayServerActiveWorkInspectors(
     getCronRuns: () =>
       Math.max(getActiveCronJobCount(), getSuspensionVisibleCronTaskRunCount()) +
       (context.cron.getSuspensionBlockerCount?.() ?? 0),
+    getCronRunHolders: () => {
+      const scheduler = context.cron.getSuspensionBlockerCount?.() ?? 0;
+      // Same max() as the count: a run has both a marker and a task core, so name one side.
+      const jobs = listActiveCronJobHolders();
+      const tasks = listSuspensionVisibleCronTaskRunHolders();
+      return [
+        ...(jobs.length >= tasks.length ? jobs : tasks),
+        ...(scheduler > 0 ? [`scheduler=${scheduler}`] : []),
+      ];
+    },
     getChatRuns: () => entries().filter(([, entry]) => isActiveChatRun(entry)).length,
     getChatRunHolders: () => holders(isActiveChatRun),
     getQueuedTurns: () => entries().filter(([, entry]) => isRpcSourceQueued(entry)).length,

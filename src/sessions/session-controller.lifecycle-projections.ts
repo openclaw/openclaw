@@ -303,19 +303,34 @@ export function captureGatewaySessionControllerWork(resolveGatewayContext: Gatew
     },
   };
 }
+/** What keeps one controller entry counted as admitted work; empty when idle. */
+function sessionControllerWorkReasons(entry: SessionControllerEntry): string[] {
+  const effects = [...(entry.lifecycle?.effects ?? [])].filter(
+    (effect) => effect.phase === "acquired" || effect.phase === "writer",
+  );
+  return [
+    entry.active ? "active-turn" : undefined,
+    entry.mailbox?.claim ? "mailbox-claim" : undefined,
+    entry.mailbox?.preparing ? "mailbox-preparing" : undefined,
+    // Idle dedupe-expiry timers do not own runnable work.
+    entry.mailbox?.dispatchEnabled && entry.mailbox.timer ? "mailbox-dispatch-timer" : undefined,
+    entry.lifecycle?.operations.size ? `operations=${entry.lifecycle.operations.size}` : undefined,
+    effects.length ? `effects=${effects.map((effect) => effect.phase).join("+")}` : undefined,
+  ].filter((reason): reason is string => reason !== undefined);
+}
 export function getSessionControllerWorkCount(): number {
   return [...sessionControllers.values()].filter(
-    (entry) =>
-      entry.active ||
-      entry.mailbox?.claim ||
-      entry.mailbox?.preparing ||
-      // Idle dedupe-expiry timers do not own runnable work.
-      (entry.mailbox?.dispatchEnabled && entry.mailbox.timer) ||
-      entry.lifecycle?.operations.size ||
-      [...(entry.lifecycle?.effects ?? [])].some(
-        (effect) => effect.phase === "acquired" || effect.phase === "writer",
-      ),
+    (entry) => sessionControllerWorkReasons(entry).length > 0,
   ).length;
+}
+/** Names the entries behind getSessionControllerWorkCount for suspension diagnostics. */
+export function listSessionControllerWorkHolders(): string[] {
+  return [...sessionControllers.values()].flatMap((entry) => {
+    const reasons = sessionControllerWorkReasons(entry);
+    return reasons.length
+      ? [`${entry.target?.sessionKey ?? entry.key} (${reasons.join(", ")})`]
+      : [];
+  });
 }
 export function getSessionMutationCount(): number {
   return [...allMutations()].filter((mutation) => mutation.phase === "active").length;

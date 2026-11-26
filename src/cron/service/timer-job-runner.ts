@@ -450,6 +450,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       runPromise,
       runAbortController.signal,
       opts?.runReceipt?.agentId ?? opts?.activeJobMarker?.agentId,
+      job.id,
     );
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
