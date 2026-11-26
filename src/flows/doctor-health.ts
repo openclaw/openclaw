@@ -291,6 +291,7 @@ async function runDoctorHealthFlowWithResult(
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
           reportFindings,
+          repairEvidence,
           fullIntegrityCheck: options.fullIntegrityCheck,
         }),
       }),

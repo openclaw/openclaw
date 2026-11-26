@@ -435,3 +435,26 @@ it.each(["hardlink", "relocated-copy"] as const)(
     });
   },
 );
+
+it("keeps an unavailable best-effort original capture advisory after completed external repair", async () => {
+  await withDoctorState(async () => {
+    const loadConfig = configFlow.loadAndMaybeMigrateDoctorConfig;
+    vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig").mockImplementation(async (params) => ({
+      ...(await loadConfig(params)),
+      sourceConfigValid: true,
+      shouldWriteConfig: false,
+    }));
+    // The real capture owner cannot identify this synthetic installation; repair can continue.
+    const report = await runDoctorHealthFlow(createDoctorRuntime(), {
+      ...repairOptions,
+      externallyManaged: true,
+      json: true,
+    });
+    expect(report?.advisories).toContainEqual({
+      stepId: "original-state-capture",
+      message: expect.stringContaining("Pre-repair recovery copy was unavailable:"),
+    });
+    expect(report?.remaining).toEqual([]);
+    expect(report?.ok).toBe(true);
+  });
+});
