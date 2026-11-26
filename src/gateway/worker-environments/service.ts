@@ -609,6 +609,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     machineShapeNotifications: providerLifecycle.machineShapeNotifications,
     readMachineShape: (environmentId: string, prepared?: WorkerEnvironmentPlacementFacts) =>
       providerLifecycle.readMachineShape(prepared ?? store.get(environmentId)),
+    readStartStatus: providerLifecycle.readStartStatus,
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: store.hasPendingNodeEnrollmentSetup.bind(store),

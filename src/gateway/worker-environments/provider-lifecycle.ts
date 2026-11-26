@@ -12,6 +12,7 @@ import {
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
 import { createWorkerReconcileTrace } from "./environment-operation.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
@@ -713,7 +714,7 @@ export function createWorkerProviderLifecycle(
 
   return {
     inspectTurnLease: leaseInspection.inspectTurnLease,
-    readStartStatus: (record: WorkerEnvironmentRecord) => {
+    readStartStatus: (record: WorkerEnvironmentPlacementFacts) => {
       const entry = startStatuses.get(record.environmentId);
       return record.state === "provisioning" && entry?.ownerEpoch === record.ownerEpoch
         ? entry.status

@@ -107,6 +107,7 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
     get: () => undefined,
     inventoryVersion: unexpected,
     readMachineShape: unexpected,
+    readStartStatus: unexpected,
     machineShapeVersion: unexpected,
     supportsExecutionMode: unexpected,
     readProviderDisplayId: unexpected,

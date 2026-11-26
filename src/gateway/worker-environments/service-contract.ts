@@ -169,6 +169,12 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string,
     prepared?: WorkerEnvironmentPlacementFacts,
   ): SessionPlacementMachine | undefined;
+  /** Startup progress for a provisioning environment, read from facts the caller already holds. */
+  readStartStatus(
+    environment: WorkerEnvironmentPlacementFacts,
+  ):
+    | import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus
+    | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   readProviderDisplayId(profileId: string): string | undefined;

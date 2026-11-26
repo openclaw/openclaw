@@ -51,6 +51,11 @@ describe("worker environment service", () => {
       });
       report?.({ mode: "cold", reason: "no-snapshot-yet", phase: "saving" });
       expect(service.get(environmentId)?.startStatus?.phase).toBe("saving");
+      const prepared = support.testState.store.list()[0]!;
+      expect(service.readStartStatus(prepared)).toEqual(service.get(environmentId)?.startStatus);
+      expect(
+        service.readStartStatus({ ...prepared, ownerEpoch: prepared.ownerEpoch + 1 }),
+      ).toBeUndefined();
       release.resolve();
       await creating;
       expect(service.get(environmentId)?.startStatus).toBeUndefined();
