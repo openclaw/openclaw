@@ -485,7 +485,7 @@ export function bootstrapApplication(
           isResolvedDefaultLanding(resolveInitialLocation(), history, basePath),
         openSession: (sessionKey, agentId) =>
           openPreferredApplicationSession(context, sessionKey, agentId),
-        onNoWelcomeChat: sidebarAttention.refreshVisitorNotice,
+        onNoWelcomeChat: () => sidebarAttention.refreshVisitorNotice(),
       })
     : undefined;
   let nativeConversation: NativeConversationBridge | null = null;
