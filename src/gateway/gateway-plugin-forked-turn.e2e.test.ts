@@ -596,14 +596,14 @@ describe("plugin forked turns through the real Gateway", () => {
             result: { status: "refused", reason: "tool_policy" },
           });
 
-          // A completion report with no earlier input keeps its own facts; the fork still runs.
+          // A host report with no earlier input keeps its own facts; the fork still runs.
           const reportOnly = await storedTurn([
             {
               role: "user",
               content: "[subagent completion] child finished.",
               timestamp: 1,
               provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-              __openclaw: { senderIsOwner: false },
+              __openclaw: { senderIsOwner: false, hostCompletion: true },
             },
             assistant("Noted"),
           ]);
