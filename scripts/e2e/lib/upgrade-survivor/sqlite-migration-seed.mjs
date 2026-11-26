@@ -197,11 +197,14 @@ export async function seedBaselineMigrationFixture({
   const statePath = path.join(stateDir, "state", "openclaw.sqlite");
   const pluginRoot = path.join(root, "fixture-plugin");
   const workspace = path.join(root, "workspace");
+  const tempDir = path.join(root, "tmp");
   const receiptPath = path.join(artifacts, "sqlite-migration-seed.json");
   assert(!fs.existsSync(stateDir), "Refusing to seed existing state");
   assert(!fs.existsSync(receiptPath), "Refusing to reuse a previous seed receipt");
-  for (const directory of [home, stateDir, pluginRoot, workspace, artifacts]) {
-    fs.mkdirSync(directory, { recursive: true });
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(artifacts, { recursive: true });
+  for (const directory of [home, stateDir, pluginRoot, workspace, tempDir]) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
   const writeJson = (file, value) =>
     fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
@@ -256,12 +259,15 @@ export async function seedBaselineMigrationFixture({
   // Start from an allowlist, so neither inherited OPENCLAW_* nor provider keys,
   // NODE_OPTIONS preloads, operator profiles or external homes enter this Gateway.
   const env = Object.fromEntries(
-    ["PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "TMP", "TEMP", "LD_LIBRARY_PATH"]
+    ["PATH", "LANG", "LC_ALL", "TZ", "LD_LIBRARY_PATH"]
       .filter((key) => process.env[key] !== undefined)
       .map((key) => [key, process.env[key]]),
   );
   Object.assign(env, {
     HOME: home,
+    TMPDIR: tempDir,
+    TMP: tempDir,
+    TEMP: tempDir,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),

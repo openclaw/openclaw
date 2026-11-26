@@ -104,7 +104,7 @@ it.runIf(Boolean(sourceRoot))(
       fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv"),
       "Requires an isolated container",
     );
-    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     fs.mkdirSync(artifacts, { recursive: true });
     const filesystem = readMigrationFilesystem(root);
     assert(
@@ -301,13 +301,11 @@ it.runIf(Boolean(sourceRoot))(
         images.length,
         "Copy observation did not cover the real pre-images",
       );
-      const schemas = [
-        readSqliteStoreFacts(context.agentPath),
-        readSqliteStoreFacts(context.statePath),
-      ];
-      receipt.schemas = schemas;
-      assert.equal(schemas[0].version, context.candidateManifest.openclaw.schemaVersions.agent);
-      assert.equal(schemas[1].version, context.candidateManifest.openclaw.schemaVersions.state);
+      const agentSchema = readSqliteStoreFacts(context.agentPath);
+      const stateSchema = readSqliteStoreFacts(context.statePath);
+      receipt.schemas = [agentSchema, stateSchema];
+      assert.equal(agentSchema.version, context.candidateManifest.openclaw.schemaVersions.agent);
+      assert.equal(stateSchema.version, context.candidateManifest.openclaw.schemaVersions.state);
       const after = readMigrationRows(context, context.witnesses);
       assert.deepEqual(after, rows, "Migration changed selected row counts or canonical content");
       receipt.rowsAfter = after;
