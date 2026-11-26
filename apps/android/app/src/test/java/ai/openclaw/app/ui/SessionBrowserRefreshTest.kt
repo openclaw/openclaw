@@ -22,6 +22,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -108,7 +109,16 @@ class SessionBrowserRefreshTest {
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
       // Bind the live runtime state before mounting; the test counts subsequent wire reads.
       runtime.chat.refreshSessions(limit = 1)
-      drainWithMainLooper { model.chatSessions.first { rows -> rows.any { it.key == "first" } } }
+      drainWithMainLooper {
+        model.chatSessions.first { rows -> rows.any { it.key == "first" } }
+        withTimeout(5_000) {
+          model.isConnected.first { it == runtime.isConnected.value }
+          model.gatewayCatalogRevision.first { it == runtime.gatewayCatalogRevision.value }
+          model.sessionBrowserRevision.first { it == runtime.chat.sessionBrowserRevision.value }
+          combine(model.chatSessionOwnerAgentId, model.gatewayDefaultAgentId) { owner, fallback -> owner ?: fallback }
+            .first { it == (runtime.chat.sessionOwnerAgentId.value ?: runtime.gatewayDefaultAgentId.value) }
+        }
+      }
       compose.setContent {
         if (mounted.value) {
           val state = rememberSessionBrowserSearchState(model, model.chatSessions.collectAsState().value, query.value, archived = true)

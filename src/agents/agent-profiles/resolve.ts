@@ -8,6 +8,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   BUILT_IN_AGENT_PROFILE_BINDINGS,
   BUILT_IN_AGENT_PROFILES,
+  indexBuiltInAgentProfiles,
   type BuiltInAgentProfile,
 } from "./builtins.js";
 import {
@@ -35,9 +36,7 @@ export type ResolvedAgentProfile = {
   selectionSource: AgentProfileSelectionSource;
 };
 
-const profilesById = new Map<string, BuiltInAgentProfile>(
-  BUILT_IN_AGENT_PROFILES.map((profile) => [profile.id, profile]),
-);
+const profilesById = indexBuiltInAgentProfiles(BUILT_IN_AGENT_PROFILES);
 const resolvedProfilesById = new Map<AgentProfileId, ResolvedBuiltInAgentProfile>();
 
 function resolveBuiltInProfileAncestry(

@@ -13,6 +13,7 @@ import {
   prepareAgentToolSurfacePresentation,
   resolveAgentToolSurfacePlan,
 } from "./tool-surface-plan.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
 
 // Params type stays module-local in production; derive it so the test cannot
 // keep a public export alive that no production caller needs.
@@ -43,25 +44,6 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(presentation.toolSearchDirectoryLean).toBe(false);
   });
 
-  it("enables Tool Search for the profile selected from a small size class", () => {
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config: autoConfig,
-      modelProvider: "llama-cpp",
-      modelId: "local-8b",
-      model: { modelSizeClass: "small" },
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(false);
-    expect(plan.toolSearchControlsEnabled).toBe(true);
-    expect(plan.toolSearchConfig).toMatchObject({
-      enabled: true,
-      mode: "tools",
-      searchDefaultLimit: 5,
-      maxSearchLimit: 10,
-    });
-  });
-
   it.each([
     { name: "a total parameter count", model: { parameterCount: 8_190_735_360 } },
     { name: "a trusted size class", model: { modelSizeClass: "small" as const } },
@@ -74,8 +56,14 @@ describe("resolveAgentToolSurfacePlan", () => {
       modelId: "unbound-model",
     });
 
+    expect(plan.codeModeControlsEnabled).toBe(false);
     expect(plan.toolSearchControlsEnabled).toBe(true);
-    expect(plan.toolSearchConfig).toMatchObject({ searchDefaultLimit: 5, maxSearchLimit: 10 });
+    expect(plan.toolSearchConfig).toMatchObject({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
   });
 
   it("presents the compact directory for a model that only reports a parameter count", () => {
@@ -411,9 +399,11 @@ describe("applyAgentToolSurfaceCatalog", () => {
       codeModeOverride: false,
     });
     const catalogRef = createToolSearchCatalogRef();
+    const progressCard = createProgressCardTool();
     const result = applyAgentToolSurfaceCatalog({
       tools: [
         ...createToolSearchTools({ config, catalogRef, executeTool }),
+        progressCard,
         createStubTool("hidden_target"),
       ],
       config,
@@ -427,8 +417,12 @@ describe("applyAgentToolSurfaceCatalog", () => {
       "tool_search",
       "tool_describe",
       "dispatch_action",
+      "progress_card",
     ]);
-    expect(result.catalogToolCount).toBe(1);
+    expect(result.tools.find((tool) => tool.name === "progress_card")?.parameters).toEqual(
+      progressCard.parameters,
+    );
+    expect(result.catalogToolCount).toBe(2);
     expect(config.tools).toBeUndefined();
   });
 

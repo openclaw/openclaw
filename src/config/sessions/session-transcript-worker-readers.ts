@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -363,12 +364,16 @@ const readers: Readers & ThisType<ReaderContext> = {
       !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
-  async readPreparedCompaction(input, signal) {
+  async readPreparedCompaction(input, signal, options) {
     return await this.runRequest(
       () => ({ kind: "compaction-preparation", ...input }),
-      JSON.stringify(input).length * 2,
+      // Plan requests can carry a whole window of preflight facts: charge the structured clone
+      // that crosses the worker boundary, not a UTF-16 JSON string as large as the window.
+      serialize(input).byteLength,
       (value) => value,
       signal,
+      undefined,
+      options,
     );
   },
   readMaintenance: reader(

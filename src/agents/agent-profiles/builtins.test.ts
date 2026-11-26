@@ -1,6 +1,6 @@
 import { validateAgentProfile } from "agentprofiles";
 import { describe, expect, it, vi } from "vitest";
-import { BUILT_IN_AGENT_PROFILES } from "./builtins.js";
+import { BUILT_IN_AGENT_PROFILES, indexBuiltInAgentProfiles } from "./builtins.js";
 import { resolveOpenClawAgentProfileExtension } from "./openclaw-extension.js";
 
 function builtIn(id: string) {
@@ -12,6 +12,14 @@ function builtIn(id: string) {
 }
 
 describe("built-in Agent Profile resources", () => {
+  it("indexes the built-ins and rejects a duplicate id before publishing", () => {
+    const base = builtIn("openclaw/base");
+    expect(indexBuiltInAgentProfiles(BUILT_IN_AGENT_PROFILES).get("openclaw/base")).toBe(base);
+    expect(() => indexBuiltInAgentProfiles([base, base])).toThrow(
+      "Duplicate built-in Agent Profile id: openclaw/base",
+    );
+  });
+
   it("passes every resource through the released portable validator", () => {
     for (const profile of BUILT_IN_AGENT_PROFILES) {
       expect(validateAgentProfile(profile.resource)).toBe(profile.resource);

@@ -88,7 +88,7 @@ suite.define(() => {
       const clock = page.locator('.sidebar-rail [data-sidebar-entry="route:cron"] a');
       await expect
         .poll(() => clock.getAttribute("aria-description"))
-        .toBe("An automation has failed");
+        .toBe("An automation needs attention");
       const finish = async (offset: number, lastRunStatus: "ok" | "error") => {
         const job = pageResponse(offset).jobs[0]!;
         await gateway.emitGatewayEvent("cron", {
@@ -101,7 +101,7 @@ suite.define(() => {
       await finish(1, "ok");
       await expect
         .poll(() => clock.getAttribute("aria-description"))
-        .toBe("An automation has failed");
+        .toBe("An automation needs attention");
       await page.locator(".sidebar-issues-button").click();
       const inbox = page.locator("#sidebar-issues-panel");
       await inbox.locator(".sidebar-issues-panel__empty").waitFor();

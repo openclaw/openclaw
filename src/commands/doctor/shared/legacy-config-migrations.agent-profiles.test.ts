@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { validateConfigObject } from "../../../config/validation-core.js";
 import { LEGACY_CONFIG_MIGRATIONS_AGENT_PROFILES } from "./legacy-config-migrations.agent-profiles.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
@@ -36,45 +37,78 @@ describe("retired localModelLean to Agent Profile migration", () => {
     });
   });
 
-  it("false at defaults is removed and keeps other experimental values", () => {
+  it("false at defaults becomes openclaw/base and keeps other experimental values", () => {
     const result = migrate({
       agents: { defaults: { experimental: { localModelLean: false, otherPreview: true } } },
     });
     expect(result.raw).toEqual({
-      agents: { defaults: { experimental: { otherPreview: true } } },
-    });
-  });
-
-  it("false on an agent under a true default becomes openclaw/base on that agent", () => {
-    const result = migrate({
       agents: {
-        defaults: flag(true),
-        entries: { full: flag(false), inherited: {} },
-        list: [{ id: "legacy-full", ...flag(false) }],
+        defaults: { agentProfileId: "openclaw/base", experimental: { otherPreview: true } },
       },
     });
-    expect(result.raw).toEqual({
-      agents: {
-        defaults: { agentProfileId: "openclaw/small" },
-        entries: { full: { agentProfileId: "openclaw/base" }, inherited: {} },
-        list: [{ id: "legacy-full", agentProfileId: "openclaw/base" }],
-      },
-    });
+    expect(result.changes).toHaveLength(1);
   });
 
   it.each([
-    ["no default flag", {}],
-    ["a false default", { defaults: flag(false) }],
-  ])("false on an agent with %s is removed", (_name, defaults) => {
+    ["no default flag", {}, {}],
+    [
+      "a false default",
+      { defaults: flag(false) },
+      { defaults: { agentProfileId: "openclaw/base" } },
+    ],
+    [
+      "a true default",
+      { defaults: flag(true) },
+      { defaults: { agentProfileId: "openclaw/small" } },
+    ],
+  ])("false on an entry and a list item with %s becomes openclaw/base", (_name, defaults, out) => {
     const result = migrate({
-      agents: { ...defaults, entries: { full: flag(false) }, list: [{ id: "x", ...flag(false) }] },
+      agents: {
+        ...defaults,
+        entries: { full: flag(false), inherited: {} },
+        list: [{ id: "x", ...flag(false) }],
+      },
     });
     expect(result.raw).toEqual({
       agents: {
-        ...(Object.keys(defaults).length ? { defaults: {} } : {}),
-        entries: { full: {} },
-        list: [{ id: "x" }],
+        ...out,
+        entries: { full: { agentProfileId: "openclaw/base" }, inherited: {} },
+        list: [{ id: "x", agentProfileId: "openclaw/base" }],
       },
+    });
+  });
+
+  it("is idempotent and leaves an absent flag alone", () => {
+    const raw = { agents: { defaults: flag(false), entries: { full: flag(false), plain: {} } } };
+    migrate(raw);
+    const again = migrate(raw);
+    expect(again.changes).toEqual([]);
+    expect(raw).toEqual({
+      agents: {
+        defaults: { agentProfileId: "openclaw/base" },
+        entries: { full: { agentProfileId: "openclaw/base" }, plain: {} },
+      },
+    });
+  });
+
+  it("writes a config that passes validation", () => {
+    const result = migrate({
+      agents: {
+        ownership: "explicit",
+        defaults: flag(false),
+        entries: { fast: flag(true), full: flag(false) },
+      },
+    });
+    const validation = validateConfigObject(result.raw);
+    expect(validation.ok ? [] : validation.issues).toEqual([]);
+  });
+
+  it("keeps an explicit profile when the legacy flag is false", () => {
+    const result = migrate({
+      agents: { entries: { a: flag(false, { agentProfileId: "openclaw/small" }) } },
+    });
+    expect(result.raw).toEqual({
+      agents: { entries: { a: { agentProfileId: "openclaw/small" } } },
     });
   });
 
@@ -83,7 +117,10 @@ describe("retired localModelLean to Agent Profile migration", () => {
       agents: { defaults: flag(false), entries: { fast: flag(true) } },
     });
     expect(result.raw).toEqual({
-      agents: { defaults: {}, entries: { fast: { agentProfileId: "openclaw/small" } } },
+      agents: {
+        defaults: { agentProfileId: "openclaw/base" },
+        entries: { fast: { agentProfileId: "openclaw/small" } },
+      },
     });
   });
 
