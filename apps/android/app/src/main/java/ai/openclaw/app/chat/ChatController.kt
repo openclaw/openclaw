@@ -37,9 +37,9 @@ import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.chat.providerQualifiedRef
-import ai.openclaw.app.ui.chat.selectedChatModelSendBlockingReason
+import ai.openclaw.app.selectedChatModelSendBlockingReason
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
