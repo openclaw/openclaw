@@ -2268,6 +2268,7 @@
                       "providers/minimax",
                       "providers/mistral",
                       "providers/moonshot",
+                      "providers/nodecode",
                       "providers/novita",
                       "providers/nvidia",
                       "providers/ollama-cloud",

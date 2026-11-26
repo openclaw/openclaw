@@ -53,6 +53,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `mistral`               | `ProviderIcon-mistral.svg`      |
 | `moonshot`              | `ProviderIcon-kimi.svg`         |
 | `muse`                  | `ProviderIcon-meta.svg`         |
+| `nodecode`              | `ProviderIcon-nodecode.svg`     |
 | `novita`                | `ProviderIcon-novita.svg`       |
 | `nvidia`                | `ProviderIcon-nvidia.svg`       |
 | `ollama`                | `ProviderIcon-ollama.svg`       |

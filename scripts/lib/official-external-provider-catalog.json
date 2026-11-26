@@ -1167,6 +1167,50 @@
       }
     },
     {
+      "name": "@openclaw/nodecode-provider",
+      "description": "OpenClaw Nodecode provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "nodecode",
+          "label": "Nodecode"
+        },
+        "providers": [
+          {
+            "id": "nodecode",
+            "name": "Nodecode",
+            "docs": "/providers/nodecode",
+            "categories": ["cloud", "llm"],
+            "envVars": ["NODECODE_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "nodecode-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Nodecode API key",
+                "choiceHint": "Cyber v1, an abliterated model for security work",
+                "groupId": "nodecode",
+                "groupLabel": "Nodecode",
+                "groupHint": "Cyber v1, an abliterated model for security work",
+                "optionKey": "nodecodeApiKey",
+                "cliFlag": "--nodecode-api-key",
+                "cliOption": "--nodecode-api-key <key>",
+                "cliDescription": "Nodecode API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/nodecode-provider",
+          "npmSpec": "@openclaw/nodecode-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.11.10"
+        }
+      }
+    },
+    {
       "name": "@openclaw/novita-provider",
       "description": "OpenClaw NovitaAI provider plugin",
       "source": "official",

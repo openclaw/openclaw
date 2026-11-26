@@ -54,6 +54,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "mimo",
   "minimax",
   "mistral",
+  "nodecode",
   "novita",
   "nvidia",
   "ollama",

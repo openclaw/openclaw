@@ -371,6 +371,7 @@
     "!dist/extensions/mxc/**",
     "!dist/extensions/nace/**",
     "!dist/extensions/nextcloud-talk/**",
+    "!dist/extensions/nodecode/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
     "!dist/extensions/onnx/**",

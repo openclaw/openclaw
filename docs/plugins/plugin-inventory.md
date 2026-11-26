@@ -214,7 +214,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-106 plugins
+107 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -341,6 +341,8 @@ Each entry lists the package, distribution route, and description.
 - **[nace](/plugins/reference/nace)** (`@openclaw/nace`) - npm or ClawHub: `@openclaw/nace`. Adds Nace model provider support to OpenClaw.
 
 - **[nextcloud-talk](/plugins/reference/nextcloud-talk)** (`@openclaw/nextcloud-talk`) - npm or ClawHub: `@openclaw/nextcloud-talk`. OpenClaw Nextcloud Talk channel plugin for conversations.
+
+- **[nodecode](/plugins/reference/nodecode)** (`@openclaw/nodecode-provider`) - npm or ClawHub: `@openclaw/nodecode-provider`. OpenClaw Nodecode provider plugin.
 
 - **[nostr](/plugins/reference/nostr)** (`@openclaw/nostr`) - npm or ClawHub: `@openclaw/nostr`. OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.
 

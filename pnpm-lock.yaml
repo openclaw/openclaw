@@ -1996,6 +1996,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/nodecode:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nostr:
     dependencies:
       '@solidjs/web':

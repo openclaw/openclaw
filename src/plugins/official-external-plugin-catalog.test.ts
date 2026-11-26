@@ -27,6 +27,13 @@ it("routes Abliteration and either credential variable to its official package",
   }
 });
 
+it("routes Nodecode and its credential variable to its official package", () => {
+  const entry = findPackage("@openclaw/nodecode-provider");
+  expect(findEntry("nodecode")).toBe(entry);
+  expect(resolveInstall(entry!)?.npmSpec).toBe("@openclaw/nodecode-provider");
+  expect(providerEnvOwners({ NODECODE_API_KEY: "synthetic-key" })).toEqual(["nodecode"]);
+});
+
 it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
   const entry = findPackage("@openclaw/fish-audio-speech");
   expect(pluginId(entry!)).toBe("fish-audio-speech");

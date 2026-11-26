@@ -65,6 +65,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Neon AI Gateway](/providers/neon)
+- [Nodecode](/providers/nodecode)
 - [NovitaAI](/providers/novita)
 - [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
