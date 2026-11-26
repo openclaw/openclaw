@@ -410,6 +410,8 @@ const enSettings = {
       agent: "Talk agent",
       thinking: "Thinking level",
       fast: "Fast mode",
+      replyThinking: "Talk reply thinking level",
+      replyFast: "Talk reply fast mode",
       defaultValue: "Default",
       generalSpeech: "General text-to-speech",
       on: "On",

@@ -181,6 +181,7 @@ export async function mountTalkSettingsRoutes(initialContext: ApplicationContext
 /** Mounted Talk page with a scripted Gateway client and a stubbed runtime config. */
 export type TalkMutationHarnessOptions = {
   configSaving?: boolean;
+  serverCapabilities?: string[];
   speakerVoice?: string | null;
   schema?: unknown;
   providerOption?: Partial<TalkCatalogResult["realtime"]["providers"][number]>;
@@ -266,14 +267,18 @@ export function createTalkMutationHarness(options: TalkMutationHarnessOptions = 
   });
   const { gateway, publish } = createApplicationGateway();
   gateway.connection.gatewayUrl = "wss://gateway.example.test";
-  const hello: ApplicationContext["gateway"]["snapshot"]["hello"] = options.voiceWakeRequest
-    ? {
-        type: "hello-ok" as const,
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["voicewake.get", "voicewake.set"] },
-      }
-    : null;
+  const hello: ApplicationContext["gateway"]["snapshot"]["hello"] =
+    options.voiceWakeRequest || options.serverCapabilities
+      ? {
+          type: "hello-ok" as const,
+          protocol: 4,
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          features: {
+            methods: options.voiceWakeRequest ? ["voicewake.get", "voicewake.set"] : [],
+            capabilities: options.serverCapabilities,
+          },
+        }
+      : null;
   publish({
     ...gateway.snapshot,
     client: {

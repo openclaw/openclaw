@@ -139,26 +139,27 @@ function TalkAgentPicker(props: FieldsProps) {
   );
 }
 
-export function TalkAgentSettings(props: FieldsProps) {
+export function TalkAgentSettings(props: FieldsProps & { supportsTalkChatSettings: boolean }) {
   const realtime = () => record(record(props.config?.talk)?.realtime);
-  const consultDisabled = () =>
-    props.disabled || (realtime()?.brain ?? "agent-consult") !== "agent-consult";
+  const splitMode = () => realtime()?.mode === "stt-tts";
+  const replySettingsDisabled = () =>
+    props.disabled || (!splitMode() && (realtime()?.brain ?? "agent-consult") !== "agent-consult");
   return (
     <SettingsSection title={t("talkPage.revamp.agent")}>
       <TalkAgentPicker {...props} />
-      <Show when={realtime()?.mode !== "stt-tts"}>
+      <Show when={!splitMode() || props.supportsTalkChatSettings}>
         <TalkChoice
           {...props}
-          title={t("talkPage.revamp.thinking")}
+          title={t(splitMode() ? "talkPage.revamp.replyThinking" : "talkPage.revamp.thinking")}
           path={["talk", "consultThinkingLevel"]}
-          disabled={consultDisabled()}
+          disabled={replySettingsDisabled()}
           options={choices(ALL_THINKING_LEVELS)}
         />
         <TalkChoice
           {...props}
-          title={t("talkPage.revamp.fast")}
+          title={t(splitMode() ? "talkPage.revamp.replyFast" : "talkPage.revamp.fast")}
           path={["talk", "consultFastMode"]}
-          disabled={consultDisabled()}
+          disabled={replySettingsDisabled()}
           options={boolOptions()}
           boolean
         />

@@ -2,6 +2,7 @@
 // that feeds the provider/model/voice pickers; all writes go through the shared
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import type { JSX } from "@solidjs/web";
 import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -9,8 +10,10 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { UserFacingError } from "../../lib/format-error.ts";
+import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -698,6 +701,14 @@ function transcriptionCatalog(catalog: TalkCatalogState) {
 export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const context = useApplication();
   const settings = createTalkSettings(context, props);
+  const gateway = projectGateway(context.gateway);
+  const supportsTalkChatSettings = () => {
+    const snapshot = gateway.read().snapshot;
+    return (
+      snapshot.phase === "connected" &&
+      isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.TALK_CHAT_SETTINGS) === true
+    );
+  };
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const configBusy = () =>
     props.mutationDisabled ||
@@ -759,7 +770,13 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         catalogScope={settings.catalogScope()}
         modelDefaultPending={settings.modelDefaultResetIntent() !== null}
         configBusy={configBusy()}
-        agentSettings={<TalkAgentSettings config={props.configObject} disabled={configBusy()} />}
+        agentSettings={
+          <TalkAgentSettings
+            config={props.configObject}
+            disabled={configBusy()}
+            supportsTalkChatSettings={supportsTalkChatSettings()}
+          />
+        }
         liveTuning={<TalkLiveTuning config={props.configObject} disabled={configBusy()} />}
         splitVoice={(catalog) => (
           <TalkSplitVoice config={props.configObject} disabled={configBusy()} catalog={catalog()} />
