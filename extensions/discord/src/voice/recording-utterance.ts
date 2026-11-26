@@ -1,7 +1,6 @@
 import type { DiscordVoiceTranscriptCapture } from "./recording-types.js";
-import type { VoiceSessionEntry } from "./session.js";
 
-export type RecordingSource = Pick<VoiceSessionEntry, "guildId" | "channelId" | "voiceSessionKey">;
+export type RecordingSource = { guildId: string; channelId: string; voiceSessionKey: string };
 
 export function publishRecordingUtterance(
   capture: DiscordVoiceTranscriptCapture,
