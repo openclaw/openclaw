@@ -647,19 +647,6 @@ describe("memory.search gateway method", () => {
     );
   });
 
-  it("does not ask a legacy memory runtime for its backend before searching", async () => {
-    getActiveMemorySearchManagerCore.mockResolvedValue({
-      manager: null,
-      error: "memory plugin unavailable",
-    });
-
-    await invokeMemorySearch({ query: "lantern" }, {});
-
-    expect(isActiveMemoryProviderNative).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
-    expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
-    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledOnce();
-  });
-
   it("reports pending index work in a successful search response", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();

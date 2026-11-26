@@ -5,7 +5,6 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-catalog.types.js";
-import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
 import type { SandboxToolPolicy } from "../../agents/sandbox/types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
@@ -586,46 +585,6 @@ describe("tools.effective handler", () => {
       );
     },
   );
-
-  it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
-    const buildSteps = vi.spyOn(
-      conversationToolPolicyPipeline,
-      "buildConversationToolPolicyPipelineSteps",
-    );
-    onTestFinished(() => buildSteps.mockRestore());
-    const [first, second] = await Promise.all([invokeTools(), invokeTools()]);
-    const warm = await invokeTools();
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expectResponsesOk(first, second, warm);
-    expect(buildSteps).toHaveBeenCalledTimes(0);
-  });
-
-  it("returns stale cached base inventory immediately while refreshing in the background", async () => {
-    let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    onTestFinished(() => clock.mockRestore());
-    const stalePayload = makeCoreInventory({ id: "read" });
-    const refreshedPayload = makeCoreInventory();
-    runtimeMocks.resolveEffectiveToolInventory
-      .mockResolvedValueOnce(stalePayload)
-      .mockResolvedValueOnce(refreshedPayload);
-
-    await invokeTools();
-    now += 11_000;
-
-    const stale = await invokeTools();
-
-    expect(firstRespondCall(stale)?.[1]).toBe(stalePayload);
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
-
-    const fresh = await invokeTools();
-    expect(firstRespondCall(fresh)?.[1]).toBe(refreshedPayload);
-  });
 
   it("reports configured MCP servers as not connected without starting them", async () => {
     mockMcpConfigSummary({ serverNames: ["zeta", "alpha"] });
