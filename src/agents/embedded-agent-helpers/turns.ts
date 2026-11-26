@@ -2,8 +2,9 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasRuntimeContextMarker } from "../../llm/types.js";
+import { readSessionForkSource } from "../../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -429,13 +430,17 @@ const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, ReplayConte
     previous.role === "user" && current.role === "user"
       ? mergeConsecutiveUserTurns(previous, current)
       : current,
-  // Carriers, operator updates and synthetic context own their authority, cache and media facts.
+  // Context and fork questions keep their own boundaries instead of rewriting cached input.
   canMergeUser: (message) => {
+    if (message.role !== "user") {
+      return false;
+    }
+    const userMessage: PersistedUserTurnMessage = message;
     return (
-      message.role === "user" &&
       !hasRuntimeContextMarker(message) &&
       !message.operatorMessage &&
       !message.synthetic &&
+      !readSessionForkSource(userMessage.provenance) &&
       !(PROJECTED_PROMPT_UPDATE in message)
     );
   },

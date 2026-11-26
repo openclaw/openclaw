@@ -880,13 +880,26 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
             // The metadata helper inherits this separate lock too: a killed JS
             // owner cannot release the mutex while its deletion child still runs.
             const leasePath = join(path, "lifetime");
+            let lockIdentity;
+            let leaseIdentity;
+            try {
+              lockIdentity = identityRecord(directory(path));
+              leaseIdentity = identityRecord(physicalFile(leasePath));
+            } catch (inspectionError) {
+              if (inspectionError.code !== "ENOENT") {
+                throw inspectionError;
+              }
+              // The previous owner can finish releasing after our directory read.
+              assertCache();
+              continue;
+            }
             const checked = processLifetime("retire", {
               candidates: [
                 {
                   id: path,
                   path,
-                  identity: identityRecord(directory(path)),
-                  lease: { path: leasePath, ...identityRecord(physicalFile(leasePath)) },
+                  identity: lockIdentity,
+                  lease: { path: leasePath, ...leaseIdentity },
                   targets: [],
                 },
               ],

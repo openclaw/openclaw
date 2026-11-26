@@ -2,17 +2,14 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
-import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -367,41 +364,6 @@ describe("agent exec command composition", () => {
     expect(stderr).not.toContain("india");
   });
 
-  it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
-    const root = tempDirs.make("openclaw-agent-exec-audit-");
-    setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
-    await runSuccessfulExec({ stateDir: root }, async () => {
-      const admission = enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "run",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          runtime: { kind: "embedded" },
-        },
-        {
-          enabled: true,
-          contextId: "context",
-          executionId: "execution",
-          now: Date.now(),
-          runtimeInstanceId: "runtime",
-        },
-      );
-      expect(admission).toMatchObject({ accepted: true });
-    });
-    using database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
-      readOnly: true,
-    });
-    const row = database
-      .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
-      .get("execution") as { context_json: string };
-    expect(JSON.parse(row.context_json)).toMatchObject({
-      contextId: "context",
-      executionId: "execution",
-      runId: "run",
-      ingress: { kind: "local-cli", state: "present" },
-    });
-  });
-
   it("keeps operator-installed plugins hidden under --isolated", async () => {
     const operatorStateDir = tempDirs.make("openclaw-agent-exec-plugin-isolated-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: operatorStateDir }, async () => {
@@ -589,20 +551,5 @@ describe("agent exec tool lifetime", () => {
     });
     await expect(retained?.execute("late", {})).rejects.toThrow();
     expect(source).not.toHaveBeenCalled();
-  });
-
-  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
-    let retainedGuard: (() => void) | undefined;
-    const effect = vi.fn();
-    await runSuccessfulExec({}, () => {
-      retainedGuard = captureAgentToolSourceExecutionGuard();
-    });
-    await runSuccessfulExec({}, () => {
-      expect(() => {
-        retainedGuard?.();
-        effect();
-      }).toThrow("execution scope is no longer active");
-    });
-    expect(effect).not.toHaveBeenCalled();
   });
 });

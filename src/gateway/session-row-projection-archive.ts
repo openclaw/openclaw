@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
@@ -12,6 +13,10 @@ export function isColdArchivedSessionRow(row: records.Row) {
 /** Archived metadata outlives its bounded, reader-populated materialization cache. */
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
+  indexes: {
+    byParent: ReadonlyMap<string, Set<string>>;
+    byKey: ReadonlyMap<string, Set<string>>;
+  };
   dirty: Set<string>;
   invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
@@ -46,13 +51,23 @@ export function createSessionRowProjectionArchive(params: {
       }
     }
   }
-  function markRelated(
-    row: records.Row,
-    indexes: Parameters<typeof records.markRelated>[1],
-    includeChildren = true,
-  ) {
-    const related = new Set<string>();
-    records.markRelated(row, indexes, related, includeChildren, params.config());
+  function markRelated(row: records.Row, relations: records.RelatedRows = "all") {
+    const { byKey, byParent } = params.indexes;
+    const related = new Set(relations === "parents" ? [] : records.dependents(row, byParent));
+    if (relations !== "parents" && parseAgentSessionKey(row.key)) {
+      // A new literal parent must wake children still indexed under its absent-row alias.
+      const alias = records.parentReference(params.config(), row.key, row.agentId);
+      for (const id of byParent.get(alias) ?? []) {
+        related.add(id);
+      }
+    }
+    if (relations !== "children") {
+      for (const parent of row.parents) {
+        for (const id of byKey.get(parent) ?? []) {
+          related.add(id);
+        }
+      }
+    }
     for (const id of related) {
       const current = params.rows.get(id);
       if (current && isColdArchivedSessionRow(current)) {
@@ -78,8 +93,8 @@ export function createSessionRowProjectionArchive(params: {
           databaseFactsRevision: current.databaseFactsRevision + 1,
         };
         params.put(next);
-        markRelated(current, indexes, false);
-        markRelated(next, indexes, false);
+        markRelated(current, "parents");
+        markRelated(next, "parents");
       } else if (current) {
         params.dirty.add(id);
       }

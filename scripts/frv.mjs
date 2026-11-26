@@ -14,9 +14,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { isDeepStrictEqual, promisify, stripVTControlCharacters } from "node:util";
 import { parse as parseYaml } from "yaml";
-import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
+import {
+  selectPublicationArtifactSource,
+  validateArtifactProducerRun,
+} from "./full-release-artifacts.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -27,6 +30,7 @@ import {
   classifyReleaseGhTransportError,
   composeReleaseAttemptJobs,
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   formatReleaseStateOutcome,
   GHOST_JOBS_ADVICE,
   isReleaseGhArtifactMissingError,
@@ -43,11 +47,14 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
   validateReleaseStateArtifact,
+  validateReleaseManifestAdvisoryJobs,
 } from "./full-release-validation-policy.mjs";
 import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
+import { artifactProducerSlots } from "./lib/full-release-publication-artifacts.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
 import {
   dispatchReceiptRecovery,
   parseReceiptRecoveryArgs,
@@ -63,7 +70,13 @@ import {
   selectDeferredRunCandidates,
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
-import { evaluateReleaseChildPolicy } from "./lib/release-validation-waivers.mjs";
+import {
+  decodeReleaseValidationSource,
+  evaluateReleaseChildPolicy,
+  isWaived,
+  readReleaseValidationWaiversAsync,
+  RELEASE_VALIDATION_WAIVERS_PATH,
+} from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import {
@@ -84,7 +97,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> --request-file <path> | pnpm frv recover --reconcile-request <path>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> [--request-file <path> [--policy-sha <Q> --policy-admission-run <id>] | --prepare-policy-admission --policy-sha <Q>] | pnpm frv recover --reconcile-request <path>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -594,7 +607,15 @@ async function recheckArtifactProducers(
 const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
 const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
-async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+async function legacyNpmRecoveryProducers(
+  plan,
+  parentJobs,
+  client,
+  repository,
+  workflow,
+  options,
+  retainedArtifacts,
+) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
     return { pending: false, producers: [] };
   }
@@ -619,6 +640,22 @@ async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, 
       /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched full-release-artifacts\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
     ),
   ];
+  if (retainedArtifacts) {
+    const jobs = Object.values(parseYaml(workflow).jobs ?? {}).filter(
+      (entry) => entry.name === job.name,
+    );
+    if (
+      dispatches.length !== 0 ||
+      job.conclusion !== "success" ||
+      jobs.length !== 1 ||
+      !jobs[0].steps?.some(
+        (step) => step.id === "reused" && step.if === "env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
+      )
+    ) {
+      throw new Error("Retained npm artifact recovery identity is unavailable or ambiguous");
+    }
+    return { pending: false, producers: [] };
+  }
   if (
     dispatches.length !== 1 ||
     dispatches[0][1] !== repository ||
@@ -644,7 +681,7 @@ async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, 
   };
 }
 
-function artifactRecoveryJobs(workflow) {
+function artifactRecoveryJobs(workflow, inputs, attemptJobs) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -656,7 +693,7 @@ function artifactRecoveryJobs(workflow) {
     return [];
   }
   const producers = [];
-  for (const job of Object.values(jobs)) {
+  for (const job of artifactProducerSlots(source, inputs, attemptJobs)) {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       continue;
     }
@@ -701,7 +738,15 @@ function artifactRecoveryJobs(workflow) {
   return producers;
 }
 
-async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+async function artifactRecoveryProducers(
+  plan,
+  parentJobs,
+  client,
+  repository,
+  workflow,
+  options,
+  retainedArtifacts,
+) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -710,11 +755,23 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
   }
   const recoveryContract = source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT;
   if (!["1", "2"].includes(recoveryContract)) {
-    return legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options);
+    return legacyNpmRecoveryProducers(
+      plan,
+      parentJobs,
+      client,
+      repository,
+      workflow,
+      options,
+      retainedArtifacts,
+    );
   }
   const producers = [];
   let pending = false;
-  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(
+    workflow,
+    plan.qualificationInputs,
+    parentJobs.filter((job) => Number(job.run_attempt) === plan.parentRunAttempt),
+  )) {
     const matches = parentJobs.filter(
       (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
     );
@@ -763,6 +820,12 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
             /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
           ),
         ];
+    if (retainedArtifacts) {
+      if (dispatches.length !== 0 || !allowsReuse || job.conclusion !== "success") {
+        throw new Error(`Retained ${stage} artifact recovery identity is unavailable or ambiguous`);
+      }
+      continue;
+    }
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -885,9 +948,14 @@ export async function preflightContinuation(
       "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
     );
   }
-  const missingChildren = selectedChildren(plan)
+  const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
+  const scope = { targetVersion: plan.targetVersion, targetSha: plan.targetSha };
+  const children = selectedChildren(plan).filter(
+    ({ key }) => !isWaived({ ...scope, childRole: key }, waiverPolicy),
+  );
+  const missingChildren = children
     .filter((child) => !hasExactChildRunIdentity(child))
-    .map((child) => child.key)
+    .map(({ key }) => key)
     .toSorted();
   if (missingChildren.length > 0) {
     throw new Error(
@@ -937,8 +1005,10 @@ export async function preflightContinuation(
       request: sourceAdmission,
       client: {
         ...evidenceClient,
-        getWorkflowSource: (sha) =>
-          sha === plan.workflowSha ? workflow : evidenceClient.getWorkflowSource(sha),
+        getWorkflowSource: (sha, sourcePath) =>
+          sha === plan.workflowSha && sourcePath === undefined
+            ? workflow
+            : evidenceClient.getWorkflowSource(sha, sourcePath),
       },
     });
     const validated = validateReleaseExecutionPlanArtifact(plan, {
@@ -950,6 +1020,36 @@ export async function preflightContinuation(
       throw new Error("continuation differs from the authenticated original publication plan");
     }
   }
+  // Explicit byte reuse is independent of whole-verdict reuse. Authenticate it
+  // through the selection owner; retained producers belong to the original parent.
+  const selection = sourceAdmission?.coverage.publication_artifact_source_json;
+  if (selection) {
+    const selected = await selectPublicationArtifactSource(
+      JSON.parse(selection),
+      {
+        GH_TOKEN: process.env.GH_TOKEN,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_RUN_ID: String(rootRunId),
+        GITHUB_RUN_ATTEMPT: String(plan.parentRunAttempt),
+        TARGET_SHA: plan.targetSha,
+        PARENT_WORKFLOW_SHA: plan.workflowSha,
+        SOURCE_ADMISSION_JSON: JSON.stringify(sourceAdmission),
+        CANDIDATE_REQUEST_JSON: JSON.stringify(plan.candidateRequest),
+        PLUGIN_NPM_REQUIRED: String(
+          sourceAdmission.publicationSelection?.pluginPublishScope !== "none",
+        ),
+      },
+      evidenceClient,
+    );
+    if (
+      !isDeepStrictEqual(selected.source, plan.publicationArtifactSource) ||
+      !isDeepStrictEqual(selected.candidate, plan.candidate)
+    ) {
+      throw new Error("Retained publication artifacts differ from the authenticated original plan");
+    }
+  } else if (plan.publicationArtifactSource) {
+    throw new Error("Historical publication artifacts require explicit admitted selection");
+  }
   const artifactRecovery = await artifactRecoveryProducers(
     plan,
     parentJobs,
@@ -957,9 +1057,10 @@ export async function preflightContinuation(
     repository,
     workflow,
     options,
+    Boolean(selection),
   );
   const childObservations = await Promise.all(
-    selectedChildren(plan).map(async (child) => {
+    children.map(async (child) => {
       const sourceParentAttempt = child.sourceParentAttempt ?? source.sourceRunAttempt;
       const parentJob = exactParentJob(parentJobs, child, sourceParentAttempt);
       const [childRun, parentLog] = await Promise.all([
@@ -1069,7 +1170,7 @@ async function readChildAttemptEvidence(child, client, options) {
       return { run, evidence, activeJobs };
     } catch (error) {
       // GitHub briefly returns overlapping job identities while a new attempt
-      // materializes. Never normalize those rows into accepted evidence.
+      // materializes. Retry only identities the shared execution owner cannot resolve.
       if (
         error?.code !== "FRV_DUPLICATE_JOB_IDENTITY" ||
         error.runAttempt !== effectiveRunAttempt ||
@@ -1093,10 +1194,25 @@ async function readChildAttemptEvidence(child, client, options) {
   }
 }
 
+// The bounded publication reader returns the Contents API payload; the ordinary
+// evidence client authenticates that payload itself and returns decoded source.
+async function readReleaseWaiverPolicy(plan, client) {
+  const sourceClient = client.getReleaseEvidenceClient?.() ?? client;
+  return readReleaseValidationWaiversAsync(async (sourcePath) => {
+    const source = await sourceClient.getWorkflowSource(plan.workflowSha, sourcePath);
+    return typeof source === "string" ? source : decodeReleaseValidationSource(source, sourcePath);
+  });
+}
+
 export async function inspectContinuation(plan, client, options = {}) {
+  const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
-      if (!hasExactChildRunIdentity(child)) {
+      const waived = isWaived(
+        { childRole: child.key, targetSha: plan.targetSha, targetVersion: plan.targetVersion },
+        waiverPolicy,
+      );
+      if (waived || !hasExactChildRunIdentity(child)) {
         return {
           compositeJobsSha256: "",
           conclusion: "",
@@ -1105,7 +1221,7 @@ export async function inspectContinuation(plan, client, options = {}) {
           passed: false,
           plannedRunAttempt: child.runAttempt ?? null,
           runId: String(child.runId ?? ""),
-          status: "missing",
+          status: waived ? "waived" : "missing",
           url: String(child.url ?? ""),
         };
       }
@@ -1130,11 +1246,21 @@ export async function inspectContinuation(plan, client, options = {}) {
         jobs: evidence.jobs,
         key: child.key,
         runId: child.runId,
+        runAttempt: effectiveRunAttempt,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
+      const policy = evaluateReleaseChildPolicy({
+        child: policyChild,
+        targetVersion: plan.targetVersion,
+        targetSha: plan.targetSha,
+        waiverPolicy,
+      });
+      const passed =
+        !active &&
+        terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha, waiverPolicy);
       return {
         activeJobs,
+        blockingJobs: policy.blockingJobs,
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
         dispatchActor: evidence.dispatchActor,
@@ -1218,7 +1344,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
   const blockers = [
     ...parentJobBlockers(currentJobs, parent.run_attempt),
-    ...childJobBlockers(status.children, plan.targetVersion, plan.targetSha),
+    ...childJobBlockers(status.children),
   ];
   const drainJobs = currentJobs.filter(
     (job) => releaseWatcherJobName(job.name) === "Diagnostic Drain",
@@ -1267,7 +1393,9 @@ async function inspectQualificationStatus(plan, runId, client) {
           operationDeadline,
         );
         evidence = (await client.verifySeal(runId, plan, operationDeadline, attempts))
-          ? "accepted"
+          ? plan.rerunGroup === "build-only"
+            ? "prepared-validation-skipped"
+            : "accepted"
           : "needs-refresh";
       } catch {
         evidence = "unavailable";
@@ -1277,18 +1405,20 @@ async function inspectQualificationStatus(plan, runId, client) {
   }
   const qualification = {
     state:
-      evidence === "accepted"
-        ? "passed"
-        : evidence === "unavailable"
-          ? "observation-unavailable"
-          : decision && !["qualifying", "passed"].includes(decision.state)
-            ? "blocked"
-            : parent.status === "completed" ||
-                status.failed.length ||
-                status.missing.length ||
-                blockers.length
+      evidence === "prepared-validation-skipped"
+        ? "prepared-not-validated"
+        : evidence === "accepted"
+          ? "passed"
+          : evidence === "unavailable"
+            ? "observation-unavailable"
+            : decision && !["qualifying", "passed"].includes(decision.state)
               ? "blocked"
-              : "running",
+              : parent.status === "completed" ||
+                  status.failed.length ||
+                  status.missing.length ||
+                  blockers.length
+                ? "blocked"
+                : "running",
     evidence,
   };
   let candidate = releaseCandidateIdentity(plan);
@@ -1300,7 +1430,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   const nextCommand = `pnpm frv ${
     status.active.length || parent.status !== "completed"
       ? "watch"
-      : qualification.state === "blocked"
+      : qualification.state === "blocked" && plan.rerunGroup !== "build-only"
         ? "continue --failed --dry-run"
         : "verify"
   } --run ${runId}`;
@@ -1360,7 +1490,7 @@ export function createClient(repository, dependencies = {}) {
       process.execPath,
       [
         "scripts/release-ci-summary.mjs",
-        "--validate-run",
+        plan.rerunGroup === "build-only" ? "--verify-build-only" : "--validate-run",
         runId,
         "--repo",
         repository,
@@ -1676,7 +1806,9 @@ async function selectedRerunJob(child, target, client, operationDeadline) {
   const jobs = await client.getAttemptJobs(child.runId, accepted.acceptedRunAttempt, {
     operationDeadline,
   });
-  const matches = jobs.filter((job) => job.name === target.name && job.conclusion !== "skipped");
+  const matches = resolveReleaseAttemptJobs(jobs, accepted.acceptedRunAttempt).filter(
+    (job) => job.name === target.name,
+  );
   if (matches.length !== 1) {
     throw new Error(
       `job identity changed before rerun dispatch: ${target.childKey}:${target.name}`,
@@ -1687,10 +1819,11 @@ async function selectedRerunJob(child, target, client, operationDeadline) {
   if (
     job.status !== accepted.status ||
     job.conclusion !== accepted.conclusion ||
-    String(job.html_url ?? "") !== accepted.url ||
-    String(job.started_at ?? "") !== accepted.startedAt ||
-    String(job.completed_at ?? "") !== accepted.completedAt ||
-    (job.run_id !== undefined && String(job.run_id) !== child.runId) ||
+    (job.html_url ?? "") !== accepted.url ||
+    (job.started_at ?? "") !== accepted.startedAt ||
+    (job.completed_at ?? "") !== accepted.completedAt ||
+    (job.run_id !== undefined &&
+      String(positiveInteger(job.run_id, "job run id")) !== child.runId) ||
     (job.run_attempt !== undefined && Number(job.run_attempt) !== accepted.acceptedRunAttempt)
   ) {
     throw new Error(
@@ -2014,19 +2147,19 @@ function reportChildRerun(child, rerun, log) {
   log(`[frv]   OPENCLAW_CI_RUNNER_BACKEND=${rerun.runnerBackend || "(unset)"}`);
 }
 
-function duplicateJobNames(jobs) {
-  const seen = new Set();
-  const duplicates = new Set();
-  for (const job of jobs) {
-    if (!(job.status === "completed" && job.conclusion === "skipped")) {
-      (seen.has(job.name) ? duplicates : seen).add(job.name);
+function duplicateJobNames(jobs, runAttempt, allowRunning = false) {
+  try {
+    resolveReleaseAttemptJobs(jobs, runAttempt, { allowRunning });
+    return [];
+  } catch (error) {
+    if (error?.code !== "FRV_DUPLICATE_JOB_IDENTITY") {
+      throw error;
     }
+    return error.jobNames;
   }
-  return [...duplicates].toSorted((left, right) => left.localeCompare(right));
 }
 
-// Any rerun request (single-job or batched) can leave duplicate queued jobs without
-// runners in the new attempt; such an attempt can never seal.
+// Wait for unresolved identities, not runnerless copies beside one real execution.
 async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadline) {
   const deadline = Math.min(
     operationDeadline,
@@ -2035,7 +2168,7 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
   );
   while (true) {
     const jobs = await client.getAttemptJobs(child.runId, runAttempt, { operationDeadline });
-    const duplicates = duplicateJobNames(jobs);
+    const duplicates = duplicateJobNames(jobs, runAttempt, true);
     if (jobs.length > 0 && duplicates.length === 0) {
       return;
     }
@@ -2478,8 +2611,16 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
   if (plan.attemptEvidenceVersion === undefined) {
     throw new Error("run predates attempt-aware immutable plans; run a fresh all-group FRV");
   }
-  if (plan.rerunGroup !== "all") {
-    throw new Error("FRV continuation requires an all-group root");
+  if (
+    plan.rerunGroup !== "all" &&
+    !(
+      plan.rerunGroup === "build-only" &&
+      ["status", "watch", "verify", "cancel"].includes(options.command)
+    )
+  ) {
+    throw new Error(
+      "FRV continuation requires an all-group root; build-only permits status, watch, verify and cancel only",
+    );
   }
   return plan;
 }
@@ -2873,6 +3014,12 @@ async function createPublicationReader(repository) {
     repository,
     getRun,
     getRunAttempt,
+    getWorkflowSource(sha, sourcePath) {
+      requirePublication(
+        /^[a-f0-9]{40}$/u.test(sha) && sourcePath === RELEASE_VALIDATION_WAIVERS_PATH,
+      );
+      return json("contents/" + sourcePath + "?ref=" + sha);
+    },
     authenticate,
     readArtifact,
     listArtifacts,
@@ -3044,6 +3191,10 @@ async function inspectPublicationStatus(options) {
               workflowRef: root.head_branch,
               workflowSha: root.head_sha,
               candidateBinding: plan.candidate,
+              deferWaiverPolicy: true,
+            });
+            validateReleaseManifestAdvisoryJobs(manifestArtifact.value, {
+              waiverPolicy: await readReleaseWaiverPolicy(plan, reader),
             });
             joinPublicationValidation(
               publication,
@@ -3305,6 +3456,7 @@ async function inspectPublicationStatus(options) {
     for (const child of status.children) {
       // Keep publication observations within their bounded validation projection.
       delete child.jobs;
+      delete child.blockingJobs;
       child.url = child.runId
         ? `https://github.com/${options.repository}/actions/runs/${child.runId}`
         : "";
@@ -3339,6 +3491,7 @@ const DISPATCHED_CHILD_PATTERN =
   /Dispatched ([\w.-]+\.ya?ml): https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)/gu;
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
+  [INITIAL_NPM_PREPARATION_JOB, "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
   ["Acquire full release candidate", "artifact:candidate"],
   ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],
@@ -3419,10 +3572,10 @@ function parentJobBlockers(jobs, attempt) {
     }));
 }
 
-function childJobBlockers(children, targetVersion, targetSha) {
+function childJobBlockers(children) {
   return children.flatMap((child) =>
-    child.jobs
-      ? evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
+    child.blockingJobs
+      ? child.blockingJobs.map((job) => ({
           owner: child.key,
           job: job.name,
           conclusion: job.conclusion,
@@ -3591,6 +3744,40 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     }
     state.reported.add(`log:${job.id}`);
   }
+  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
+  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
+  if (
+    !observation.plan &&
+    parentJobs?.some(
+      (job) =>
+        job.name === "Seal release execution plan" &&
+        (job.conclusion === "success" ||
+          job.steps?.some(
+            (step) =>
+              step.name === "Upload immutable release execution plan" &&
+              step.conclusion === "success",
+          )),
+    )
+  ) {
+    observation.plan = await read(
+      "execution plan",
+      async () => {
+        const evidence = await client
+          .getReleaseEvidenceClient()
+          .loadExecutionPlanEvidence(parentRunId);
+        return validateReleaseExecutionPlanArtifact(evidence.plan, {
+          parentRunId,
+          workflowSha: parent.head_sha,
+        });
+      },
+      false,
+    );
+  }
+  if (observation.plan && !observation.waiverPolicy) {
+    observation.waiverPolicy = await read("current Q waiver policy", () =>
+      readReleaseWaiverPolicy(observation.plan, client),
+    );
+  }
   // Bounded fanout keeps shared GitHub quota for the rest of the release.
   const childStates = await mapBounded(
     Object.entries(state.children),
@@ -3630,7 +3817,9 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           const jobs = await readJobs(attempt);
           if (
             !jobs?.length ||
-            (attempt < current && jobs.some((job) => job.status !== "completed"))
+            (attempt < current &&
+              duplicateJobNames(jobs, attempt).length === 0 &&
+              resolveReleaseAttemptJobs(jobs, attempt).some((job) => job.status !== "completed"))
           ) {
             return false;
           }
@@ -3650,22 +3839,20 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         }
         if (composite) {
           for (const job of evaluateReleaseChildPolicy({
-            child: { key: child.key, jobs: composite.jobs },
+            child: {
+              key: child.key,
+              jobs: composite.jobs,
+              runId,
+              runAttempt: current,
+            },
             targetVersion: observation.plan?.targetVersion,
             targetSha: observation.plan?.targetSha,
+            waiverPolicy: observation.waiverPolicy ?? [],
           }).blockingJobs) {
             const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
-              (row) => row.name === job.name && row.conclusion !== "skipped",
+              (row) => row.name === job.name && row.html_url === job.url,
             );
-            let sourceAttempt = Number(raw.run_attempt ?? job.acceptedRunAttempt);
-            // GitHub also restamps retained executions with a new attempt and ID.
-            for (const previous of attempts.slice(0, job.acceptedRunAttempt - 1)) {
-              if (
-                previous.jobs.some((row) => row.name === job.name && sameJobExecution(row, raw))
-              ) {
-                sourceAttempt = Math.min(sourceAttempt, previous.runAttempt);
-              }
-            }
+            const sourceAttempt = job.acceptedRunAttempt;
             if (currentProducer || sourceAttempt < current) {
               reportFailure(
                 failedJobEvent(child.key, raw, current, runId, sourceAttempt),
@@ -3686,11 +3873,14 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         if (!jobs) {
           return false;
         }
-        // A relay snapshot can lag the run; only an all-terminal job list is final.
+        const duplicates = duplicateJobNames(jobs, attempt, !done && attempt === current);
+        // Only resolved, terminal executions settle an inventory.
         const final =
           (attempt < current || done) &&
           jobs.length > 0 &&
-          jobs.every((job) => job.status === "completed");
+          (jobs.every((job) => job.status === "completed") ||
+            (duplicates.length === 0 &&
+              resolveReleaseAttemptJobs(jobs, attempt).every((job) => job.status === "completed")));
         scansComplete &&= final;
         for (const job of jobs) {
           const failure = failedJobEvent(
@@ -3704,7 +3894,6 @@ async function pollRelease(state, client, pending, observation, readOptions) {
             report(...failure);
           }
         }
-        const duplicates = duplicateJobNames(jobs);
         // Attempts briefly list overlapping jobs while GitHub materializes them; only a
         // final attempt that still holds duplicates is unsealable ghost-job evidence.
         if (duplicates.length > 0 && (final || pending.has(scanned))) {
@@ -3722,37 +3911,6 @@ async function pollRelease(state, client, pending, observation, readOptions) {
       return done && scansComplete;
     },
   );
-  // Required tree reads precede advisory metadata so a tip throttle cannot suppress
-  // terminal evidence; its shared backoff still prevents requests before the retry boundary.
-  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
-  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
-  if (
-    !observation.plan &&
-    parentJobs?.some(
-      (job) =>
-        job.name === "Seal release execution plan" &&
-        (job.conclusion === "success" ||
-          job.steps?.some(
-            (step) =>
-              step.name === "Upload immutable release execution plan" &&
-              step.conclusion === "success",
-          )),
-    )
-  ) {
-    observation.plan = await read(
-      "execution plan",
-      async () => {
-        const evidence = await client
-          .getReleaseEvidenceClient()
-          .loadExecutionPlanEvidence(parentRunId);
-        return validateReleaseExecutionPlanArtifact(evidence.plan, {
-          parentRunId,
-          workflowSha: parent.head_sha,
-        });
-      },
-      false,
-    );
-  }
   // Candidate metadata is advisory: absent artifacts or refs stay unknown, never hold
   // an independently verified terminal tree open or grant qualification authority.
   const candidate =
@@ -3874,7 +4032,9 @@ function print(value, json) {
     );
     console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
     if (value.decision) {
-      console.log(formatReleaseStateOutcome(value.decision));
+      console.log(
+        formatReleaseStateOutcome(value.decision, { observedDrainStatus: value.drain.status }),
+      );
     }
     for (const error of value.observationErrors) {
       console.log(`observation: ${error}`);
@@ -3988,8 +4148,8 @@ async function main() {
         }
       },
     });
-    print(result, options.json);
-    if (!options.json) {
+    print(result, options.json || options.preparePolicyAdmission);
+    if (!options.json && !options.preparePolicyAdmission) {
       console.log(
         "recovery run: " +
           (result.runId ?? "unconfirmed") +
@@ -4042,9 +4202,28 @@ async function main() {
   }
   const client = createClient(options.repository);
   if (options.command === "logs") {
-    const log = stripVTControlCharacters(
-      await client.getJobLog(positiveInteger(options.job, "--job")),
-    );
+    const jobId = positiveInteger(options.job, "--job");
+    let log;
+    try {
+      log = stripVTControlCharacters(await client.getJobLog(jobId));
+    } catch (error) {
+      if (!/\b(?:HTTP|returned status) 404\b/iu.test(String(error?.stderr ?? ""))) {
+        throw error;
+      }
+      // The archive can be missing while the job runs. A 404 alone cannot distinguish this
+      // from a missing job or expired logs, so only offer a retry for a confirmed active job.
+      const job = await ghJson(options.repository, `actions/jobs/${jobId}`, {}, true);
+      if (
+        job.id !== jobId ||
+        !["queued", "waiting", "pending", "requested", "in_progress"].includes(job.status)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Job ${jobId} ${JSON.stringify(job.name)} is ${job.status}. Retry the log request after the job completes.`,
+        { cause: error },
+      );
+    }
     const output = options.grep
       ? log
           .split("\n")
@@ -4075,6 +4254,16 @@ async function main() {
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
+    if (!options.json) {
+      console.log(`VERIFIED: Full Release Validation run ${options.runId}`);
+      console.log(`Qualification tooling (Q): ${plan.trustedWorkflow.sha}`);
+      console.log(
+        `Candidate inputs: --target-sha ${plan.targetSha} --full-release-validation-run-id ${options.runId} --release-profile ${String(plan.releaseProfile)} --skip-dispatch`,
+      );
+      console.log(
+        "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>, plus the release tag, channel, route, and any required SDK acknowledgement; these are not inferred from verification.",
+      );
+    }
     return;
   }
   const loaded = await loadPlanForCommand(options, client);

@@ -6,6 +6,7 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureSessionMcpRuntimeRetirement } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
 import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
@@ -41,17 +42,65 @@ import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
 } from "./sessions-patch-archive.types.js";
+import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import {
   sessionChangedError as archiveChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
+import type {
+  MutationOutcome,
+  MutationTarget,
+  PreparedPatchTarget,
+} from "./sessions-patch-types.js";
 import {
   resolveProtectedSessionVisibilityError,
   prepareSessionWorkerPlacementPatchValidation,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
+
+/** Drain archive targets before entering a mutation lane; a failed target cannot undo another target's receipt. */
+export async function prepareSessionPatchArchives(
+  params: Pick<
+    SessionPatchArchiveParams,
+    "cfg" | "context" | "personalModelSelection" | "pluginOwnerId" | "assertDrainStartAllowed"
+  > & {
+    targets: readonly PreparedPatchTarget[];
+    mutationTargets: readonly MutationTarget[];
+    outcomes: (MutationOutcome | undefined)[];
+    loadCatalog: (agentId: string) => Promise<ModelCatalogSnapshot>;
+  },
+) {
+  await Promise.all(
+    params.targets
+      .filter((target) => target.fullPatch.archived === true)
+      .map(async (target) => {
+        try {
+          const result = await prepareSessionPatchArchive({
+            cfg: params.cfg,
+            context: params.context,
+            personalModelSelection: params.personalModelSelection,
+            pluginOwnerId: params.pluginOwnerId,
+            target,
+            commitGuard: params.mutationTargets[target.index]!.commitGuard,
+            assertDrainStartAllowed: params.assertDrainStartAllowed,
+            loadGatewayModelCatalogSnapshot: () => params.loadCatalog(target.targetAgentId),
+          });
+          if (result.ok) {
+            target.archivePreparation = result.value;
+          } else {
+            params.outcomes[target.index] = result;
+          }
+        } catch (error) {
+          params.outcomes[target.index] = {
+            ok: false,
+            error: unexpectedPatchError(target.key, error),
+          };
+        }
+      }),
+  );
+}
 
 export async function releaseSessionPatchArchive(
   preparation?: SessionPatchArchivePreparation,
@@ -97,6 +146,7 @@ function archiveTargetChanged(params: {
 }
 
 type SessionPatchArchiveParams = {
+  assertDrainStartAllowed?: () => void;
   commitGuard: () => ErrorShape | undefined;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
@@ -321,6 +371,7 @@ async function prepareSessionPatchArchiveFromSource(
     const drain = await prepareSessionLifecycleDrain({
       action: "archive",
       authorize: assertCurrent,
+      onPrepared: params.assertDrainStartAllowed,
       context: params.context,
       storePath: target.storePath,
       sessionKeys,
@@ -348,6 +399,12 @@ async function prepareSessionPatchArchiveFromSource(
         entry?.sessionId ? [...sessionKeys, entry.sessionId] : sessionKeys,
         assertCurrent,
       );
+      if (entry?.sessionId) {
+        assertCurrent();
+        await captureSessionMcpRuntimeRetirement({ sessionId: entry.sessionId })?.retire(
+          assertCurrent,
+        );
+      }
     } catch (error) {
       drain.release();
       sessionLog.warn(
@@ -439,6 +496,7 @@ export function validateSessionPatchArchiveProjection(params: {
 /** Restore before opening admission; durable archive metadata delegates removal to GC. */
 export async function prepareSessionPatchArchiveTransition(params: {
   archived: boolean;
+  existingCheckoutOnly: boolean;
   entry: SessionEntry;
   context: GatewayRequestContext;
   scope: SessionAccessScope;
@@ -474,10 +532,65 @@ export async function prepareSessionPatchArchiveTransition(params: {
           entry: params.entry,
           scope: params.scope,
           commitGuard,
-          assertRestoreAllowed: () => {
+          assertRestoreAllowed: (effect) => {
+            // The row writer consumes Undo after detached preparation. It cannot roll back Git.
+            if (params.existingCheckoutOnly && effect === "recreate") {
+              throw new SessionMutationAuthorizationChangedError(
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "Archive Undo cannot recreate a removed checkout. Use Restore on the archived thread instead.",
+                  {
+                    details: {
+                      reason: "ARCHIVE_UNDO_REQUIRES_RESTORE",
+                      archivedAt: params.entry.archivedAt,
+                      lifecycleRevision: params.entry.lifecycleRevision,
+                    },
+                  },
+                ),
+              );
+            }
             assertWorktreeMutationAllowed =
               prepareSessionWorkerPlacementMutationCheck(placementTarget);
           },
         }),
   };
+}
+
+/** Times and prepares the checkout transition that Archive or Restore of this target needs. */
+export async function prepareTargetArchiveTransition(params: {
+  target: PreparedPatchTarget;
+  entry: SessionEntry | undefined;
+  primaryKey: string;
+  context: GatewayRequestContext;
+  diagnostics?: SessionPatchDiagnostics;
+  authorize: () => ErrorShape | undefined;
+  existingCheckoutOnly: boolean;
+}) {
+  const { target, entry } = params;
+  const archived = target.fullPatch.archived;
+  if (
+    !entry ||
+    typeof archived !== "boolean" ||
+    !(entry.worktree || entry.archivedAt !== undefined || archived)
+  ) {
+    return undefined;
+  }
+  const timing = params.diagnostics?.scope(archived ? "archivePlacement" : "worktree");
+  try {
+    return await prepareSessionPatchArchiveTransition({
+      archived,
+      existingCheckoutOnly: params.existingCheckoutOnly,
+      entry,
+      context: params.context,
+      scope: {
+        agentId: target.targetAgentId,
+        sessionKey: params.primaryKey,
+        storePath: target.storePath,
+      },
+      authorize: params.authorize,
+      preparation: target.archivePreparation,
+    });
+  } finally {
+    timing?.finish();
+  }
 }

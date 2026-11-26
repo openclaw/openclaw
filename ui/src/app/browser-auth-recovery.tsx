@@ -15,6 +15,7 @@ import {
   resolveControlUiAuthCandidates,
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
@@ -127,6 +128,15 @@ export function startBrowserAuthRecovery(
       dialog = undefined;
     });
   };
+
+  const stopReloadGuard = registerControlUiReloadGuard(
+    () => !pending && !signInRequired,
+    () => {
+      if (signInRequired) {
+        showDialog();
+      }
+    },
+  );
 
   function check(explicit = false): Promise<void> | undefined {
     if (lifetime.signal.aborted || pending || (!explicit && Date.now() - lastProbeAt < 30_000)) {
@@ -250,6 +260,7 @@ export function startBrowserAuthRecovery(
   listen(document, "visibilitychange", onVisibilityChange, options);
   return () => {
     lifetime.abort();
+    stopReloadGuard();
     modalHost.dispose();
     stopFailures();
   };

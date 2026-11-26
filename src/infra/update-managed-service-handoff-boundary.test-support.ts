@@ -167,7 +167,7 @@ export function createManagedServiceManagerBoundary({
         ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
         runId: run?.runId,
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
-        ...(options?.profileRequester ? { requesterAuthority: { assertCurrent() {} } } : {}),
+        ...(options?.profileRequester ? { requesterAuthority: {} } : {}),
         root: interrupted?.installRoot ?? root,
         timeoutMs: options?.recoveryTimeoutMs,
         restartDrainTimeoutMs: 300_000,

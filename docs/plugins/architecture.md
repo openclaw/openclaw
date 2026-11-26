@@ -308,6 +308,11 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+Bundled public surfaces that would load TypeScript below `node_modules` use the
+matching `dist/extensions/<plugin>/` or `dist-runtime/extensions/<plugin>/`
+JavaScript artifact when available. Resolution follows release symlinks, so Git
+releases built by older updaters do not need a manual relocation to start.
+
 For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
 capture a bundled plugin's own code: its package tree and the build chunks that
 `dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
@@ -413,6 +418,9 @@ generation receipt. Unchanged warm startup reuses those facts. Added, removed, o
 changed companions require admission again. If a recorded capture directory is
 missing, fresh admission reads the installed package without promoting the missing
 capture's identities. This also applies to post-update Doctor with older updaters.
+If a package swap removes the host targeted by a retained capture's link, the
+next admission creates a replacement namespace for the current host. It leaves
+the previous host link unchanged so it resolves again if the old package returns.
 Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
 capture retains or releases. First-read metadata stamps from Windows security

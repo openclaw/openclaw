@@ -1,7 +1,7 @@
 /** The scribes Knowledge can start, their options, and the readable prompts that start, run and repair them. */
 import type { IconName } from "./ui-icons.js";
 
-export type ScribeId = "claim-consolidation" | "conversations" | "granola" | "memory";
+export type ScribeId = "claim-consolidation" | "conversations" | "granola" | "memory" | "slack";
 export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
@@ -9,6 +9,7 @@ export type MemorySource = "memory-md" | "daily-notes" | "dreams";
 /** Granola meetings to learn from: the owner's own, or every meeting the account can read. */
 export type GranolaMeetings = "mine" | "all";
 export type GranolaSince = "7d" | "30d" | "today";
+export type SlackSince = "7d" | "30d" | "today";
 export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE;
 
 /** Dialog choices for each scribe; the prompts spell them out as settings. */
@@ -17,6 +18,11 @@ export type ScribeOptions = {
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   granola: { meetings: GranolaMeetings; since: GranolaSince; schedule?: string };
   memory: { sources: MemorySource[] };
+  /**
+   * `userToken` also reads the channels the owner's Slack user token can access; `dms` also reads
+   * direct messages and group DMs.
+   */
+  slack: { since: SlackSince; userToken: boolean; dms: boolean; schedule?: string };
 };
 
 /** One start's choices: the scribe, once or ongoing, its options and the operator's time zone. */
@@ -27,15 +33,28 @@ export type ScribeSetup<Id extends ScribeId = ScribeId> = {
   timezone: string;
 };
 
-/** A plugin a scribe needs: its id, display name and its Plugins page path. */
-export type ScribePlugin = { id: string; name: string; catalogPath: string };
+/**
+ * A plugin a scribe needs: its id, display name and its Plugins page path. A channel plugin also
+ * names its channel, whose account must be configured and running, and the Control UI path where
+ * that account is connected.
+ */
+export type ScribePlugin = {
+  id: string;
+  name: string;
+  catalogPath: string;
+  channel?: { id: string; accountPath: string };
+};
 
 /** Static description of one scribe, shared by the list, detail and start dialog. */
 export type ScribeDefinition = {
   id: ScribeId;
   title: string;
   blurb: string;
-  skill: "knowledge-claim-consolidation" | "knowledge-ingest" | "knowledge-meeting-ingest";
+  skill:
+    | "knowledge-claim-consolidation"
+    | "knowledge-ingest"
+    | "knowledge-meeting-ingest"
+    | "knowledge-source-ingest";
   icon: IconName;
   tone: "blue" | "teal" | "green" | "amber";
   /** Plugin whose tools the scribe reads its source through; the page checks it is connected. */
@@ -53,6 +72,8 @@ export type ScribeDefinition = {
 export const CONVERSATIONS_SCHEDULE = "0 4 * * *";
 /** Schedule an ongoing Granola scribe uses: weekdays at 10 AM, 2 PM and 6 PM. */
 export const GRANOLA_SCHEDULE = "0 10,14,18 * * 1-5";
+/** Schedule an ongoing Slack scribe uses: weekdays at 9:30 AM, 1:30 PM and 5:30 PM. */
+export const SLACK_SCHEDULE = "30 9,13,17 * * 1-5";
 /** Default review schedule: Sundays at 3:45 AM in the operator's timezone. */
 export const REVIEW_WEEKLY_SCHEDULE = "45 3 * * 0";
 /** Nightly review schedule: 3:45 AM, after the default 3:30 AM maintenance relink. */
@@ -116,6 +137,26 @@ export const SCRIBES: readonly ScribeDefinition[] = [
     dialogTitle: "Import from Memory",
     submitLabel: "Start import",
   },
+  {
+    id: "slack",
+    title: "Learn from Slack",
+    blurb:
+      "Reads the Slack channels your Slack bot is in and saves the decisions, commitments and project news discussed there, keeping the people and projects in them up to date. Run it once, or keep it learning as conversations continue.",
+    skill: "knowledge-source-ingest",
+    icon: "hash",
+    tone: "blue",
+    plugin: {
+      id: "slack",
+      name: "Slack",
+      catalogPath: "openclaw/slack",
+      channel: { id: "slack", accountPath: "settings/channels" },
+    },
+    modes: ["ongoing", "once"],
+    cadence: "Once or ongoing",
+    startLabel: "Set up…",
+    dialogTitle: "Learn from Slack",
+    submitLabel: "Start",
+  },
 ];
 
 /** Catalog entry for `id`, or undefined for an unknown id. */
@@ -140,7 +181,8 @@ export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: s
 
 /**
  * Default dialog choices: conservative (weekly review; active conversations, last 30 days; the
- * owner's Granola meetings, last 7 days).
+ * owner's Granola meetings, last 7 days; Slack channels the bot is in, last 7 days, without the
+ * user token or direct messages).
  */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
@@ -148,6 +190,7 @@ export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
     granola: { meetings: "mine", since: "7d", schedule: GRANOLA_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
+    slack: { since: "7d", userToken: false, dms: false, schedule: SLACK_SCHEDULE },
   };
   return defaults[id];
 }
@@ -171,6 +214,7 @@ const SCHEDULE_WORDS: Record<string, string> = {
   [REVIEW_NIGHTLY_SCHEDULE]: "nightly at 3:45 AM",
   [CONVERSATIONS_SCHEDULE]: "daily at 4:00 AM",
   [GRANOLA_SCHEDULE]: "weekdays at 10:00 AM, 2:00 PM and 6:00 PM",
+  [SLACK_SCHEDULE]: "weekdays at 9:30 AM, 1:30 PM and 5:30 PM",
 };
 const SINCE_WORDS: Record<ConversationSince, string> = {
   "30d": "from the last 30 days",
@@ -187,11 +231,33 @@ const GRANOLA_MEETING_WORDS: Record<GranolaMeetings, string> = {
   mine: "the owner's (recorded by them or with them invited)",
   all: "every meeting the Granola account can read, including notes others shared",
 };
+const SLACK_SINCE_WORDS: Record<SlackSince, string> = {
+  "7d": "from the last 7 days",
+  "30d": "from the last 30 days",
+  today: "from today on (new messages only)",
+};
+const SLACK_USER_TOKEN_WORDS = {
+  off: "not used; read only channels the Slack bot is a member of.",
+  on: "also read every channel the owner's Slack user token can access, when one is configured.",
+} as const;
+const SLACK_DM_WORDS = {
+  off: "skipped.",
+  on: "included.",
+} as const;
 const MEMORY_WORDS: Record<MemorySource, string> = {
   "memory-md": "MEMORY.md",
   "daily-notes": "daily notes (memory/YYYY-MM-DD.md)",
   dreams: "the Dreaming diary (DREAMS.md)",
 };
+
+/** Schedules Change schedule offers an ongoing scribe by name; any other is a custom one. */
+export const SCHEDULE_CHOICES: Partial<Record<ScribeId, readonly string[]>> = {
+  "claim-consolidation": [REVIEW_WEEKLY_SCHEDULE, REVIEW_NIGHTLY_SCHEDULE],
+  conversations: [CONVERSATIONS_SCHEDULE],
+  granola: [GRANOLA_SCHEDULE],
+};
+/** An offered cron schedule in words ("weekly, Sundays at 3:45 AM"); undefined for any other. */
+export const scheduleWords = (expr: string): string | undefined => SCHEDULE_WORDS[expr];
 
 /** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
 function scheduleLine(expr: string, timezone: string) {
@@ -215,11 +281,13 @@ const CONSOLIDATION_AMOUNTS: Record<ReviewSchedule, { timelines: number; pages: 
 };
 /** Meetings one scheduled Learn from Granola run ingests, within the same 60-minute ceiling. */
 const GRANOLA_MEETINGS_PER_RUN = 4;
+/** Channels with new messages one scheduled Learn from Slack run ingests, within the same ceiling. */
+const SLACK_CHANNELS_PER_RUN = 6;
 /** How a settings line naming a scheduled run's amount begins. */
 const EACH_RUN = "Each run:";
 
-// The settings a scribe's work reads: conversations, Granola meetings, Memory files and how much
-// a scheduled run takes on. Schedules are separate.
+// The settings a scribe's work reads: conversations, Granola meetings, Memory files, Slack
+// channels and how much a scheduled run takes on. Schedules are separate.
 // `amounts: false` leaves them out, as for a consolidation automation on a custom schedule.
 function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const { options } = setup;
@@ -238,6 +306,16 @@ function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = t
   if ("sources" in options) {
     return [`Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`];
   }
+  if ("userToken" in options) {
+    return [
+      `Slack channels: every channel the Slack bot is a member of, ${SLACK_SINCE_WORDS[options.since] ?? options.since}.`,
+      `Slack user token: ${SLACK_USER_TOKEN_WORDS[options.userToken ? "on" : "off"]}`,
+      `Direct messages and group DMs: ${SLACK_DM_WORDS[options.dms ? "on" : "off"]}`,
+      ...(scheduled
+        ? [`${EACH_RUN} ingest ${SLACK_CHANNELS_PER_RUN} channels with new messages.`]
+        : []),
+    ];
+  }
   // A once run carries no schedule, and a custom schedule has no amounts.
   const amount = scheduled ? CONSOLIDATION_AMOUNTS[options.schedule] : undefined;
   return amount
@@ -255,6 +333,8 @@ const PURPOSE: Record<ScribeId, string> = {
     "This scribe reads the owner's Granola meetings through the Granola plugin and turns each one into a meeting page, updated people and project pages, and the decisions and commitments in it.",
   memory:
     "This scribe brings what Memory already knows into Knowledge. Memory itself is left as it is.",
+  slack:
+    "This scribe reads Slack channels through the Slack plugin's message actions and saves the decisions, commitments and project news discussed there to Knowledge, keeping the people and projects in them up to date.",
 };
 
 // The work step: the skill section that does it, applied to the settings.
@@ -267,6 +347,8 @@ const WORK: Record<ScribeId, string> = {
     'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
   memory:
     'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Never change Memory files.',
+  slack:
+    'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill, for the Slack channels in the settings. Never post, react or change anything in Slack.',
 };
 
 // What the closing sentence counts after the work.
@@ -277,6 +359,8 @@ const COUNTS: Record<ScribeId, string> = {
   granola:
     "meetings ingested, already in Knowledge, left pending and without a transcript, pages and claims written",
   memory: "files read, items saved, already known and skipped",
+  slack:
+    "channels read, channels left for a later run, messages read, discussions ingested, pages and claims written",
 };
 
 const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
@@ -285,7 +369,7 @@ const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
  * Wording a run message is generated from; earlier releases generated some of it differently.
  * `work` and `counts` replace a scribe's current work step and closing counts; `rules` are a
  * scribe's extra closing rules after the failure rule; `amounts` adds how much a scheduled
- * consolidation or Granola run takes on to its settings.
+ * consolidation, Granola or Slack run takes on to its settings.
  */
 type RunWording = {
   access: string;
@@ -495,6 +579,11 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
       choicesOf(GRANOLA_SINCE_WORDS).map((since) => ({ meetings, since })),
     );
   }
+  if (id === "slack") {
+    return choicesOf(SLACK_SINCE_WORDS).flatMap((since) =>
+      [false, true].flatMap((userToken) => [false, true].map((dms) => ({ since, userToken, dms }))),
+    );
+  }
   if (id === "claim-consolidation") {
     return choicesOf(CONSOLIDATION_AMOUNTS).map((schedule) => ({ schedule }));
   }
@@ -584,6 +673,31 @@ export function checkRunMessage(
   return { state: "differs", current: generate(target) };
 }
 
+/**
+ * The run message an automation moving from `from` to `to` should carry. Only a consolidation
+ * message names run amounts by schedule: one Knowledge generated, now or earlier, becomes the
+ * current one for the new schedule (without amounts on a custom schedule). Any other is kept.
+ */
+export function rescheduledRunMessage(
+  id: ScribeId,
+  message: string,
+  from: RunSchedule,
+  to: RunSchedule,
+) {
+  const state = checkRunMessage(id, message, from).state;
+  if (id !== "claim-consolidation" || (state !== "current" && state !== "outdated")) {
+    return message;
+  }
+  const options = settingsChoices(id).find(
+    (choice) => to.kind === "cron" && "schedule" in choice && choice.schedule === to.expr,
+  );
+  return runPrompt(
+    { scribe: id, mode: "ongoing", options: options ?? defaultOptions(id), timezone: "UTC" },
+    CURRENT_WORDING,
+    options !== undefined,
+  );
+}
+
 /** First words of every repair prompt; the page never forces a first run after one. */
 export const REPAIR_HEADING = "Repair the Knowledge scribe";
 /** First words of every update prompt; the page never forces a first run after one either. */
@@ -607,13 +721,15 @@ export type RepairSource = {
  * It does no work.
  * - repair: take the automation over and turn it back on.
  * - update: bring it up to this version (fresh session per run, the given run message) and keep
- *   it paused or on as it is. A turn in the conversation re-declares it, so the automation keeps
+ *   it paused or on as it is.
+ * - reschedule: an update that also moves it to `current.schedule`, a new one, from the page's
+ *   Change schedule. A turn in the conversation re-declares it, so the automation keeps
  *   the authority of the owner's authenticated turn; an edit from the page would drop it.
  */
 export function repairPrompt(
   id: ScribeId,
   current: RepairSource,
-  purpose: "repair" | "update" = "repair",
+  purpose: "repair" | "update" | "reschedule" = "repair",
 ) {
   const scribe = scribeById(id)!;
   const { schedule } = current;
@@ -639,7 +755,9 @@ export function repairPrompt(
   return [
     `${repair ? REPAIR_HEADING : UPDATE_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
     "",
-    "Settings, kept from its current automation:",
+    purpose === "reschedule"
+      ? "Settings, kept from its current automation except the new schedule:"
+      : "Settings, kept from its current automation:",
     `- ${scheduleSetting}`,
     "- Run message: the text below.",
     "",
@@ -654,10 +772,12 @@ export function repairPrompt(
           : "Leave `enabled` out: an update keeps a paused automation paused.",
         repair
           ? ` If exactly one exists, ${healthy} and it is enabled, leave it as it is and go to the last step.`
-          : ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`,
+          : purpose === "update"
+            ? ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`
+            : "",
         saved,
       ),
-      endStep("on", `one sentence: what the ${purpose} changed`),
+      endStep("on", `one sentence: what the ${repair ? "repair" : "update"} changed`),
     ]),
     "",
     FAILED,

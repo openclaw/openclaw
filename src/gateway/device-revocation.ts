@@ -1,5 +1,4 @@
 import type { PairedDeviceTokenIdentity } from "../infra/device-pairing-core.types.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 type CurrentCaller = () => boolean;
 
@@ -40,7 +39,6 @@ type RevocationState = {
   references: number;
   revoked: boolean;
   sourceAccepted: boolean;
-  listeners?: Set<() => void>;
 };
 
 type RevocationOwner = {
@@ -150,7 +148,6 @@ function releaseHold(capture: CapturedRevocation): () => void {
     capture.releaseSourceIdentity = undefined;
     capture.releaseClientRevocation?.();
     capture.releaseClientRevocation = undefined;
-    state.listeners?.clear();
     if (!state.deviceId) {
       return;
     }
@@ -163,11 +160,7 @@ function releaseHold(capture: CapturedRevocation): () => void {
 }
 
 function revoke(state: RevocationState): void {
-  if (state.revoked) {
-    return;
-  }
   state.revoked = true;
-  notifyListeners(state.listeners ?? [], undefined);
 }
 
 /** Capture the attested identity before dispatch yields, without retaining credentials or sockets. */
@@ -256,14 +249,6 @@ export function readGatewayDeviceRevocationGuard(
   return guard ? captures.get(guard)?.isRevocationCurrent : undefined;
 }
 
-/** New starts check committed source policy, never the fallback transport callback. */
-export function readGatewayDeviceCommittedSourceAuthority(
-  guard: (() => unknown) | undefined,
-): CurrentCaller | undefined {
-  const capture = guard ? captures.get(guard) : undefined;
-  return capture?.hasSourceAuthority ? capture.isSourceCurrent : undefined;
-}
-
 /** Original committed source authority, excluding tentative transport and later request lifetimes. */
 export function readGatewayDeviceSourceAuthority(
   guard: (() => unknown) | undefined,
@@ -320,22 +305,6 @@ export function readGatewayDeviceReconnectSourceIdentity(
   return capture?.reconnectSourceClient === sourceClient ? capture.sourceIdentity : undefined;
 }
 
-/** Notify retained work of access revocation, independently of transport or Gateway shutdown. */
-export function onGatewayDeviceSourceRevoked(
-  guard: (() => unknown) | undefined,
-  onRevoked: () => void,
-): (() => void) | undefined {
-  const capture = guard ? captures.get(guard) : undefined;
-  if (!capture) {
-    return undefined;
-  }
-  const unsubscribe = registerListener((capture.state.listeners ??= new Set()), onRevoked);
-  if (capture.state.revoked) {
-    onRevoked();
-  }
-  return unsubscribe;
-}
-
 /** Transfer a hold on the original captured state, never recapture a later device/session. */
 export function retainGatewayDeviceRevocation(
   guard: (() => unknown) | undefined,
@@ -344,20 +313,8 @@ export function retainGatewayDeviceRevocation(
   if (!capture) {
     return undefined;
   }
-  if (!capture.isCurrent() || capture.state.references === 0) {
-    throw new Error("Gateway caller authority is no longer active.");
-  }
-  capture.state.references += 1;
-  return releaseHold(capture);
-}
-
-/** Keep a retained capture indexed for a later start check; never checks caller authority. */
-export function retainGatewayDeviceRevocationIndex(
-  guard: (() => unknown) | undefined,
-): (() => void) | undefined {
-  const capture = guard ? captures.get(guard) : undefined;
-  if (!capture || capture.state.references === 0) {
-    return undefined;
+  if (capture.owner.closed || capture.state.references === 0) {
+    throw new Error("Gateway request ended. Start a new request.");
   }
   capture.state.references += 1;
   return releaseHold(capture);

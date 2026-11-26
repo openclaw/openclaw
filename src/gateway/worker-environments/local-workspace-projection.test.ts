@@ -48,7 +48,6 @@ import {
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
   proveHostAdmittedBuildInputs,
-  proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
   proveSandboxMutationCheckpoints,
   proveSharedSandboxCheckpoints,
@@ -221,22 +220,14 @@ it("coalesces concurrent cold and warm sandbox preparations without retaining co
 it("observes edits made before a later preparation while an earlier scan is in flight", () =>
   provePreparationObservationBoundary(owner));
 
-it.each([
-  "cancel waiter",
-  "revoke waiter",
-  "cancel producer",
-  "failed producer",
-  "other session",
-] as const)("retains independent preparation authority: %s", (mode) =>
-  provePreparationWaiterAuthority(owner, mode),
+it.each(["cancel waiter", "cancel producer", "failed producer", "other session"] as const)(
+  "retains independent preparation authority: %s",
+  (mode) => provePreparationWaiterAuthority(owner, mode),
 );
 
-it.each(["read", "authority", "observation", "cancel"] as const)(
+it.each(["read", "observation", "cancel"] as const)(
   "retries only read failures during warm reuse (%s)",
-  (failure) =>
-    proveWarmWorkspaceReuseFailure(owner, failure, () => {
-      revoked = true;
-    }),
+  (failure) => proveWarmWorkspaceReuseFailure(owner, failure),
 );
 
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
@@ -326,23 +317,11 @@ it.each([false, true])("settles command checkpoints (parent disposed: %s)", asyn
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
 });
 
-it.each(["operator", "gateway"] as const)(
-  "settles admitted checkpoints until original %s authority closes",
-  async (authority) => {
-    const { proveStoppedSandboxAuthority } =
-      await import("./local-workspace-cancellation.test-support.js");
-    await proveStoppedSandboxAuthority(owner, authority);
-  },
-);
-
-it.for(["guest-involvement", "guest-role-involvement"] as const)(
-  "preserves accepted guest writes but fences revoked authority across a late receipt (%s)",
-  async (revoke, { signal }) => {
-    const { proveStoppedSandboxAuthority } =
-      await import("./local-workspace-cancellation.test-support.js");
-    await proveStoppedSandboxAuthority(owner, revoke, signal);
-  },
-);
+it("settles admitted checkpoints until the Gateway closes", async () => {
+  const { proveStoppedSandboxAuthority } =
+    await import("./local-workspace-cancellation.test-support.js");
+  await proveStoppedSandboxAuthority(owner, "gateway");
+});
 
 it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));
@@ -639,20 +618,6 @@ it("replaces rejected v31 storage when a full rescan matches the unchanged accep
   ).toBe(0);
   await expectText(canonical, "source.txt", "original\n");
   await expectText(projection, "source.txt", "original\n");
-});
-
-it.each([
-  "reservation",
-  "v31 reservation",
-  "v31 rejected conversion",
-  "v31 rejected staged conversion",
-  "acceptance",
-  "accepted-result cleanup",
-  "legacy accepted-result cleanup",
-] as const)("recovers durable state when authority closes during %s", async (phase) => {
-  await proveInterruptedWorkspaceCheckpoint(owner, phase, (value) => {
-    revoked = value;
-  });
 });
 
 it.for([false, true])(

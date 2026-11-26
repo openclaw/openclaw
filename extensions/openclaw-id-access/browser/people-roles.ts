@@ -47,13 +47,22 @@ export function roleOptions(roles: Role[], locale: string) {
     description: !isMemberRole(role.name)
       ? roleText(locale, "invalidRoleName")
       : [
-          roleText(locale, `sessions.${role.sessions}`),
+          role.maxInvitedAccess
+            ? roleText(locale, "invitedAccess", {
+                level: roleText(locale, `invitationLevels.${role.maxInvitedAccess}`),
+              }) +
+              (role.maxInvitedAccess === "send"
+                ? ` · ${roleText(locale, "invitedPermission", { mode: roleText(locale, `permissions.${role.invitedPermission ?? "workspace"}`) })}`
+                : "")
+            : roleText(locale, `sessions.${role.sessions}`),
           roleText(
             locale,
             role.sandbox?.ready === false
               ? "sandboxNotReady"
               : role.requiresSandbox
-                ? "sandboxRequired"
+                ? role.maxInvitedAccess
+                  ? "ownSandboxRequired"
+                  : "sandboxRequired"
                 : "sandboxInherited",
           ),
           roleText(locale, role.admin ? "administrator" : "noAdministrator"),

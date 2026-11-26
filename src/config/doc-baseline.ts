@@ -463,6 +463,7 @@ function writeFileAtomic(filePath: string, content: string): void {
   replaceFileAtomicSync({
     filePath,
     content,
+    allowDrvfsRenameRecovery: true,
     dirMode: 0o755,
     mode: 0o644,
     tempPrefix: path.basename(filePath),

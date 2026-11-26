@@ -59,7 +59,7 @@ export function extractTextCached(message: unknown): string | null {
   return readCachedMessageExtraction(message, textCache, extractText);
 }
 
-function contentText(
+export function readContentBlockText(
   content: unknown,
   read: (item: Record<string, unknown>) => string | undefined,
 ): string | null {
@@ -74,10 +74,12 @@ function contentText(
 }
 
 function extractThinking(message: unknown): string | null {
-  return contentText((message as Record<string, unknown> | null | undefined)?.content, (item) =>
-    item.type === "thinking" && typeof item.thinking === "string"
-      ? item.thinking.trim() || undefined
-      : undefined,
+  return readContentBlockText(
+    (message as Record<string, unknown> | null | undefined)?.content,
+    (item) =>
+      item.type === "thinking" && typeof item.thinking === "string"
+        ? item.thinking.trim() || undefined
+        : undefined,
   );
 }
 
@@ -96,7 +98,7 @@ function extractRawText(message: unknown): string | null {
     return content;
   }
   return (
-    contentText(content, (item) =>
+    readContentBlockText(content, (item) =>
       (item.type === "text" ||
         (role === "user" && item.type === "input_text") ||
         (role === "assistant" && (item.type === "input_text" || item.type === "output_text"))) &&

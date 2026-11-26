@@ -21,7 +21,6 @@ import {
   createInvite,
   decideInvite,
   removeMember,
-  changeMemberRole,
   RoleClassificationChangedError,
 } from "./invites.js";
 import { NodeSection } from "./node-section.js";
@@ -249,16 +248,6 @@ export function PeoplePage(props: {
     });
   };
 
-  const changeRole = async (
-    member: Member,
-    role: MemberRole,
-    confirmedAdmin: boolean,
-  ): Promise<boolean> =>
-    (await run(`member:${member.accountId}`, async (link) => {
-      await changeMemberRole(host.request, link, member.accountId, role, confirmedAdmin);
-      return true;
-    })) === true;
-
   // Sandbox setup goes to the owner's agent; the page only rechecks readiness afterwards.
   const [sandboxStatus, setSandboxStatus] =
     createSignal<ReturnType<SandboxSetup["status"]>>("idle");
@@ -286,7 +275,7 @@ export function PeoplePage(props: {
   return (
     <section class="ocid-access">
       <header class="ocid-access__header">
-        <h1>Remote access</h1>
+        <h1 class="plugin-page-title">Remote access</h1>
         <p class="ocid-access__hint">
           Who can reach this claw from other devices through OpenClaw ID. Devices paired with this
           Gateway are in Settings → Devices.
@@ -383,15 +372,11 @@ export function PeoplePage(props: {
                     />
                   </Show>
                   <Members
-                    sandboxSetup={canManage() ? sandboxSetup : undefined}
                     selectedMember={props.params?.member}
                     selectedDevice={props.params?.device}
                     navigation={host.navigation}
                     motion={motion}
                     members={current().link.members ?? []}
-                    components={host.components}
-                    roles={current().link.roles ?? []}
-                    onChangeRole={changeRole}
                     error={latest(error)}
                     notice={latest(notice)}
                     readOnly={!latest(ownDevicePub)}

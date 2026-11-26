@@ -43,7 +43,7 @@ export type SqliteIntegrityWorkerInput = {
 };
 
 export type SqliteIntegrityWorkerResult =
-  | { ok: true; checkElapsedMs?: number }
+  | { ok: true; checkElapsedMs?: number; staleFts?: true }
   | {
       ok: false;
       checkElapsedMs?: number;
@@ -131,7 +131,7 @@ export function runSqliteIntegrityCheckInWorkerSync(check: SqliteIntegrityCheck)
     }
     throw error;
   }
-  if (check.check !== "quick") {
+  if (check.check !== "quick" && !result.staleFts) {
     recordSqliteDatabaseIntegrity(check.database);
   }
 }
@@ -220,6 +220,7 @@ export function assertSqliteIntegrityInWorker(
     priority?: "background";
     expectedIdentity?: DatabaseFileIdentity;
     preparedIdentity?: FileIdentityStat & { size: bigint };
+    onToleratedFts?: () => void;
   },
 ): Promise<void> {
   const scope = integrityScope.getStore();
@@ -379,6 +380,9 @@ export function assertSqliteIntegrityInWorker(
               throw integrityError;
             }
             throw error;
+          }
+          if (result.staleFts) {
+            scheduling?.onToleratedFts?.();
           }
           resolve();
         } catch (error) {

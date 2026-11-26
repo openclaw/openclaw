@@ -10,7 +10,7 @@ import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.j
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
-import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { QuestionManager } from "../../../src/gateway/question-manager.js";
 import type { SerializedGatewayFrame } from "../../../src/gateway/serialized-json.js";
@@ -128,7 +128,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       updatedAt: profile.updatedAt,
     },
   };
-  const operator = await captureGatewayOperatorRunAuthority({
+  const operator = await prepareGatewayOperatorRunAuthority({
     client: browser,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {

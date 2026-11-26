@@ -8,6 +8,7 @@ import {
   pluginStateText,
   scribeTile,
 } from "./scribe-dialog.js";
+import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import { runScribeNow, setScribePaused, startScribe, turnOffScribe } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./scribes-state.js";
 import {
   repair,
+  reschedule,
   settleUpdates,
   update,
   updateNotice,
@@ -73,8 +75,7 @@ const listText = (items: string[]) =>
 const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? "" : "s"}`;
 
 /** Human schedule for a scribe automation; daily cron expressions read as a time of day. */
-function scheduleText(job: ScribeJob) {
-  const { schedule } = job;
+function scheduleText(schedule: ScribeJob["schedule"]) {
   if (schedule.kind === "cron" && schedule.expr) {
     // Daily ("M H * * *") and weekly ("M H * * D", one day 0-7) read as a time of day.
     const fields = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-7])$/.exec(schedule.expr.trim());
@@ -142,7 +143,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
     parts.push(job?.state.runningAtMs ? "First run in progress" : "First run requested");
   }
   if (job && status !== "missing") {
-    parts.push(scheduleText(job));
+    parts.push(scheduleText(job.schedule));
     if (job.state.lastRunAtMs) {
       parts.push(`Last run ${when(job.state.lastRunAtMs)}`);
     }
@@ -588,8 +589,29 @@ function detail(
   const lastRun = runs[0];
   const facts: [string, string | Node][] = [["Status", statusValue]];
   if (job) {
+    const scheduleValue = el("span", scheduleText(job.schedule), "scribe-status");
+    if (status !== "missing") {
+      const change = button(
+        "Change…",
+        () =>
+          openScheduleDialog({
+            scribe,
+            schedule: job.schedule,
+            describe: scheduleText,
+            save: async (next) => {
+              await reschedule(ui, snapshot, job, agentId, next);
+              void ui.load();
+            },
+          }),
+        "knowledge-quiet knowledge-small",
+      );
+      change.setAttribute("aria-label", "Change schedule");
+      // One turn changes the automation at a time.
+      change.disabled = !canWrite || Boolean(updateState(ui, job));
+      scheduleValue.append(change);
+    }
     facts.push(
-      ["Schedule", scheduleText(job)],
+      ["Schedule", scheduleValue],
       [
         "Next run",
         job.state.runningAtMs
@@ -634,7 +656,12 @@ function detail(
   const readiness = neededPluginState(scribe, detection);
   if (scribe.plugin && readiness) {
     const value = el("span", undefined, "scribe-status");
-    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
+    const tokens = scribe.plugin.channel && detection.tokens?.[scribe.plugin.id];
+    const tokenText = [
+      tokens?.bot === false ? "no bot token" : "",
+      tokens?.user === undefined ? "" : tokens.user ? "user token configured" : "no user token",
+    ].filter(Boolean);
+    value.append(el("span", [pluginStateText(scribe.plugin, readiness), ...tokenText].join(" · ")));
     if (readiness !== "ready") {
       value.append(
         pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),

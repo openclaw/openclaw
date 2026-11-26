@@ -112,7 +112,12 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
         repair_json: "[]",
       }),
     );
-  return { database, insert, update, external, readRows, startUpdate };
+  const removeAlias = () =>
+    executeSqliteQuerySync(
+      db,
+      queries.deleteFrom("agent_databases").where("path", "=", namespaced),
+    );
+  return { database, insert, update, removeAlias, external, readRows, startUpdate };
 }
 
 function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealthFlowContext {
@@ -178,29 +183,39 @@ describe("Doctor Windows database path repair", () => {
     const ctx = context();
     await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
     expect(ctx.updateWarnings).toEqual([
-      "Skipped agent database path repair while update 00000000-0000-4000-8000-000000000001 is in progress. Run openclaw doctor --fix after the update finishes.",
+      "Skipped agent database path repair for 1 registration(s) while update 00000000-0000-4000-8000-000000000001 is in progress. Run openclaw doctor --fix after the update finishes.",
     ]);
     expect(fixture.note).toHaveBeenCalledWith(ctx.updateWarnings?.[0], "Doctor warnings");
     expect(state.readRows()).toEqual(baseline);
   });
 
-  it.each([true, false])(
-    "leaves inventory unchanged with update Doctor = %s",
-    async (updateDoctor) => {
-      const state = seedDatabase();
-      const before = state.readRows();
-      const ctx = context(updateDoctor ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}, updateDoctor);
-      await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
-      expect(state.readRows()).toEqual(before);
-      if (updateDoctor) {
-        expect(ctx.updateWarnings).toEqual([
-          "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
-        ]);
-      } else {
-        expect(fixture.note).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it.each([
+    ["update Doctor", "alias", 1],
+    ["update Doctor", "clean", 0],
+    ["active update", "clean", 0],
+    ["check only", "alias", 0],
+  ] as const)("leaves inventory unchanged: %s, %s registry", async (mode, registry, skipped) => {
+    const state = seedDatabase();
+    if (registry === "clean") {
+      state.removeAlias();
+    }
+    const before = state.readRows();
+    if (mode === "active update") {
+      fixture.beforeAdmission = state.startUpdate;
+    }
+    const env = mode === "update Doctor" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {};
+    const ctx = context(env, mode !== "check only");
+    await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
+    expect(state.readRows()).toEqual(before);
+    if (skipped) {
+      expect(ctx.updateWarnings).toEqual([
+        `Skipped agent database path repair for ${skipped} registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.`,
+      ]);
+    } else {
+      expect(ctx.updateWarnings).toBeUndefined();
+      expect(fixture.note).not.toHaveBeenCalled();
+    }
+  });
 
   it("refuses unrecognized shared-state ownership before removing aliases", async () => {
     const state = seedDatabase();

@@ -45,6 +45,8 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
+  /** The saved sign-in doesn't cover voice and no API key is set; adding one would. */
+  voiceApiKeyRequired?: true;
   usage?: Pick<
     ProviderUsageSnapshot,
     "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"
@@ -58,6 +60,9 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  quickApiKeyGroupLabel?: string;
+  /** A provider setup suggests first: one of its text-inference choices is onboarding-featured. */
+  featured?: true;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
 };
 

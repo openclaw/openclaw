@@ -7,6 +7,7 @@ import {
   extractErrorCodeOrErrno,
 } from "@openclaw/normalization-core/error-coercion";
 import { requireExactTestResults } from "./lib/ios-test-results.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayPairChatAndRelaunch",
@@ -444,6 +445,11 @@ async function main() {
     options: {
       mode: { type: "string", default: "stock" },
       "target-sha": { type: "string" },
+      "candidate-root": { type: "string" },
+      "harness-sha": { type: "string" },
+      "client-root": { type: "string" },
+      "client-sha": { type: "string" },
+      "client-release-tag": { type: "string" },
       output: { type: "string" },
       "build-dir": { type: "string" },
       "build-only": { type: "boolean", default: false },
@@ -451,14 +457,31 @@ async function main() {
       "gateway-selection": { type: "string" },
     },
   });
+  const clientOptions = [values["client-root"], values["client-sha"], values["client-release-tag"]];
+  const compatibility = clientOptions.some((value) => value !== undefined);
+  const releaseTag = values["client-release-tag"];
+  const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
   if (
+    ((values["candidate-root"] !== undefined || values["harness-sha"] !== undefined) &&
+      (!compatibility ||
+        (values["candidate-root"] !== undefined && !values["candidate-root"].trim()) ||
+        (values["harness-sha"] !== undefined && !/^[a-f0-9]{40}$/u.test(values["harness-sha"])))) ||
+    (compatibility &&
+      (!values["client-root"]?.trim() ||
+        !/^[a-f0-9]{40}$/u.test(values["client-sha"] ?? "") ||
+        !release ||
+        release.channel !== "stable" ||
+        release.patch >= 33 ||
+        releaseTag !== `v${release.version}`)) ||
     (values.mode !== "stock" && values.mode !== "compare") ||
     !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "") ||
     !values.output ||
     (values["build-only"] && !values["build-dir"]) ||
     (values["gateway-only"] && (values["build-only"] || values.mode !== "stock"))
   ) {
-    throw new Error("usage: --mode stock|compare --target-sha <full-sha> --output <proof.json>");
+    throw new Error(
+      "usage: --mode stock|compare --target-sha <full-sha> --output <proof.json> [--candidate-root <checkout> --harness-sha <full-sha>] [--client-root <checkout> --client-sha <full-sha> --client-release-tag <stable-tag>]",
+    );
   }
   const started = performance.now();
   const abort = new AbortController();
@@ -503,7 +526,19 @@ async function main() {
       buildDir: values["build-dir"],
       gatewayOnly: values["gateway-only"],
       buildOnly: values["build-only"],
-      gatewaySelectionDir: path.resolve(values["gateway-selection"] ?? `${values.output}.gateway`),
+      ...(compatibility
+        ? {
+            candidateRoot: path.resolve(values["candidate-root"] ?? process.cwd()),
+            harnessSha: values["harness-sha"] ?? values["target-sha"]!,
+            clientRoot: path.resolve(values["client-root"]!),
+            clientSha: values["client-sha"]!,
+            clientReleaseTag: values["client-release-tag"]!,
+          }
+        : {
+            gatewaySelectionDir: path.resolve(
+              values["gateway-selection"] ?? `${values.output}.gateway`,
+            ),
+          }),
       onProgress: writeProof,
     });
     cleanup = native.cleanup;

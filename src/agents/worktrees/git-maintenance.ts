@@ -21,6 +21,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { cleanTemporaryPacks } from "./git-pack-cleanup.js";
+import { writeConsolidatedPack } from "./git-pack-consolidation.js";
 import * as git from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
@@ -432,8 +433,7 @@ async function consolidatePacks(
       const candidates = packs.filter(
         (pack) => pack.promisor === promisor && pack.indexBytes <= PACK_BATCH_INDEX_BYTES,
       );
-      // Only reclaimable, single-link bytes participate in the geometric write bound.
-      const end = candidates.findLastIndex(
+      const start = candidates.findIndex(
         (pack, i) =>
           i > 0 &&
           pack.size < 2 * candidates[i - 1]!.size &&
@@ -443,10 +443,11 @@ async function consolidatePacks(
       const batch = [];
       let bytes = 0;
       let indexBytes = 0;
-      // Start at the break so small arrivals cannot starve history peers; later passes use the output size.
-      for (let i = end; i >= 0; i--) {
+      // Fold the cheapest break first; a stable larger pack can wait for a later pass.
+      for (let i = start - 1; i >= 0 && i < candidates.length; i++) {
         const pack = candidates[i]!;
         if (
+          (i > start && pack.size >= 2 * candidates[i - 1]!.size) ||
           bytes + pack.size > PACK_BATCH_BYTES ||
           indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
           batch.length >= PACK_BATCH_COUNT
@@ -463,23 +464,12 @@ async function consolidatePacks(
       const selected = batch.map((pack) => pack.name);
       // Validate only selected inputs. The streaming writer does not check source CRCs.
       await verify(selected);
-      // Keep every object and compact offset deltas; full base IDs inflate small deltas.
-      // index-pack publishes the promisor marker and verified index before returning the hash.
-      const alias =
-        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --delta-base-offset --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
-        (promisor ? " --promisor" : "");
-      const result = await git.requireGit(
-        repoRoot,
-        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-        {
-          ...options,
-          timeoutMs: PACK_BATCH_TIMEOUT_MS,
-          input: `${selected.join("\n")}\n`,
-        },
-      );
-      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+      const hash = await writeConsolidatedPack(repoRoot, directory, selected, bytes, promisor, {
+        ...options,
+        timeoutMs: PACK_BATCH_TIMEOUT_MS,
+      });
       if (!hash) {
-        throw new Error("Git pack consolidation returned an invalid pack identity");
+        continue;
       }
       if (!present.has(`pack-${hash}.pack`)) {
         bytesWritten += (await fs.stat(path.join(directory, `pack-${hash}.pack`))).size;

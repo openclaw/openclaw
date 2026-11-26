@@ -9,6 +9,7 @@
  * CPU/allocation include instrumentation; fixture creation is outside timing.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
@@ -24,6 +25,11 @@ const { values } = parseArgs({
     worker: { type: "string" },
     files: { type: "string", default: "62000" },
     "file-bytes": { type: "string", default: "18432" },
+    "reservation-counter": { type: "string" },
+    reflink: { type: "boolean", default: false },
+    "fake-reservations": { type: "boolean", default: false },
+    "fake-commits": { type: "boolean", default: false },
+    "commit-counter": { type: "string" },
   },
 });
 assert(values.output);
@@ -37,16 +43,49 @@ fs.mkdirSync(retired);
 const sizes = new Map<string, number>([[retired, 0]]);
 const content = Buffer.alloc(fileBytes, 97);
 for (let index = 0; index < files; index++) {
-  const directory = path.join(retired, String(Math.floor(index / 100)));
+  const directory = path.join(retired, "node_modules", `package-${Math.floor(index / 100)}`, "lib");
   if (index % 100 === 0) {
-    fs.mkdirSync(directory);
+    fs.mkdirSync(directory, { recursive: true });
     sizes.set(directory, 0);
+    sizes.set(path.dirname(directory), 0);
+    sizes.set(path.dirname(path.dirname(directory)), 0);
   }
   const file = path.join(directory, String(index));
   fs.writeFileSync(file, content);
   sizes.set(file, fileBytes);
 }
+// A sibling reflink checkout keeps shared extents live during retirement.
+if (values.reflink) {
+  execFileSync("cp", ["-a", "--reflink=always", retired, path.join(output, "sibling")]);
+  execFileSync("sync", ["-f", retired]);
+}
 const entryCount = sizes.size;
+let peakReservationBytes = 0;
+let simulatedMs = 0;
+let simulatedReservation = 0;
+const simulated = values["fake-reservations"] || values["fake-commits"];
+if (simulated) {
+  assert(
+    values["reservation-counter"],
+    "Bind a writable fake counter over this filesystem's sysfs counter",
+  );
+  fs.writeFileSync(values["reservation-counter"], "0\n");
+}
+if (values["fake-commits"]) {
+  assert(values["commit-counter"] && !values["fake-reservations"]);
+  fs.writeFileSync(
+    values["commit-counter"],
+    "commits 0\ntotal_commit_ms 0\nlast_commit_ms 0\ncur_commit_ms 0\n",
+  );
+}
+const sampleReservation = () => {
+  if (values["reservation-counter"]) {
+    peakReservationBytes = Math.max(
+      peakReservationBytes,
+      Number(fs.readFileSync(values["reservation-counter"], "utf8")),
+    );
+  }
+};
 const batches: { entries: number; bytes: number; pauseMs: number; actualPauseMs: number }[] = [];
 let entries = 0;
 let bytes = 0;
@@ -60,6 +99,24 @@ const count = (target: fs.PathLike) => {
   entries++;
   bytes += sizes.get(name)!;
   sizes.delete(name);
+  if (values["fake-reservations"]) {
+    // Deliberately synthetic: 3 MiB reserved per entry, drained every 30s.
+    // This exercises feedback; it is not a calibrated btrfs cost model.
+    simulatedReservation += 3 * 1024 ** 2;
+    fs.writeFileSync(values["reservation-counter"]!, String(simulatedReservation));
+  }
+  if (values["fake-commits"]) {
+    // Below the 40 GiB watermark: one observed 600 ms commit per 8,192 unlinks.
+    const commits = Math.floor((entryCount - sizes.size) / 8192);
+    fs.writeFileSync(values["reservation-counter"]!, String(39.6 * 1024 ** 3));
+    fs.writeFileSync(
+      values["commit-counter"]!,
+      `commits ${commits}\ntotal_commit_ms ${commits * 600}\nlast_commit_ms ${commits ? 600 : 0}\ncur_commit_ms 0\n`,
+    );
+  }
+  if (entries % 128 === 0) {
+    sampleReservation();
+  }
 };
 fs.unlinkSync = (target) => {
   unlink(target);
@@ -79,7 +136,18 @@ fs.rmSync = (target, options) => {
 };
 timers.setTimeout = async (ms, value, options) => {
   const start = performance.now();
-  const result = await sleep(ms, value, options);
+  const result = await sleep(simulated ? 0 : ms, value, options);
+  if (simulated) {
+    const previousCommit = Math.floor(simulatedMs / 30_000);
+    simulatedMs += ms ?? 1;
+    if (values["fake-reservations"] && Math.floor(simulatedMs / 30_000) > previousCommit) {
+      simulatedReservation = 0;
+      fs.writeFileSync(values["reservation-counter"]!, "0\n");
+    }
+  }
+  if (values["fake-commits"] && ms === 30_000) {
+    fs.writeFileSync(values["reservation-counter"]!, String(19 * 1024 ** 3));
+  }
   batches.push({ entries, bytes, pauseMs: ms ?? 1, actualPauseMs: performance.now() - start });
   entries = 0;
   bytes = 0;
@@ -93,14 +161,36 @@ const allocation = getHeapStatistics().total_allocated_bytes;
 assert(Number.isFinite(allocation));
 const loadBefore = os.loadavg();
 const start = performance.now();
+sampleReservation();
+const sampler = setInterval(sampleReservation, 20);
+const worker = values.worker
+  ? pathToFileURL(path.resolve(values.worker)).href
+  : new URL("../../src/agents/worktrees/retired-worktree-cleanup.worker.js", import.meta.url).href;
+const passes: { elapsedMs: number; removed: number; yielded: boolean }[] = [];
+const exitCode = process.exitCode;
 try {
-  await import(
-    values.worker
-      ? pathToFileURL(path.resolve(values.worker)).href
-      : "../../src/agents/worktrees/retired-worktree-cleanup.worker.js"
-  );
+  do {
+    const passStart = performance.now();
+    const before = sizes.size;
+    process.exitCode = undefined;
+    await import(`${worker}?pass=${passes.length}`);
+    const yielded = process.exitCode === 75;
+    passes.push({
+      elapsedMs: performance.now() - passStart,
+      removed: before - sizes.size,
+      yielded,
+    });
+    if (!yielded) {
+      break;
+    }
+    process.argv[3] = "resume";
+    await timers.setTimeout(30_000);
+  } while (sizes.size);
 } finally {
+  clearInterval(sampler);
+  sampleReservation();
   process.argv = argv;
+  process.exitCode = exitCode;
   fs.unlinkSync = unlink;
   fs.rmdirSync = rmdir;
   fs.rmSync = rm;
@@ -120,6 +210,10 @@ const report = {
   elapsedMs,
   cpuMs: (used.user + used.system) / 1000,
   allocatedBytes,
+  peakReservationBytes,
+  passes,
+  maxPassMs: Math.max(...passes.map((pass) => pass.elapsedMs)),
+  simulatedMs: simulated ? simulatedMs : undefined,
   loadBefore,
   loadAfter: os.loadavg(),
   maxBatchEntries: Math.max(...batches.map((batch) => batch.entries)),

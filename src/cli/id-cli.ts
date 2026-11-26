@@ -1,6 +1,6 @@
 // `openclaw id`: OpenClaw ID remote access of the Gateway on this machine. `rebind`
-// moves the claw to new machine keys with its recovery kit; the Gateway accepts it only
-// from a direct-loopback client, never over the tunnel.
+// moves the claw to new machine keys with its recovery kit and `unlink` ends its link for
+// good; the Gateway accepts both only from a direct-loopback client, never over the tunnel.
 import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -18,6 +18,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
+import { describePendingUnlinks, runUnlink } from "./id-cli-unlink.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -48,7 +49,11 @@ const authority = (opts: IdCliOpts, params: Record<string, unknown>) =>
 
 type KeysStatus = {
   status?: { state?: string; key?: string; reason?: string };
-  link?: { linked?: boolean; hostname?: string };
+  link?: {
+    linked?: boolean;
+    hostname?: string;
+    pendingUnlinks?: Array<{ hostname: string; refused?: string }>;
+  };
 };
 type PeopleLink = {
   binding?: {
@@ -169,6 +174,7 @@ async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);
   }
+  lines.push(...describePendingUnlinks(status.link?.pendingUnlinks ?? []));
   if (link?.binding) {
     lines.push(
       `Binding: ${link.binding.bindingSeq} (Discovery has ${link.binding.publishedBindingSeq})`,
@@ -337,6 +343,18 @@ export function registerIdCli(program: Command) {
     });
     write(opts, result, JSON.stringify(result));
   });
+
+  addIdGatewayOptions(
+    id
+      .command("unlink")
+      .description(
+        "Unlink this claw from OpenClaw ID for good: members are removed and the name is retired (on this machine only)",
+      )
+      .option("--yes", "Skip the confirmation", false),
+  ).action(
+    async (opts: IdCliOpts & { yes?: boolean }) =>
+      await runUnlink(opts, (json, text) => write(opts, json, text)),
+  );
 
   applyParentDefaultHelpAction(id);
 }

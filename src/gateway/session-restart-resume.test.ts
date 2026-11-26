@@ -50,7 +50,7 @@ import {
   prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 
 it("requests original recorded custody only at the actual marked restart admission", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

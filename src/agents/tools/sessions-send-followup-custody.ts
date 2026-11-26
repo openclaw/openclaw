@@ -1,22 +1,14 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
-import {
-  resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
-} from "../../gateway/operator-role-policy.js";
+import { resolveGatewayOperatorRoleActor } from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 class FollowupAccessChangedError extends Error {}
 
@@ -34,22 +26,20 @@ export async function prepareSessionsSendFollowup(params: {
   if (!caller) {
     return undefined;
   }
-  const assertInvocation = captureGatewayToolCallerAssertion();
-  assertInvocation?.();
   if (
     caller.agentId !== params.requesterAgentId ||
     caller.sessionKey !== params.requesterSessionKey
   ) {
     throw new Error("Followup result requester differs from its admitted tool caller.");
   }
-  const captured = await captureOperatorToolGatewayContinuationContext();
+  const captured = await captureOperatorToolGatewayContinuationContext(undefined, {
+    retainRequester: true,
+  });
   if (!captured) {
     throw new Error("Followup completion requires in-process caller custody.");
   }
   const facts: Awaited<ReturnType<typeof prepareSessionMutationFacts>>[] = [];
-  const revoked = new AbortController();
-  const signal = AbortSignal.any([captured.signal, revoked.signal]);
-  let stopAccessWatch: (() => void) | undefined;
+  const signal = captured.signal;
   let released = false;
   let observationReleased = false;
   let authorityReleased = true;
@@ -59,7 +49,6 @@ export async function prepareSessionsSendFollowup(params: {
       return;
     }
     released = true;
-    stopAccessWatch?.();
     for (const read of facts) {
       read.release();
     }
@@ -74,7 +63,6 @@ export async function prepareSessionsSendFollowup(params: {
     releaseResources();
   };
   try {
-    assertInvocation?.();
     const cfg = getRuntimeConfig();
     const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
     const actor = resolveGatewayOperatorRoleActor(client ?? null);
@@ -93,13 +81,15 @@ export async function prepareSessionsSendFollowup(params: {
     if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
       throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
     }
-    assertInvocation?.();
     for (const target of [
-      { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey },
+      {
+        agentId: params.requesterAgentId,
+        sessionKey: params.requesterSessionKey,
+        followLifecycle: true,
+      },
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
-      assertInvocation?.();
       captured.assertCurrent();
     }
     const assertCurrent = () => {
@@ -108,17 +98,18 @@ export async function prepareSessionsSendFollowup(params: {
         throw new Error("Followup completion custody was released.");
       }
       captured.assertCurrent();
-      if (profile && !profile.isCurrent()) {
-        throw new FollowupAccessChangedError("Followup requester identity changed.");
-      }
-      const currentConfig = getRuntimeConfig();
       // The prepared reader owns canonical routing, physical store and incarnation fencing.
       for (const read of facts) {
-        const currentFacts = read.readCurrent(currentConfig);
-        const current = currentFacts.target;
+        const current = read.readCurrent(getRuntimeConfig()).target;
         if (!current?.entry || current.entry.archivedAt !== undefined) {
-          throw new FollowupAccessChangedError("Followup conversation was archived.");
+          throw new FollowupAccessChangedError("Followup conversation changed.");
         }
+      }
+    };
+    const admitTargets = () => {
+      const currentConfig = getRuntimeConfig();
+      for (const read of facts) {
+        const currentFacts = read.readCurrent(currentConfig);
         const denied = authorizePreparedSessionMutation(
           {
             cfg: currentConfig,
@@ -128,16 +119,11 @@ export async function prepareSessionsSendFollowup(params: {
           },
           currentFacts,
           {
+            // The role the sending turn was admitted with; a role change applies to its next turn.
             policy:
               actor.kind === "system"
                 ? undefined
-                : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
-                    profile?.role ?? null,
-                    currentConfig,
-                    profile?.githubLogin ?? null,
-                    operatorRoleSubject(profile),
-                  ),
+                : client.internal?.operatorRunAuthority?.readCurrentRoleFacts?.().policy,
             aliases: new Set(profile?.aliases ?? []),
           },
         );
@@ -146,26 +132,8 @@ export async function prepareSessionsSendFollowup(params: {
         }
       }
     };
+    admitTargets();
     assertCurrent();
-    const watchedKeys = new Set(
-      facts.flatMap((read) => {
-        const target = read.readCurrent(cfg).target;
-        return [target.canonicalKey, target.storeKey, ...target.storeKeys];
-      }),
-    );
-    stopAccessWatch = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && !watchedKeys.has(change.sessionKey)) {
-        return;
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        // Pending metadata remains fenced. A committed denial is irreversible for this capture.
-        if (error instanceof FollowupAccessChangedError) {
-          revoked.abort(error);
-        }
-      }
-    });
     const requesterSessionId = facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId;
     if (params.requesterTurnRunId && params.withRequesterAuthority) {
       const requesterTurnRunId = params.requesterTurnRunId;
@@ -202,6 +170,12 @@ export async function prepareSessionsSendFollowup(params: {
         run<T>(work: () => T): T {
           assertCurrent();
           return captured.run(work);
+        },
+        runWithRequester<T>(work: () => Promise<T>): Promise<T> {
+          assertCurrent();
+          return captured.requesterOrigin
+            ? captured.runWithRequester(work, params.requesterAgentId)
+            : captured.run(work);
         },
       },
     };

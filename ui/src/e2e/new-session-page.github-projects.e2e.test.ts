@@ -475,7 +475,7 @@ suite.define(() => {
         state: "error",
         errorMessage: failure,
       });
-      const alert = page.locator('.chat-error[role="alert"]');
+      const alert = page.locator('.chat-error--reply .app-toast__message[role="alert"]');
       await pollLocatorText(alert).toContain(failure);
       expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
         activeRunIds: [],

@@ -34,6 +34,7 @@ import {
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
+import * as sqliteWal from "./sqlite-wal.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateDatabaseGenerationsIsolated,
@@ -222,6 +223,79 @@ it("refuses restoration when its named live cohort pair is missing", async () =>
     });
     expect(getUpdateRun(fixture.run.runId, { env: fixture.state.env })?.status).toBe("running");
   });
+});
+
+it("restores databases back to the filesystem's WAL journal policy", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.restore();
+    // Snapshot images are single DELETE-journal files by design; leaving them in
+    // rollback-journal mode makes the next update's maintenance lease fail
+    // sqlite-busy against the updater's own readers and loops every retry.
+    for (const owner of [fixture.shared, fixture.agent]) {
+      using restored = new DatabaseSync(owner.path, { readOnly: true });
+      expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({
+        journal_mode: "wal",
+      });
+    }
+    // The client credential store's exclusive custody design requires DELETE mode;
+    // the WAL re-establishment must exclude it.
+    using credentials = new DatabaseSync(resolveClientCredentialStorePath(fixture.state.env), {
+      readOnly: true,
+    });
+    expect(credentials.prepare("PRAGMA journal_mode").get()).toEqual({
+      journal_mode: "delete",
+    });
+  });
+});
+
+it("completes credential rebinding when journal reconciliation fails", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-journal-reconcile-", scenario: "minimal" },
+    async (state) => {
+      runClientCredentialOperation(state.env, {
+        kind: "socket.ensure",
+        fallback: {
+          socket_key: "current",
+          socket_path: "/synthetic/native.sock",
+          socket_token: "synthetic-before-update",
+          updated_at_ms: 123,
+        },
+        requested: { token: "synthetic-before-update" },
+      });
+      const fixture = await createRestoreFixture(state);
+      const reportedFailures: string[][] = [];
+      // The normal-path test proves physical conversion. Here fail at its owner
+      // to keep real publication and credential recovery under test.
+      const fault = vi.spyOn(sqliteWal, "enableSqliteWalJournalMode").mockImplementation(() => {
+        throw new Error("injected journal conversion failure");
+      });
+      try {
+        const displaced = await restoreUpdateDatabaseBackup({
+          backup: fixture.backup,
+          runId: fixture.run.runId,
+          env: state.env,
+          assertCurrent() {},
+          onJournalReconciliationFailures: (failures) => {
+            reportedFailures.push([...failures]);
+          },
+        });
+        // Journal reconciliation is recoverable: the published restoration, its
+        // credential receipt rebinding, and the failure report all complete
+        // instead of the throw blocking Gateway restart.
+        expect(displaced).not.toBeNull();
+        expect(reportedFailures.flat().length).toBeGreaterThan(0);
+        using restored = new DatabaseSync(resolveClientCredentialStorePath(state.env), {
+          readOnly: true,
+        });
+        expect(
+          restored.prepare("SELECT socket_token FROM native_exec_socket_credentials").all(),
+        ).toEqual([{ socket_token: "synthetic-before-update" }]);
+      } finally {
+        fault.mockRestore();
+        await fixture.close();
+      }
+    },
+  );
 });
 
 it("captures and restores exact local daemon intent with its independent schema", async () => {

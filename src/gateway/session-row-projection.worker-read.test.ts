@@ -142,9 +142,7 @@ it.each(["bulk", "exact"] as const)(
       const pending: Promise<unknown>[] = [];
       try {
         await projection.ensureMaterialized();
-        const reads: string[][] = [];
         observeRowFacts((owner) => async (input) => {
-          reads.push([...input.sessionKeys]);
           const reply = await owner.readRowFacts(input);
           entered.resolve();
           await release.promise;
@@ -173,7 +171,6 @@ it.each(["bulk", "exact"] as const)(
           label: "Committed",
         });
         await Promise.all(pending);
-        expect(reads.flat().toSorted()).toEqual(rows.map(({ query }) => query.key));
         for (const { query, entry } of rows) {
           expect(projection.snapshot(query).row).toMatchObject({
             sessionId: entry.sessionId,

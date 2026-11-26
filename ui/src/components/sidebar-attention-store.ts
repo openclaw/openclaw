@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import { hasOperatorReadAccess, isRestrictedSessionGuest } from "../app/operator-access.ts";
@@ -7,22 +8,19 @@ import type {
   SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../lib/cron/inventory-connection.ts";
-import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
-import { createCronReadState, readCronStatus } from "../lib/cron/state.ts";
+import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
+import { readCompactCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
+  deferredCronFailurePrefix,
   dismissSidebarAttention,
+  hasDeferredCronFailure,
   isSidebarAttentionDismissed,
   loadDismissals,
   reconcileSidebarAttentionDismissals,
@@ -35,59 +33,55 @@ import {
   buildSidebarInboxEntries,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
-import {
-  type CronAttentionJob,
-  buildSidebarAttentionEntries,
-  cronOverdueAt,
-  compactCronAttentionJob,
-} from "./sidebar-attention-items.ts";
+import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
-import { retainedDismissals, resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import {
+  resolveSidebarHistoricalUpdateAttention,
+  resolveSidebarUpdateAttention,
+  retainedDismissals,
+} from "./sidebar-attention-update.ts";
 
 type SidebarAttentionOwner = {
   connectionRevision: number;
   dismissalKey: string | null;
 };
 
-function isCronAttentionJob(job: unknown): job is CronAttentionJob {
+type SidebarCronJob = Pick<CronCompactJob, "id" | "enabled"> & {
+  state: Pick<CronJob["state"], "lastRunStatus" | "lastStatus" | "autoDisabled">;
+};
+
+function isSidebarCronJob(job: unknown): job is SidebarCronJob {
   if (
     !isRecord(job) ||
     typeof job.id !== "string" ||
     !job.id ||
-    typeof job.name !== "string" ||
     typeof job.enabled !== "boolean" ||
-    typeof job.updatedAtMs !== "number" ||
-    (job.agentId !== undefined && typeof job.agentId !== "string") ||
     !isRecord(job.state)
   ) {
     return false;
   }
-  const state = job.state;
-  const disabled = state.autoDisabled;
+  const { lastRunStatus, lastStatus, autoDisabled } = job.state;
   return (
-    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
-      (value) =>
-        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
-    ) &&
-    [state.lastRunStatus, state.lastStatus].every(
+    [lastRunStatus, lastStatus].every(
       (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
     ) &&
-    (disabled === undefined ||
-      (isRecord(disabled) &&
-        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
-        typeof disabled.atMs === "number" &&
-        Number.isFinite(disabled.atMs) &&
-        disabled.atMs >= 0 &&
-        typeof disabled.consecutiveErrors === "number" &&
-        Number.isSafeInteger(disabled.consecutiveErrors) &&
-        disabled.consecutiveErrors > 0))
+    (autoDisabled === undefined ||
+      (isRecord(autoDisabled) &&
+        (autoDisabled.reason === "consecutive-failures" ||
+          autoDisabled.reason === "schedule-errors") &&
+        typeof autoDisabled.atMs === "number" &&
+        Number.isFinite(autoDisabled.atMs) &&
+        autoDisabled.atMs >= 0 &&
+        typeof autoDisabled.consecutiveErrors === "number" &&
+        Number.isSafeInteger(autoDisabled.consecutiveErrors) &&
+        autoDisabled.consecutiveErrors > 0))
   );
 }
 
 export class SidebarAttentionStoreOwner implements StoreOwner {
   readonly mentions: MentionsCapability;
-  #cronJobs: CronAttentionJob[] = [];
-  #cronSchedulerEnabled: boolean | null = null;
+  readonly #healthyCronJobIds = new Set<string>();
+  readonly #failedCronJobIds = new Set<string>();
   #modelAuthStatus: ModelAuthStatusResult | null = null;
   #modelAuthAgentId: string | null = null;
   #modelAuthRefreshAt?: number;
@@ -99,6 +93,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   #dismissalKey: string | null = null;
   #dismissed: SidebarAttentionDismissals = {};
+  #cronDismissalImport: { key: string; client: GatewayBrowserClient } | null = null;
   readonly #reviewedOutbox = new Set<string>();
   #loadGeneration = 0;
   #cronRefresh: { generation: number; requested: boolean } | null = null;
@@ -128,16 +123,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         if (event.event === "openclawId.people.changed") {
           this.refreshOpenClawId();
         } else if (event.event === "cron") {
-          if (
-            !this.#applyCronEvent(event.payload) &&
-            !hasCronInventoryEvents(sources.gateway.snapshot)
-          ) {
-            this.#load(false);
-          }
+          this.#applyCronEvent(event.payload);
           if (document.visibilityState === "hidden") {
             this.#cronRefreshNeeded = true;
           }
-        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
+        } else if (isCronInventoryInvalidation(event)) {
           this.#load(false);
         } else if (
           modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)
@@ -181,6 +171,10 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     );
   }
 
+  get hasFailedAutomation(): boolean {
+    return this.#failedCronJobIds.size > 0;
+  }
+
   #owner(): SidebarAttentionOwner {
     return {
       connectionRevision: this.sources.gateway.connectionRevision,
@@ -195,11 +189,15 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     );
   }
 
+  #clearCronJobs(): void {
+    this.#healthyCronJobIds.clear();
+    this.#failedCronJobIds.clear();
+  }
+
   #clearHealth(): void {
     this.#openClawIdReadGeneration += 1;
     this.#openClawIdAttention = null;
-    this.#cronJobs = [];
-    this.#cronSchedulerEnabled = null;
+    this.#clearCronJobs();
     this.#cronRetryAt = undefined;
     this.#modelAuthStatus = null;
     this.#modelAuthAgentId = null;
@@ -225,15 +223,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.#load(refreshAuth, retryCron);
       return;
     }
-    let refreshAt = Math.min(this.#modelAuthRefreshAt ?? Infinity, this.#cronRetryAt ?? Infinity);
-    refreshAt = Math.min(refreshAt, this.#openClawIdAttention?.nextChangeAt(now) ?? Infinity);
-    for (const job of this.#cronJobs) {
-      // Overdue uses a strict comparison; notify on the first millisecond after it.
-      const overdueAt = Math.floor(cronOverdueAt(job, this.#cronSchedulerEnabled)) + 1;
-      if (overdueAt > now) {
-        refreshAt = Math.min(refreshAt, overdueAt);
-      }
-    }
+    const refreshAt = Math.min(
+      this.#modelAuthRefreshAt ?? Infinity,
+      this.#cronRetryAt ?? Infinity,
+      this.#openClawIdAttention?.nextChangeAt(now) ?? Infinity,
+    );
     if (!Number.isFinite(refreshAt)) {
       return;
     }
@@ -243,24 +237,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         this.#scheduleHealthRefresh();
       },
       Math.min(2_147_483_647, refreshAt - now),
-    );
-  }
-
-  #cronOwnerByJobId(): ReadonlyMap<string, string> | undefined {
-    const selection = this.sources.agentSelection.state;
-    const roster = this.sources.agents.state.agentsList;
-    if (selection.scopeId !== null || !roster) {
-      return undefined;
-    }
-    const namesByAgentId = new Map(
-      roster.agents.map((agent) => [normalizeAgentId(agent.id), normalizeAgentLabel(agent)]),
-    );
-    const defaultId = normalizeAgentId(roster.defaultId);
-    return new Map(
-      this.#cronJobs.map((job) => {
-        const ownerId = normalizeAgentId(job.agentId ?? defaultId);
-        return [job.id, namesByAgentId.get(ownerId) ?? ownerId];
-      }),
     );
   }
 
@@ -298,6 +274,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
+    const historicalUpdate = resolveSidebarHistoricalUpdateAttention(this.sources);
     // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
     const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
       ? null
@@ -306,16 +283,17 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
           state: this.sources.scopeUpgrade.state,
         });
     const attention = buildSidebarAttentionEntries({
-      cronJobs: this.#cronJobs,
-      cronSchedulerEnabled: this.#cronSchedulerEnabled,
-      cronOwnerByJobId: this.#cronOwnerByJobId(),
       modelAuthStatus: this.#modelAuthStatus,
       modelAuthAgentId: this.#modelAuthAgentId,
       now,
     });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
-      attention: [...attention, ...(this.#openClawIdAttention?.items(now) ?? [])],
+      attention: [
+        ...attention,
+        ...(historicalUpdate ? [historicalUpdate] : []),
+        ...(this.#openClawIdAttention?.items(now) ?? []),
+      ],
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
@@ -323,66 +301,42 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
   }
 
-  #reconcileDismissals(scope: {
-    cronInventoryComplete: boolean;
-    modelAuthAgentId: string | null;
-  }): void {
+  #reconcileDismissals(modelAuthAgentId: string): void {
     if (!this.#dismissalKey) {
       return;
     }
     this.#dismissed = reconcileSidebarAttentionDismissals({
       active: this.#buildEntries().flatMap(retainedDismissals),
       key: this.#dismissalKey,
-      scope,
+      scope: { modelAuthAgentId },
     });
   }
 
-  #applyCronEvent(payload: unknown): boolean {
+  #applyCronEvent(payload: unknown): void {
     // A pending/partial inventory still needs its trailing read. Applying an event
     // there would let an older page overwrite it or certify missing rows.
     if (
       this.#cronRefresh ||
       this.#cronRefreshNeeded ||
-      this.#cronSchedulerEnabled === null ||
       !isGatewayAvailable(this.sources.gateway.snapshot) ||
       document.visibilityState === "hidden" ||
       !isRecord(payload) ||
       typeof payload.action !== "string" ||
       !["removed", "started", "finished", "scheduled"].includes(payload.action) ||
-      !isCronAttentionJob(payload.job) ||
+      !isSidebarCronJob(payload.job) ||
       payload.jobId !== payload.job.id
     ) {
-      return false;
+      return;
     }
     const job = payload.job;
-    const scopeId = this.sources.agentSelection.state.scopeId;
-    const index = this.#cronJobs.findIndex((entry) => entry.id === job.id);
-    // Events do not establish list membership: even All agents can be access-
-    // filtered, and completion can carry a removed job's historical snapshot.
-    if (index < 0) {
-      return false;
+    // Only the scoped inventory establishes membership. A late completion can name a removed job.
+    if (!this.#failedCronJobIds.delete(job.id) && !this.#healthyCronJobIds.delete(job.id)) {
+      return;
     }
-    if (payload.action === "removed") {
-      this.#cronJobs.splice(index, 1);
-    } else {
-      const { id, name, agentId, enabled, updatedAtMs } = job;
-      const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
-        job.state;
-      // Retain attention facts only; event jobs also contain full task payloads.
-      const attention = {
-        id,
-        name,
-        agentId,
-        enabled,
-        updatedAtMs,
-        state: { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled },
-      };
-      this.#cronJobs[index] = attention;
+    if (payload.action !== "removed") {
+      (isCronJobActiveFailure(job) ? this.#failedCronJobIds : this.#healthyCronJobIds).add(job.id);
     }
-    this.#reconcileDismissals({ cronInventoryComplete: scopeId === null, modelAuthAgentId: null });
-    this.#scheduleHealthRefresh();
     this.onChange();
-    return true;
   }
 
   #load(refreshModelAuth = true, refreshCron = true): void {
@@ -408,19 +362,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.sources.gateway.snapshot.client === client &&
       this.#ownerEquals(owner, this.#owner()) &&
       this.sources.agentSelection.state.scopeId === agentScope.scopeId;
-    const publishSource = (scope: {
-      cronInventoryComplete: boolean;
-      modelAuthAgentId: string | null;
-    }) => {
-      if (!current()) {
-        return;
-      }
-      this.#reconcileDismissals(scope);
-      this.#scheduleHealthRefresh();
-      this.onChange();
-    };
-    // Deferring dispatch still invalidates the pending inventory: its stale
-    // response must not retire dismissals saved since the request began.
     if (refreshCron && this.#cronRefresh?.generation === generation) {
       this.#cronRefresh.requested = true;
     }
@@ -434,55 +375,36 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       const canRefreshCron = () => current() && document.visibilityState !== "hidden";
       const run = async () => {
         try {
-          // One scope owns both reads. Events during either read request one
-          // trailing inventory; retired scopes never drain queued network work.
+          // Events during a read request one trailing inventory. Retired scopes
+          // never drain queued network work.
           while (refresh.requested && current()) {
             if (!canRefreshCron()) {
               this.#cronRefreshNeeded = true;
               break;
             }
             refresh.requested = false;
-            const cron = createCronReadState<CronCompactJob>({ client, connected: true });
-            cron.canRefresh = canRefreshCron;
-            cron.cronAgentId = agentScope.scopeId;
-            // The Inbox consumes the whole inventory, rather than one table page.
-            cron.cronJobsLimit = 200;
-            const [, status] = await Promise.all([
-              loadCompactCronJobsPage(cron),
-              readCronStatus(client).catch(() => null),
-            ]);
-            while (
-              canRefreshCron() &&
-              cron.cronJobsHasMore &&
-              !cron.cronJobsError &&
-              !refresh.requested
-            ) {
-              await loadCompactCronJobsPage(cron, { append: true });
-            }
+            const inventory = await readCompactCronInventory(
+              client,
+              { agentId: agentScope.scopeId ?? undefined },
+              { canRead: canRefreshCron },
+            ).catch(() => null);
             if (current()) {
-              const failed = Boolean(cron.cronJobsError || !status);
-              this.#cronRefreshNeeded ||= failed;
-              this.#cronRetryAt = failed ? Date.now() + 60_000 : undefined;
-              if (!cron.cronJobsError && !cron.cronJobsHasMore) {
-                this.#cronJobs = cron.cronJobs.map(compactCronAttentionJob);
+              this.#cronRefreshNeeded = !inventory || !canRefreshCron();
+              this.#cronRetryAt = inventory ? undefined : Date.now() + 60_000;
+              if (inventory && !this.#cronRefreshNeeded) {
+                // Publish membership only after the shared inventory has validated every wire page.
+                // Runtime events need job IDs and failure state, never the table's sorted rows.
+                this.#clearCronJobs();
+                for (const { id, enabled, lastRunStatus, autoDisabled } of inventory.jobs) {
+                  const failed = isCronJobActiveFailure({
+                    enabled,
+                    state: { lastRunStatus: lastRunStatus ?? undefined, autoDisabled },
+                  });
+                  (failed ? this.#failedCronJobIds : this.#healthyCronJobIds).add(id);
+                }
               }
-              if (status !== null) {
-                this.#cronSchedulerEnabled = status.enabled ?? null;
-              }
-              publishSource({
-                // Keep progress visible under sustained events, but only a fresh,
-                // successful inventory can establish absence and retire dismissals.
-                cronInventoryComplete:
-                  agentScope.scopeId === null &&
-                  !cron.cronJobsHasMore &&
-                  !refresh.requested &&
-                  !cron.cronJobsError &&
-                  status !== null,
-                modelAuthAgentId: null,
-              });
-              if (cron.cronJobsHasMore && !canRefreshCron()) {
-                this.#cronRefreshNeeded = true;
-              }
+              this.#scheduleHealthRefresh();
+              this.onChange();
             }
           }
         } finally {
@@ -518,11 +440,14 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
             while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (currentAuth() && status) {
+              // An unavailable catalog cannot establish that a dismissed warning has cleared.
+              if (currentAuth() && status && !status.unavailable) {
                 this.#modelAuthStatus = status;
                 this.#modelAuthAgentId = agentId;
                 this.#modelAuthRefreshAt = nextModelAuthStatusRefreshAt(status);
-                publishSource({ cronInventoryComplete: false, modelAuthAgentId: agentId });
+                this.#reconcileDismissals(agentId);
+                this.#scheduleHealthRefresh();
+                this.onChange();
               }
             }
           } finally {
@@ -577,6 +502,41 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
   }
 
+  async #importCronDismissals(): Promise<void> {
+    const gateway = this.sources.gateway;
+    const { client } = gateway.snapshot;
+    const key = resolveSidebarAttentionKey(gateway);
+    const revision = gateway.connectionRevision;
+    const isCurrent = () =>
+      !this.#disposed &&
+      gateway.snapshot.client === client &&
+      gateway.connectionRevision === revision &&
+      resolveSidebarAttentionKey(gateway) === key &&
+      isGatewayAvailable(gateway.snapshot) &&
+      hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+    if (
+      !client ||
+      !key ||
+      !isCurrent() ||
+      (this.#cronDismissalImport?.key === key && this.#cronDismissalImport.client === client) ||
+      (!this.#dismissed.cronFailed?.length && !hasDeferredCronFailure(key))
+    ) {
+      return;
+    }
+    const pending = { key, client };
+    this.#cronDismissalImport = pending;
+    try {
+      const { importCronFailureDismissals } = await import("./sidebar-cron-failure-dismissals.ts");
+      await importCronFailureDismissals(client, key, isCurrent);
+    } catch {
+      // The browser records remain available if the lazy import fails.
+    } finally {
+      if (this.#cronDismissalImport === pending) {
+        this.#cronDismissalImport = null;
+      }
+    }
+  }
+
   #synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
     const scope = gatewayPresentationScope(this.sources.gateway);
@@ -593,7 +553,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       (snapshot.phase !== "connected" || identityPending) && !identityChanged
         ? this.#dismissalKey
         : resolveSidebarAttentionKey(this.sources.gateway);
-    if (key !== this.#dismissalKey) {
+    const dismissalKeyChanged = key !== this.#dismissalKey;
+    if (dismissalKeyChanged) {
       this.#dismissalKey = key;
       this.#dismissed = loadDismissals(key);
     }
@@ -628,6 +589,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.#scheduleHealthRefresh();
       return;
     }
+    if (dismissalKeyChanged || snapshot.client !== this.loadedClient) {
+      void this.#importCronDismissals();
+    }
     const owner = this.#owner();
     const agentScope = this.sources.agentSelection.state;
     const ownerChanged =
@@ -650,7 +614,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       snapshot.client === this.loadedClient &&
       agentScope.scopeId === this.loadedAgentScope.scopeId
     ) {
-      // Chat selection changes auth ownership, not the Inbox inventory's filter.
+      // Chat selection changes auth ownership, not the Automations filter.
       this.#modelAuthStatus = null;
       this.#modelAuthAgentId = null;
       this.#load(true, false);
@@ -664,7 +628,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       scopeChanged = true;
     }
     if (agentScope.scopeId !== this.loadedAgentScope.scopeId) {
-      this.#cronJobs = [];
+      this.#clearCronJobs();
       scopeChanged = true;
     }
     if (scopeChanged) {
@@ -691,8 +655,12 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   };
 
   readonly #syncDismissalsFromStorage = (event: StorageEvent) => {
-    if (this.#dismissalKey && (event.key === null || event.key === this.#dismissalKey)) {
+    const key = this.#dismissalKey;
+    if (key && (event.key === null || event.key === key)) {
       this.syncDismissals();
+      void this.#importCronDismissals();
+    } else if (key && event.key?.startsWith(deferredCronFailurePrefix(key))) {
+      void this.#importCronDismissals();
     }
   };
 

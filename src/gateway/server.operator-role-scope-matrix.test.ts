@@ -366,7 +366,7 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
           )
         : await settled(sendChatAndWait(connected.client, ownKey, marker, 20_000));
       if (readerAssignment) {
-        expect(sent).toEqual({ ok: false, error: "missing scope: operator.write" });
+        expect(sent).toEqual({ ok: false, error: `Session "${ownKey}" was not found.` });
       }
       return {
         scopes: connected.scopes,
@@ -409,10 +409,13 @@ function expected(row: Row, column: Column) {
       ? PRESET
       : member && column === "assignment"
         ? ["operator.read"]
-        : restricted
-          ? // Pinned base operator-scope-compat.ts: operator.write grants requested talk.
-            [...RW, "operator.talk"]
-          : ALL;
+        : row === "member"
+          ? // A tunnel member connects with its role's scopes, whatever it asked for.
+            RW
+          : restricted
+            ? // Pinned base operator-scope-compat.ts: operator.write grants requested talk.
+              [...RW, "operator.talk"]
+            : ALL;
   const send = !(member && column === "assignment");
   return {
     connected: true,

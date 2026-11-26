@@ -86,7 +86,7 @@ it("replaces optional welcome actions with plugin starters and keeps them unsent
   expect(page.textContent).toContain("This plugin adds useful capabilities.");
   expect(page.textContent).not.toContain(greeting.reply);
   expect(query("openclaw-option-card")).toBeNull();
-  expect(reveal).toHaveBeenLastCalledWith({ block: "nearest" });
+  await waitForFast(() => expect(reveal).toHaveBeenLastCalledWith({ block: "nearest" }));
 });
 
 it("preserves an existing conversation and draft when a plugin becomes selected", async () => {

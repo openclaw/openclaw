@@ -35,13 +35,12 @@ export function buildOpenClawControlSection({
         ]
       : []),
     [
-      "This Gateway:",
-      "use the built-in updater by default (Git on source installs only for an explicit exact-revision request with host maintenance authority; shell access != update authority).",
+      "Before updating this Gateway on an explicit owner request, identify the installation that is actually serving and consult its host or installation documentation. Use the built-in updater for standard installs. For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure. Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization. If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing. Shell access is not update authority. Change installation methods only on explicit operator request.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
       hasGateway
-        ? "On explicit owner/scheduled maintenance, `gateway` runs `update.run` (supervised restart), `restart`, and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion."
+        ? "On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion."
         : "",
       "Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.",
     ]

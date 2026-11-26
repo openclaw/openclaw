@@ -485,7 +485,7 @@ it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
   const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
   expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
+  expect(() => parseV2({ ...validBundleV2, schemaVersion: 3 })).toThrow();
 });
 
 it("limits configured-origin discovery to owned runtime catalogs", () => {

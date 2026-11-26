@@ -6,71 +6,21 @@
 // Logical VFS page spans include repeats; OS cache and physical I/O are not controlled.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
-import { once } from "node:events";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
-import { isMainThread, parentPort, Worker, type MessagePort } from "node:worker_threads";
+import { isMainThread, parentPort, type MessagePort } from "node:worker_threads";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { ChatHistoryPageCursor } from "../../src/config/sessions/session-history-types.js";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 // Exercise dispatch's worker reader with the same host-owned SQLite write receipts.
 if (isMainThread) {
-  const worker = new Worker(new URL(import.meta.url), { argv: process.argv.slice(2) });
-  let relay:
-    | ReturnType<
-        typeof import("../../src/infra/sqlite-worker-operation-admission.js").createSqliteDatabaseAdmissionRelay
-      >
-    | undefined;
-  try {
-    const exited = new Promise<number>((resolve, reject) => {
-      worker.once("error", reject);
-      worker.once("exit", resolve);
-    });
-    const admitted = (async () => {
-      const [storePath] = await once(worker, "message");
-      const {
-        prepareOwnedSqliteDatabaseAdmission,
-        captureSqliteDatabaseAdmissions,
-        trackSqliteDatabaseAdmissionWorker,
-      } = await import("../../src/infra/sqlite-database-admission.js");
-      const { createSqliteDatabaseAdmissionRelay } =
-        await import("../../src/infra/sqlite-worker-operation-admission.js");
-      const { readDatabaseIdentityBirthtime } =
-        await import("../../src/infra/sqlite-worker-identity.js");
-      const location = realpathSync.native(storePath);
-      const file = statSync(location, { bigint: true });
-      await prepareOwnedSqliteDatabaseAdmission({
-        location,
-        expectedIdentity: {
-          key: `file:${file.dev}:${file.ino}`,
-          birthtime: readDatabaseIdentityBirthtime(file),
-        },
-        assertCurrent() {},
-      });
-      const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
-      assert(record);
-      relay = createSqliteDatabaseAdmissionRelay(() => {});
-      relay.bindDatabaseAuthority({
-        databasePath: record.location,
-        databaseIdentity: { ...record.physicalIdentity, databasePath: record.location },
-        assertAccess() {},
-        acquireSchema() {
-          throw new Error("Synthetic reader must not acquire schema custody");
-        },
-      });
-      trackSqliteDatabaseAdmissionWorker(worker);
-      worker.postMessage(relay.port, [relay.port]);
-    })();
-    const [code] = await Promise.all([exited, admitted]);
-    process.exitCode = code;
-  } finally {
-    await relay?.finish();
-  }
+  const { runPerfSqliteWorker } = await import("../lib/perf-sqlite-worker.ts");
+  await runPerfSqliteWorker(new URL(import.meta.url), process.argv.slice(2));
   process.exit(process.exitCode ?? 0);
 }
 

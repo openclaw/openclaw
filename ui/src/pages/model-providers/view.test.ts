@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { resolveDefaultModelPresentation } from "./data.ts";
-import { card, mount, props, settingsRow, text } from "./view.test-support.tsx";
+import { resolveDefaultModelPresentation, type ModelProviderCard } from "./data.ts";
+import { card, mount, openMoreSettings, props, settingsRow, text } from "./view.test-support.tsx";
 
 function expand(container: Element, providerId = "openai"): Element {
   container
@@ -219,7 +219,6 @@ describe("renderModelProviders", () => {
   it("surfaces a provider-usage failure on the provider list", () => {
     const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
-    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([
@@ -263,22 +262,27 @@ describe("renderModelProviders", () => {
       container.querySelector('.model-providers__catalog-progress[role="alert"]');
     // Providers that failed discovery still get a row; none is connected on a fresh install.
     const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
-    const fresh = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
-    );
-    const configured = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
+    const view = (cards: ModelProviderCard[], primary: string) =>
+      mount(
+        props({
+          cards,
+          configuredModels: [],
+          thinkingOverridden: false,
+          fastModeOverridden: false,
+          defaultModels: { primary, fallbacks: [], utilityModel: null },
+          catalogDiscoveryError: failure,
+        }),
+      );
+    const fresh = view([unconnected], "");
+    const configured = view([unconnected], "openai/gpt-5.5");
+    // Saved credentials with no default yet: the listing failure is why nothing works.
+    const signedIn = view(
+      [card({ profiles: [{ profileId: "a", type: "oauth", status: "ok" }] })],
+      "",
     );
     await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
-    // Both views settled the same way; only the set-up one reports the failure.
+    await waitForFast(() => expect(alert(signedIn)?.textContent).toContain(failure));
+    // All settled the same way; only the fresh install keeps quiet.
     expect(alert(fresh)).toBeNull();
   });
 
@@ -354,6 +358,7 @@ describe("renderModelProviders", () => {
 
   it("keeps decision model help behind the standard info button", () => {
     const container = mount(props());
+    openMoreSettings(container);
     const row = settingsRow(container, "Decision model");
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
@@ -629,36 +634,32 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("9145");
   });
 
-  it("puts model recovery first when credentials expose no selectable models", () => {
-    const onConnectProvider = vi.fn();
+  it("leads a new user with the provider catalog and holds defaults until a model exists", () => {
+    const onCatalogConnect = vi.fn();
+    const openai = { id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] };
     const container = mount(
       props({
-        cards: [
-          card({
-            auth: { kind: "ok" },
-            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
-            modelCount: 0,
-            availableModelCount: 0,
-          }),
-        ],
+        cards: [],
         configuredModels: [],
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        onConnectProvider,
+        thinkingOverridden: false,
+        fastModeOverridden: false,
+        catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
+        onCatalogConnect,
       }),
     );
-
-    const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain(t("modelProviders.login.action"));
-    expect(text(readiness)).toContain("Model required");
+    const catalog = container.querySelector("[data-models-catalog]");
+    expect(text(catalog)).toContain(t("modelProviders.catalog.firstTitle"));
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    button(catalog!, "Connect")?.click();
+    expect(onCatalogConnect).toHaveBeenCalledWith("openai");
+    // Connected: the catalog moves below as "Add a provider" and marks the provider in use.
+    mount(props({ catalogProviders: [openai] }), container);
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-    // Setup has one way to connect; the access section offers its own again once it ends.
-    expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
-
-    button(readiness!, "Add account")?.click();
-    expect(onConnectProvider).toHaveBeenCalledOnce();
-
-    mount(props(), container);
-    expect(container.querySelector("[data-model-readiness]")).toBeNull();
+    const later = container.querySelector("[data-models-catalog]");
+    expect(text(later)).toContain(t("modelProviders.catalog.title"));
+    const openaiRow = later?.querySelector('[data-models-catalog-provider="openai"] p');
+    expect(text(openaiRow ?? null)).toContain("Connected");
   });
 
   it.each([true])(
@@ -817,6 +818,7 @@ describe("renderModelProviders", () => {
           automaticUtilityModel,
         }),
       );
+      openMoreSettings(automatic);
       await updatePickers(automatic);
       await openPicker(automatic.querySelector("openclaw-select-picker")!);
       expect(
@@ -824,14 +826,11 @@ describe("renderModelProviders", () => {
           .querySelector('[role="option"][data-value="opus"]')
           ?.getAttribute("aria-selected") === "true",
       ).toBe(true);
-      await openPicker(
-        automatic.querySelectorAll<HTMLElement>(
-          ".model-providers__defaults openclaw-select-picker",
-        )[2]!,
-      );
-      const automaticOption = automatic
-        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
-        ?.querySelector('[role="option"][aria-selected="true"]');
+      const utilityPicker = automatic
+        .querySelector("#model-providers-utility-model")!
+        .closest<HTMLElement>("openclaw-select-picker")!;
+      await openPicker(utilityPicker);
+      const automaticOption = utilityPicker.querySelector('[role="option"][aria-selected="true"]');
       expect(text(automaticOption?.querySelector(".picker-select__label") ?? null)).toBe("Auto");
       expect(text(automaticOption?.querySelector(".picker-select__description") ?? null)).toBe(
         automaticUtilityModel === null ? "No recommended small model" : "",
@@ -844,30 +843,22 @@ describe("renderModelProviders", () => {
         }),
       );
       await updatePickers(disabled);
-      await openPicker(
-        disabled.querySelectorAll<HTMLElement>(
-          ".model-providers__defaults openclaw-select-picker",
-        )[2]!,
+      const disabledPicker = disabled
+        .querySelector("#model-providers-utility-model")!
+        .closest<HTMLElement>("openclaw-select-picker")!;
+      await openPicker(disabledPicker);
+      expect(text(disabledPicker.querySelector('[role="option"][aria-selected="true"]'))).toBe(
+        "Disabled",
       );
-      expect(
-        text(
-          disabled
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
-            ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
-        ),
-      ).toBe("Disabled");
     },
   );
 
   async function utilityOption(container: HTMLElement, value: string) {
-    await openPicker(
-      container.querySelectorAll<HTMLElement>(
-        ".model-providers__defaults openclaw-select-picker",
-      )[2]!,
-    );
-    const option = container
-      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
-      ?.querySelector(`[role="option"][data-value="${value}"]`);
+    const picker = container
+      .querySelector("#model-providers-utility-model")!
+      .closest<HTMLElement>("openclaw-select-picker")!;
+    await openPicker(picker);
+    const option = picker.querySelector(`[role="option"][data-value="${value}"]`);
     return {
       label: text(option?.querySelector(".picker-select__label") ?? null),
       detail: text(option?.querySelector(".picker-select__description") ?? null),

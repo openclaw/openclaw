@@ -17,8 +17,8 @@ aligned:
 
 - `dev` -> creates or reuses a git checkout (default `~/openclaw`, or
   `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
-  `OPENCLAW_GIT_DIR`), updates it, and installs the global CLI from that
-  checkout.
+  `OPENCLAW_GIT_DIR`) and builds its first release. The checkout stays the
+  source. The CLI runs the release link; the service starts through the release launcher.
 - `stable` -> installs from npm using `latest`.
 - `extended-stable` -> resolves the public npm `extended-stable` selector,
   verifies the exact selected package, and installs that exact version. It
@@ -100,18 +100,28 @@ The seven-second collection budget is unchanged. Updated Gateways also avoid
 reporting collection timeouts as negative probes to older updaters, although those
 updaters cannot add the new warning to their update reports.
 
-If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
+If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git release is already current and its runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Git currentness checks compare the selected source with the running release, not just the checkout's `HEAD`.
 Runtime maintenance can therefore succeed without changing the Git revision.
 A same-version explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
-If a Git checkout advanced without rebuilding or its runtime has missing or unverified artifacts, the matching source revision still needs an update.
+If a Git runtime has missing or unverified artifacts, matching source alone does not make it current.
 Verification checks the build commit, both build stamps, runtime entry, Control UI assets, version, and build identity.
-OpenClaw builds and validates a separate candidate, then stops the managed Gateway before replacing the runtime and restarting it.
-The new build records its commit, so the next update can finish as already current.
-`--no-restart` cannot replace runtime files used by a running Gateway in the same
-installation; the update leaves those files intact and reports the process and
-the stop/retry action.
+OpenClaw builds and validates a separate release without replacing the checkout's runtime.
+The running Gateway keeps its release. The next start uses the release selected by the launcher.
+With `--no-restart`, the new release stays pending until the next service start.
+The update does not rewrite a managed service that still starts the checkout's
+`dist/index.js` or `openclaw.mjs`. It leaves a forwarding marker in the checkout
+(`.git/openclaw-launcher`, or `.openclaw-launcher` in a linked worktree), so that
+entry starts the release launcher. `openclaw gateway status`, `openclaw doctor --fix`
+and `openclaw update repair` treat that service as this installation's, serving the
+release the launcher selects, and leave its definition unchanged.
+A package install's managed service that still starts the old package is staged
+onto the release launcher without starting or restarting the Gateway. Linux reloads
+systemd's unit metadata without restarting the unit; macOS reloads the staged plist
+on the next OpenClaw restart or login; Windows runs the updated task script on its
+next start. If staging fails, update history records the service-definition refresh
+as owed.
 
 Stopping another Gateway that shares this installation protects its running
 code; it does not migrate that Gateway's separate state. If its older state
@@ -163,6 +173,19 @@ June Gateways, this also requires a live legacy lock and local listener matching
 the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
+
+Two layouts run the Gateway as the direct child of a launcher that is the
+service's main process: a release install, whose service runs
+`~/.openclaw/git-install/openclaw-launcher.mjs`, and a service whose Node fails
+the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
+finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
+drain, which Doctor and `openclaw update repair` also use, accepts the child as
+the service's Gateway only when every listener on the Gateway port is that
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
 
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a
@@ -432,7 +455,7 @@ result. The installed updater owns these announcements, so an older updater gain
 them on its next update after installing this version.
 
 Plugin dependency inventory skips incidental Git runtime transaction directories
-named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
+left by older in-place updaters, named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
 contents stay untouched; explicitly referenced dependencies still undergo normal
 validation. Other temporary directories remain plugin inputs. This prevents an
 abandoned transaction's relocated links from blocking an unrelated update.
@@ -505,7 +528,7 @@ for the private state copy (`candidate-state-snapshot`), the rehearsal Doctor
 (`candidate-doctor`), the test Gateway startup (`candidate-gateway-startup`), and
 temporary-copy removal (`candidate-state-cleanup`), including Git updates. Activation
 also records `post-stop-checks` (the schema, artifact, and configuration checks after the
-Gateway stops) and `git-runtime-activation`. Each Doctor the updater launches adds one
+Gateway stops). Each Doctor the updater launches adds one
 `Doctor sections: …` diagnostic with its database preflight, configuration, and
 contribution times, plus the slowest contributions. Run history keeps these rows when
 older diagnostics are trimmed. The updater that is already installed records these
@@ -774,9 +797,9 @@ candidate. The candidate preserves that wire protocol and returns repair
 unavailable without loading inference or changing operator state. The installed
 updater still owns that first hop and its failure reporting.
 
-Only `activating` stops the managed service. Its offline work includes the package
-or checkout swap, required `doctor --fix` migrations, and state compatibility
-inspection, followed by service start
+For mutable package updates, `activating` stops the managed service. Its offline
+work includes package replacement, required `doctor --fix` migrations, and state
+compatibility inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 successful health checks and a Gateway hello handshake matching the
@@ -807,8 +830,12 @@ ownership, restarts through the service owner, and verifies normal readiness.
 Successful recovery completes with a warning and retains package backups for
 `openclaw update repair`. Failed startup reports its concrete error and directs
 you to `openclaw update repair` and `openclaw gateway status --deep`.
-Only named data risks, such as unsettled Doctor writers or unverified migrated
-state, instruct you to keep the Gateway stopped.
+A named data risk, such as unverified migrated state, is reported as unverified:
+the report states whether the Gateway is running or stopped and which version is
+installed, and names `openclaw update repair`, which checks the state before it
+starts the Gateway (see
+[Recorded data risk](/cli/update/repair-and-recovery#recorded-data-risk)).
+Unsettled Doctor writers still require you to stop the recorded processes first.
 
 On Windows, recovery re-enables the Scheduled Task before starting the Gateway
 and retains that recovery handle until final readiness verification completes.
@@ -1245,9 +1272,9 @@ before starting the updater. Stop the Gateway, run `openclaw update`, and start
 it again, or relaunch it without `OPENCLAW_NO_RESPAWN` to allow control-plane updates.
 
 Each requested update checks the current local installation and Git upstream
-before accepting its target. After a pinned Git update leaves the checkout
-detached, a verified update receipt preserves the upstream for that same checkout
-and revision. Startup status discovery does not freeze later update requests.
+before accepting its target. Git updates build a detached release worktree;
+they do not detach the source checkout. Startup status discovery does not freeze
+later update requests.
 
 A foreground replacement can still be starting when the initial readiness
 observation ends. OpenClaw leaves that process running and reports readiness as
@@ -1375,10 +1402,11 @@ instructions.
 
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
 `Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
-With `--no-restart`, package replacement or git rebuild still runs, but the
-updater does not stop or restart the Gateway. A running Gateway can still exit
-when it detects that its installation was replaced; restart it through its
-service or foreground process owner afterward.
+With `--no-restart`, package replacement still runs, but the updater does not
+stop or restart the Gateway. A package Gateway can still exit when it detects
+that its installation was replaced; restart it through its service or foreground
+process owner afterward. Git updates build a release and leave it pending for
+the next service start. The serving release stays unchanged.
 
 When updater-owned Doctor reaches maintenance before that foreground Gateway
 finishes shutting down, it waits for exclusive state ownership, up to
@@ -1510,12 +1538,12 @@ the sentinel.
 ### Update steps
 
 <Steps>
-  <Step title="Verify clean worktree">
-    Requires no uncommitted changes. Local edits fail the clean check before installation or service shutdown; the checkout is preserved. Commit your changes and retry, or run `openclaw triage` for help.
+  <Step id="verify-clean-worktree" title="Inspect the source and serving release">
+    Resolves the source repository, checkout `HEAD`, and serving release's commit and runtime identity. It does not require a clean source checkout or overwrite its local edits. Candidate validation checks that the release worktree still matches its selected commit.
   </Step>
   <Step title="Resolve the target">
     Selects the channel's tag or branch and fetches upstream as needed.
-    If the resolved target SHA equals `HEAD` and the installed runtime passes artifact verification, finishes `skipped` with reason `already-current` before staging or stopping the service.
+    A verified running release can report `skipped` with reason `already-current` when its source already matches the target. After a build, the runner also compares the candidate and running commit trees. Equal trees are already current only when the running runtime verifies. This handles local commit replay that changes commit IDs without changing source. Conversion to releases first builds the currently serving commit as a fallback, even when the target is current.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 
@@ -1529,27 +1557,19 @@ the sentinel.
 
   </Step>
   <Step id="build-a-candidate" title="Build the update">
-    Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+    Stable, beta, and dev updates install dependencies and build a detached release worktree while the old Gateway serves. Dev rebases the candidate first so local commits are preserved in the release. The source checkout's branch, files, and built runtime stay unchanged. Only dev updates walk back through earlier commits; stable and beta validate their selected tag.
 
     Dev skips local commit replay with a warning when shallow boundaries or unrelated history hide a shared ancestor with the target. Optional local checkout and rebase each have a ten-minute deadline, shortened by an explicit `--timeout`. If replay times out, that candidate is validated without local replay; conflicts retain the existing walk back through older candidates, and interruption stops the attempt.
 
-    Before moving `main`, commits outside the validated candidate are kept at `refs/openclaw/update-preserved/main-<sha>`. The warning names the ref and its inspection/removal commands. If the ref cannot be written, activation uses a detached HEAD and leaves `main` unchanged; interruption is not downgraded to this fallback. The installed updater must contain this fix: candidate code cannot repair an older updater's already-running preflight.
+    Releases live at `<state>/git-install/releases/<id>/openclaw`. Each release is built and checked at that path, so the update validates the tree the Gateway serves from. The updater does not import a candidate pack into the checkout or copy the built runtime over its files.
 
-    When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
+    When switching a package installation to Git, the updater clones the source checkout and builds its first release from it. The global npm package's `openclaw.mjs` then starts the release link's CLI.
 
-    Git object transfer reads its prepared pack directly from disk. Packs above 256 MiB record a size warning and continue when the installed Git object volume has room for the measured pack and index. A known shortfall reports `snapshot-capacity-insufficient` before stopping the Gateway; unknown free space remains a warning. The pack import duration is recorded with the update steps. This check is separate from state-snapshot placement and runtime build-cache exclusions.
-
-    This repair runs in the installed updater. An older updater that refuses a pack above its fixed limit cannot acquire the repair through that same failing update; update the source installation manually using the [source-checkout reference script](/install/updating/update-methods#source-checkout-servers-reference-script).
-
-    The updater prepares the built runtime (`dist`, `dist-runtime`, and dependencies, including nested workspace outputs) on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
-
-    On Windows, runtime staging recreates directory links as junctions without requiring elevation or Developer Mode, instead of expanding them into directories. Packaged plugin dependencies use the shared SDK alias instead of checkout back-links and omit ancestor targets. Failed runtime staging leaves the original checkout and build intact; the updater verifies that build before restarting a service it stopped. Admission and publication refusals keep their caller's classification, and uncertain command cleanup still prevents restart.
-
-    These protections belong to the installed updater. A candidate cannot repair an older updater that fails while copying it; update the source installation through its [manual method](/install/updating/update-methods) first.
+    On Windows, the release link is an NTFS junction, which needs no administrator rights.
 
     Dev can walk back up to 10 commits to find the newest buildable version. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
-    The updater already running owns staging. Artifact-area staging first shipped in 2026.8.1; updating to a commit that contains it cannot change an older published updater's first hop, which still stages under the system temporary directory.
+    The installed updater owns this flow. Installing candidate code cannot change an older updater's staging or activation behavior on that first update.
 
     Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary npm installation of the target checkout’s exact pnpm version) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
 
@@ -1558,21 +1578,17 @@ the sentinel.
     Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
-    Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
+    Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/openclaw`. This is a symlink on POSIX and a junction on Windows. The service and the `openclaw` command on PATH both run through `<state>/git-install/openclaw-launcher.mjs`.
 
-    Every activated Git build runs post-update checks in a fresh process, including when local commits already ahead of upstream rebase without changing the commit or version. Activation captures the built commit and runtime content digest. At convergence completion, the update records one comparison against that activated runtime, including when finalization runs in the migrated candidate worker. A changed identity is reported as a verification failure.
+    Windows cannot rename onto a junction, so a switch removes the old junction and then renames the new one into place. A process killed between those two steps leaves no `git-install\openclaw`; the temporary `.openclaw.release-link-*` junction beside it still names the new release. The next start through the launcher renames it into place, and the next `openclaw update` recreates a missing link.
 
-    The previous checkout and runtime remain available until final verification completes. A late verification failure restores the original configuration, source, and runtime and restarts a previously verified running service when the state-safety checks permit rollback. Incompatible state changes or independent source edits refuse destructive restoration and retain the named backups for recovery.
+    Publication selects a release; it does not replace the running Gateway's files. The next Gateway start loads the selected release and upgrades state at boot. With `--no-restart`, publication leaves the old link selected and records the new release as pending for the next service start.
 
-    Retained Git rollback normally keeps this checkout attached to its original branch while restoring the source tree and rewriting the branch ref. Git refuses another worktree's attempt to check out that branch during restoration. If another worktree already holds the original branch when rollback starts, restoration stops and retains the runtime backup. The attached checkout protects conflicting, untracked, and ignored files and preserves staged and unstaged edits in unchanged files. If the branch reflog is unusable, rollback skips the branch rewrite and detaches this checkout at the previous commit, leaving the branch at the activated commit. It restores and verifies the previous runtime so the CLI can restart the previously running Gateway. A maintenance advisory names the checkout, branch, and both commits and gives commands to restore it with `git -C <root> update-ref refs/heads/<branch> <previous-commit> <activated-commit>` once no worktree uses it (Git refuses the update if the branch has moved since rollback), reattach with `git -C <root> switch <branch>`, and enable reflogs for future rollbacks. After rewriting, rollback verifies the reflog transition. A concurrent ref change retains the runtime backup and reports the expected, current, and reflog-previous commits. Recovery suggests restoring the previous ref only while the branch still points to the rollback commit; a later write instead directs you to inspect the reflog and keep the newest intended commit. The retained transaction still refuses completion if it detects independent source edits.
+    A normal release trial records Gateway starts. If the release fails to become ready twice, the launcher restores state files preserved by that trial's upgrade and switches the link back before the next start. A ready Gateway ends the trial. A deferred `--no-restart` start selects the pending release without this two-start fallback.
 
-    Retained rollback keeps any dev branch created by the update and reports a cleanup hint with the commit at which it was created. It restores the original branch or detached checkout and runtime without deleting a branch that another worktree may be claiming. Once no worktree uses the retained branch, inspect it and use the reported `git branch -d` command to remove it. This protection runs in the installed updater; installing a newer candidate cannot change an older updater's rollback behavior on that first update.
+    Activation captures the built commit and runtime content digest. At convergence completion, the update compares the runtime with that identity, including when finalization runs in the migrated candidate worker. A changed identity is a verification failure.
 
-    If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
-
-    Plugin loading and artifact inventory exclude these transaction directories from incidental source scans. Retained rollback dependencies do not become plugin inputs or prevent the updated plugin from loading. Explicitly selected package dependencies still receive their normal validation; only the updater retires its rollback trees after verification. This loading repair runs in the candidate, including when an older updater created the transaction directories.
-
-    The installed updater owns fresh-process selection and backup retention. The published 2026.9.5 driver can still keep its old module graph after a same-commit rebuild and discard its previous runtime before verification. Installing newer candidate code cannot change that first hop. Use the [source-checkout manual update procedure](/install/updating/update-methods#source-checkout-servers-reference-script) to install the repaired driver, stopping the Gateway through its service manager before rebuilding. Subsequent updates use fresh verification and retained rollback.
+    Recovery switches the release link. It does not restore checkout files, rewrite branch refs, or retain in-place runtime transaction directories.
 
   </Step>
   <Step title="Sync plugins">
@@ -1589,14 +1605,39 @@ the sentinel.
 
 ### Git checkouts that run from releases
 
-On macOS and Linux, a Git checkout whose Gateway service the update owns runs from
-releases instead of being rebuilt in place. Each release is a detached worktree of the
+On every platform, a Git checkout runs from releases instead of being rebuilt in place,
+with or without a Gateway service. Each release is a detached worktree of the
 checkout under `<stateDir>/git-install/releases/`, and the link
 `<stateDir>/git-install/openclaw` names the selected one. An update
 builds the target as a new release, switches the link, and arms a trial in
-`releases/.trial`. The service starts through `<stateDir>/git-install/openclaw-launcher.mjs`,
-which switches the link back to the trial's previous release after two failed starts.
-The trial ends once the Gateway on the new release is ready.
+`releases/.trial`. The service and the `openclaw` command on PATH start through
+`<stateDir>/git-install/openclaw-launcher.mjs`. Only a Gateway run (`openclaw gateway` or
+`openclaw gateway run`, without `--help` or `--version`) counts as a start: after two failed
+starts the launcher switches the link back to the trial's previous release. With `--no-restart`,
+the new release stays pending and the next Gateway run selects it. A service that still starts the
+source checkout (the first update to releases) gets a definition that starts the launcher, written
+without starting or restarting the Gateway, so its next start selects the release too. Only if that
+write fails does the update record an owed `service-definition` step. The trial ends once the
+Gateway on the new release is ready.
+
+The launcher knows only its own state directory. A Gateway run for another profile started
+through the same `openclaw` on PATH (`openclaw --profile work gateway`) also counts as a start of
+this install: it selects this install's pending release, and two such failed runs during this
+install's trial switch it back to its previous release.
+
+If the old Gateway is still serving after its next maintenance check, the updater can
+request a cooperative restart. A busy Gateway can defer that request for five minutes.
+When the running Gateway records that it accepted a restart, the updater waits for
+that deferral and process replacement before verifying. A signal alone does not extend
+the wait. Older Gateways without this receipt keep the original bounded wait; an
+explicit overall update timeout still applies. Only serving-build and readiness checks
+confirm the update. This behavior requires the updated updater and, for the extended
+wait, a running Gateway that records acceptance. If restart signals are disabled, an updater in an
+independent terminal can still use the native restart of its verified, owned service.
+A managed handoff never selects that route to restart a running incumbent. On macOS,
+if a loaded KeepAlive job has no listener when verification times out, the updater
+leaves the trial unconfirmed rather than restarting the job a second time: launchd
+may still bring it up. Inspect `openclaw gateway status --deep` before taking action.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that
@@ -1862,9 +1903,9 @@ when the Gateway was verified on the version it installed they are kept. The
 update prints what it settled, continues, and records an
 `interrupted-update-recovery` warning in its run history.
 
-A source checkout's version does not show whether the killed update had
-replaced its build. An update of a checkout in place records the commit and
-build it activates before it reserves its plugin recovery. The next update
+Older in-place Git updaters can leave recovery records tied to a checkout build.
+Its version alone does not identify that build. Such an updater records the
+commit and build it activates before reserving plugin recovery. The next update
 settles that recovery only when all of these still hold:
 
 - the killed update recorded that activation, for the same build its plugin
@@ -1926,11 +1967,34 @@ repair can settle the recovery, the message adds the reason and the command:
   build.** The message names the reason: no recorded activation, a commit or
   build that differs from it, or local changes. Run `openclaw update repair`.
 - **The recovery belongs to another installation.** Run `openclaw update repair`
-  from that installation.
+  from that installation. A pnpm install whose package directory was replaced is the exception below.
 - **A dry run** changes nothing. Run `openclaw update`.
 
 Recovery that `openclaw update repair` cannot settle either keeps the plain
 refusal without a command.
+
+pnpm gives each OpenClaw version its own package directory, and activation
+moves the previous one away. Plugin recovery left by an update that died after
+activating therefore names a directory that no longer exists. Both
+`openclaw update repair` and the next `openclaw update` settle it from the
+installation that replaced it when all of these hold:
+
+- the directory that update recorded no longer exists;
+- that update ran from this installation's path, which now resolves here;
+- every process that update recorded has exited;
+- that update recorded its candidate version serving.
+
+The plugin and configuration changes are then settled as for any verified
+candidate: usually kept, but a rollback that had already restored something is
+finished instead. A commit that update had already begun is finished even when
+a later build is installed, but not when the version from before that update
+was installed again. That update's run records a
+`warning:plugin-cohort:replaced-installation` entry naming both directories.
+The next update still needs the lease proof above. An updater that exited on its
+own, rather than being killed, released its lease, so that update stops and
+names `openclaw update repair`; run it once, then update again. When any of the
+four facts is missing, both commands refuse and say which one; while that
+update's process may still be running they say to wait for it.
 
 The updater does not settle the leftover when another updater still holds the
 installation, when the lease store is missing or was replaced, when the
@@ -2005,6 +2069,8 @@ the update keeps the new package and exits 0. It records a
 `package-backup-retention` warning that names the link and any launcher backups
 or database snapshots left beside it, because cleanup stops at the link.
 Historical package backups from earlier updates also wait for a later update.
+A database snapshot left this way is removed by update cleanup after a later
+update is verified successful.
 The link still names your checkout, which the updater does not modify. After
 checking the installation, remove the link itself and not what it names: use
 `rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a

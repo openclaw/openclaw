@@ -2257,18 +2257,14 @@ describe("chat welcome", () => {
 
   it.each([true, false])(
     "allows model-free setup commands only with write access (%s)",
-    (canSend) => {
+    async (canSend) => {
       const onModelSetup = vi.fn();
       const onSend = vi.fn();
       const container = renderChatView({
         draft: "/models",
         canSend,
         modelRequiredReason: "Connect a provider to send messages.",
-        ...(canSend
-          ? {
-              disabledBanner: createChatModelSetupBanner(onModelSetup),
-            }
-          : {}),
+        disabledBanner: canSend ? createChatModelSetupBanner(onModelSetup) : undefined,
         onSend,
       });
       expect(getComposerTextarea(container).disabled).toBe(!canSend);
@@ -2281,6 +2277,9 @@ describe("chat welcome", () => {
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
         expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+        await waitForSolid(() =>
+          expect(container.querySelector(".agent-chat__disabled-banner button")).not.toBeNull(),
+        );
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }

@@ -136,7 +136,12 @@ it("changes dependency identity when a mutable image is rebuilt or the engine ta
   expect(mocks.exec.mock.lastCall?.[0].globalArgs).toEqual(["--url", "unix:///second.sock"]);
 });
 
-async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
+async function prepare(
+  config = cfg,
+  signal?: AbortSignal,
+  rollbackGuard = vi.fn(),
+  idleIoPriority?: boolean,
+) {
   const identity = await resolveSandboxDependencyTemplateIdentity(config, {
     assertCurrent: () => {},
   });
@@ -151,6 +156,7 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
           cfg: config,
           scopeKey: "fixture",
           identity: identity!,
+          idleIoPriority,
           signal,
           assertCurrent: () => {},
           rollbackGuard,
@@ -332,12 +338,28 @@ it.each(["ENOSPC", "No space left on device", "No space left\n      on device (o
   },
 );
 
-it("uses offline installation without skipping source lifecycle scripts", async () => {
-  const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
-  await prepare(offlineCfg);
-  expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
-    'exec pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"',
-  );
+it.each([false, true])(
+  "installs offline with lifecycle scripts at the requested IO priority (idle=%s)",
+  async (idle) => {
+    const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
+    await prepare(offlineCfg, undefined, undefined, idle);
+    expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1].at(-1)).toContain(
+      `exec ${idle ? "ionice -c 3 " : ""}pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
+    );
+  },
+);
+
+it("leaves foreground installation available when the image lacks idle IO support", async () => {
+  mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+    code: args[0] === "exec" ? 127 : 0,
+    stdout: args[0] === "image" ? image : containerId,
+    stderr:
+      args[0] === "exec"
+        ? "Background dependency preparation requires ionice in the sandbox image\n"
+        : "",
+  }));
+  await expect(prepare(cfg, undefined, undefined, true)).rejects.toThrow("requires ionice");
+  expect(mocks.retire).toHaveBeenCalledOnce();
 });
 
 it("settles cancellation through independent cleanup authority", async () => {

@@ -78,6 +78,20 @@ describe("telegram actions contract", () => {
     const schema = describeActions(cfg, "default")?.schema;
     const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
     expect(contributions.some((entry) => Object.hasOwn(entry.properties, "emoji"))).toBe(false);
+    const sendFields = contributions.find((entry) => Object.hasOwn(entry.properties, "location"));
+    expect(sendFields).toMatchObject({
+      visibility: "all-configured",
+      properties: { effectId: { type: "string" }, effect: { type: "string" }, quoteText: {} },
+    });
+    const workSchema = describeActions(cfg, "work")?.schema;
+    const workContributions = Array.isArray(workSchema)
+      ? workSchema
+      : workSchema
+        ? [workSchema]
+        : [];
+    expect(workContributions.some((entry) => Object.hasOwn(entry.properties, "effectId"))).toBe(
+      false,
+    );
   });
 
   it("discovers SecretRef actions and account-scoped reaction guidance without hiding healthy siblings", () => {

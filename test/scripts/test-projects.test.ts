@@ -307,7 +307,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/ci-check-plan.mts"],
       testFiles(
         "test/scripts",
-        "ci-check-plan ci-workflow-planning check-changed-compiler-delegation",
+        "ci-check-plan ci-workflow-planning check-changed-compiler-delegation ci-scripts-only-lint",
       ),
     );
   });

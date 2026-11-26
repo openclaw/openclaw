@@ -8,7 +8,7 @@ import type {
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
-import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { AssistantHistoryMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
@@ -124,6 +124,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Looks up move destinations under the admitted requester when the harness offers session_project. */
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
+  sessionProjectMoveEligible?: boolean;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -431,14 +434,14 @@ export type EmbeddedRunAttemptResult = {
   requesterContinuationSettled?: true;
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
   runtimeContinuationStarted?: boolean;
-  lastAssistant: AssistantMessage | undefined;
+  lastAssistant: AssistantHistoryMessage | undefined;
   /**
    * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`
    * means this attempt produced no assistant response.
    */
-  currentAttemptAssistant?: AssistantMessage | undefined;
+  currentAttemptAssistant?: AssistantHistoryMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
-  currentAttemptCompletedAssistant?: AssistantMessage | undefined;
+  currentAttemptCompletedAssistant?: AssistantHistoryMessage | undefined;
   /** A real model response completed successfully during this attempt, before any later failure. */
   hasSuccessfulModelResponse?: boolean;
   lastToolError?: ToolErrorSummary;
@@ -485,6 +488,8 @@ export type EmbeddedRunAttemptResult = {
   yieldAcknowledgment?: string;
   /** The registry accepted this attempt's explicit incoming-message wait. */
   yieldMessageWaitRegistered?: boolean;
+  /** This attempt's sessions_yield armed background commands whose exit resumes the session. */
+  yieldExecWakeArmed?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is

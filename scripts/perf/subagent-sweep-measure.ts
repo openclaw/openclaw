@@ -97,7 +97,6 @@ const sweeper = createSubagentRegistrySweeper({
   isTerminalTailActive: () => false,
   sessionEffectsHostCurrent: unexpected,
   shouldSuppressSessionEffects: unexpected,
-  discardTerminalDelivery: unexpected,
   shouldEmitEndedHookForRun: unexpected,
   emitSubagentEndedHookForRun: unexpected,
   callGateway: unexpected,
@@ -291,8 +290,7 @@ try {
   assertUnchanged();
   const stepNames = new Set([
     "getRecordedSubagentChildAuthority",
-    "settleSubagentCompletionReservation",
-    "blockSubagentCompletionDelivery",
+    "settleSubagentCompletionInHistory",
     "reconcileRetiredSubagentCancellation",
     "settleUnreachableYieldedSubagentRun",
     "reconcileDurableSubagentKillIntent",

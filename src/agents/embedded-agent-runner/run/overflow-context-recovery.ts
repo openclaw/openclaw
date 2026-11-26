@@ -3,7 +3,7 @@ import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics"
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../../../shared/assistant-error-format.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -75,7 +75,7 @@ type EmbeddedRunOverflowRecoveryInput = EmbeddedRunCompactionRecoveryInput & {
   promptError: unknown;
   assistantErrorText?: string;
   assistantOverflowCandidate?: {
-    message: AssistantMessage;
+    message: AssistantHistoryMessage;
     classification: FailoverClassification | null;
   };
   attemptCompactionCount: number;
@@ -230,7 +230,7 @@ async function recoverContextPressure(
     return { action: "retry" };
   };
   const truncateToolResults = async () => {
-    const { sessionManager, assertActive } = await input.prepareRecoverySession(contextTokenBudget);
+    const { sessionManager, assertActive } = await input.prepareRecoverySession();
     if (!sessionManager) {
       return {
         truncated: false,
@@ -365,7 +365,7 @@ async function recoverContextPressure(
         );
       }
       if (input.contextEngine.maintain) {
-        const transcript = await input.prepareRecoverySession(contextTokenBudget);
+        const transcript = await input.prepareRecoverySession();
         await runContextEngineMaintenance({
           ...transcript,
           contextEngine: input.contextEngine,
@@ -390,7 +390,7 @@ async function recoverContextPressure(
     if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
       input.state.lastCompactionTokensAfter = undefined;
       input.state.lastContextBudgetStatus = undefined;
-      const transcript = await input.prepareRecoverySession(contextTokenBudget);
+      const transcript = await input.prepareRecoverySession();
       await resetNoRealConversationTokenSnapshot({
         sessionTarget: transcript.sessionManager?.getSessionTarget(),
         sessionPersistence: runParams.sessionPersistence,

@@ -1,8 +1,8 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
@@ -22,6 +22,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+registerChatComposerEnglish();
 
 export function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -84,12 +85,6 @@ export function createChatPaneRunRecoveryActions(
     | "chatRunId"
     | "chatSending"
     | "handleSendChat"
-    | "chatMessages"
-    | "chatMessage"
-    | "chatAttachments"
-    | "chatMentions"
-    | "chatReplyTarget"
-    | "chatGoalDraftMode"
     | "chatRunError"
     | "chatDismissedRunErrorId"
   >,
@@ -97,13 +92,9 @@ export function createChatPaneRunRecoveryActions(
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
-    onRewindMessage?: ChatProps["onRewindMessage"];
     onStartNewSession?: (summary: string) => Promise<boolean>;
   },
-): Pick<
-  ChatProps,
-  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
-> {
+): Pick<ChatProps, "onRetryRun" | "onStartNewSession" | "onDismissRunError"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -112,19 +103,7 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
-  const failedRunId = options.latestFailedRunId();
-  const rewind = options.onRewindMessage;
   return {
-    failedMessageEditSource:
-      rewind && failedRunId
-        ? {
-            state,
-            runId: failedRunId,
-            isCurrent: () => ownsFailure(failedRunId),
-            readIdentity: readSessionMessageIdentity,
-            rewind,
-          }
-        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
@@ -216,18 +195,22 @@ export class SessionParticipationTracker {
     catalog: boolean;
     listLoading: boolean;
     sessionKey: string;
-    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility" | "invitedAccess"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
     }
     if (params.session) {
       const blocked =
-        params.session.visibility === "draft"
-          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
-          : params.session.visibility !== undefined &&
-            params.session.visibility !== "shared" &&
-            params.session.sharingRole === "viewer";
+        params.session.invitedAccess !== undefined &&
+        params.session.sharingRole !== "owner" &&
+        params.session.sharingRole !== "admin"
+          ? params.session.invitedAccess !== "send"
+          : params.session.visibility === "draft"
+            ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+            : params.session.visibility !== undefined &&
+              params.session.visibility !== "shared" &&
+              params.session.sharingRole === "viewer";
       this.lastBlocked.delete(params.sessionKey);
       this.lastBlocked.set(params.sessionKey, blocked);
       if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
@@ -259,6 +242,7 @@ export function chatSubmitState(
   state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
   unavailable: boolean,
   nativeChat: boolean,
+  session?: GatewaySessionRow,
 ) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
@@ -268,6 +252,7 @@ export function chatSubmitState(
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
+  const workspaceRemoved = session?.worktreeState && session.worktreeState !== "ready";
   return {
     initialSubmission:
       nativeChat &&
@@ -276,9 +261,13 @@ export function chatSubmitState(
         state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
       ),
     goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
-    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
-    submitDisabledReason:
-      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    ...(workspaceRemoved || routePending || (connectionPendingReason && !controlCommand)
+      ? { canSend: false }
+      : {}),
+    submitDisabledReason: workspaceRemoved
+      ? t("chat.composer.workspaceRemoved")
+      : (pendingReason ??
+        (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null)),
     submitPending:
       routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {

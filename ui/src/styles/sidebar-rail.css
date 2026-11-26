@@ -161,7 +161,7 @@
 .sidebar-rail__separator {
   flex: 0 0 1px;
   width: 24px;
-  background: var(--border);
+  background: light-dark(var(--border-strong), var(--border));
 }
 
 /* While a pin is dragged, a faint fill marks the zone and a short line marks where it lands. */

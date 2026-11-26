@@ -30,11 +30,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import {
-  captureCommandOwnerAssertion,
-  getCommandOwnerAuthority,
-  type CommandOwnerAssertion,
-} from "./command-owner-authority.js";
+import { getCommandOwnerAuthority, type CommandOwnerAssertion } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
   formatAllowFromList,
@@ -49,7 +45,10 @@ export type CommandAuthorization = {
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
-  /** Rechecks the host-admitted owner capability after awaited work, when one is present. */
+  /**
+   * @deprecated Never set. The owner decision is fixed when the command is admitted; kept
+   * only so published plugin SDK readers still compile. Remove with the next SDK break.
+   */
   assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   /** Retains command-policy admission independently of owner-only authority. */
@@ -425,12 +424,14 @@ function resolveCommandAuthorizationState(
 
   const enforceOwner = Boolean(plugin?.commands?.enforceOwnerForCommands);
   const senderIsOwnerByIdentity = Boolean(matchedSender);
-  const senderIsOwnerByScope =
-    isInternalMessageChannel(ctx.Provider) &&
-    Array.isArray(ctx.GatewayClientScopes) &&
-    ctx.GatewayClientScopes.includes("operator.admin");
+  // Trusted only as far as the internal Gateway provider is; unadmitted callers use scopes.
+  const turnGrant = isInternalMessageChannel(ctx.Provider) ? ctx.TurnGrant : undefined;
+  const senderIsOwnerByScope = turnGrant
+    ? turnGrant.owner
+    : isInternalMessageChannel(ctx.Provider) &&
+      Array.isArray(ctx.GatewayClientScopes) &&
+      ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = explicitOwners.length > 0;
-  const assertOwnerCurrent = captureCommandOwnerAssertion(ctx);
   const senderIsOwner =
     senderIsOwnerByIdentity ||
     senderIsOwnerByScope ||
@@ -450,11 +451,13 @@ function resolveCommandAuthorizationState(
       (providerResolutionError && commandsAllowFromConfigured)
     ) {
       if (!providerResolutionError) {
-        access = commandsAllowFromList?.some(
-          (entry) => isWildcardAllowFromEntry(entry) || senderCandidates.includes(entry),
-        )
-          ? "commands"
-          : "denied";
+        access =
+          turnGrant?.commands === "all" ||
+          commandsAllowFromList?.some(
+            (entry) => isWildcardAllowFromEntry(entry) || senderCandidates.includes(entry),
+          )
+            ? "commands"
+            : "denied";
       }
     } else if (commandAuthorized) {
       // Global ownership does not revoke channel-admitted session resets; explicit
@@ -469,7 +472,6 @@ function resolveCommandAuthorizationState(
       ownerList: explicitOwners,
       senderId: senderId || undefined,
       senderIsOwner,
-      ...(assertOwnerCurrent ? { assertOwnerCurrent } : {}),
       isAuthorizedSender: access === "commands",
       from: from || undefined,
       to: to || undefined,

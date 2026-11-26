@@ -541,17 +541,6 @@ describe("EmbeddedTuiBackend", () => {
     defaultRuntime.error = originalRuntimeError;
   });
 
-  it("returns the resolved model from the shared reset lifecycle", async () => {
-    const backend = new EmbeddedTuiBackend();
-
-    await expect(backend.resetSession("main", "new")).resolves.toEqual({
-      ok: true,
-      key: "agent:main:main",
-      entry: {},
-      resolved: { modelProvider: "openai", model: "gpt-5.4" },
-    });
-  });
-
   it.each([
     { key: "agent:work:new", parentSessionKey: "agent:work:main" },
     { key: "global", agentId: "work" },

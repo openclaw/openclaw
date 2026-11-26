@@ -18,6 +18,7 @@ import {
   catalogRowCount,
   catalogSchemaVersion,
   releasedReaderVerdict,
+  RELEASED_READER_ENTRIES,
   releasedSchemaVersions,
   type ReleaseVerdict,
 } from "./lib/catalog-compare-released-gate.mts";
@@ -231,6 +232,7 @@ async function readRelease(
     out,
     filter: values.filter,
     refreshOnly,
+    readerEntries: RELEASED_READER_ENTRIES,
     ...cert,
   });
   const log: Buffer[] = [];

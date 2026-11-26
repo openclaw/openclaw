@@ -563,6 +563,9 @@
       "@openclaw/ai/event-stream": [
         "../../packages/plugin-sdk/dist/packages/ai/src/utils/event-stream.d.ts"
       ],
+      "@openclaw/ai/provider-types": [
+        "../../packages/plugin-sdk/dist/packages/ai/src/provider-types.d.ts"
+      ],
       "@openclaw/ai/providers": [
         "../../packages/plugin-sdk/dist/packages/ai/src/providers.d.ts"
       ],

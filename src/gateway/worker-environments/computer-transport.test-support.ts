@@ -243,7 +243,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     authority: workerAuthority,
     assertCurrent() {
       if (!validateAgentRunDelegatedAuthority(workerAuthority)) {
-        throw new Error("Session desktop placement authority changed");
+        throw new Error("Session desktop placement changed. Start a new turn.");
       }
     },
   };

@@ -147,7 +147,7 @@ test.each(["release", "abort"])(
     expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
     expect(() => source?.assertCurrent()).toThrow("child authority closed");
     expect(captureAgentRunDelegatedSourceAssertion(copiedChild, refuseChild)).toBeUndefined();
-    expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("no longer active");
+    expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("The approval scope ended.");
   },
 );
 

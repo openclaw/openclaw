@@ -7,9 +7,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, expect, it, type TestContext } from "vitest";
 import {
-  formatBoundaryCheckSuccessSummary,
-  formatSlowCompileSummary,
-  formatSkippedCompileProgress,
   installCanaryArtifactCleanup,
   resolveCompileConcurrency,
   resolveCanaryArtifactPaths,
@@ -270,6 +267,48 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
   );
   expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
+  const originalIndex = fs.readFileSync(path.join(root, "extensions/demo/index.ts"), "utf8");
+  const external = tempRoots.make("openclaw-boundary-external-");
+  // Reading this file would fail diagnostics before the worker's final input admission.
+  fs.writeFileSync(
+    path.join(external, "outside.d.ts"),
+    "export type Escaped = MissingBoundaryType;\n",
+  );
+  const alias = path.join(root, "extensions/demo/escaped");
+  fs.symlinkSync(external, alias, "junction");
+  for (const emit of [false, true]) {
+    const inputReceipt = path.join(root, `.artifacts/worker-${emit}.inputs.json`);
+    const outDir = path.join(root, `.artifacts/worker-${emit}`);
+    const request = {
+      configFile: path.join(
+        root,
+        ".artifacts/extension-package-boundary/compile/demo.tsconfig.json",
+      ),
+      inputReceipt,
+      compilerOptions: { outDir, skipLibCheck: false },
+      emit,
+    };
+    const worker = () =>
+      spawnSync(
+        process.execPath,
+        ["scripts/compile-extension-boundary.mts", JSON.stringify(request)],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+    expectCompile(worker(), 0);
+    expect(JSON.parse(fs.readFileSync(inputReceipt, "utf8")).inputs).toContain(
+      "extensions/demo/index.ts",
+    );
+    write("extensions/demo/index.ts", 'export type { Escaped } from "./escaped/outside.js";\n');
+    // The real worker must remove its prior success receipt and refuse publication.
+    expectCompile(worker(), 1, "Declaration input escapes checkout");
+    expect(fs.existsSync(inputReceipt)).toBe(false);
+    write("extensions/demo/index.ts", originalIndex);
+  }
+  fs.unlinkSync(alias);
   write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
   write(
@@ -326,52 +365,6 @@ it("parses extension boundary compile concurrency strictly", () => {
       resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
     ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
   }
-});
-
-it("formats a success summary with counts and elapsed time", () => {
-  expect(
-    formatBoundaryCheckSuccessSummary({
-      mode: "all",
-      compileCount: 84,
-      skippedCompileCount: 13,
-      canaryCount: 12,
-      prepElapsedMs: 12_345,
-      compileElapsedMs: 54_321,
-      canaryElapsedMs: 6_789,
-      elapsedMs: 54_321,
-    }),
-  ).toBe(`extension package boundary check passed
-mode: all
-compiled plugins: 84
-skipped plugins: 13
-canary plugins: 12
-prep elapsed: 12345ms
-compile elapsed: 54321ms
-canary elapsed: 6789ms
-elapsed: 54321ms
-`);
-});
-
-it("formats skipped compile progress concisely", () => {
-  expect(formatSkippedCompileProgress({ skippedCount: 13, totalCount: 97 })).toBe(
-    "skipped 13 fresh plugin compiles before running 84 stale plugin checks\n",
-  );
-  expect(formatSkippedCompileProgress({ skippedCount: 97, totalCount: 97 })).toBe(
-    "skipped 97 fresh plugin compiles\n",
-  );
-});
-
-it("formats the slowest plugin compiles in descending order", () => {
-  expect(
-    formatSlowCompileSummary({
-      compileTimings: [
-        { extensionId: "quick", elapsedMs: 40 },
-        { extensionId: "slow", elapsedMs: 900 },
-        { extensionId: "medium", elapsedMs: 250 },
-      ],
-      limit: 2,
-    }),
-  ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
 });
 
 it("keeps full failure output on the thrown error for canary detection", async () => {

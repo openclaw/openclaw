@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
@@ -24,6 +24,8 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+  /** Only active-only retries need the durable delivery outcome. */
+  includeCompletion?: boolean;
 };
 
 export type PendingInputSourceSnapshot = {
@@ -32,6 +34,7 @@ export type PendingInputSourceSnapshot = {
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
   committedMessageSeq?: number;
+  completion?: AgentRunTerminalOutcome;
 };
 
 export type PendingInputSnapshot = {
@@ -57,6 +60,8 @@ export type PendingInputMutation =
       inputId: string;
       messageJson: string;
       originSourceJson?: string;
+      /** Queued owed rows this row's bytes now carry; the same transaction consumes them. */
+      absorbedIdempotencyKeys?: readonly string[];
     })
   | (PendingInputSettlementIdentity & {
       kind: "complete";
