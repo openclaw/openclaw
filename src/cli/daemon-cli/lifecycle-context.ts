@@ -81,6 +81,7 @@ export async function waitForGatewayUpdateRecovery(
   expectedVersion: string,
   expectedBuildId?: string,
   timeoutMs?: number,
+  requireHealthRpc?: boolean,
 ) {
   if (!expectedVersion?.trim()) {
     throw new Error("Recovery Gateway version is unavailable.");
@@ -98,6 +99,7 @@ export async function waitForGatewayUpdateRecovery(
     expectedBuildId,
     timeoutMs,
     requireRunningService: true,
+    requireHealthRpc,
   });
 }
 

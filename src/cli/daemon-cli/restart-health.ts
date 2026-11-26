@@ -89,6 +89,7 @@ type GatewayRestartWaitOptions = {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
+  requireHealthRpc?: boolean;
   requireChannelHealth?: boolean;
   requireOwnedListener?: boolean;
   allowUnattributedDiagnosticProbe?: boolean;
@@ -280,6 +281,7 @@ export async function waitForGatewayHealthyRestart(
       // report running without exposing a PID, so Windows retains status-only proof.
       const healthy =
         snapshot.healthy &&
+        (!params.requireHealthRpc || snapshot.healthRpcVerified === true) &&
         (!params.requireRunningService ||
           (snapshot.runtime.status === "running" &&
             (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
