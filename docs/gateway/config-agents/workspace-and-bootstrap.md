@@ -163,6 +163,25 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 Per-agent override: `agents.entries.*.bootstrapTotalMaxChars`. Omitted values
 inherit `agents.defaults.bootstrapTotalMaxChars`.
 
+## `agents.entries.*.sharedUserDir`
+
+Directory holding a `USER.md` that several agents share. When set, the agent
+loads that file in place of its workspace `USER.md`. Agents without it keep
+their workspace file. The workspace path guard is unchanged: the directory is
+read only for bootstrap and is not exposed to workspace file tools. See
+[One USER.md for several agents](/concepts/user-model#one-usermd-for-several-agents).
+
+```json5
+{
+  agents: {
+    entries: {
+      work: { sharedUserDir: "~/openclaw-user" },
+      home: { sharedUserDir: "~/openclaw-user" },
+    },
+  },
+}
+```
+
 ## Per-agent bootstrap profile overrides
 
 Use per-agent bootstrap profile overrides when one agent needs different prompt
