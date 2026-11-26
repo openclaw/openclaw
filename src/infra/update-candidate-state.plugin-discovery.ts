@@ -22,7 +22,7 @@ export async function discoverUpdateSupplementalDatabasePaths(
   }
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const rows = (await updateStateDatabaseExists(shared))
-    ? await inspectPhysicalStoreInProcess(shared, false, (db) =>
+    ? await inspectPhysicalStoreInProcess(shared, true, (db) =>
         readPluginMetadataStateRowsInDatabase(db, [
           "plugins.bundledDiscovery",
           INSTALLED_PLUGIN_INDEX_STATE_KEY,
