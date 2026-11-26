@@ -13,6 +13,7 @@ import {
   redactClaudeCliHistoryMessage,
   resolveClaudeCliSessionFilePathAsync,
 } from "./cli-session-history.claude.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const YIELD_BYTES = 256 * 1024;
 const OVERSIZED_JSONL_LINE_CHARS = 1024 * 1024;
@@ -134,6 +135,8 @@ export async function visitClaudeCliSessionMessages(
   const reseedState = createClaudeReseedImportState(params);
   let bytesSinceYield = 0;
   let lineNumber = 0;
+  // The native prompt, synthetic ones included, that the following rows answer.
+  let turnExternalId: unknown;
   // Production imports already run in the history worker. A pathological decode can
   // fail that read under its heap limit; the external transcript is never changed.
   for await (const line of lines) {
@@ -159,6 +162,12 @@ export async function visitClaudeCliSessionMessages(
       if (!entry) {
         continue;
       }
+      const content = entry.message?.content;
+      const toolResult =
+        Array.isArray(content) && content.some((b) => asOptionalRecord(b)?.type === "tool_result");
+      if (entry.type === "user" && entry.isSidechain !== true && !toolResult) {
+        turnExternalId = entry.uuid;
+      }
       parsedMessage = parseClaudeCliHistoryEntry(
         entry,
         params.cliSessionId,
@@ -166,6 +175,9 @@ export async function visitClaudeCliSessionMessages(
         toolNames,
         { reseedMode: "recover", reseedState },
       );
+      if (parsedMessage && typeof turnExternalId === "string") {
+        parsedMessage = attachOpenClawTranscriptMeta(parsedMessage, { turnExternalId }) as Message;
+      }
     } catch {
       // Ignore malformed external history entries.
     }
