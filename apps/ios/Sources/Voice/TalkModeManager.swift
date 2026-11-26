@@ -296,6 +296,7 @@ final class TalkModeManager {
     @ObservationIgnored private var testPTTFinalizerHandler: (@MainActor () async -> Void)?
     @ObservationIgnored private var testPTTOnceStartedHandler: (@MainActor () async -> Void)?
     @ObservationIgnored private var testPTTReservedHandler: (@MainActor () async -> Void)?
+    @ObservationIgnored private var testRecognitionStartError: Error?
     @ObservationIgnored private var testRealtimeVoiceSessionCloseRequest:
         (@MainActor (_ method: String, _ paramsJSON: String?) async throws -> Void)?
     #endif
@@ -1391,6 +1392,11 @@ final class TalkModeManager {
         self.stopRecognition()
         let recognitionGeneration = self.recognitionGeneration
         if Self.isSimulator {
+            #if DEBUG
+            if let testRecognitionStartError {
+                throw testRecognitionStartError
+            }
+            #endif
             if self.allowSimulatorCapture {
                 self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
                 self.recognitionRequest?.shouldReportPartialResults = true
@@ -1578,6 +1584,8 @@ final class TalkModeManager {
             deactivateAudioSession()
             let msg = error.localizedDescription
             GatewayDiagnostics.log("talk speech: restart failed error=\(msg)")
+            let status = String(format: String(localized: "Start failed: %@"), msg)
+            self.setStatus(status, phase: .idle, watchPresentation: .verbatim(status))
         }
     }
 
@@ -4397,6 +4405,10 @@ extension TalkModeManager {
             isFinal: isFinal,
             pttCaptureId: captureId,
             recognitionGeneration: self.recognitionGeneration)
+    }
+
+    func _test_setRecognitionStartError(_ error: Error?) {
+        self.testRecognitionStartError = error
     }
 
     func _test_recognitionGeneration() -> UInt64 {
