@@ -608,20 +608,25 @@ it("releases closed attempt predicates without retaining abort callbacks or lane
      class RuntimeStores {}
      const retained = (() => {
        const stores = new RuntimeStores();
+       const parent = new AbortController();
+       const reason = new Error("synthetic cancellation");
        const admittedRunContext = createTestAdmittedRunContext("retention");
        const { controller } = createLaneControllerFixture({
          runId: "retention", sessionId: "retention", sessionFile: "retention.jsonl",
          workspaceDir: ".", prompt: "synthetic", timeoutMs: 1000, admittedRunContext,
        }, { globalLane: "retention", configureRuntime: false,
             onSessionWriterClaimed: () => assert.ok(stores) });
-       const controls = controller.createAttemptControls({ admittedRunContext,
+       const controls = controller.createAttemptControls({ admittedRunContext, abortSignal: parent.signal,
          onAbort: () => assert.ok(stores) });
        assert.equal(controls.isAttemptCurrent(), true);
+       parent.abort(reason);
+       assert.equal(controls.abortSignal.reason, reason);
+       assert.equal(controls.isAttemptCurrent(), false);
        controls.close();
        assert.equal(controls.isAttemptCurrent(), false);
-       return { check: controls.isAttemptCurrent, stores: new WeakRef(stores) };
+       return { check: controls.isAttemptCurrent, stores: new WeakRef(stores), reason: new WeakRef(reason) };
      })();
-     await expectCollected(retained.stores);
+     await expectCollected(retained.stores, retained.reason);
      assert.equal(retained.check(), false);
      console.log("Closed attempt inputs released");`,
     { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 20_000 },

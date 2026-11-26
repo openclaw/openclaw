@@ -139,21 +139,35 @@ it("releases closed borrowed snapshots while native async contexts remain retain
      import { scopePreparedModelRuntimeLease, getPreparedModelRuntimeBorrowedSnapshot } from ${JSON.stringify(new URL("./prepared-model-runtime-generation-scope.ts", import.meta.url).href)};
      class Snapshot {}
      const generation = { remoteCatalog: null };
-     const retained = await (async () => {
+     const otherGeneration = { remoteCatalog: null };
+     const live = scopePreparedModelRuntimeLease({
+       snapshot: new Snapshot(), pluginGeneration: otherGeneration, run: run => run(),
+       [Symbol.asyncDispose]: async () => {},
+     });
+     const liveContext = live.run(() => AsyncLocalStorage.snapshot());
+     const { promise: pending, resolve: finish } = Promise.withResolvers();
+     const retained = (() => {
        const snapshot = new Snapshot();
        const lease = scopePreparedModelRuntimeLease({
          snapshot, pluginGeneration: generation, run: run => run(),
-         [Symbol.asyncDispose]: async () => {},
+         [Symbol.asyncDispose]: () => pending,
        });
        const context = lease.run(() => AsyncLocalStorage.snapshot());
        assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), snapshot);
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), undefined);
        const disposal = lease[Symbol.asyncDispose]();
        assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
        assert.throws(() => lease.run(() => {}), /lease is closed/);
-       await disposal;
-       return { context, snapshot: new WeakRef(snapshot) };
+       assert.equal(lease[Symbol.asyncDispose](), disposal);
+       return { context, snapshot: new WeakRef(snapshot), disposal };
      })();
+     // The retired disposer is still pending while the independent sibling is usable.
      await expectCollected(retained.snapshot);
+     assert.equal(liveContext(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), live.snapshot);
+     finish();
+     await retained.disposal;
+     await live[Symbol.asyncDispose]();
+     assert.equal(liveContext(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), undefined);
      assert.equal(retained.context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
      console.log("Closed borrowed snapshot released");`,
     { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },

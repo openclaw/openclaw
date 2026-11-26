@@ -63,10 +63,9 @@ import { claimAgentSessionWriter } from "./session-bootstrap.js";
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
 type AttemptLiveness = {
-  state: "active" | "aborted" | "closed";
   activeOwner: { current: object | undefined };
   owner: object;
-  signal: AbortSignal;
+  signal: AbortSignal | undefined;
   lifecycleGeneration: string;
 };
 
@@ -74,9 +73,8 @@ type AttemptLiveness = {
 // not the lane inputs or abort callbacks in the controller's lexical context.
 function isEmbeddedAttemptCurrent(this: AttemptLiveness): boolean {
   return (
-    this.state === "active" &&
+    this.signal?.aborted === false &&
     this.activeOwner.current === this.owner &&
-    !this.signal.aborted &&
     isAgentEventLifecycleGenerationCurrent(this.lifecycleGeneration)
   );
 }
@@ -199,7 +197,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       ? AbortSignal.any([abortSignal, input.abortSignal])
       : abortSignal;
     const liveness: AttemptLiveness = {
-      state: "active",
       activeOwner: activeAttemptOwner,
       owner,
       signal,
@@ -272,17 +269,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         if (!isCurrent()) {
           return;
         }
-        liveness.state = "aborted";
+        liveness.signal = undefined;
         laneTaskAbortController.abort(createAgentRunDirectAbortError());
         input.onAbort?.();
       },
       close: () => {
-        if (liveness.state === "closed") {
-          return;
-        }
-        // Every retry/finalizer gets a fresh closure; retained callbacks must
-        // never change the next attempt's deadline or cancellation state.
-        liveness.state = "closed";
+        // Release the abort reason even when a newer attempt owns the lane.
+        // Only this attempt can withdraw its own deadline and watchdog.
+        liveness.signal = undefined;
         if (activeAttemptOwner.current === owner) {
           activeAttemptOwner.current = undefined;
           recoverAttemptDeadline = undefined;
