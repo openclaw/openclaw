@@ -90,6 +90,12 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
   ) {
     return null;
   }
+  if (
+    record.attachmentVersion !== undefined &&
+    (typeof record.attachmentVersion !== "string" || !record.attachmentVersion)
+  ) {
+    record.attachmentVersion = undefined;
+  }
   if (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) {
     record.permissionMode = undefined;
   }
