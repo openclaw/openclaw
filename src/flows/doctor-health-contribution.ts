@@ -32,6 +32,7 @@ type DoctorContributionOptions = {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   required?: true;
   updateWork?: DoctorHealthContribution["updateWork"];
+  pending?: DoctorHealthContribution["pending"];
   run?: DoctorHealthContribution["run"];
 };
 
@@ -70,6 +71,7 @@ export function createDoctorHealthContribution(
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
     ...(params.updateWork ? { updateWork: params.updateWork } : {}),
+    ...(params.pending ? { pending: params.pending } : {}),
     run:
       params.run ??
       (async (ctx) => {
