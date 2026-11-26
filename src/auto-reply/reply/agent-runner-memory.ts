@@ -25,7 +25,6 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMaxActiveTranscriptBytes,
@@ -72,7 +71,7 @@ import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
 } from "./memory-flush-errors.js";
-import { recordMemoryFlushFailure } from "./memory-flush-failure.js";
+import { recordMemoryFlushFailure, recordMemoryFlushSuccess } from "./memory-flush-outcome.js";
 import {
   isToolsMemoryFlushPlan,
   memoryFlushResultIsSilent,
@@ -519,7 +518,7 @@ export async function runMemoryFlushIfNeeded(
   const { writable: memoryFlushWritable, toolPolicy: sandboxToolPolicy } =
     await resolveMemoryFlushSandbox(params, assertMemoryFlushCurrent);
 
-  let entry =
+  const entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   if (entry?.incognito === true || isIncognitoSessionKey(params.sessionKey)) {
@@ -783,6 +782,13 @@ export async function runMemoryFlushIfNeeded(
           ...runBaseParams,
           awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
           ...memorySession,
+          onMemoryFlushModelProgress: params.replyOperation
+            ? () => {
+                if (!deferredLifecycle.signal.aborted) {
+                  params.replyOperation?.watchdog.progress("semantic", "memory_flush:model_output");
+                }
+              }
+            : undefined,
           agentHarnessId: resolveSessionPinnedHarnessId(entry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
@@ -842,23 +848,7 @@ export async function runMemoryFlushIfNeeded(
     ) {
       throw new Error("no persistence tool call succeeded");
     }
-    if (params.storePath && params.sessionKey) {
-      try {
-        const updatedEntry = await updateSessionEntry(
-          { storePath: params.storePath, sessionKey: params.sessionKey },
-          async () => ({
-            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
-          }),
-          { skipMaintenance: true, takeCacheOwnership: true },
-        );
-        if (updatedEntry) {
-          entry = updatedEntry;
-        }
-      } catch (err) {
-        logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
-      }
-    }
-    return { sessionEntry: entry, outcome: "completed" };
+    return await recordMemoryFlushSuccess(params, flushedCompactionCount, entry);
   } catch (error) {
     if (error instanceof MemoryFlushToolsUnavailableError) {
       memoryFlushLog.debug(error.message);
