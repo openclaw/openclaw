@@ -562,8 +562,9 @@ private struct CleanComposerModelChipLabel<Chevron: View>: View {
 
     var body: some View {
         HStack(spacing: 3) {
+            // One point under the other composer labels, so the name sits back next to the draft.
             Text(self.name)
-                .font(OpenClawChatTypography.composerControlLabel)
+                .font(OpenClawChatTypography.body(size: 15, weight: .medium, relativeTo: .callout))
                 .lineLimit(1)
                 .truncationMode(.tail)
             self.chevron()
