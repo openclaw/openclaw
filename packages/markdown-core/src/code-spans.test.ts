@@ -62,6 +62,17 @@ describe("buildCodeSpanIndex", () => {
       expect(state.ticks).toBe(expected.inlineState.ticks);
     },
   );
+
+  it.each(["opener", "closer"])("tracks a mid-line %s split with both scanner states", (kind) => {
+    const text = "note: ``word`` after";
+    const cut = (kind === "opener" ? text.indexOf("``") : text.lastIndexOf("``")) + 1;
+    const first = buildCodeSpanIndex(text.slice(0, cut));
+    const second = buildCodeSpanIndex(text.slice(cut), first.inlineState, first.fenceState);
+    const word = text.indexOf("word");
+
+    expect(word < cut ? first.isInside(word) : second.isInside(word - cut)).toBe(true);
+    expect(second.isInside(text.indexOf("after") - cut)).toBe(false);
+  });
 });
 
 describe("markdown-core code spans", () => {
