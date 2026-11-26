@@ -195,6 +195,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
         mode: request.mode === "realtime" ? "agent" : (request.mode ?? params.config.defaultMode),
         agentId: this.#resolveAgentId(request.agentId),
       }),
+      getRequesterSessionKey: (request) => request.requesterSessionKey,
       createSession: ({ resolved, createdAt }): GoogleMeetSession =>
         createMeetingSession({ platform: adapter, config: params.config, resolved, createdAt }),
       resolveSpeechInstructions: (request) =>
@@ -235,7 +236,8 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
           await this.#refreshTwilioVoiceCallStatus(session);
         }
       },
-      ensureRealtimeBridge: async (session) => await this.#ensureChromeRealtimeBridge(session),
+      ensureRealtimeBridge: (session, requesterSessionKey) =>
+        this.#ensureChromeRealtimeBridge(session, requesterSessionKey),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async (session, instructions) =>
@@ -476,6 +478,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
 
   async #ensureChromeRealtimeBridge(
     session: GoogleMeetSession,
+    requesterSessionKey?: string,
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
       !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
@@ -503,6 +506,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       config: recoveryConfig,
       fullConfig: this.params.fullConfig,
       meetingSessionId: session.id,
+      requesterSessionKey,
       mode: session.mode,
       url: session.url,
       logger: this.params.logger,
