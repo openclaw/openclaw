@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createChatPaneDictationProps } from "./chat-pane-session-controls.ts";
 import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
@@ -205,6 +216,73 @@ function composerBoundary(h: ReturnType<typeof fixture>) {
   return { props, textarea, update, draft: () => draft, editRevision: () => state.editRevision };
 }
 
+// The actual transport/presentation scopes feed the production pane helper and
+// composer adapter. The existing fixture retains the capture and insertion owners.
+function lifecycleBoundary(h: ReturnType<typeof fixture>, profileless = false) {
+  const composer = composerBoundary(h);
+  const chat = createChatState({ awaitDomCommit: async () => true });
+  onTestFinished(chat.dispose);
+  const page = createPageState(createChatPageStateContext(), chat.createRenderLifecycle(), {
+    sessionKey: "agent:main:one",
+    dispatchEvent: () => true,
+  });
+  page.chatMessage = composer.draft();
+  page.currentSessionId = "physical-one";
+  page.settings = {
+    ...page.settings,
+    composerHoldToRecord: true,
+    composerCorrections:
+      h.options.corrections?.mode === "explicit"
+        ? { version: 1, mode: "explicit", locale: "en-US" }
+        : undefined,
+  };
+  chat.attach(page);
+  const writes = vi.spyOn(page, "handleChatDraftChange");
+  const hello = sessionMutationGatewayHello();
+  const connected = createApplicationGatewaySnapshot({
+    client: h.options.client,
+    phase: "connected",
+    hello: { ...hello, auth: { ...hello.auth, recoveryScope: "account-one" } },
+    selfUser: profileless
+      ? null
+      : { id: "alice", identity: { type: "profile", id: "profile-alice" } },
+  });
+  const { gateway, publish } = createApplicationGateway(connected);
+  const lifecycle = createGatewayConnectionLifecycle(connected);
+  onTestFinished(lifecycle.dispose);
+  const update = (patch: Partial<ApplicationGatewaySnapshot> = {}) => {
+    const snapshot = { ...gateway.snapshot, ...patch };
+    publish(snapshot);
+    lifecycle.transition(snapshot);
+    page.connectionEpoch = lifecycle.epoch;
+    page.client = snapshot.client;
+    page.connected = snapshot.phase === "connected";
+    const scope = gatewayPresentationScope(gateway);
+    const user = resolveCurrentSelfUser({
+      snapshotUser:
+        snapshot.selfUser === undefined ? (scope.displayUser ?? undefined) : snapshot.selfUser,
+    });
+    composer.update({
+      connected: page.connected,
+      gatewayClient: page.client,
+      currentSessionId: page.currentSessionId,
+      canCompose: hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
+      draftSource: chat.composerDraft,
+      getDraft: () => page.chatMessage,
+      ...createChatPaneDictationProps(
+        page,
+        chat.composerDraft,
+        () => true,
+        user?.identity?.type === "profile" ? user.identity.id : null,
+        gateway,
+      ),
+      onDraftChange: (value) => page.handleChatDraftChange(value),
+    });
+  };
+  update();
+  return { page, writes, gateway, connected, update };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   mediaDescriptor = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
@@ -236,21 +314,75 @@ afterEach(async () => {
 });
 
 describe("spoken corrections through composer dictation", () => {
-  it.each(["original", "correction"] as const)(
-    "keeps a preexisting selected draft when the production insertion adapter accepts %s",
-    async (choice) => {
-      const h = fixture();
-      const composer = composerBoundary(h);
-      await h.start();
-      await h.finish("Tuesday sorry Wednesday");
-      expect(h.owner.resolveCorrection(choice)).toBe(true);
-      const inserted = choice === "original" ? "Tuesday sorry Wednesday" : "Wednesday";
-      expect(composer.draft()).toBe(`Existing field text. ${inserted}`);
-      expect(composer.textarea.value).toBe(composer.draft());
-      expect(composer.props.onDraftChange).toHaveBeenCalledOnce();
-      expect(composer.props.onSend).not.toHaveBeenCalled();
-    },
-  );
+  it("cancels on Escape while the actual correction module is still loading", async () => {
+    const h = fixture();
+    await h.start();
+    const entered = createDeferred();
+    const release = createDeferred();
+    vi.doMock(import("./spoken-corrections.ts"), async (importOriginal) => {
+      entered.resolve();
+      await release.promise;
+      return importOriginal();
+    });
+    onTestFinished(() => {
+      release.resolve();
+      vi.doUnmock("./spoken-corrections.ts");
+    });
+    const stopped = h.finish("Tuesday sorry Wednesday");
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        stopped,
+        "Correction preparation settled without reaching the held module boundary",
+      );
+      expect(h.owner.active).toBe(false);
+      expect(h.owner.transcribing).toBe(false);
+      expect(h.owner.correctionReview).toBeNull();
+      expect(h.owner.correctionCommitRequired).toBe(true);
+      const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      document.dispatchEvent(escape);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(h.owner.correctionCommitRequired).toBe(false);
+      expect(h.onCommit).not.toHaveBeenCalled();
+
+      // Admission belongs to the new capture before the cancelled import finishes.
+      expect(h.owner.startDirect()).toBe(true);
+      release.resolve();
+      expect(await stopped).toBe(false);
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.owner.active).toBe(true);
+      expect(h.owner.correctionReview).toBeNull();
+      expect(h.onCommit).not.toHaveBeenCalled();
+      expect(await h.finish("Fresh capture text.")).toBe(false);
+      expect(h.owner.correctionReview).toMatchObject({
+        canAccept: false,
+        canKeepOriginal: true,
+        result: { original: "Fresh capture text.", plan: null },
+      });
+      expect(h.owner.resolveCorrection("original")).toBe(true);
+      expect(h.owner.correctionReview).toBeNull();
+      expect(h.draft()).toBe("Existing field text. Fresh capture text.");
+      expect(h.onCommit).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await stopped;
+    }
+  });
+
+  it("keeps a preexisting selected draft when the insertion adapter keeps the original", async () => {
+    const h = fixture();
+    const composer = composerBoundary(h);
+    await h.start();
+    await h.finish("Tuesday sorry Wednesday");
+    expect(h.owner.resolveCorrection("correction")).toBe(false);
+    expect(composer.draft()).toBe("Existing field text.");
+    expect(h.owner.resolveCorrection("original")).toBe(true);
+    expect(composer.draft()).toBe("Existing field text. Tuesday sorry Wednesday");
+    expect(composer.textarea.value).toBe(composer.draft());
+    expect(composer.props.onDraftChange).toHaveBeenCalledOnce();
+    expect(composer.props.onSend).not.toHaveBeenCalled();
+  });
 
   it.each(["finalizing", "review"])(
     "retires %s corrections when the composer loses permission, including later restoration",
@@ -264,7 +396,7 @@ describe("spoken corrections through composer dictation", () => {
         queuedFinal();
         h.emit({ type: "close", reason: "completed" });
         expect(await stopped).toBe(false);
-        expect(h.owner.correctionReview?.canAccept).toBe(true);
+        expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
       }
       composer.update({ canCompose: false });
       composer.update({ canCompose: true });
@@ -303,7 +435,7 @@ describe("spoken corrections through composer dictation", () => {
         h.emit({ type: "close", reason: "completed" });
         expect(await stopped).toBe(false);
         if (phase === "review") {
-          expect(h.owner.correctionReview?.canAccept).toBe(true);
+          expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
           publish();
         }
         expect(composer.editRevision()).toBe(revision);
@@ -321,7 +453,7 @@ describe("spoken corrections through composer dictation", () => {
     );
   });
 
-  it("does not insert unchanged raw text after an external replacement during recording", async () => {
+  it("does not insert the original after an external replacement during recording", async () => {
     const h = fixture();
     const composer = composerBoundary(h);
     await h.start();
@@ -332,7 +464,7 @@ describe("spoken corrections through composer dictation", () => {
     expect(h.owner.correctionReview).toMatchObject({
       canAccept: false,
       canKeepOriginal: false,
-      result: { original: "Already resolved Wednesday", status: "unchanged" },
+      result: { original: "Already resolved Wednesday", status: "unavailable", plan: null },
     });
     expect(composer.draft()).toBe("New external draft");
     expect(composer.props.onDraftChange).toHaveBeenCalledOnce();
@@ -350,7 +482,7 @@ describe("spoken corrections through composer dictation", () => {
         queuedFinal();
         h.emit({ type: "close", reason: "completed" });
         expect(await stopped).toBe(false);
-        expect(h.owner.correctionReview?.canAccept).toBe(true);
+        expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
       }
       composer.update({ currentSessionId: "physical-two" });
       composer.update({ currentSessionId: "physical-one" });
@@ -370,7 +502,8 @@ describe("spoken corrections through composer dictation", () => {
     const composer = composerBoundary(h);
     const chat = createChatState({ awaitDomCommit: async () => true });
     onTestFinished(chat.dispose);
-    const page = createPageState(createChatPageStateContext(), chat.createRenderLifecycle(), {
+    const context = createChatPageStateContext();
+    const page = createPageState(context, chat.createRenderLifecycle(), {
       sessionKey: "agent:main:one",
       dispatchEvent: () => true,
     });
@@ -384,12 +517,13 @@ describe("spoken corrections through composer dictation", () => {
         chat.composerDraft,
         () => true,
         "test-profile",
+        context.gateway,
       ).captureDictationDraft,
       onDraftChange: (value) => page.handleChatDraftChange(value),
     });
     await h.start();
     await h.finish("Tuesday sorry Wednesday");
-    expect(h.owner.correctionReview?.canAccept).toBe(true);
+    expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
     const revision = composer.editRevision();
     page.handleChatDraftChange(page.chatMessage);
     expect(composer.editRevision()).toBe(revision);
@@ -399,26 +533,33 @@ describe("spoken corrections through composer dictation", () => {
   });
 
   it.each([
-    ["Do not send it Tuesday sorry Wednesday", "Do not send it Wednesday"],
-    ["The total is fifteen no fifty dollars", "The total is fifty dollars"],
-    ["Tuesday, no Wednesday, actually Thursday", "Thursday"],
-    ["Meet Tuesday. scratch that last sentence", ""],
-  ])("reviews %j before applying it once to the current draft", async (spoken, corrected) => {
+    "Do not send it Tuesday sorry Wednesday",
+    "The total is fifteen no fifty dollars",
+    "Tuesday, no Wednesday, actually Thursday",
+    "Meet Tuesday. scratch that last sentence",
+    "I work Tuesday, no Wednesday shifts are available",
+  ])("keeps formerly supported or negative %j literal until original is chosen", async (spoken) => {
     const h = fixture();
     await h.start();
     expect(await h.finish(spoken)).toBe(false);
     expect(h.draft()).toBe("Existing field text.");
     expect(h.onCommit).not.toHaveBeenCalled();
     expect(h.owner.correctionReview).toMatchObject({
-      canAccept: true,
+      canAccept: false,
       canKeepOriginal: true,
-      result: { original: spoken, candidate: corrected, status: "needs-review" },
+      result: {
+        original: spoken,
+        candidate: spoken,
+        plan: null,
+        status: "unavailable",
+        reasons: ["corrections-unavailable"],
+      },
     });
-    expect(h.owner.resolveCorrection("correction")).toBe(true);
-    expect(h.draft()).toBe(`Existing field text.${corrected ? ` ${corrected}` : ""}`);
     expect(h.owner.resolveCorrection("correction")).toBe(false);
+    expect(h.owner.resolveCorrection("original")).toBe(true);
+    expect(h.draft()).toBe(`Existing field text. ${spoken}`);
     expect(h.owner.resolveCorrection("original")).toBe(false);
-    expect(h.onCommit).toHaveBeenCalledTimes(corrected ? 1 : 0);
+    expect(h.onCommit).toHaveBeenCalledOnce();
     expect(h.request.mock.calls.map(([method]) => method)).toEqual([
       "talk.session.create",
       "talk.session.close",
@@ -468,13 +609,16 @@ describe("spoken corrections through composer dictation", () => {
     await h.start();
     expect(h.owner.literal).toBe(false);
     expect(await h.finish("Tuesday sorry Wednesday")).toBe(false);
-    expect(h.owner.correctionReview?.canAccept).toBe(true);
+    expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
   });
 
   it("does not turn dictated application commands into tool or agent requests", async () => {
     const h = fixture();
     await h.start();
-    expect(await h.finish("Actually open the browser and buy it")).toBe(true);
+    expect(await h.finish("Actually open the browser and buy it")).toBe(false);
+    expect(h.draft()).toBe("Existing field text.");
+    expect(h.owner.resolveCorrection("correction")).toBe(false);
+    expect(h.owner.resolveCorrection("original")).toBe(true);
     expect(h.draft()).toBe("Existing field text. Actually open the browser and buy it");
     expect(h.options.realtimeTalkActive).toBe(false);
     expect(h.request.mock.calls.map(([method]) => method)).toEqual([
@@ -517,7 +661,7 @@ describe("spoken corrections through composer dictation", () => {
       const h = fixture();
       await h.start();
       await h.finish("Tuesday sorry Wednesday");
-      expect(h.owner.correctionReview?.canAccept).toBe(true);
+      expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
       if (change === "cancel") {
         h.owner.cancel();
       } else {
@@ -571,6 +715,165 @@ describe("spoken corrections through composer dictation", () => {
     },
   );
 
+  it.each([
+    ["off", "recording"],
+    ["off", "finalizing"],
+    ["explicit", "recording"],
+    ["explicit", "finalizing"],
+    ["explicit", "review"],
+  ] as const)("keeps %s raw recovery across the real lifecycle while %s", async (mode, phase) => {
+    const h = fixture({ corrections: { mode, locale: "en-US" } });
+    const boundary = lifecycleBoundary(h);
+    await h.start();
+    const original = "Do not send it Tuesday sorry Wednesday";
+    h.emit({ type: "partial", text: original });
+    const stopped = phase === "finalizing" ? h.owner.finishActive() : null;
+    if (phase === "review") {
+      await h.finish(original);
+      expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
+    }
+    const epoch = boundary.page.connectionEpoch;
+    // A transient close keeps client/hello and temporarily clears selfUser.
+    boundary.update({ phase: "reconnecting", selfUser: undefined });
+    expect(boundary.page.connectionEpoch).toBeGreaterThan(epoch);
+    await stopped;
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    if (mode === "explicit") {
+      expect(h.owner.correctionReview).toMatchObject({
+        canAccept: false,
+        canKeepOriginal: false,
+        result: { original },
+      });
+      expect(h.owner.resolveCorrection("original")).toBe(false);
+      expect(boundary.writes).not.toHaveBeenCalled();
+    } else {
+      expect(boundary.page.chatMessage).toBe(original);
+      expect(boundary.writes).toHaveBeenCalledTimes(1);
+    }
+    boundary.update(boundary.connected);
+    if (mode === "explicit") {
+      expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: true });
+      expect(h.owner.resolveCorrection("correction")).toBe(false);
+      expect(h.owner.resolveCorrection("original")).toBe(true);
+      expect(h.owner.resolveCorrection("original")).toBe(false);
+    }
+    h.final(original);
+    h.emit({ type: "close", reason: "completed" });
+    await vi.advanceTimersByTimeAsync(0);
+    // Off retains the ordinary selected-text placement; Explicit owns only capture text.
+    expect(boundary.page.chatMessage).toBe(
+      mode === "off" ? original : `Existing field text. ${original}`,
+    );
+    expect(boundary.writes).toHaveBeenCalledTimes(1);
+    expect(h.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
+
+  it.each([
+    ["off", "delayed final"],
+    ["off", "timeout"],
+    ["off", "failure"],
+    ["explicit", "delayed final"],
+    ["explicit", "timeout"],
+    ["explicit", "failure"],
+  ] as const)("retains %s received text after %s through the production pane", async (mode, outcome) => {
+    const h = fixture({ corrections: { mode, locale: "en-US" } });
+    const boundary = lifecycleBoundary(h);
+    await h.start();
+    const preview = "Keep the received preview";
+    const final = "Keep the received final";
+    h.emit({ type: "partial", text: preview });
+    const stopped = h.owner.finishActive();
+    const duplicateFinal = h.retainFinal(final);
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "timeout") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    } else {
+      h.final(final);
+      h.emit(
+        outcome === "failure"
+          ? { type: "error", message: "Controlled finalization failure" }
+          : { type: "close", reason: "completed" },
+      );
+    }
+    expect(await stopped).toBe(mode === "off");
+    const expected = outcome === "delayed final" ? final : preview;
+    if (mode === "explicit") {
+      expect(h.owner.correctionReview).toMatchObject({
+        canAccept: false,
+        canKeepOriginal: true,
+        result: { original: expected, candidate: expected, plan: null },
+      });
+      expect(boundary.writes).not.toHaveBeenCalled();
+      expect(h.owner.resolveCorrection("original")).toBe(true);
+    }
+    expect(boundary.page.chatMessage).toBe(
+      mode === "off" ? expected : `Existing field text. ${expected}`,
+    );
+    expect(boundary.writes).toHaveBeenCalledOnce();
+    duplicateFinal();
+    h.emit({ type: "close", reason: "completed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boundary.writes).toHaveBeenCalledOnce();
+    expect(boundary.page.chatMessage).toBe(
+      mode === "off" ? expected : `Existing field text. ${expected}`,
+    );
+  });
+
+  it.each([
+    "profile",
+    "profileless resolution",
+    "profileless recovery scope",
+    "credentials",
+    "client",
+    "physical session",
+    "permission",
+  ] as const)("retires prepared dictation when the live %s owner changes", async (change) => {
+    const h = fixture();
+    const boundary = lifecycleBoundary(h, change === "profileless recovery scope");
+    await h.start();
+    await h.finish("Tuesday sorry Wednesday");
+    expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
+    if (change === "physical session") {
+      boundary.page.currentSessionId = "physical-two";
+      boundary.update();
+    } else if (change === "credentials") {
+      Object.assign(boundary.gateway, {
+        connectionRevision: boundary.gateway.connectionRevision + 1,
+      });
+      boundary.update();
+    } else if (change === "client") {
+      boundary.update({ client: h.createClient() });
+    } else if (change === "profile" || change === "profileless resolution") {
+      boundary.update({
+        selfUser:
+          change === "profile"
+            ? { id: "bob", identity: { type: "profile", id: "profile-bob" } }
+            : null,
+      });
+    } else {
+      const hello = boundary.connected.hello!;
+      boundary.update({
+        hello: {
+          ...hello,
+          auth: {
+            ...hello.auth,
+            ...(change === "permission"
+              ? { scopes: ["operator.read"] }
+              : { recoveryScope: "account-two" }),
+          },
+        },
+      });
+    }
+    expect(h.owner.correctionReview).toBeNull();
+    boundary.page.currentSessionId = "physical-one";
+    boundary.update(boundary.connected);
+    expect(h.owner.resolveCorrection("correction")).toBe(false);
+    expect(h.owner.resolveCorrection("original")).toBe(false);
+    expect(boundary.page.chatMessage).toBe("Existing field text.");
+    expect(boundary.writes).not.toHaveBeenCalled();
+  });
+
   it.each(["contextKey", "sessionKey"] as const)(
     "ignores an already queued final after %s leaves and returns to the same target",
     async (key) => {
@@ -590,32 +893,93 @@ describe("spoken corrections through composer dictation", () => {
     },
   );
 
-  it("retires a previous capture before accepting a new final with identical text", async () => {
-    const h = fixture();
-    await h.start();
-    const previous = h.owner.finishActive();
-    await h.start();
-    h.final("Tuesday sorry Wednesday", 1);
-    h.emit({ type: "close", reason: "completed" }, 1);
-    expect(await previous).toBe(false);
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
-    expect(h.onCommit).not.toHaveBeenCalled();
-    expect(await h.finish("Tuesday sorry Wednesday")).toBe(false);
-    expect(h.owner.resolveCorrection("correction")).toBe(true);
-    expect(h.draft()).toBe("Existing field text. Wednesday");
-    expect(h.onCommit).toHaveBeenCalledTimes(1);
-  });
+  it.each(["original", "unavailable correction", "cancel", "literal"] as const)(
+    "refuses another enabled capture until the previous recording resolves through %s",
+    async (resolution) => {
+      const h = fixture();
+      const original = "Tuesday sorry Wednesday";
+      h.owner.setLiteral(resolution === "literal");
+      await h.start();
+      const previous = h.owner.finishActive();
+      expect(h.owner.correctionCommitRequired).toBe(true);
+      expect(h.owner.startDirect()).toBe(false);
+      expect(h.owner.handlePointerDown(new PointerEvent("pointerdown", { button: 0 }))).toBe(false);
+      expect(
+        h.request.mock.calls.filter(([method]) => method === "talk.session.create"),
+      ).toHaveLength(1);
 
-  it("disabling corrections preserves original recovery but retires the prepared candidate", async () => {
-    const h = fixture();
-    await h.start();
-    await h.finish("Tuesday sorry Wednesday");
-    h.owner.update({ ...h.options, corrections: { mode: "off", locale: "en-US" } });
-    expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: true });
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
-    expect(h.owner.resolveCorrection("original")).toBe(true);
-    expect(h.draft()).toBe("Existing field text. Tuesday sorry Wednesday");
-    h.owner.update(h.options);
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
-  });
+      h.final(original, 1);
+      h.emit({ type: "close", reason: "completed" }, 1);
+      expect(await previous).toBe(resolution === "literal");
+      if (resolution !== "literal") {
+        expect(h.owner.correctionReview).toMatchObject({
+          canAccept: false,
+          canKeepOriginal: true,
+          result: { original, candidate: original, plan: null },
+        });
+        expect(h.owner.startDirect()).toBe(false);
+        expect(h.owner.handlePointerDown(new PointerEvent("pointerdown", { button: 0 }))).toBe(
+          false,
+        );
+        // A next-capture policy change cannot discard the unresolved recording.
+        h.owner.update({ ...h.options, corrections: { mode: "off", locale: "en-US" } });
+        expect(h.owner.startDirect()).toBe(false);
+        h.owner.update(h.options);
+        expect(h.onCommit).not.toHaveBeenCalled();
+        if (resolution === "unavailable correction") {
+          expect(h.owner.resolveCorrection("correction")).toBe(false);
+          expect(h.owner.correctionCommitRequired).toBe(true);
+          expect(h.owner.startDirect()).toBe(false);
+        }
+        expect(h.owner.resolveCorrection(resolution === "cancel" ? "cancel" : "original")).toBe(
+          true,
+        );
+      }
+      expect(h.owner.correctionCommitRequired).toBe(false);
+      await h.start();
+      h.final(original, 1);
+      expect(await h.finish(original)).toBe(false);
+      expect(h.owner.resolveCorrection("correction")).toBe(false);
+      expect(h.owner.resolveCorrection("original")).toBe(true);
+      const first = resolution === "cancel" ? "" : ` ${original}`;
+      expect(h.draft()).toBe(`Existing field text.${first} ${original}`);
+      expect(h.onCommit).toHaveBeenCalledTimes(resolution === "cancel" ? 1 : 2);
+    },
+  );
+
+  it.each(["recording", "finalizing", "review"] as const)(
+    "applies policy changes to the next capture while %s keeps its snapshot",
+    async (phase) => {
+      const h = fixture();
+      const original = "Tuesday sorry Wednesday";
+      await h.start();
+      const stopped = phase === "finalizing" ? h.owner.finishActive() : null;
+      if (phase === "review") {
+        await h.finish(original);
+      }
+      h.owner.update({ ...h.options, corrections: { mode: "off", locale: "fr" } });
+      if (stopped) {
+        h.final(original);
+        h.emit({ type: "close", reason: "completed" });
+        await stopped;
+      } else if (phase === "recording") {
+        await h.finish(original);
+      }
+      expect(h.owner.correctionReview).toMatchObject({
+        canAccept: false,
+        canKeepOriginal: true,
+        result: { original, candidate: original, status: "unavailable", plan: null },
+      });
+      expect(h.owner.resolveCorrection("correction")).toBe(false);
+      expect(h.owner.resolveCorrection("original")).toBe(true);
+      expect(h.draft()).toBe(`Existing field text. ${original}`);
+      expect(h.owner.resolveCorrection("original")).toBe(false);
+
+      await h.start();
+      expect(await h.finish(original)).toBe(true);
+      expect(h.owner.correctionReview).toBeNull();
+      expect(h.draft()).toBe(`Existing field text. ${original} ${original}`);
+      expect(h.onCommit).toHaveBeenCalledTimes(2);
+    },
+  );
 });

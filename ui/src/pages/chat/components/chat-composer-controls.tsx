@@ -3,6 +3,7 @@ import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { registerChatCorrectionsEnglish } from "../../../i18n/locales/en-chat-corrections.ts";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
@@ -21,6 +22,7 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 registerEnglishCatalog(registerSessionNavigationEnglish);
+registerEnglishCatalog(registerChatCorrectionsEnglish);
 
 const MicrophoneMenu = lazy(() => import("./chat-composer-microphone-menu.tsx"), {
   export: "MicrophoneMenu",
@@ -167,20 +169,30 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;
   const holding = () => props.readDictation?.()?.locksComposer === true;
+  const correctionPending = () =>
+    !active() && props.readDictation?.()?.correctionCommitRequired === true;
+  const correctionPendingReason = () =>
+    props.readDictation?.()?.correctionReview
+      ? t("chat.corrections.reviewBeforeRecording")
+      : t("chat.corrections.waitBeforeRecording");
   const startsDictationDirectly = () =>
     props.readDictation !== undefined && props.onToggleVoice === undefined;
   const label = () =>
-    active()
-      ? t("chat.composer.dictationStopAndKeep")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
-  const tooltip = () =>
-    props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
-      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
-          .filter(Boolean)
-          .join(" · ")
+    correctionPending()
+      ? correctionPendingReason()
       : active()
-        ? label()
-        : (props.submitDisabledReason ?? label());
+        ? t("chat.composer.dictationStopAndKeep")
+        : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
+  const tooltip = () =>
+    correctionPending()
+      ? correctionPendingReason()
+      : props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
+        ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
+            .filter(Boolean)
+            .join(" · ")
+        : active()
+          ? label()
+          : (props.submitDisabledReason ?? label());
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
@@ -204,8 +216,16 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
                 ],
           ]}
           type="button"
-          onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
+          onPointerDown={(event: PointerEvent) => {
+            if (!correctionPending()) {
+              props.onDictationPointerDown?.(event);
+            }
+          }}
           onClick={(event: MouseEvent) => {
+            if (correctionPending()) {
+              event.preventDefault();
+              return;
+            }
             if (active()) {
               event.preventDefault();
               // The controller owns hold suppression: releasing a latched hold
@@ -230,11 +250,12 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
           onContextMenu={(event: MouseEvent) => props.readDictation?.()?.handleContextMenu(event)}
           disabled={
             !active() &&
-            (!props.connected ||
+            (correctionPending() ||
+              !props.connected ||
               props.disabled ||
               (!props.readDictation && Boolean(props.submitDisabledReason)))
           }
-          aria-disabled={finalizing() ? "true" : "false"}
+          aria-disabled={finalizing() || correctionPending() ? "true" : "false"}
           aria-label={label()}
         >
           {active() ? (

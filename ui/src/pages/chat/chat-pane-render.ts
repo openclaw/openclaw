@@ -515,6 +515,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.chatState.composerDraft,
         () => this.state === state,
         selfProfileId,
+        this.context.gateway,
       ),
       onOpenTalkSettings: () => this.context.navigate("talk"),
       onOpenDictationSettings: () => this.context.navigate("talk"),

@@ -229,6 +229,8 @@ export function stopRunFromEscape({
     state.mentionMenu.open ||
     props.replyTarget ||
     state.dictation?.active ||
+    state.dictation?.transcribing ||
+    state.dictation?.correctionCommitRequired ||
     !showAbortableUi ||
     !props.onAbort
   ) {

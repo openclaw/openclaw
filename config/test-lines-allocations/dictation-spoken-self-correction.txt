@@ -1,4 +1,5 @@
-# M03 requires independent semantic/range properties, real capture/draft-owner race schedules,
-# preference migration/disable coverage, and accessible review/composer browser cases.
-# Exact net growth: 1,449 test lines; the first 400 use the ordinary allowance.
-1049
+# M03 covers actual Gateway/draft recovery, ordered drain and cancellation,
+# capture admission, local-only preference persistence, mounted Escape/Send controls,
+# review presentation and structural edit-map boundaries. Semantic service remains deferred.
+# Exact net growth: 2,259 test lines; the first 400 use the ordinary allowance.
+1859

@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   collectDictationProtectedSpans,
   validateDictationPlan,
@@ -8,7 +8,8 @@ import {
 } from "./dictation-refinement.ts";
 import { prepareDictationRefinement } from "./spoken-corrections.ts";
 
-// Synthetic transcript fixtures test text semantics, not microphone/STT accuracy.
+// These fixtures cover retention and structural maps, not accepted semantic intent
+// or microphone/STT accuracy. No current production preparer supplies an edit plan.
 function source(
   text: string,
   fields: Partial<DictationRefinementSource> = {},
@@ -42,133 +43,173 @@ function replacement(start: number, end: number, value = "B", id = "one"): Dicta
   };
 }
 
-describe("spoken corrections", () => {
+describe("spoken correction availability", () => {
   it.each([
-    ["Meet on Tuesday sorry Wednesday", "Meet on Wednesday"],
-    ["The total is fifteen no fifty dollars", "The total is fifty dollars"],
-    ["Do not send it Tuesday sorry Wednesday", "Do not send it Wednesday"],
-    ["Maybe Tuesday sorry Wednesday if the bus runs", "Maybe Wednesday if the bus runs"],
-    ["The total is twenty-five no thirty dollars", "The total is thirty dollars"],
-    ["Use minus fifteen no negative fifty volts", "Use negative fifty volts"],
-    ["Use -15 no 50 volts", "Use 50 volts"],
-    ["Use 15.5 no 50.5 volts", "Use 50.5 volts"],
-    ["Tuesday, no Wednesday, actually Thursday", "Thursday"],
-    ["Tuesday sorry Wednesday. Fifteen no fifty dollars", "Wednesday. fifty dollars"],
-    ["Tell John to call change John to James", "Tell James to call"],
-    ["Meet Tuesday. scratch that last sentence", ""],
-    ["First sentence. Second sentence. scratch that last sentence", "First sentence."],
-    ["Tuesday no Wednesday. scratch that last sentence", ""],
-    ["Meet Tuesday restart this sentence Meet Wednesday", "Meet Wednesday"],
-    [
-      "First sentence. Meet Tuesday restart this sentence Meet Wednesday",
-      "First sentence. Meet Wednesday",
-    ],
-  ])("prepares an explicit reviewed candidate for %s", (original, candidate) => {
-    const result = prepare(original);
-    expect(result.candidate).toBe(candidate);
-    expect(result.original).toBe(original);
-    expect(result.status).toBe("needs-review");
-    expect(result.reasons).toEqual(["metadata-incomplete"]);
-    expect(result.plan?.edits.length).toBeGreaterThan(0);
-  });
-
-  it.each([
+    "I work Tuesday, no Wednesday shifts are available",
+    "I work Tuesday, no Wednesday shifts this month",
+    // Former positive commands remain literal while the semantic owner is absent.
+    "Meet on Tuesday sorry Wednesday",
+    "The total is fifteen no fifty dollars",
+    "Do not send it Tuesday sorry Wednesday",
+    "Tuesday, no Wednesday, actually Thursday",
+    "Tell John to call change John to James",
+    "First sentence. Second sentence. scratch that last sentence",
+    "First sentence. Meet Tuesday restart this sentence Meet Wednesday",
     "Actually open the browser and buy it",
-    "Do not send this message",
-    "There is no Wednesday delivery",
-    "Tuesday is no Wednesday",
     'He said "Tuesday no Wednesday"',
-    "He said quote no Wednesday end quote",
-    "He said quote Tuesday sorry Wednesday end quote",
     "`Tuesday sorry Wednesday`",
-    "```Tuesday no Wednesday```",
-    "The snippet is ``Tuesday sorry Wednesday``.",
-    "````Tuesday sorry Wednesday````",
-    "He said “Tuesday no Wednesday”",
-    "‘Don’t send it Tuesday sorry Wednesday’",
-    "'It's Tuesday no Wednesday'",
     "The provider already returned Wednesday",
-    "Tuesday no not Wednesday",
-    "Tuesday sorry maybe Wednesday",
-    "Tuesday_id sorry Wednesday_id",
-    "customer15 no 50",
-    "fifteen no 50customer",
-    "fifteen no twenty five_id",
-    "Tuesday sorry Wednesday2",
     "https://example.com/Tuesday sorry Wednesday",
-    "one thousand no fifty dollars",
-    "Use minus 15 no 50 volts",
-    "Use −15 no 50 volts",
-    "The total is fifteen point 5 no 50 dollars",
-    "Use negative 15 no 50 volts",
-    "Use - 15 no 50 volts",
-    "Use − fifteen no 50 volts",
-    "Use − twenty five no fifty volts",
-    "Use plus 15 no 50 volts",
-    "Use 15 point five no 50 volts",
-    "Use fifteen no minus 50 volts",
-  ])("preserves lexical speech: %s", (text) => {
-    const result = prepare(text);
-    expect(result.candidate).toBe(text);
-    expect(result.plan).toBeNull();
-  });
-
-  it.each([
-    ["Tell John that John should call change John to James", "ambiguous-target"],
-    ["Tuesday or Friday sorry Wednesday", "ambiguous-target"],
-    ["fifteen or sixteen no fifty dollars", "ambiguous-target"],
-    ["Scratch that last sentence", "no-target"],
-    ["unfinished sentence scratch that last sentence", "no-target"],
-    ["change John to James", "no-target"],
-    ["restart this sentence Meet Wednesday", "no-target"],
-    ["I might restart this sentence tomorrow", "uncertain-scope"],
-    ["The phrase Tuesday sorry Wednesday", "uncertain-scope"],
-  ])("retains a reviewable original for %s", (text, reason) => {
-    const result = prepare(text);
-    expect(result).toMatchObject({
-      status: "needs-review",
+    "  e\u0301 👨‍👩‍👧 Tuesday sorry Wednesday\r\n\t",
+    "",
+  ])("keeps the exact original without an inferred correction: %s", (text) => {
+    expect(prepare(text)).toEqual({
+      status: "unavailable",
       original: text,
       candidate: text,
       plan: null,
+      reasons: ["corrections-unavailable"],
     });
-    expect(result.reasons).toEqual([reason]);
   });
 
-  it("preserves defaults, transient literal mode, unsupported locales and unfinished speech", () => {
-    const input = source("Tuesday sorry Wednesday");
-    for (const policy of [{ mode: "off" }, { mode: "explicit", literal: true }] as const) {
-      expect(prepareDictationRefinement(input, policy).candidate).toBe(input.text);
+  it.each([
+    [{ mode: "off" }, "off"],
+    [{ mode: "off", literal: true }, "off"],
+    [{ mode: "explicit", literal: true }, "literal"],
+  ] as const)("retains the unchanged raw bypass for %j", (policy, reason) => {
+    const input = source("  Tuesday sorry Wednesday\r\n\t");
+    expect(prepareDictationRefinement(input, policy)).toEqual({
+      status: "unchanged",
+      original: input.text,
+      candidate: input.text,
+      plan: null,
+      reasons: [reason],
+    });
+  });
+
+  it("retains text across locale, finality, bounds and supplied metadata", () => {
+    const inputs = [
+      source("Tuesday sorry Wednesday", { locale: "fr" }),
+      source("Tuesday sorry Wednesday", { isFinal: false }),
+      source("a".repeat(10_001)),
+      source("Tuesday" + " no Wednesday".repeat(9)),
+      source("Tuesday sorry Wednesday", {
+        segments: [
+          { id: "a", range: { start: 0, end: 7 }, speakerId: "first", sequence: 1 },
+          { id: "a", range: { start: 8, end: 23 }, speakerId: "second", sequence: 0 },
+        ],
+        protectedSpans: [{ id: "literal", kind: "literal", range: { start: 0, end: 7 } }],
+      }),
+    ];
+    for (const input of inputs) {
+      expect(prepareDictationRefinement(input, { mode: "explicit" })).toEqual({
+        status: "unavailable",
+        original: input.text,
+        candidate: input.text,
+        plan: null,
+        reasons: ["corrections-unavailable"],
+      });
     }
-    expect(
-      prepareDictationRefinement({ ...input, locale: "fr" }, { mode: "explicit" }).reasons,
-    ).toEqual(["unsupported-locale"]);
-    expect(
-      prepareDictationRefinement({ ...input, isFinal: false }, { mode: "explicit" }).reasons,
-    ).toEqual(["not-final"]);
-    expect(prepare("a".repeat(10_001))).toMatchObject({
-      candidate: "a".repeat(10_001),
-      plan: null,
-      reasons: ["input-too-large"],
+  });
+});
+
+describe("revisioned edit plan validation", () => {
+  it("rejects old captures and revisions even when text is identical", () => {
+    const input = source("abcd efgh");
+    const supplied = plan(input, [replacement(0, 4, "ABCD")]);
+    expect(validateDictationPlan(input, supplied)).toEqual({ ok: true, candidate: "ABCD efgh" });
+    expect(validateDictationPlan({ ...input, captureToken: {} }, supplied)).toEqual({
+      ok: false,
+      reason: "source-changed",
+    });
+    expect(validateDictationPlan({ ...input, revision: 2 }, supplied)).toEqual({
+      ok: false,
+      reason: "source-changed",
+    });
+    expect(validateDictationPlan(input, { ...supplied, schemaVersion: 2 })).toEqual({
+      ok: false,
+      reason: "invalid-plan",
     });
   });
 
-  it("collapses chains against original ranges and bounds correction depth", () => {
-    const result = prepare("Tuesday, no Wednesday, actually Thursday");
-    expect(result.plan?.edits).toHaveLength(1);
-    expect(result.plan?.edits[0]).toMatchObject({
-      range: { start: 0, end: 40 },
-      replacement: "Thursday",
-      chainDepth: 2,
+  it("rejects malformed, duplicate, overlapping and oversized maps at their boundary", () => {
+    const input = source("abcd efgh");
+    const cases: [DictationEdit[], string][] = [
+      [[replacement(-1, 2)], "invalid-range"],
+      [[replacement(0, 99)], "invalid-range"],
+      [[replacement(1.5, 2)], "invalid-range"],
+      [[replacement(2, 2)], "invalid-range"],
+      [[replacement(0, 2), replacement(1, 3, "C", "two")], "overlap"],
+      [[replacement(0, 2), replacement(3, 4)], "duplicate-id"],
+      [Array.from({ length: 33 }, (_, i) => replacement(0, 1, "x", String(i))), "plan-too-large"],
+      [[{ ...replacement(0, 2), chainDepth: 0 }], "chain-limit"],
+      [[{ ...replacement(0, 2), chainDepth: 9 }], "chain-limit"],
+      [[replacement(0, 2, "\ud800")], "unicode-boundary"],
+      [[replacement(0, 2, "x".repeat(10_001))], "plan-too-large"],
+    ];
+    for (const [edits, reason] of cases) {
+      expect(validateDictationPlan(input, plan(input, edits))).toEqual({ ok: false, reason });
+    }
+  });
+
+  it("rejects unfinished or oversized sources before applying a supplied map", () => {
+    const input = source("abcd efgh");
+    const supplied = plan(input, [replacement(0, 4, "ABCD")]);
+    expect(validateDictationPlan({ ...input, isFinal: false }, supplied)).toEqual({
+      ok: false,
+      reason: "not-final",
     });
-    const tooDeep = "Tuesday" + " no Wednesday".repeat(9);
-    expect(prepare(tooDeep)).toMatchObject({
-      candidate: tooDeep,
-      plan: null,
-      reasons: ["chain-limit"],
+    const oversized = source("a".repeat(10_001));
+    expect(validateDictationPlan(oversized, plan(oversized, [replacement(0, 1)]))).toEqual({
+      ok: false,
+      reason: "input-too-large",
     });
   });
 
-  it("consumes real metadata without treating callback time or a long gap as intent", () => {
+  it("preserves lexical and caller-supplied protected spans", () => {
+    const quoted = source('"Tuesday" sorry Wednesday');
+    expect(validateDictationPlan(quoted, plan(quoted, [replacement(1, 8)]))).toEqual({
+      ok: false,
+      reason: "protected-span",
+    });
+    const protectedInput = source("Tuesday sorry Wednesday", {
+      protectedSpans: [{ id: "literal", kind: "literal", range: { start: 0, end: 7 } }],
+    });
+    expect(
+      validateDictationPlan(protectedInput, plan(protectedInput, [replacement(0, 7)])),
+    ).toEqual({ ok: false, reason: "protected-span" });
+  });
+
+  it("cannot omit or forge a protected-range declaration", () => {
+    const input = source('"name" alpha beta');
+    const supplied = plan(input, [replacement(7, 12, "omega")]);
+    expect(validateDictationPlan(input, supplied)).toEqual({
+      ok: true,
+      candidate: '"name" omega beta',
+    });
+    expect(validateDictationPlan(input, { ...supplied, protectedSpans: [] })).toEqual({
+      ok: false,
+      reason: "invalid-plan",
+    });
+    expect(
+      validateDictationPlan(input, {
+        ...supplied,
+        protectedSpans: [{ id: "fake", kind: "quote", range: { start: 0, end: 1 } }],
+      }),
+    ).toEqual({ ok: false, reason: "invalid-plan" });
+  });
+
+  it("rejects an unquoted edit authorized by a protected trigger", () => {
+    const input = source('Tuesday "sorry" Wednesday');
+    const forged = replacement(0, 7, "Wednesday");
+    forged.triggerRange = { start: 9, end: 14 };
+    expect(validateDictationPlan(input, plan(input, [forged]))).toEqual({
+      ok: false,
+      reason: "protected-span",
+    });
+  });
+
+  it("validates supplied metadata without treating a long gap as semantic intent", () => {
     const input = source("Tuesday sorry Wednesday", {
       segments: [
         {
@@ -189,9 +230,15 @@ describe("spoken corrections", () => {
         },
       ],
     });
+    const supplied = plan(input, [replacement(0, 7, "Friday")]);
+    expect(validateDictationPlan(input, supplied)).toEqual({
+      ok: true,
+      candidate: "Friday sorry Wednesday",
+    });
     expect(prepareDictationRefinement(input, { mode: "explicit" })).toMatchObject({
-      candidate: "Wednesday",
-      status: "needs-review",
+      candidate: input.text,
+      plan: null,
+      status: "unavailable",
     });
     const second = input.segments![1]!;
     for (const [change, reason] of [
@@ -200,80 +247,13 @@ describe("spoken corrections", () => {
       [{ id: "a" }, "duplicate-id"],
       [{ startMs: 100 }, "metadata-reordered"],
     ] as const) {
-      const result = prepareDictationRefinement(
-        { ...input, segments: [input.segments![0]!, { ...second, ...change }] },
-        { mode: "explicit" },
-      );
-      expect(result).toMatchObject({ candidate: input.text, plan: null, reasons: [reason] });
+      expect(
+        validateDictationPlan(
+          { ...input, segments: [input.segments![0]!, { ...second, ...change }] },
+          supplied,
+        ),
+      ).toEqual({ ok: false, reason });
     }
-  });
-});
-
-describe("revisioned edit plan validation", () => {
-  it("rejects old captures and revisions even when text is identical", () => {
-    const input = source("Tuesday sorry Wednesday");
-    const result = prepareDictationRefinement(input, { mode: "explicit" });
-    assert.isNotNull(result.plan);
-    expect(validateDictationPlan({ ...input, captureToken: {} }, result.plan)).toEqual({
-      ok: false,
-      reason: "source-changed",
-    });
-    expect(validateDictationPlan({ ...input, revision: 2 }, result.plan)).toEqual({
-      ok: false,
-      reason: "source-changed",
-    });
-    expect(validateDictationPlan(input, { ...result.plan, schemaVersion: 2 }).ok).toBe(false);
-  });
-
-  it("rejects malformed, duplicate, overlapping, protected and oversized maps", () => {
-    const input = source("abcd efgh");
-    for (const edits of [
-      [replacement(-1, 2)],
-      [replacement(0, 99)],
-      [replacement(1.5, 2)],
-      [replacement(2, 2)],
-      [replacement(0, 2), replacement(1, 3, "C", "two")],
-      [replacement(0, 2), replacement(3, 4)],
-      Array.from({ length: 33 }, (_, i) => replacement(0, 1, "x", String(i))),
-      [{ ...replacement(0, 2), chainDepth: 9 }],
-      [replacement(0, 2, "\ud800")],
-    ]) {
-      expect(validateDictationPlan(input, plan(input, edits)).ok).toBe(false);
-    }
-    const quoted = source('"Tuesday" sorry Wednesday');
-    expect(validateDictationPlan(quoted, plan(quoted, [replacement(1, 8)]))).toEqual({
-      ok: false,
-      reason: "protected-span",
-    });
-    const protectedInput = source("Tuesday sorry Wednesday", {
-      protectedSpans: [{ id: "literal", kind: "literal", range: { start: 0, end: 7 } }],
-    });
-    expect(prepareDictationRefinement(protectedInput, { mode: "explicit" }).candidate).toBe(
-      protectedInput.text,
-    );
-  });
-
-  it("cannot omit or forge a protected-range declaration", () => {
-    const input = source('"name" Tuesday sorry Wednesday');
-    const result = prepareDictationRefinement(input, { mode: "explicit" });
-    assert.isNotNull(result.plan);
-    expect(validateDictationPlan(input, { ...result.plan, protectedSpans: [] }).ok).toBe(false);
-    expect(
-      validateDictationPlan(input, {
-        ...result.plan,
-        protectedSpans: [{ id: "fake", kind: "quote", range: { start: 0, end: 1 } }],
-      }).ok,
-    ).toBe(false);
-  });
-
-  it("rejects an unquoted edit authorized by a protected trigger", () => {
-    const input = source('Tuesday "sorry" Wednesday');
-    const forged = replacement(0, 7, "Wednesday");
-    forged.triggerRange = { start: 9, end: 14 };
-    expect(validateDictationPlan(input, plan(input, [forged]))).toEqual({
-      ok: false,
-      reason: "protected-span",
-    });
   });
 
   it("property-checks generated UTF-16 ranges against independently known grapheme boundaries", () => {
@@ -307,21 +287,15 @@ describe("revisioned edit plan validation", () => {
     }
   });
 
-  it("property-checks ordered chain composition without changing surrounding negation or units", () => {
-    const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-    for (let start = 0; start < dayNames.length; start += 1) {
-      for (let depth = 1; depth <= 8; depth += 1) {
-        const chain = Array.from(
-          { length: depth + 1 },
-          (_, i) => dayNames[(start + i) % dayNames.length]!,
-        ).join(" no ");
-        const text = `Do not send it ${chain} if the total is fifteen dollars`;
-        const result = prepare(text);
-        expect(result.candidate).toBe(
-          `Do not send it ${dayNames[(start + depth) % dayNames.length]} if the total is fifteen dollars`,
-        );
-        expect(result.plan?.edits).toHaveLength(1);
-      }
-    }
+  it("applies supplied maps in original-source order without changing negation or quantities", () => {
+    const input = source("Do not send Alpha or Beta if total is fifteen dollars");
+    const supplied = plan(input, [
+      { ...replacement(21, 25, "second", "two"), chainDepth: 8 },
+      replacement(12, 17, "first"),
+    ]);
+    expect(validateDictationPlan(input, supplied)).toEqual({
+      ok: true,
+      candidate: "Do not send first or second if total is fifteen dollars",
+    });
   });
 });

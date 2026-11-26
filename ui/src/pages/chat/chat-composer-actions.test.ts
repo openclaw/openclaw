@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -15,6 +17,7 @@ import {
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { placeComposerDictation } from "./composer-dictation-session.ts";
+import { audioFixture, MockDictationAudioContext } from "./talk/input.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -256,15 +259,18 @@ describe("renderChatComposer controls", () => {
     );
   });
 
-  it("keeps Stop and Send mounted but aria-disabled while dictation finalizes", () => {
-    const { container } = renderDictatingComposer({ finalizing: true });
+  it.each([false, true])(
+    "keeps active Stop and Send mounted while dictation finalizes (correction=%s)",
+    (correctionCapture) => {
+      const { container } = renderDictatingComposer({ finalizing: true, correctionCapture });
 
-    for (const kind of ["dictating", "dictation-commit"]) {
-      const action = query(container, `.chat-send-btn--${kind}`);
-      expect(action?.disabled).toBe(false);
-      expect(action?.getAttribute("aria-disabled")).toBe("true");
-    }
-  });
+      for (const kind of ["dictating", "dictation-commit"]) {
+        const action = query(container, `.chat-send-btn--${kind}`);
+        expect(action?.disabled).toBe(false);
+        expect(action?.getAttribute("aria-disabled")).toBe("true");
+      }
+    },
+  );
 
   it.each([false, true])(
     "preserves Off empty Send and blocks uncommitted correction captures (correction=%s)",
@@ -286,41 +292,82 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("holds keyboard and pointer Send while an inactive recording awaits review", async () => {
-    const { container, props, onSend } = renderComposer({
-      draft: "Typed beginning",
-      onToggleRealtimeTalk: vi.fn(),
-    });
-    const dictation = getChatComposerState(props.paneId).dictation;
-    if (!dictation) {
-      throw new Error("expected the composer dictation owner");
-    }
-    const original = "Tell John that John should call change John to James";
-    vi.spyOn(dictation, "correctionCommitRequired", "get").mockReturnValue(true);
-    vi.spyOn(dictation, "correctionReview", "get").mockReturnValue({
-      result: {
-        status: "needs-review",
-        original,
-        candidate: original,
-        plan: null,
-        reasons: ["ambiguous-target"],
-      },
-      canAccept: false,
-      canKeepOriginal: true,
-      invalidated: false,
-    });
-    renderComposerInto(container, props);
-    await waitForSolid(() =>
-      expect(container.querySelector(".composer-correction-review")).not.toBeNull(),
-    );
-    const send = primaryButton(container);
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("aria-label")).toBe(t("chat.corrections.reviewBeforeSend"));
-    send.click();
-    pressComposerEnter(container);
-    expect(textarea(container).value).toBe("Typed beginning");
-    expect(onSend).not.toHaveBeenCalled();
-  });
+  it.each(["finalization", "review"])(
+    "holds Send and both microphone controls while an inactive recording awaits %s",
+    async (phase) => {
+      const { container, props, onSend } = renderComposer({
+        draft: "Typed beginning",
+        onToggleRealtimeTalk: vi.fn(),
+      });
+      const dictation = getChatComposerState(props.paneId).dictation;
+      if (!dictation) {
+        throw new Error("expected the composer dictation owner");
+      }
+      const original = "I work Tuesday, no Wednesday shifts are available";
+      const pending = vi.spyOn(dictation, "correctionCommitRequired", "get").mockReturnValue(true);
+      const review = vi.spyOn(dictation, "correctionReview", "get").mockReturnValue(
+        phase === "review"
+          ? {
+              result: {
+                status: "unavailable",
+                original,
+                candidate: original,
+                plan: null,
+                reasons: ["corrections-unavailable"],
+              },
+              canAccept: false,
+              canKeepOriginal: true,
+              invalidated: false,
+            }
+          : null,
+      );
+      const start = vi.spyOn(dictation, "startDirect").mockReturnValue(false);
+      const hold = vi.spyOn(dictation, "handlePointerDown").mockReturnValue(false);
+      renderComposerInto(container, props);
+      if (phase === "review") {
+        await waitForSolid(() =>
+          expect(container.querySelector(".composer-correction-review")).not.toBeNull(),
+        );
+      }
+      const microphones = container.querySelectorAll<HTMLButtonElement>(".chat-send-btn--voice");
+      expect(microphones).toHaveLength(2);
+      const reason = t(
+        phase === "review"
+          ? "chat.corrections.reviewBeforeRecording"
+          : "chat.corrections.waitBeforeRecording",
+      );
+      for (const microphone of microphones) {
+        expect(microphone.disabled).toBe(true);
+        expect(microphone.getAttribute("aria-disabled")).toBe("true");
+        expect(microphone.getAttribute("aria-label")).toBe(reason);
+        expect(microphone.closest("openclaw-tooltip")).toHaveProperty("content", reason);
+        microphone.click();
+        // Late queued events also recheck the owner before any start-selection callback.
+        microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        microphone.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      }
+      expect(start).not.toHaveBeenCalled();
+      expect(hold).not.toHaveBeenCalled();
+      expect(props.onToggleRealtimeTalk).not.toHaveBeenCalled();
+      const send = primaryButton(container);
+      expect(send.disabled).toBe(true);
+      if (phase === "review") {
+        expect(send.getAttribute("aria-label")).toBe(t("chat.corrections.reviewBeforeSend"));
+      }
+      send.click();
+      pressComposerEnter(container);
+      expect(textarea(container).value).toBe("Typed beginning");
+      expect(onSend).not.toHaveBeenCalled();
+      pending.mockReturnValue(false);
+      review.mockReturnValue(null);
+      renderComposerInto(container, props);
+      const ready = container.querySelectorAll<HTMLButtonElement>(".chat-send-btn--voice");
+      expect(ready).toHaveLength(2);
+      for (const microphone of ready) {
+        expect(microphone.disabled).toBe(false);
+      }
+    },
+  );
 
   it("keeps dictation available while Talk is held during an active turn", () => {
     const { container } = renderComposer({
@@ -529,6 +576,229 @@ describe("renderChatComposer controls", () => {
       expect(text).not.toContain(" · ");
     }
   });
+
+  it.each([
+    { mode: "explicit", withSlashMenu: false },
+    { mode: "explicit", withSlashMenu: true },
+    { mode: "off", withSlashMenu: false },
+  ] as const)(
+    "preserves mounted dictation Escape ownership (mode=$mode, slash menu=$withSlashMenu)",
+    async ({ mode, withSlashMenu }) => {
+      // Real mounted owners with synthetic audio/Gateway I/O; this is not a live microphone test.
+      const mediaDescriptor = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+      const getUserMedia = vi.fn(async () => audioFixture().stream);
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia },
+      });
+      onTestFinished(() => {
+        if (mediaDescriptor) {
+          Object.defineProperty(navigator, "mediaDevices", mediaDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "mediaDevices");
+        }
+      });
+      vi.stubGlobal("AudioContext", MockDictationAudioContext);
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+      const listeners = new Set<(event: GatewayEventFrame) => void>();
+      const client = createTestGatewayClient(async (method) => {
+        if (method === "talk.catalog") {
+          return { realtime: { ready: false }, transcription: { ready: true } };
+        }
+        if (method === "talk.config") {
+          return { config: {} };
+        }
+        if (method === "talk.session.create") {
+          return {
+            sessionId: "escape-capture",
+            transcriptionSessionId: "escape-capture",
+            audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+          };
+        }
+        if (method === "talk.session.close" || method === "talk.session.appendAudio") {
+          return { ok: true };
+        }
+        throw new Error(`Unexpected dictation effect: ${method}`);
+      });
+      client.addEventListener = (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      };
+      const onAbort = vi.fn();
+      let draft = "Keep this draft";
+      const draftSource = createComposerDraftSource(() => ({
+        draft,
+        mentions: [],
+        attachments: [],
+        pendingAttachmentReads: 0,
+      }));
+      const onDraftChange = vi.fn((value: string) => {
+        draft = value;
+        draftSource.publish();
+      });
+      const view = renderComposer({
+        canAbort: true,
+        onAbort,
+        draft,
+        getDraft: () => draft,
+        draftSource,
+        onDraftChange,
+        gatewayClient: client,
+        onToggleRealtimeTalk: vi.fn(),
+        composerCorrections:
+          mode === "explicit" ? { version: 1, mode, locale: "en-US" } : undefined,
+        captureDictationDraft: () => draftSource.captureRevision(),
+      });
+      document.body.append(view.container);
+      const state = getChatComposerState(view.props.paneId);
+      const dictation = state.dictation;
+      if (!dictation) {
+        throw new Error("expected the composer dictation owner");
+      }
+      await waitForSolid(() => expect(state.microphonePicker?.dictationStatus).toBe("ready"));
+      const mobileMicrophone = query(
+        view.container,
+        ".chat-mobile-dictation-action .chat-send-btn--voice",
+      );
+      expect(mobileMicrophone?.disabled).toBe(false);
+      mobileMicrophone!.click();
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(dictation.connecting).toBe(false));
+      expect(dictation.active).toBe(true);
+      const stopped = dictation.finishActive();
+      const original = "I work Tuesday, no Wednesday shifts are available";
+      const retainedListeners = [...listeners];
+      expect(retainedListeners.length).toBeGreaterThan(0);
+      const deliverRetainedFinal = () => {
+        for (const payload of [
+          { type: "transcript", text: original, final: true },
+          { type: "close", reason: "completed" },
+        ]) {
+          for (const listener of retainedListeners) {
+            listener({
+              type: "event",
+              event: "talk.event",
+              payload: { transcriptionSessionId: "escape-capture", ...payload },
+            });
+          }
+        }
+      };
+      const cancel = vi.spyOn(dictation, "cancel");
+      const escapedToWindow = vi.fn();
+      const recordWindowEscape = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          escapedToWindow();
+        }
+      };
+      window.addEventListener("keydown", recordWindowEscape);
+      onTestFinished(() => window.removeEventListener("keydown", recordWindowEscape));
+
+      if (mode === "off") {
+        // Off releases active capture before its final drain. Escape still belongs to dictation.
+        expect(dictation).toMatchObject({
+          active: false,
+          transcribing: true,
+          correctionCommitRequired: false,
+          correctionReview: null,
+        });
+        const event = pressComposerKey(view.container, "Escape");
+        expect(event.defaultPrevented).toBe(true);
+        expect(onAbort).not.toHaveBeenCalled();
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(escapedToWindow).not.toHaveBeenCalled();
+        // Exercise the actual retained provider callback even after cancellation removes it.
+        deliverRetainedFinal();
+        await expect(stopped).resolves.toBe(false);
+        expect(dictation.transcribing).toBe(false);
+        expect(dictation.correctionReview).toBeNull();
+        expect(textarea(view.container).value).toBe("Keep this draft");
+        expect(draft).toBe("Keep this draft");
+        expect(onDraftChange).not.toHaveBeenCalled();
+        expect(view.onSend).not.toHaveBeenCalled();
+        expect(onAbort).not.toHaveBeenCalled();
+        return;
+      }
+
+      deliverRetainedFinal();
+      await stopped;
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".composer-correction-review")).not.toBeNull(),
+      );
+      expect(dictation.correctionReview).toMatchObject({
+        result: {
+          status: "unavailable",
+          original,
+          candidate: original,
+          plan: null,
+          reasons: ["corrections-unavailable"],
+        },
+        canAccept: false,
+        canKeepOriginal: true,
+      });
+      expect(dictation.active).toBe(false);
+      const microphones =
+        view.container.querySelectorAll<HTMLButtonElement>(".chat-send-btn--voice");
+      expect(microphones).toHaveLength(2);
+      for (const microphone of microphones) {
+        expect(microphone.disabled).toBe(true);
+        expect(microphone.getAttribute("aria-label")).toBe(
+          t("chat.corrections.reviewBeforeRecording"),
+        );
+        microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        microphone.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      }
+      expect(dictation.active).toBe(false);
+      expect(dictation.correctionCommitRequired).toBe(true);
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      pressComposerEnter(view.container);
+      expect(view.onSend).not.toHaveBeenCalled();
+      expect(onDraftChange).not.toHaveBeenCalled();
+      if (withSlashMenu) {
+        const input = textarea(view.container);
+        input.dispatchEvent(
+          new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "/" }),
+        );
+        input.value = "/";
+        input.setSelectionRange(1, 1);
+        input.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText", data: "/" }),
+        );
+        await waitForSolid(() => expect(state.slashMenu.state.slashMenuOpen).toBe(true));
+        expect(onDraftChange).toHaveBeenCalledOnce();
+        expect(draft).toBe("/");
+        onDraftChange.mockClear();
+        const menuEscape = pressComposerKey(view.container, "Escape");
+        expect(menuEscape.defaultPrevented).toBe(true);
+        expect(state.slashMenu.state.slashMenuOpen).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+        expect(onAbort).not.toHaveBeenCalled();
+        expect(dictation.correctionCommitRequired).toBe(true);
+        expect(dictation.correctionReview?.result.original).toBe(original);
+        // Real input makes insertion stale, but closing its menu must not erase readable recovery.
+        expect(dictation.correctionReview?.canKeepOriginal).toBe(false);
+        await waitForSolid(() =>
+          expect(view.container.querySelector(".composer-correction-review")?.textContent).toContain(
+            original,
+          ),
+        );
+        expect(escapedToWindow).toHaveBeenCalledOnce();
+        escapedToWindow.mockClear();
+      }
+
+      const event = pressComposerKey(view.container, "Escape");
+      expect(onAbort).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(escapedToWindow).not.toHaveBeenCalled();
+      expect(dictation.correctionCommitRequired).toBe(false);
+      expect(dictation.correctionReview).toBeNull();
+      expect(textarea(view.container).value).toBe(withSlashMenu ? "/" : "Keep this draft");
+      expect(onDraftChange).not.toHaveBeenCalled();
+      expect(view.onSend).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops an abortable run with Escape unless reply or menu precedence owns it", () => {
     const onAbort = vi.fn();

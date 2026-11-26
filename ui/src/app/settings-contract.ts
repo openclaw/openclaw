@@ -231,7 +231,7 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
-  // Browser-local opt-in, versioned English grammar; no transcript or Literal state is saved.
+  // Browser-local review preference; no transcript or Literal state is saved.
   composerCorrections?: DictationCorrectionsPreference;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;

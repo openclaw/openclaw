@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
@@ -69,6 +70,7 @@ export function createChatPaneDictationProps(
   draft: Pick<ReturnType<typeof createComposerDraftSource>, "captureRevision">,
   isPaneCurrent: () => boolean,
   profileId: string | null,
+  gateway: Pick<ApplicationGateway, "snapshot" | "connectionRevision">,
 ): Pick<
   ChatProps,
   | "composerHoldToRecord"
@@ -82,7 +84,9 @@ export function createChatPaneDictationProps(
   return {
     composerHoldToRecord: state.settings.composerHoldToRecord,
     composerCorrections: state.settings.composerCorrections,
-    dictationContextKey: JSON.stringify([state.connectionEpoch, profileId]),
+    // The existing presentation scope survives transport-only epoch changes.
+    // Actual account/client/session and draft guards still own retirement.
+    dictationContextKey: JSON.stringify([gatewayPresentationScope(gateway).key, profileId]),
     captureDictationDraft: () => {
       const isDraftCurrent = draft.captureRevision();
       const physicalSessionId = state.currentSessionId;

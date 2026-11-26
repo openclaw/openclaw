@@ -24,7 +24,7 @@ export function createComposerCorrectionBindings(
       literal: dictation.literal,
       disabled: dictation.locksComposer,
       onPolicyChange: (mode: "off" | "explicit") => {
-        // Invalidate pending plans synchronously before the preference projection updates.
+        // Update next-capture policy before the preference projection refreshes.
         dictation.update({ ...options, corrections: { mode, locale: "en-US" } });
         if (props.onComposerCorrectionsChange) {
           props.onComposerCorrectionsChange(mode);

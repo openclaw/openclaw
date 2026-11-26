@@ -194,7 +194,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (this.phase !== "idle" || this.correctionCommitRequired || !this.canHold()) {
       return false;
     }
     // Surfaces without Talk do not need the hold discriminator. Enter the same
@@ -215,14 +215,12 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     const correctionInvalidated = Boolean(
-      this.correctionCapture &&
-      ((!options.connected && this.options.connected) ||
-        this.options.corrections?.mode !== options.corrections?.mode ||
-        this.options.corrections?.locale !== options.corrections?.locale),
+      this.correctionCapture && !options.connected && this.options.connected,
     );
     if (this.correctionCapture && correctionInvalidated) {
-      // A policy change or lost transport revokes the semantic plan. The same
-      // local context can still expose recognized text for manual recovery.
+      // Lost transport revokes the semantic plan but keeps recognized text for
+      // same-context recovery. Preference changes apply to the next capture;
+      // this capture retains the policy and locale sampled when it started.
       this.correctionCapture.correctionInvalidated = true;
     }
     this.options = options;
@@ -250,7 +248,12 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   handlePointerDown(event: PointerEvent): boolean {
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
+    if (
+      event.button !== 0 ||
+      this.phase !== "idle" ||
+      this.correctionCommitRequired ||
+      !this.canHold()
+    ) {
       return false;
     }
     event.preventDefault();
@@ -374,8 +377,9 @@ export class ComposerDictationOwner extends EventTarget {
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
     if (
+      event.defaultPrevented ||
       event.key !== "Escape" ||
-      (this.phase === "idle" && !this.transcribing && !this.pendingCorrection)
+      (this.phase === "idle" && !this.transcribing && !this.correctionCapture)
     ) {
       return;
     }
@@ -409,6 +413,14 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private async start(): Promise<void> {
+    // The delayed hold must not retire an unresolved Explicit or Literal capture.
+    if (this.correctionCommitRequired) {
+      this.clearPointerGesture();
+      if (this.phase === "holding") {
+        this.setPhase("idle");
+      }
+      return;
+    }
     const client = this.options.client;
     if (this.phase !== "holding" || !client || !this.canHold()) {
       await this.stop({ commit: false });
@@ -426,12 +438,6 @@ export class ComposerDictationOwner extends EventTarget {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     const captureStart = {};
-    if (this.correctionCapture) {
-      // A new recording supersedes an unaccepted correction, including a provider
-      // result still in the existing FIFO. Ordinary Off dictation keeps its FIFO.
-      this.commits?.retire();
-      this.pendingCorrection = null;
-    }
     const corrections = this.options.corrections;
     this.correctionCapture =
       corrections?.mode === "explicit"
@@ -531,6 +537,7 @@ export class ComposerDictationOwner extends EventTarget {
     if (!options.commit) {
       this.correctionCapture = null;
       this.pendingCorrection = null;
+      this.syncCancellationListeners();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -613,7 +620,7 @@ export class ComposerDictationOwner extends EventTarget {
         original: text,
         candidate: text,
         plan: null,
-        reasons: ["review-required"],
+        reasons: ["corrections-unavailable"],
       };
     }
     if (this.correctionCapture !== capture) {
@@ -625,6 +632,7 @@ export class ComposerDictationOwner extends EventTarget {
       this.isCorrectionSourceCurrent(capture)
     ) {
       this.correctionCapture = null;
+      this.syncCancellationListeners();
       this.options.onCommit(text, true, undefined, true);
       this.dispatchEvent(new Event("change"));
       return true;
@@ -688,7 +696,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing || this.pendingCorrection) {
+    if (this.phase !== "idle" || this.transcribing || this.correctionCapture) {
       if (this.cancellationListeners) {
         return;
       }

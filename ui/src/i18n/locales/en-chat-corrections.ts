@@ -6,18 +6,20 @@ const enChatCorrections = {
     corrections: {
       policy: "Spoken corrections",
       off: "Off",
-      explicit: "Explicit corrections (English)",
+      explicit: "Review original (corrections unavailable)",
       literal: "Literal for this recording",
       literalHint: "Keep correction words as dictated text for the next recording.",
-      reviewTitle: "Review spoken corrections",
+      reviewTitle: "Review dictated text",
       reviewBeforeSend: "Review the recording before sending.",
+      waitBeforeRecording: "Wait for the current recording to finish before starting another.",
+      reviewBeforeRecording: "Review or cancel the current recording before starting another.",
       oneReady: "1 proposed correction is ready for review.",
       manyReady: "{count} proposed corrections are ready for review.",
       originalReady: "The recognized text needs your review. No correction was applied.",
       original: "Original recognized text",
       candidate: "Proposed correction",
       emptyCandidate: "No dictated text remains after this correction.",
-      noCandidate: "No unique correction could be prepared for this recording.",
+      noCandidate: "No correction is available. You can keep the original text or cancel.",
       changes: "Inspect changed words",
       before: "Before",
       after: "After",
@@ -27,6 +29,8 @@ const enChatCorrections = {
       cancel: "Cancel",
       boundary: "Only this recording's unsent text can change. Nothing is sent automatically.",
       reasons: {
+        "corrections-unavailable":
+          "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
         off: "Spoken corrections are off. The recognized text is unchanged.",
         literal: "Literal mode keeps correction words as recognized text.",
         "unsupported-locale":
@@ -39,7 +43,7 @@ const enChatCorrections = {
         "invalid-plan":
           "The proposed correction could not be validated. The recognized text is unchanged.",
         "source-changed":
-          "The draft, connection, or spoken correction setting changed. This earlier correction can no longer be accepted.",
+          "The draft or connection changed. This earlier correction can no longer be accepted.",
         "invalid-range": "The correction did not identify a valid part of this recording.",
         "unicode-boundary":
           "The correction could split a written character, so it was not applied.",

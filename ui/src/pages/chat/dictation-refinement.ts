@@ -34,6 +34,7 @@ export type DictationRefinementPolicy = { mode: "off" | "explicit"; literal?: bo
 export type DictationRefinementReason =
   | "off"
   | "literal"
+  | "corrections-unavailable"
   | "unsupported-locale"
   | "not-final"
   | "input-too-large"

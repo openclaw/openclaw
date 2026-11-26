@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 it.each([390, 1100])(
-  "presents an unsent correction in the production composer at %ipx",
+  "presents an injected original-only review and delegates its choice at %ipx",
   async (width) => {
     await page.viewport(width, 1050);
     document.documentElement.dataset.themeMode = "dark";
@@ -56,23 +56,30 @@ it.each([390, 1100])(
     if (!dictation) {
       throw new Error("expected the composer dictation owner");
     }
+    const original = "I work Tuesday, no Wednesday shifts are available";
     const result = prepareDictationRefinement(
       {
         captureToken: {},
         revision: 0,
-        text: "Tell John to call. Change John to James.",
+        text: original,
         locale: "en-US",
         isFinal: true,
       },
       { mode: "explicit" },
     );
-    expect(result.plan?.edits).toHaveLength(2);
-    // The capture owner publishes this presentation after final recognition.
-    // No microphone/provider result is claimed by this browser fixture.
+    expect(result).toEqual({
+      status: "unavailable",
+      original,
+      candidate: original,
+      plan: null,
+      reasons: ["corrections-unavailable"],
+    });
+    // Presentation/delegation only: these getters inject the real preparer's result.
+    // No capture was admitted, so this fixture cannot prove insertion or microphone/provider I/O.
     vi.spyOn(dictation, "correctionCommitRequired", "get").mockReturnValue(true);
     vi.spyOn(dictation, "correctionReview", "get").mockReturnValue({
       result,
-      canAccept: true,
+      canAccept: false,
       canKeepOriginal: true,
       invalidated: false,
     });
@@ -81,14 +88,20 @@ it.each([390, 1100])(
       expect(container.querySelector(".composer-correction-review")).not.toBeNull(),
     );
     await expect
-      .element(page.getByText("1 proposed correction is ready for review.", { exact: true }))
+      .element(page.getByText("The recognized text needs your review. No correction was applied."))
       .toBeVisible();
-    const summary = page.getByText("Inspect changed words", { exact: true });
-    await userEvent.click(summary);
-    expect(document.activeElement).toBe(summary.element());
-    await expect.element(page.getByText("James", { exact: true })).toBeVisible();
+    await expect
+      .element(
+        page.getByText(
+          "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
+        ),
+      )
+      .toBeVisible();
+    const originalRegion = page.getByRole("region", { name: "Original recognized text" });
+    await expect.element(originalRegion).toHaveTextContent(original);
+    expect(container.querySelector(".composer-correction-review details")).toBeNull();
     const accept = page.getByRole("button", { name: "Accept correction" });
-    await expect.element(accept).toBeEnabled();
+    await expect.element(accept).toBeDisabled();
     expect(accept.element().closest(".agent-chat__input")).toBeNull();
     expect(findPrimaryButton(container).disabled).toBe(true);
     expect(props.onSend).not.toHaveBeenCalled();
@@ -98,5 +111,26 @@ it.each([390, 1100])(
     expect(shell.top).toBeGreaterThanOrEqual(0);
     expect(shell.bottom).toBeLessThanOrEqual(window.innerHeight);
     await page.screenshot({ path: `.artifacts/m03-review/composer-${width}-pending-review.png` });
+
+    const resolve = vi.spyOn(dictation, "resolveCorrection");
+    (originalRegion.element() as HTMLElement).focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(
+      page.getByRole("region", { name: "Proposed correction" }).element(),
+    );
+    await userEvent.tab();
+    expect(document.activeElement).toBe(
+      page.getByRole("button", { name: "Cancel", exact: true }).element(),
+    );
+    await userEvent.tab();
+    expect(document.activeElement).toBe(
+      page.getByRole("button", { name: "Keep original" }).element(),
+    );
+    await userEvent.keyboard("{Enter}");
+    expect(resolve).toHaveBeenCalledExactlyOnceWith("original");
+    // The unmodified owner refuses insertion because the presentation fixture has no capture.
+    expect(resolve).toHaveReturnedWith(false);
+    expect(props.onDraftChange).not.toHaveBeenCalled();
+    expect(props.onSend).not.toHaveBeenCalled();
   },
 );

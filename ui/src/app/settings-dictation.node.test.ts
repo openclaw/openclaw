@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
-import { loadSettings, saveSettings, settingsKeyForGateway } from "./settings.ts";
+import { loadSettings, patchSettings, saveSettings, settingsKeyForGateway } from "./settings.ts";
 
 function stored(gatewayUrl: string): Record<string, unknown> {
   return JSON.parse(localStorage.getItem(settingsKeyForGateway(gatewayUrl)) ?? "{}");
@@ -15,31 +15,50 @@ describe("dictation correction preferences", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
   });
 
-  it("defaults to Off, preserves existing preferences, and scopes opt-in and disable to this Gateway", () => {
+  it("keeps a pre-correction settings shape through Gateway-local opt-in and disable", () => {
     const gatewayUrl = "ws://corrections.example:18789";
     expect(loadSettings(gatewayUrl).composerCorrections).toBeUndefined();
+    // Existing persisted fields, not a claim of running an installed stable app upgrade.
+    const retained = {
+      composerHoldToRecord: false,
+      realtimeTalkInputDeviceId: "usb-microphone",
+      navWidth: 320,
+      themeMode: "dark",
+      pinnedAgentIds: ["research"],
+    };
     localStorage.setItem(
       settingsKeyForGateway(gatewayUrl),
-      JSON.stringify({ composerHoldToRecord: false, themeMode: "dark" }),
+      JSON.stringify({
+        ...retained,
+        sessionsByGateway: {
+          [gatewayUrl]: {
+            sessionKey: "agent:main:saved",
+            lastActiveSessionKey: "agent:main:saved",
+          },
+        },
+      }),
     );
-    const previous = loadSettings(gatewayUrl);
-    expect(previous.composerCorrections).toBeUndefined();
-    saveSettings({
-      ...previous,
+    expect(loadSettings(gatewayUrl)).toMatchObject({
+      ...retained,
+      sessionKey: "agent:main:saved",
+      composerCorrections: undefined,
+    });
+    patchSettings({
+      gatewayUrl,
       composerCorrections: { version: 1, mode: "explicit", locale: "en-US" },
     });
     expect(loadSettings(gatewayUrl)).toMatchObject({
-      composerHoldToRecord: false,
-      themeMode: "dark",
+      ...retained,
+      sessionKey: "agent:main:saved",
       composerCorrections: { version: 1, mode: "explicit", locale: "en-US" },
     });
     expect(
       loadSettings("ws://other-corrections.example:18789").composerCorrections,
     ).toBeUndefined();
-    saveSettings({ ...loadSettings(gatewayUrl), composerCorrections: undefined });
+    patchSettings({ gatewayUrl, composerCorrections: undefined });
     expect(loadSettings(gatewayUrl)).toMatchObject({
-      composerHoldToRecord: false,
-      themeMode: "dark",
+      ...retained,
+      sessionKey: "agent:main:saved",
       composerCorrections: undefined,
     });
     expect(stored(gatewayUrl)).not.toHaveProperty("composerCorrections");
