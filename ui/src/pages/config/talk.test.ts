@@ -263,6 +263,21 @@ describe("Talk catalog boundaries", () => {
 });
 
 describe("Talk device and voice wake settings", () => {
+  it("shows browser-local chimes without the device settings bridge", async () => {
+    const { page } = createTalkMutationHarness();
+    await waitForSolid(() => expect(page.textContent).toContain("Saved for this browser"));
+    expect(page.querySelector('[role="group"][aria-label="Status chimes"]')).not.toBeNull();
+    expect(page.textContent).not.toContain("This iPhone");
+  });
+
+  it("shows native device settings instead of browser-local chimes with the bridge", async () => {
+    const { page } = createTalkMutationHarness({
+      nativeDeviceSettings: nativeVoice(createIosNativeDeviceSettingsSnapshot()).settings,
+    });
+    await waitForSolid(() => expect(page.textContent).toContain("This iPhone"));
+    expect(page.querySelector('[role="group"][aria-label="Status chimes"]')).toBeNull();
+  });
+
   it("renders only published iOS voice controls and routes edits to native owners", async () => {
     const snapshot = createIosNativeDeviceSettingsSnapshot();
     snapshot.voice = { supported: true, wakeEnabled: false };

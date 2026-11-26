@@ -635,50 +635,60 @@ export function Talk(props: TalkViewProps) {
           {readinessRows()}
         </SettingsSection>
         {props.agentSettings}
-        <SettingsSection
-          title={t("talkPage.chimesSection.title")}
-          description={t("talkPage.chimesSection.description")}
-        >
-          <div class="settings-row">
-            <div
-              style={{ display: "flex", "flex-wrap": "wrap", gap: "var(--space-4)" }}
-              role="group"
-              aria-label={t("talkPage.chimesSection.title")}
+        <Show
+          when={props.nativeDeviceSettings}
+          fallback={
+            <SettingsSection
+              title={t("talkPage.chimesSection.title")}
+              description={t("talkPage.chimesSection.description")}
             >
-              <label class="settings-row__desc" style={chimeLabelStyle}>
-                <Checkbox
-                  style={chimeCheckboxStyle}
-                  checked={chimes().talkChimeStart !== false}
-                  onChange={(event) => updateChime("talkChimeStart", event.currentTarget.checked)}
-                />
-                {t("talkPage.chimeStart")}
-              </label>
-              <label class="settings-row__desc" style={chimeLabelStyle}>
-                <Checkbox
-                  style={chimeCheckboxStyle}
-                  checked={chimes().talkChimeEnd !== false}
-                  onChange={(event) => updateChime("talkChimeEnd", event.currentTarget.checked)}
-                />
-                {t("talkPage.chimeEnd")}
-              </label>
-              <Show when={splitMode()}>
-                <label class="settings-row__desc" style={chimeLabelStyle}>
-                  <Checkbox
-                    style={chimeCheckboxStyle}
-                    checked={chimes().talkChimeReply !== false}
-                    onChange={(event) => updateChime("talkChimeReply", event.currentTarget.checked)}
-                  />
-                  {t("talkPage.chimeReply")}
-                </label>
-              </Show>
-            </div>
-          </div>
-        </SettingsSection>
-        <DeviceTalk
-          capability={props.nativeDeviceSettings}
-          snapshot={props.nativeDeviceSnapshot}
-          presentationRetired={props.presentationRetired}
-        />
+              <div class="settings-row">
+                <div
+                  style={{ display: "flex", "flex-wrap": "wrap", gap: "var(--space-4)" }}
+                  role="group"
+                  aria-label={t("talkPage.chimesSection.title")}
+                >
+                  <label class="settings-row__desc" style={chimeLabelStyle}>
+                    <Checkbox
+                      style={chimeCheckboxStyle}
+                      checked={chimes().talkChimeStart !== false}
+                      onChange={(event) =>
+                        updateChime("talkChimeStart", event.currentTarget.checked)
+                      }
+                    />
+                    {t("talkPage.chimeStart")}
+                  </label>
+                  <label class="settings-row__desc" style={chimeLabelStyle}>
+                    <Checkbox
+                      style={chimeCheckboxStyle}
+                      checked={chimes().talkChimeEnd !== false}
+                      onChange={(event) => updateChime("talkChimeEnd", event.currentTarget.checked)}
+                    />
+                    {t("talkPage.chimeEnd")}
+                  </label>
+                  <Show when={splitMode()}>
+                    <label class="settings-row__desc" style={chimeLabelStyle}>
+                      <Checkbox
+                        style={chimeCheckboxStyle}
+                        checked={chimes().talkChimeReply !== false}
+                        onChange={(event) =>
+                          updateChime("talkChimeReply", event.currentTarget.checked)
+                        }
+                      />
+                      {t("talkPage.chimeReply")}
+                    </label>
+                  </Show>
+                </div>
+              </div>
+            </SettingsSection>
+          }
+        >
+          <DeviceTalk
+            capability={props.nativeDeviceSettings}
+            snapshot={props.nativeDeviceSnapshot}
+            presentationRetired={props.presentationRetired}
+          />
+        </Show>
         {props.voiceWake && (
           <VoiceWakeEditor
             readState={props.voiceWake.readState}
