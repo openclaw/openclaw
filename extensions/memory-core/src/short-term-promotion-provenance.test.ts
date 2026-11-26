@@ -9,7 +9,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { resolveMemoryPathClassification } from "./memory/memory-path-provenance.js";
 import {
@@ -21,10 +21,6 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "./test-helpers.js";
-
-vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
-  appendMemoryHostEvent: vi.fn(async () => {}),
-}));
 
 const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 } as const;
 const dailyPath = "memory/2026-04-01.md";
