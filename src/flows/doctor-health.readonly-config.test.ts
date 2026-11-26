@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import * as configFlow from "../commands/doctor-config-flow.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -21,13 +22,20 @@ const actualConfigFlow = await vi.importActual<typeof configFlow>(
 
 useDoctorHealthFixture();
 
-it.each([false, true])(
-  "repairs state while leaving config edits external (invalid=%s)",
-  async (invalid) => {
+it.each([
+  { invalid: false, externallyManaged: false },
+  { invalid: true, externallyManaged: false },
+  { invalid: false, externallyManaged: true },
+])(
+  "repairs state while leaving config edits external (%o)",
+  async ({ invalid, externallyManaged }) => {
     await withOpenClawTestState(
       {
         scenario: "minimal",
-        env: { OPENCLAW_CONFIG_READONLY: "1", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        env: {
+          OPENCLAW_CONFIG_READONLY: externallyManaged ? undefined : "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
       },
       async (state) => {
         mocks.emulateNativeInstall = false;
@@ -50,16 +58,27 @@ it.each([false, true])(
         const configSpy = vi
           .spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig")
           .mockImplementation(actualConfigFlow.loadAndMaybeMigrateDoctorConfig);
+        let downstreamConfig: unknown;
         mocks.runContributions.mockImplementation(async (ctx) => {
           await runInitialConfigWriteHealth(ctx);
           await runWriteConfigHealth(ctx);
+          downstreamConfig = ctx.cfg;
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         try {
-          await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+          await runDoctorHealthFlow(runtime, {
+            repair: true,
+            nonInteractive: true,
+            externallyManaged,
+          });
+          expect(downstreamConfig).toEqual(
+            (await readConfigFileSnapshot({ observe: false })).config,
+          );
           expect(fs.readFileSync(state.configPath)).toEqual(original);
           expect(fs.existsSync(`${state.configPath}.bak`)).toBe(false);
-          expect(runtime.log.mock.calls.flat().join("\n")).toContain('"synthetic-filter": {}');
+          expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+            externallyManaged ? '"webhookListeners": true' : '"synthetic-filter": {}',
+          );
           expect(
             (await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt,
           ).toBe("2026-07-15T00:00:00.000Z");

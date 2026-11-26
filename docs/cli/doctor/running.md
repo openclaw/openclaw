@@ -75,6 +75,32 @@ Doctor supports these postures:
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
 
+### Externally managed repair
+
+Use the externally managed posture when a deployment controller owns both
+`openclaw.json` and the Gateway process lifecycle:
+
+```bash
+openclaw doctor --fix --externally-managed --non-interactive --json
+```
+
+Stop the Gateway before running the command. Doctor acquires the normal state and
+database maintenance owners, backs up databases before schema changes, repairs
+supported legacy state and sessions, and verifies that the config bytes did not
+change. It uses the same ordered repair flow as ordinary `doctor --fix`; this
+posture changes who owns config writes and service effects. Doctor reports config
+changes without writing them and never installs, stops, starts, or rewrites a
+Gateway service. The JSON report projects the same repair evidence into
+`applied`, `skipped`, and `remaining`; a nonempty `remaining` list exits nonzero.
+Owner-classified recoverable migration warnings appear in `advisories` instead of
+blocking completion. Deferred or refused required repairs still remain blocking.
+Update the deployment config source for any remaining config finding, redeploy it,
+then rerun repair.
+
+This posture requires `--fix` (or `--repair`) and `--non-interactive`. It rejects
+`--force`, `--yes`, and `--generate-gateway-token` because those options can
+authorize work outside the state-only deployment handoff.
+
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
 Interactive `doctor` first checks shared schema compatibility and can offer a

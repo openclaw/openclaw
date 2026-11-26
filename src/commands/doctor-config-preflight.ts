@@ -123,7 +123,7 @@ async function runDoctorConfigPreflightOperation(
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
     env: () => process.env,
-    report: (result) => noteDoctorStateMigrationResult(result),
+    report: (result) => noteDoctorStateMigrationResult("plugin-state", result),
     recordReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
     measure: measurePreflightStep,
     runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
@@ -135,7 +135,24 @@ async function runDoctorConfigPreflightOperation(
     env: process.env,
     getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
   });
-  const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
+  const noteDoctorStateMigrationResult = (
+    stepId: string,
+    result: MigrationMessages,
+    changesAlreadyReceipted = false,
+  ) => {
+    options.onStateMigrationMessage?.(
+      stepId,
+      changesAlreadyReceipted
+        ? {
+            ...result,
+            changes: [],
+            warnings: result.warnings.filter(
+              (warning) =>
+                !stateMigrationStepReceipts.some((receipt) => receipt.warnings.includes(warning)),
+            ),
+          }
+        : result,
+    );
     stateMigrationUnsettled ||=
       result.outcome === "deferred" ||
       (result.warnings.length > 0 && result.warningDisposition !== "recoverable");
@@ -156,7 +173,7 @@ async function runDoctorConfigPreflightOperation(
       installRecords: loadInstalledPluginIndexInstallRecordsSync({ env: process.env }),
     });
     rehearsalCompleted = true;
-    noteDoctorStateMigrationResult({
+    noteDoctorStateMigrationResult("config-rehearsal", {
       changes:
         result.copiedFiles > 0
           ? [`Update rehearsal: copied ${result.copiedFiles} missing plugin dependency files.`]
@@ -227,6 +244,7 @@ async function runDoctorConfigPreflightOperation(
     : undefined;
   if (stateDirMigrations) {
     noteDoctorStateMigrationResult(
+      "state-directory",
       await measurePreflightStep("state-dir-migrations", () =>
         stateDirMigrations.autoMigrateLegacyStateDir({ env: process.env }),
       ),
@@ -267,10 +285,12 @@ async function runDoctorConfigPreflightOperation(
       ));
     if (receipt.outcome !== "skipped") {
       stateMigrationStepReceipts.push(receipt);
-      noteDoctorStateMigrationResult({
+      noteDoctorStateMigrationResult("state-schema", {
         changes: receipt.changes,
         warnings: receipt.warnings,
         notices: receipt.notices,
+        ...(receipt.outcome === "warning" ? { warningDisposition: "recoverable" as const } : {}),
+        ...(receipt.outcome === "deferred" ? { outcome: "deferred" as const } : {}),
       });
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
@@ -278,6 +298,7 @@ async function runDoctorConfigPreflightOperation(
   if (options.doctorOnlyStateMigrations === true && stateDirMigrations) {
     const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
     noteDoctorStateMigrationResult(
+      "retired-state-repair",
       await measurePreflightStep("retired-state-repair", () => repairRetiredDoctorState()),
     );
   }
@@ -333,6 +354,13 @@ async function runDoctorConfigPreflightOperation(
         },
       }),
     );
+    options.onStateMigrationMessage?.("session-entry-state", {
+      changes:
+        entryState.repaired > 0
+          ? [`Canonicalized entry state for ${entryState.repaired} durable session row(s).`]
+          : [],
+      warnings: entryState.warnings ?? [],
+    });
     preflightWarnings.push(...(entryState.warnings ?? []));
     if (!repair && entryState.found > 0) {
       const { SessionStoreMigrationRequiredError } =
@@ -388,6 +416,7 @@ async function runDoctorConfigPreflightOperation(
       const stateDir = resolveStateDir(process.env);
       // Invalid config cannot drive the general graph; its root policy can still recover.
       noteDoctorStateMigrationResult(
+        "exec-approvals-migration",
         await measurePreflightStep("exec-approvals-migration", async () => {
           const detected = await withOpenClawStateDatabaseReadSnapshot(async () => {
             await getActiveOpenClawStateDatabaseReadSnapshotAsync();
@@ -416,13 +445,16 @@ async function runDoctorConfigPreflightOperation(
             migrateCodexModelRefs: false,
           }),
         );
-        noteDoctorStateMigrationResult(cronResult);
+        noteDoctorStateMigrationResult("cron-store", cronResult);
         if (options.repairPrefixedConfig === true) {
           const cronCodexPlan = await measurePreflightStep("cron-policy-scan", () =>
             collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: migrationConfig }),
           );
           cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
-          noteDoctorStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
+          noteDoctorStateMigrationResult("cron-policy", {
+            changes: [],
+            warnings: cronCodexPlan.warnings,
+          });
         }
         const legacyStateResult = await measurePreflightStep("legacy-state-migrations", () =>
           pluginMetadata.run({ config: pluginDoctorConfig ?? migrationConfig }, () =>
@@ -440,19 +472,31 @@ async function runDoctorConfigPreflightOperation(
                 ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                 : {}),
               beforeWorkspaceStateMigration: options.beforeWorkspaceStateMigration,
-              onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
+              onStepReceipt: (receipt) => {
+                stateMigrationStepReceipts.push(receipt);
+                options.onStateMigrationMessage?.(receipt.id, {
+                  changes: receipt.changes,
+                  warnings: receipt.warnings,
+                  notices: receipt.notices,
+                  ...(receipt.outcome === "warning" || receipt.outcome === "skipped"
+                    ? { warningDisposition: "recoverable" as const }
+                    : {}),
+                  ...(receipt.outcome === "deferred" ? { outcome: "deferred" as const } : {}),
+                });
+              },
             }),
           ),
         );
         postSessionPluginMigration = legacyStateResult.postSessionPluginMigration;
         postSessionPluginMigrationPlanBound = options.doctorOnlyStateMigrations === true;
         doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
-        noteDoctorStateMigrationResult(legacyStateResult);
+        // Committed changes belong to their step receipts, not this aggregate summary.
+        noteDoctorStateMigrationResult("legacy-state", legacyStateResult, true);
         if (options.doctorOnlyStateMigrations === true) {
           await assertDoctorPreflightMigrationsComplete({
             cfg: migrationConfig,
             stepReceipts: stateMigrationStepReceipts,
-            report: noteDoctorStateMigrationResult,
+            report: (result) => noteDoctorStateMigrationResult("legacy-state", result),
           });
         }
       } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -461,7 +505,7 @@ async function runDoctorConfigPreflightOperation(
           config: pluginDoctorConfig,
           env: process.env,
           measure: measurePreflightStep,
-          report: noteDoctorStateMigrationResult,
+          report: (result) => noteDoctorStateMigrationResult("legacy-state", result),
         });
         await pluginMigrations.migrate(pluginDoctorConfig);
       }
@@ -475,6 +519,7 @@ async function runDoctorConfigPreflightOperation(
     const { migrateLegacyMediaPersistence } =
       await import("../infra/state-migrations.media-persistence.js");
     noteDoctorStateMigrationResult(
+      "media-persistence-migration",
       await measurePreflightStep("media-persistence-migration", () =>
         migrateLegacyMediaPersistence({ env: process.env, integrityCheck: options.integrityCheck }),
       ),
@@ -485,6 +530,13 @@ async function runDoctorConfigPreflightOperation(
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       integrityCheck: options.integrityCheck,
+    });
+    options.onStateMigrationMessage?.("session-entry-state", {
+      changes:
+        entryState.repaired > 0
+          ? [`Canonicalized entry state for ${entryState.repaired} durable session row(s).`]
+          : [],
+      warnings: entryState.warnings ?? [],
     });
     preflightWarnings.push(...(entryState.warnings ?? []));
   }
@@ -497,7 +549,7 @@ async function runDoctorConfigPreflightOperation(
         integrityCheck: options.integrityCheck,
       }),
     );
-    noteDoctorStateMigrationResult(retirement);
+    noteDoctorStateMigrationResult("retired-a2ui-widgets", retirement);
     preflightWarnings.push(...retirement.warnings);
   }
   // Import retired locators before removing them from the authored config.
@@ -516,6 +568,7 @@ async function runDoctorConfigPreflightOperation(
   if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
     const { repairRelativeSessionStores } = await import("./doctor-relative-session-store.js");
     noteDoctorStateMigrationResult(
+      "relative-session-store",
       await measurePreflightStep("relative-session-store", () =>
         repairRelativeSessionStores({
           cfg: automaticConfigRepair?.config ?? baseConfig,

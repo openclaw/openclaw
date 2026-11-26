@@ -504,10 +504,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           env: ctx.env ?? process.env,
           shouldRepair: ctx.prompter.shouldRepair,
         });
-        if (warnings.length > 0) {
-          ctx.updateWarnings ??= [];
-          ctx.updateWarnings.push(...warnings);
-        }
+        recordDoctorHealthWarnings(ctx, [], warnings);
         const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
         await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
           stateDirExistedAtStart: ctx.stateDirExistedAtStart,
@@ -537,6 +534,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           await import("../commands/doctor-session-transcript-headers.js");
         await noteSessionTranscriptHeaderHealth({
           cfg: ctx.cfg,
+          onChanges: (changes) => ctx.repairEvidence?.applied("session-state", changes),
+          onWarnings: (warnings) => ctx.repairEvidence?.remaining("session-state", warnings),
           env: ctx.env ?? process.env,
           shouldRepair: ctx.prompter.shouldRepair,
           integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
@@ -551,6 +550,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           await import("../commands/doctor-session-transcript-labels.js");
         await noteSessionTranscriptLabelHealth({
           cfg: ctx.cfg,
+          onChanges: (changes) => ctx.repairEvidence?.applied("session-state", changes),
+          onWarnings: (warnings) => ctx.repairEvidence?.remaining("session-state", warnings),
           env: ctx.env ?? process.env,
           shouldRepair: ctx.prompter.shouldRepair,
           integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",

@@ -23,10 +23,15 @@ export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDoctorAgentMemorySchemaHealth } =
     await import("../commands/doctor-agent-memory-schema.js");
-  await noteDoctorAgentMemorySchemaHealth({
+  const result = await noteDoctorAgentMemorySchemaHealth({
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
   });
+  ctx.repairEvidence?.applied(
+    "agent-memory-schema",
+    result.repaired.map((repair) => `Repaired memory schema for agent ${repair.agentId}.`),
+  );
+  recordDoctorHealthWarnings(ctx, [], result.warnings);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -66,6 +71,16 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
+    onChanges: (changes) =>
+      ctx.repairEvidence?.applied(
+        "session-state",
+        changes.filter(
+          (change) =>
+            !ctx.configResult.stateMigrationStepReceipts?.some((receipt) =>
+              receipt.changes.includes(change),
+            ),
+        ),
+      ),
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration
@@ -75,6 +90,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
       ? { postSessionPluginMigrationPlanBound: true }
       : {}),
     onStepReceipt: (receipt) => {
+      ctx.repairEvidence?.receipts([receipt]);
       ctx.configResult.stateMigrationStepReceipts ??= [];
       ctx.configResult.stateMigrationStepReceipts.push(receipt);
       if (receipt.outcome === "deferred" || receipt.warnings.length > 0) {

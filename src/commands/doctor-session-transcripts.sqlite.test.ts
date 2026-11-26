@@ -9,6 +9,7 @@ const note = vi.hoisted(() => vi.fn());
 const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionResolvedSkills = vi.hoisted(() => vi.fn());
+const repairLegacySessionExecPolicy = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
 const repairLegacySessionWorktreeWorkspaces = vi.hoisted(() => vi.fn());
 const migrateLegacyMainSessionKeys = vi.hoisted(() => vi.fn());
@@ -47,8 +48,9 @@ vi.mock("./doctor-session-delivery-state.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: isolate exec-policy writes from transcript import and receipt fixtures.
 vi.mock("./doctor-session-exec-policy.js", () => ({
-  repairLegacySessionExecPolicy: vi.fn(),
+  repairLegacySessionExecPolicy,
 }));
 
 // mock-isolation: isolate canonical-key repair from session import fixtures.
@@ -134,6 +136,9 @@ describe("doctor session transcript repair", () => {
   const maintenanceAuthority = { assertCurrent() {} };
 
   beforeEach(async () => {
+    repairLegacySessionExecPolicy
+      .mockReset()
+      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0 });
     note.mockClear();
     repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
     repairCanonicalSessionDeliveryStates
@@ -152,7 +157,7 @@ describe("doctor session transcript repair", () => {
     });
     repairLegacySessionWorktreeWorkspaces
       .mockReset()
-      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0 });
+      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0, warnings: [] });
     migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
       armed: false,
       changes: [],
@@ -222,6 +227,27 @@ describe("doctor session transcript repair", () => {
     });
     expectNote("Legacy entries: 1");
     expectNote("Archived 2 legacy transcript artifact(s).");
+  });
+
+  it("publishes committed dashboard repairs and their warnings through transcript evidence", async () => {
+    const dashboard = await import("./doctor-session-dashboard-chat-type.js");
+    const owner = vi.spyOn(dashboard, "repairLegacyDashboardChatTypes").mockResolvedValueOnce({
+      found: 2,
+      repaired: 1,
+      scannedStores: 1,
+      warnings: ["One dashboard row was retained."],
+    });
+    const onChanges = vi.fn();
+    const onWarnings = vi.fn();
+    try {
+      await repair({ onChanges, onWarnings });
+      expect(onChanges).toHaveBeenCalledWith([
+        "Recorded direct chat type for dashboard session(s): 1.",
+      ]);
+      expect(onWarnings).toHaveBeenCalledWith(["One dashboard row was retained."]);
+    } finally {
+      owner.mockRestore();
+    }
   });
 
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
@@ -360,7 +386,11 @@ describe("doctor session transcript repair", () => {
     runPostSessionPluginDoctorStateRepairs
       .mockImplementationOnce(async () => {
         mutations += 1;
-        return { changes: ["repaired frozen plugin action"], warnings: [] };
+        return {
+          changes: ["repaired frozen plugin action"],
+          warnings: ["Retained a dreaming cron row."],
+          warningDisposition: "recoverable",
+        };
       })
       .mockResolvedValueOnce({ changes: [], warnings: [] });
     const receipts: unknown[] = [];
@@ -368,9 +398,13 @@ describe("doctor session transcript repair", () => {
       expect(mutations).toBe(1);
       receipts.push(receipt);
     };
+    const onWarnings = vi.fn();
+    const onChanges = vi.fn();
     const params = {
       env: fixtureEnv(),
       postSessionPluginMigration: preparedPostSessionPluginMigration,
+      onWarnings,
+      onChanges,
       onStepReceipt: recordReceipt,
     };
 
@@ -385,7 +419,8 @@ describe("doctor session transcript repair", () => {
     });
     expect(first).toMatchObject({
       id: "plugin-doctor-post-session-state",
-      outcome: "completed",
+      outcome: "warning",
+      warnings: ["Retained a dreaming cron row."],
       changes: ["repaired frozen plugin action"],
     });
     expect(replay).toMatchObject({
@@ -394,6 +429,8 @@ describe("doctor session transcript repair", () => {
       changes: [],
     });
     expect(receipts).toEqual([first, replay]);
+    expect(onWarnings).toHaveBeenCalledWith(["Retained a dreaming cron row."]);
+    expect(onChanges).toHaveBeenCalledWith(["repaired frozen plugin action"]);
   });
 
   it.each([

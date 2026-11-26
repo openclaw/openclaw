@@ -41,6 +41,7 @@ import {
   prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
 import {
+  type DoctorConfigPreflightOptions,
   prepareDoctorConfigMigrationResult,
   retainHeartbeatMigrationInput,
 } from "./doctor/shared/config-migration-result.js";
@@ -59,6 +60,7 @@ import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   retiredStateAdmitted?: boolean;
+  onStateMigrationMessage?: DoctorConfigPreflightOptions["onStateMigrationMessage"];
   stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
@@ -68,7 +70,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   reportFindings?: notes.DoctorFindingReporter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
-  const { shouldRepair, nonInteractive } = resolveDoctorRepairMode(params.options);
+  const { shouldRepair: repairState, nonInteractive } = resolveDoctorRepairMode(params.options);
+  const shouldRepair = repairState && !params.options.externallyManaged;
   const preflight = await runDoctorConfigPreflight({
     retiredStateAdmitted: params.retiredStateAdmitted,
     stateSchemaPreparation: params.stateSchemaPreparation,
@@ -76,12 +79,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     observe: false,
     invocationPurpose: "doctor",
     repairPrefixedConfig: shouldRepair,
-    doctorOnlyStateMigrations: shouldRepair,
+    doctorOnlyStateMigrations: repairState,
+    migrateLegacyConfig: params.options.externallyManaged ? false : undefined,
+    onStateMigrationMessage: params.onStateMigrationMessage,
     deferPluginPackageRepair: nonInteractive && !shouldRepair,
     preparePluginMetadataSnapshot: true,
-    ...(params.automaticHeartbeatRepair
-      ? { automaticHeartbeatRepair: params.automaticHeartbeatRepair }
-      : {}),
+    automaticHeartbeatRepair: params.automaticHeartbeatRepair,
     agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
     beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
     cronStoreSelection: { options: params.options, prompter: params.prompter },
@@ -94,12 +97,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   const { snapshot, baseConfig: baseCfg, heartbeatMigrationDeferred: deferHeartbeat } = preflight;
   if (!shouldRepair && !params.options.json) {
-    const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
-      await import("./recovery-disk-usage.js");
-    note(
-      formatRecoveryDiskUsage(await collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
-      "Recovery copies (read-only)",
-    );
+    const { noteDoctorRecoveryDiskUsage } = await import("./doctor-config-analysis.js");
+    await noteDoctorRecoveryDiskUsage(baseCfg);
   }
   preparingResources.use(preflight.pluginCache);
   if (!snapshot.exists || snapshot.valid) {

@@ -16,6 +16,14 @@ function reportDoctorRepairResult(
   findings: readonly HealthFinding[],
 ): void {
   ctx.cfg = result.config;
+  if (result.configChangesSkipped) {
+    ctx.repairEvidence?.remaining(
+      "config",
+      result.changes.length ? result.changes : ["Deployment-owned configuration requires repair."],
+    );
+  } else {
+    ctx.repairEvidence?.applied("structured-health-repairs", result.changes);
+  }
   renderStructuredHealthFindings(ctx, findings);
   recordDoctorHealthWarnings(ctx, findings, result.warnings);
   noteDoctorRepairResult(result);
@@ -61,7 +69,11 @@ export async function runStructuredHealthRepairs(
       env: ctx.env,
       cwd: workspaceDir,
     }),
-    { checks, progress: ctx.options.json !== true },
+    {
+      checks,
+      progress: ctx.options.json !== true,
+      ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
+    },
   );
   reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
 }
@@ -89,7 +101,12 @@ export async function runCoreContributionHealth(
       cwd: workspaceDir,
       dryRun,
     }),
-    { checks, dryRun, progress: ctx.options.json !== true },
+    {
+      checks,
+      dryRun,
+      progress: ctx.options.json !== true,
+      ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
+    },
   );
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings);
 }

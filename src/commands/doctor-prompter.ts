@@ -62,6 +62,9 @@ export function createDoctorPrompter(params: {
       return confirmPrompt(p);
     },
     confirmRuntimeRepair: async (p: DoctorRuntimeRepairConfirmParams) => {
+      if (params.options.externallyManaged) {
+        return false;
+      }
       const { requiresInteractiveConfirmation, ...confirmParams } = p;
       if (
         requiresInteractiveConfirmation !== true &&

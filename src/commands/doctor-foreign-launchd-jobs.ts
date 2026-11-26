@@ -54,7 +54,7 @@ export async function noteMacForeignLaunchdJobs(
     );
   }
   note(lines.join("\n"), "Foreign launchd jobs (macOS)");
-  if (options.repair !== true || candidates.length === 0) {
+  if (options.repair !== true || options.externallyManaged === true || candidates.length === 0) {
     return;
   }
   if (

@@ -426,7 +426,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   });
   try {
     await settle(async () => {
-      const externallyManaged = isServiceRepairExternallyManaged(undefined, env);
+      const externallyManaged =
+        params.options.externallyManaged || isServiceRepairExternallyManaged(undefined, env);
       if (externallyManaged) {
         await preflightExternalDoctorAgentLease(env, waitForMaintenance, exit.signal);
       }

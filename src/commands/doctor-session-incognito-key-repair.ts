@@ -49,6 +49,7 @@ import { rewriteDoctorSessionEntries } from "./doctor/shared/session-entry-rewri
 export type ReservedIncognitoKeyRepairReport = {
   found: number;
   repaired: number;
+  warnings?: string[];
 };
 
 class ReservedIncognitoSessionKeyRepairError extends DoctorStateMigrationRefusalError {
@@ -98,6 +99,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
   const occupiedKeys = sharedState?.occupiedKeys ?? new Set<string>();
   let hasPostgresAgent = agentEngineInput() !== undefined;
   let inspectionFailed = false;
+  const warnings: string[] = [];
   for (const { target, databaseOptions } of targets) {
     const operation = await runDoctorAgentDatabaseOperationAsync({
       agentId: target.agentId,
@@ -113,6 +115,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
     signal?.throwIfAborted();
     if (!operation.ok) {
       inspectionFailed = true;
+      warnings.push(operation.message);
     } else if (operation.value.found) {
       for (const key of operation.value.value) {
         occupiedKeys.add(key);
@@ -134,10 +137,10 @@ export async function repairReservedIncognitoSessionKeys(params: {
     );
   }
   if (!params.apply) {
-    return { found: pendingKeys.size, repaired: 0 };
+    return { found: pendingKeys.size, repaired: 0, ...(warnings.length ? { warnings } : {}) };
   }
   if (reservedKeys.size === 0 && journalRenames.length === 0) {
-    return { found: 0, repaired: 0 };
+    return { found: 0, repaired: 0, ...(warnings.length ? { warnings } : {}) };
   }
 
   for (const rename of journalRenames) {

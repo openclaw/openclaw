@@ -17,6 +17,7 @@ interface DoctorRepairRunOptions {
   readonly dryRun?: boolean;
   readonly diff?: boolean;
   readonly progress?: boolean;
+  readonly allowConfigMutation?: boolean;
 }
 
 interface DoctorRepairRunResult {
@@ -27,6 +28,7 @@ interface DoctorRepairRunResult {
   readonly warnings: readonly string[];
   readonly diffs: readonly HealthRepairDiff[];
   readonly effects: readonly HealthRepairEffect[];
+  readonly configChangesSkipped: boolean;
 }
 
 export async function runDoctorHealthRepairs(
@@ -48,6 +50,7 @@ export async function runDoctorHealthRepairs(
     warnings,
     diffs,
     effects,
+    configChangesSkipped: false,
   };
 
   for (const check of checks) {
@@ -101,7 +104,11 @@ export async function runDoctorHealthRepairs(
         continue;
       }
       if (result.config !== undefined && opts.dryRun !== true) {
-        outcome.config = result.config;
+        if (opts.allowConfigMutation !== false) {
+          outcome.config = result.config;
+        } else if (JSON.stringify(result.config) !== JSON.stringify(outcome.config)) {
+          outcome.configChangesSkipped = true;
+        }
       }
       if (opts.dryRun === true) {
         continue;

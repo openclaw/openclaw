@@ -4,6 +4,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import type { DoctorRepairEvidenceSink } from "./doctor-externally-managed-repair.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
@@ -13,6 +14,7 @@ export function createDoctorOriginalCaptureHook(
     Parameters<typeof preserveDoctorOriginalState>[0],
     "root" | "runtime" | "writeAuthority" | "fullIntegrityCheck"
   > & {
+    repairEvidence?: DoctorRepairEvidenceSink;
     rehearsalRoot?: string;
     json?: boolean;
     reportFindings: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
@@ -85,6 +87,12 @@ export function createDoctorOriginalCaptureHook(
         ),
       params.json !== true,
     );
+    // Required recovery evidence throws above; returned capture warnings are best effort.
+    params.repairEvidence?.migration("original-state-capture", {
+      changes: [],
+      warnings: [...warnings],
+      warningDisposition: "recoverable",
+    });
     params.reportFindings(findings, warnings);
   };
 }

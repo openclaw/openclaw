@@ -20,6 +20,7 @@ export async function repairLegacySessionWorktreeWorkspaces(params: {
   const targets = params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env);
   let found = 0;
   let repaired = 0;
+  const warnings: string[] = [];
   for (const target of targets) {
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
     try {
@@ -38,6 +39,8 @@ export async function repairLegacySessionWorktreeWorkspaces(params: {
       if (operation.ok) {
         found += operation.value.found;
         repaired += operation.value.repaired;
+      } else {
+        warnings.push(operation.message);
       }
     } finally {
       if (!wasOpen) {
@@ -45,5 +48,5 @@ export async function repairLegacySessionWorktreeWorkspaces(params: {
       }
     }
   }
-  return { found, repaired, scannedStores: targets.length };
+  return { found, repaired, scannedStores: targets.length, warnings };
 }

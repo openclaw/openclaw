@@ -207,7 +207,12 @@ describe("doctor canonical session delivery state", () => {
     database.db.exec("PRAGMA user_version = 8;");
     closeOpenClawAgentDatabasesForTest();
 
-    expectReport(await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env }), 0);
+    expect(await repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+      warnings: [expect.stringContaining("does not match user version 8")],
+    });
   });
 
   it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", async () => {
@@ -413,7 +418,12 @@ describe("doctor canonical session resolved skills", () => {
         .all();
     const originalSnapshots = readSnapshots();
 
-    expectReport(await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env }), 0);
+    expect(await repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+      warnings: [expect.stringContaining("JSON")],
+    });
     expect(readEntryJson(env, sessionKey)).toBe(originalEntry);
     expect(readEntryJson(env, tombstoneKey)).toBe("{}");
     expect(readSnapshots()).toEqual(originalSnapshots);

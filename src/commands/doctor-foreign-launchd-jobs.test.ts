@@ -74,6 +74,12 @@ describe("Doctor foreign launchd jobs", () => {
     expect(mocks.repair).not.toHaveBeenCalled();
   });
 
+  it("leaves deployment-owned lifecycle jobs unchanged", async () => {
+    await run({ repair: true, nonInteractive: true, externallyManaged: true });
+    expect(mocks.find).toHaveBeenCalled();
+    expect(mocks.repair).not.toHaveBeenCalled();
+  });
+
   it("reports owner rejection without claiming removal", async () => {
     mocks.repair.mockResolvedValue({ removed: false, detail: "Lifecycle command changed." });
     await run({ repair: true, nonInteractive: true });

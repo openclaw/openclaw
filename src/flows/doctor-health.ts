@@ -1,11 +1,13 @@
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import type {
+  DoctorRepairEvidenceSink,
+  ExternallyManagedDoctorRepairReport,
+} from "../commands/doctor-externally-managed-repair.js";
 import { createDoctorWriteAuthority } from "../commands/doctor-policy-custody.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import * as doctorMode from "../commands/doctor-repair-mode.js";
 import * as updatePhase from "../commands/doctor/shared/update-phase.js";
-import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -16,17 +18,15 @@ import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-cust
 import {
   captureUpdateDoctorConfigWrites,
   getUpdateDoctorConfigCapture,
-  DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
+  DoctorMaintenanceRefusalError,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-  UpdateDoctorError,
   type UpdateDoctorWriteAuthority,
   type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
-import { createUpdateErrorFact, createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -43,15 +43,29 @@ import {
 } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import * as startup from "./doctor-health-startup.js";
-import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
+import {
+  createDoctorCompletedResult,
+  createDoctorFailureResult,
+  publishDoctorUpdateResult,
+} from "./doctor-health-update-result.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function runDoctorHealthFlow(
+type DoctorHealthFlowResult<T extends DoctorOptions> = T["externallyManaged"] extends true
+  ? ExternallyManagedDoctorRepairReport
+  : void;
+
+export async function runDoctorHealthFlow<TOptions extends DoctorOptions = DoctorOptions>(
   runtime?: RuntimeEnv,
-  options: DoctorOptions = {},
+  options?: TOptions,
   delegatedAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
-) {
+): Promise<DoctorHealthFlowResult<TOptions>> {
+  const selectedOptions: DoctorOptions = options ?? {};
+  const externallyManagedRepair = selectedOptions.externallyManaged
+    ? (
+        await import("../commands/doctor-externally-managed-repair.js")
+      ).createExternallyManagedDoctorRepairEvidence()
+    : undefined;
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
   const writeAuthority = delegatedAuthority && createDoctorWriteAuthority(delegatedAuthority);
@@ -66,7 +80,8 @@ export async function runDoctorHealthFlow(
       // Snapshot-time generations must survive Doctor's own pre-maintenance reads.
       const preserveSourceArtifacts = writeAuthority?.databaseGenerations ? true : undefined;
       const preCaptureRehearsalRoot =
-        !writeAuthority?.postCoreSchemaRepair && (options.repair === true || options.yes === true)
+        !writeAuthority?.postCoreSchemaRepair &&
+        (selectedOptions.repair === true || selectedOptions.yes === true)
           ? resolveUpdateRehearsalRoot(process.env)
           : undefined;
       if (
@@ -81,11 +96,11 @@ export async function runDoctorHealthFlow(
             guardUpdateDoctorSchemaUpgrade({
               schemas: preparedPreflight,
               runtime,
-              json: options.json,
+              json: selectedOptions.json,
               statePublicationOnly: preCaptureRehearsalRoot !== undefined,
               preserveSourceArtifacts,
             }),
-          options.json !== true,
+          selectedOptions.json !== true,
         );
         if (!preCaptureRehearsalRoot) {
           preparedPreflight = guarded ?? preparedPreflight;
@@ -95,8 +110,12 @@ export async function runDoctorHealthFlow(
           await startup.withDoctorProgress(
             formatDoctorProgressPhase("Update schema rehearsal"),
             () =>
-              rehearseDeferredUpdateDoctorSchema(rehearsal, runtime, options.fullIntegrityCheck),
-            options.json !== true,
+              rehearseDeferredUpdateDoctorSchema(
+                rehearsal,
+                runtime,
+                selectedOptions.fullIntegrityCheck,
+              ),
+            selectedOptions.json !== true,
           );
           return;
         }
@@ -109,13 +128,14 @@ export async function runDoctorHealthFlow(
               requestedExit = () => startup.exitDoctorHealthFlow(selectedRuntime, code);
             },
             runtime,
-            options,
+            selectedOptions,
             preparedPreflight,
             diagnostics,
             capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
             preCaptureRehearsalRoot,
+            externallyManagedRepair?.sink,
           );
         return resultPath
           ? captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority)
@@ -124,16 +144,33 @@ export async function runDoctorHealthFlow(
     });
   const { withPluginGenerationSourceCustody } =
     await import("../plugins/plugin-generation-source-lookup.js");
-  await withPluginGenerationSourceCustody(() =>
-    custody ? withCommandProcessScope(run, undefined, custody) : run(),
-  ).catch(async (error: unknown) => {
-    const { reportDoctorReadOnlyFilesystemError } =
-      await import("../commands/doctor-maintenance-inspection.js");
-    await reportDoctorReadOnlyFilesystemError(error, runtime);
-    throw error;
-  });
-  signal?.throwIfAborted();
-  requestedExit?.();
+  try {
+    await withPluginGenerationSourceCustody(() =>
+      custody ? withCommandProcessScope(run, undefined, custody) : run(),
+    ).catch(async (error: unknown) => {
+      const { reportDoctorReadOnlyFilesystemError } =
+        await import("../commands/doctor-maintenance-inspection.js");
+      await reportDoctorReadOnlyFilesystemError(error, runtime);
+      throw error;
+    });
+    signal?.throwIfAborted();
+    if (!externallyManagedRepair) {
+      requestedExit?.();
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (!externallyManagedRepair || error instanceof UpdateSchemaRefusalError) {
+      throw error;
+    }
+    const { DoctorStateMigrationRefusalError } =
+      await import("../infra/state-migrations.messages.js");
+    if (error instanceof DoctorStateMigrationRefusalError) {
+      externallyManagedRepair.sink.receipts(error.stepReceipts);
+    }
+    externallyManagedRepair.fail(error);
+  }
+  // SAFETY: only externally managed options create the report, matching the conditional return type.
+  return externallyManagedRepair?.finish() as DoctorHealthFlowResult<TOptions>;
 }
 
 async function runDoctorHealthFlowWithResult(
@@ -146,12 +183,19 @@ async function runDoctorHealthFlowWithResult(
   writeAuthority?: UpdateDoctorWriteAuthority,
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
+  repairEvidence?: DoctorRepairEvidenceSink,
 ) {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   const measure = startup.createDoctorProgressMeasure(options);
+  const renderOutro = options.json ? () => {} : startup.showDoctorOutro;
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } = await measure(
     "doctor.startup",
-    () => startup.prepareDoctorHealthFlow(runtime, options, startup.showDoctorIntro),
+    () =>
+      startup.prepareDoctorHealthFlow(
+        runtime,
+        options,
+        options.json ? () => {} : startup.showDoctorIntro,
+      ),
   );
   let maintenance: Awaited<
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
@@ -163,8 +207,10 @@ async function runDoctorHealthFlowWithResult(
   let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
-  const { buffer: startupFindings, reportFindings } =
-    createDoctorHealthFindingBuffer(effectiveRuntime);
+  const { buffer: startupFindings, reportFindings } = createDoctorHealthFindingBuffer(
+    effectiveRuntime,
+    repairEvidence,
+  );
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
@@ -186,7 +232,7 @@ async function runDoctorHealthFlowWithResult(
         options,
         databasePreflight,
         root,
-        outro: startup.showDoctorOutro,
+        outro: renderOutro,
       }),
     );
     if (admission !== "accepted") {
@@ -245,6 +291,7 @@ async function runDoctorHealthFlowWithResult(
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
           reportFindings,
+          repairEvidence,
           fullIntegrityCheck: options.fullIntegrityCheck,
         }),
       }),
@@ -273,7 +320,7 @@ async function runDoctorHealthFlowWithResult(
           options,
           root,
           confirm: (p) => prompter.confirm(p),
-          outro: startup.showDoctorOutro,
+          outro: renderOutro,
         });
         if (offeredUpdate) {
           return undefined;
@@ -332,6 +379,7 @@ async function runDoctorHealthFlowWithResult(
           startup.repairDoctorStateDatabase(
             effectiveRuntime,
             options.fullIntegrityCheck ? "full" : "quick",
+            (result) => repairEvidence?.migration("shared-state", result),
           ),
         );
         if (repairedState) {
@@ -349,6 +397,7 @@ async function runDoctorHealthFlowWithResult(
           check: options.fullIntegrityCheck ? "full" : "quick",
           verifiedSnapshots,
           automaticRepair: Boolean(automaticHeartbeatRepair),
+          onMigration: (stepId, result) => repairEvidence?.migration(stepId, result),
           runtime: effectiveRuntime,
           measure,
         });
@@ -367,9 +416,11 @@ async function runDoctorHealthFlowWithResult(
         doctorRuntime,
         prompter,
         options,
+        (result) => repairEvidence?.migration("agent-deletion-journal", result),
       );
       schemas = preparedRuntime.schemas;
       sqliteNoCowPaths = preparedRuntime.nocowPaths;
+      repairEvidence?.remaining("runtime-state", preparedRuntime.warnings);
 
       const discovery = schemas.agentDatabaseMigrationDiscovery;
       if (discovery && discovery.stateDir === preparedArchiveDiscovery?.stateDir) {
@@ -380,6 +431,7 @@ async function runDoctorHealthFlowWithResult(
         loadAndMaybeMigrateDoctorConfig({
           options,
           retiredStateAdmitted: true,
+          onStateMigrationMessage: (stepId, result) => repairEvidence?.migration(stepId, result),
           stateSchemaPreparation,
           ...(automaticHeartbeatRepair ? { automaticHeartbeatRepair } : {}),
           agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
@@ -390,6 +442,12 @@ async function runDoctorHealthFlowWithResult(
         }),
       );
       resources.use(configResult);
+      repairEvidence?.receipts(configResult.stateMigrationStepReceipts);
+      if (!configResult.sourceConfigValid || configResult.shouldWriteConfig) {
+        repairEvidence?.remaining("config", [
+          "Deployment-owned config requires changes. Update the deployment source, redeploy it, then rerun Doctor repair.",
+        ]);
+      }
       // Relocation changes the inspected scope; unchanged fleets retain their prepared facts.
       const admissionSchemas =
         schemas.agentDatabaseMigrationDiscovery &&
@@ -441,6 +499,7 @@ async function runDoctorHealthFlowWithResult(
         ),
         runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
         invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+        repairEvidence,
       };
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
@@ -559,6 +618,8 @@ async function runDoctorHealthFlowWithResult(
     if (recordRepairRefusal(ctx)) {
       return;
     }
+    const maintenanceWarnings = maintenance?.warnings ?? [];
+    repairEvidence?.remaining("maintenance", maintenanceWarnings);
     const pluginWarnings: string[] = [];
     let pluginLoadFailed = false;
     if (diagnostics.length > 0) {
@@ -571,37 +632,16 @@ async function runDoctorHealthFlowWithResult(
       pluginLoadFailed = findings.some((finding) => finding.severity === "error");
     }
     showDoctorHealthSummary(ctx);
-    const warnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...pluginWarnings,
-      ...(ctx.configResult.warnings ?? []),
-      ...(maintenance?.warnings ?? []),
-      ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
-        receipt.outcome === "warning" ||
-        receipt.outcome === "skipped" ||
-        receipt.outcome === "deferred"
-          ? receipt.warnings
-          : [],
-      ),
-      ...(ctx.postInstallDoctorResult?.warnings ?? []),
-    ]);
-    doctorResult = {
-      ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
-      ...(warnings.length ? { warnings } : {}),
-      ...(maintenance?.failureFacts?.length
-        ? {
-            failureFacts: [
-              ...maintenance.failureFacts,
-              ...(ctx.postInstallDoctorResult?.failureFacts ?? []),
-            ],
-          }
-        : {}),
-    };
+    doctorResult = createDoctorCompletedResult(ctx, maintenance, pluginWarnings);
+    if (exitCode === undefined || exitCode === 0) {
+      repairEvidence?.complete();
+    }
     if (updateResult?.resultPath && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }
     if (pluginLoadFailed) {
-      startup.showDoctorOutro("Doctor finished with plugin load errors.");
+      renderOutro("Doctor finished with plugin load errors.");
       if (options.nonInteractive && !updatePhase.isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;
       }
@@ -630,7 +670,7 @@ async function runDoctorHealthFlowWithResult(
       if (!updateResult) {
         await recordDeferredUpdateDoctorWarning(error.message, effectiveRuntime);
       }
-      startup.showDoctorOutro("Doctor maintenance deferred; pending repairs remain unchanged.");
+      renderOutro("Doctor maintenance deferred; pending repairs remain unchanged.");
       exitCode = 0;
       return;
     }
@@ -653,47 +693,7 @@ async function runDoctorHealthFlowWithResult(
       }
     }
     showDoctorHealthSummary(healthContext ?? startupFindings);
-    const causes = collectNestedErrorCandidates(error);
-    const { classifyDoctorMaintenanceRefusal } =
-      await import("../commands/doctor-maintenance-inspection.js");
-    const maintenanceRefusal = classifyDoctorMaintenanceRefusal(error);
-    const unsafeConfigWrite = causes.find(
-      (cause): cause is ConfigWritePostCommitError =>
-        cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored",
-    );
-    const schemaRefusal = causes.find(
-      (cause): cause is UpdateSchemaRefusalError => cause instanceof UpdateSchemaRefusalError,
-    );
-    const refusalFacts = causes.flatMap((cause) =>
-      cause instanceof UpdateDoctorError || cause instanceof DoctorStateMigrationRefusalError
-        ? cause.failureFacts
-        : [],
-    );
-    doctorResult = {
-      status: "error",
-      ...(maintenanceRefusal.kind === "data-at-risk" ? { maintenanceRefusal } : {}),
-      ...(!healthContext && refusalWarnings.length > 0 ? { warnings: refusalWarnings } : {}),
-      failureFacts:
-        !unsafeConfigWrite && !schemaRefusal && refusalFacts.length > 0
-          ? refusalFacts
-          : [
-              createUpdateFailureFact({
-                leaseLoss: createUpdateErrorFact("doctor", error).leaseLoss,
-                check: unsafeConfigWrite
-                  ? "config-write"
-                  : schemaRefusal
-                    ? "database-schema-preflight"
-                    : "doctor",
-                code: unsafeConfigWrite
-                  ? "rollback-state-unverified"
-                  : (schemaRefusal?.code ?? "doctor-failed"),
-                message: unsafeConfigWrite
-                  ? `${unsafeConfigWrite.publication} config publication; rollback ${unsafeConfigWrite.rollbackStatus}. ${unsafeConfigWrite.message}`
-                  : (schemaRefusal?.message ??
-                    (error instanceof Error ? error.message : String(error))),
-              }),
-            ],
-    };
+    doctorResult = await createDoctorFailureResult(error, refusalWarnings, !healthContext);
     if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
       effectiveRuntime.error(
         "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
@@ -718,5 +718,7 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
+  if (!options.json) {
+    startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
+  }
 }

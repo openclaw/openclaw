@@ -185,6 +185,7 @@ export async function noteSessionTranscriptHealth(options?: {
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  onChanges?: (changes: readonly string[]) => void;
   onWarnings?: (warnings: readonly string[]) => void;
   onFindings?: (findings: readonly import("../flows/health-checks.js").HealthFinding[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
@@ -208,6 +209,16 @@ export async function noteSessionTranscriptHealth(options?: {
     );
     params.onStepReceipt?.(postSessionPluginReceipt);
     return postSessionPluginReceipt;
+  };
+  const publishChanges = (changes: readonly string[]) => {
+    if (params.shouldRepair && changes.length > 0) {
+      params.onChanges?.(changes);
+    }
+  };
+  const publishWarnings = (warnings: readonly string[]) => {
+    if (warnings.length > 0) {
+      params.onWarnings?.(warnings);
+    }
   };
   const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
     const previewTargets = params.shouldRepair
@@ -234,6 +245,19 @@ export async function noteSessionTranscriptHealth(options?: {
       },
       maintenanceAuthority,
     );
+    publishChanges([
+      ...(report.totals.importedEntries > 0
+        ? [`Imported ${report.totals.importedEntries} legacy session entry(ies) into SQLite.`]
+        : []),
+      ...((report.totals.archivedLegacyStoreFiles ?? 0) > 0
+        ? [
+            `Archived ${report.totals.archivedLegacyStoreFiles} migrated legacy session index file(s).`,
+          ]
+        : []),
+      ...(report.totals.archivedTranscriptFiles > 0
+        ? [`Archived ${report.totals.archivedTranscriptFiles} migrated session transcript file(s).`]
+        : []),
+    ]);
     const { migrateLegacyMainSessionKeys } =
       await import("../config/sessions/legacy-main-session-migration.js");
     const legacyMainSessionResult = await migrateLegacyMainSessionKeys({
@@ -241,6 +265,8 @@ export async function noteSessionTranscriptHealth(options?: {
       env: params.env,
       mode: params.shouldRepair ? "doctor-fix" : "detect",
     });
+    publishChanges(legacyMainSessionResult.changes);
+    publishWarnings(legacyMainSessionResult.warnings);
     const repairParams = {
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
@@ -248,6 +274,11 @@ export async function noteSessionTranscriptHealth(options?: {
       integrityCheck: params.integrityCheck,
     };
     const canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
+    publishChanges(
+      canonicalKeyReport.repairedGroups > 0
+        ? [`Canonicalized session-key group(s): ${canonicalKeyReport.repairedGroups}.`]
+        : [],
+    );
     // Preview reuses its read-only inventory; import and key repair can create stores.
     const rowRepairParams = {
       ...repairParams,
@@ -255,26 +286,76 @@ export async function noteSessionTranscriptHealth(options?: {
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
     const resolvedSkillsReport = await repairCanonicalSessionResolvedSkills(rowRepairParams);
+    publishWarnings(resolvedSkillsReport.warnings ?? []);
+    publishChanges(
+      resolvedSkillsReport.repaired > 0
+        ? [
+            `Stripped runtime-only skills from durable session row(s): ${resolvedSkillsReport.repaired}.`,
+          ]
+        : [],
+    );
     // Import may create the first durable SQLite row for a colliding legacy key.
     const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
+    publishWarnings(reservedKeyReport.warnings ?? []);
+    publishChanges(
+      reservedKeyReport.repaired > 0
+        ? [`Renamed reserved incognito session key(s): ${reservedKeyReport.repaired}.`]
+        : [],
+    );
     const deliveryReport = await repairCanonicalSessionDeliveryStates(rowRepairParams);
-    await repairLegacySessionExecPolicy(rowRepairParams);
-    await repairLegacyDashboardChatTypes(rowRepairParams);
+    publishWarnings(deliveryReport.warnings ?? []);
+    publishChanges(
+      deliveryReport.repaired > 0
+        ? [`Canonicalized delivery state for durable session row(s): ${deliveryReport.repaired}.`]
+        : [],
+    );
+    const execPolicyReport = await repairLegacySessionExecPolicy(rowRepairParams);
+    publishWarnings(execPolicyReport.warnings ?? []);
+    publishChanges(
+      execPolicyReport.repaired > 0
+        ? [`Retired legacy exec policy from durable session row(s): ${execPolicyReport.repaired}.`]
+        : [],
+    );
+    const dashboardReport = await repairLegacyDashboardChatTypes(rowRepairParams);
+    publishWarnings(dashboardReport.warnings ?? []);
+    publishChanges(
+      dashboardReport.repaired > 0
+        ? [`Recorded direct chat type for dashboard session(s): ${dashboardReport.repaired}.`]
+        : [],
+    );
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,
       integrityCheck: params.integrityCheck,
     });
+    publishWarnings(acpKeyReport.warnings);
+    publishChanges(
+      acpKeyReport.repaired > 0 ? [`Repaired ACP metadata key(s): ${acpKeyReport.repaired}.`] : [],
+    );
     const titleReport = await repairLegacySessionTitles({
       ...rowRepairParams,
       authority: maintenanceAuthority,
     });
+    publishWarnings(titleReport.warnings);
+    publishChanges(
+      titleReport.repaired > 0
+        ? [`Repaired missing session title(s): ${titleReport.repaired}.`]
+        : [],
+    );
     const worktreeWorkspaceReport = await repairLegacySessionWorktreeWorkspaces({
       ...rowRepairParams,
       // Workspace metadata participates in an unfinished legacy-main source claim.
       apply:
         params.shouldRepair && (!legacyMainSessionResult.armed || legacyMainSessionResult.complete),
     });
+    publishWarnings(worktreeWorkspaceReport.warnings);
+    publishChanges(
+      worktreeWorkspaceReport.repaired > 0
+        ? [
+            `Repaired workspace metadata for managed-worktree session(s): ${worktreeWorkspaceReport.repaired}.`,
+          ]
+        : [],
+    );
     const results = {
       entryStateReport: undefined,
       report,
@@ -348,6 +429,8 @@ export async function noteSessionTranscriptHealth(options?: {
       postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(receiptStep, pluginRepair);
       params.onStepReceipt?.(postSessionPluginReceipt);
     }
+    publishChanges(pluginRepair.changes);
+    publishWarnings(pluginRepair.warnings);
     const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
     if (pluginMessages.length > 0) {
       note(pluginMessages.join("\n"), "Plugin session repair");
@@ -376,6 +459,7 @@ export async function noteSessionTranscriptHealth(options?: {
       `- Skipped: ${failure} Then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
       "Session SQLite",
     );
+    params.onWarnings?.([failure]);
     recordPostSessionRefusal({
       code: "sqlite-maintenance-unavailable",
       message: failure,

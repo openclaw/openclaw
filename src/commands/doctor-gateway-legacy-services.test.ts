@@ -21,6 +21,7 @@ import {
   expectNoteContaining,
   expectNoNoteContaining,
 } from "./doctor-gateway-services.native.test-support.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import { formatServiceRepairDeferredNote } from "./doctor-service-repair-policy.js";
 
 await vi.hoisted(() => import("./doctor-gateway-services.native.test-support.js"));
@@ -223,6 +224,18 @@ it("skips host-service discovery in containers without an OpenClaw service", asy
   });
   expect(mocks.findExtraGatewayServices).not.toHaveBeenCalled();
   expect(mocks.isSystemdUnitActive).not.toHaveBeenCalled();
+});
+
+it("preserves legacy services in externally managed repair without an environment override", async () => {
+  mockProcessPlatform("linux");
+  inventory([fileService("linux", "clawdbot-gateway.service", "user", true)]);
+  const options = { repair: true, nonInteractive: true, externallyManaged: true };
+  const runtime = makeDoctorIo();
+  await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: undefined }, () =>
+    maybeScanExtraGatewayServices(options, runtime, createDoctorPrompter({ runtime, options })),
+  );
+  expect(mocks.uninstallLegacySystemdUnits).not.toHaveBeenCalled();
+  expect(mocks.execLaunchctl).not.toHaveBeenCalled();
 });
 
 it.each(["recognized", "unsupported", "external"])(

@@ -122,6 +122,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
     identity: ReturnType<typeof readDatabasePathIdentitySync>;
   }> = [];
   const deferredWarnings: string[] = [];
+  const warnings: string[] = [];
   for (const target of targets) {
     signal?.throwIfAborted();
     const sessionKeys: string[] = [];
@@ -158,7 +159,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
     try {
       const operation =
         params.source === "raw"
-          ? { ok: true, value: await scan() }
+          ? { ok: true as const, value: await scan() }
           : await runDoctorAgentDatabaseOperationAsync({
               agentId: target.agentId,
               path: target.sqlitePath,
@@ -166,6 +167,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
             });
       signal?.throwIfAborted();
       if (!operation.ok) {
+        warnings.push(operation.message);
         continue;
       }
       inspectedTargets.push({
@@ -215,6 +217,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
     inspectedTargets,
     pending,
     deferredWarnings,
+    warnings,
     found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
     scannedStores: targets.length,
     apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
@@ -255,6 +258,7 @@ export async function repairCanonicalSessionEntries(
     found: plan.found,
     repaired: params.apply ? plan.apply() : 0,
     scannedStores: plan.scannedStores,
+    ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
   };
 }
 

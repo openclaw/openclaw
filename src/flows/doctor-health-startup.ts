@@ -12,6 +12,7 @@ import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -132,6 +133,7 @@ export async function prepareDoctorHealthFlow(
     });
   });
   if (
+    options.externallyManaged !== true &&
     resolveIsNixMode() &&
     (options.repair === true || options.yes === true || options.generateGatewayToken === true)
   ) {
@@ -295,6 +297,7 @@ export async function prepareDoctorStateSchema(
 export async function repairDoctorStateDatabase(
   runtime: RuntimeEnv,
   integrityCheck: "quick" | "full",
+  onMigration?: (result: MigrationMessages) => void,
 ) {
   const {
     repairOpenClawStateDatabaseIndexesForDoctor,
@@ -307,6 +310,7 @@ export async function repairDoctorStateDatabase(
     repairOpenClawStateDatabaseReadabilityForDoctor,
   ]) {
     const result = await repair({ env: process.env, integrityCheck });
+    onMigration?.(result);
     repairedState ||= result.changes.length > 0;
     if (result.warnings.length > 0) {
       throw new Error(result.warnings.join("\n"));
@@ -324,6 +328,7 @@ export async function prepareDoctorRuntimeChecks(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
   options: DoctorOptions,
+  onDeletionJournal?: (result: MigrationMessages) => void,
 ) {
   const measure: DoctorProgressMeasure = (label, run) =>
     withDoctorProgress(formatDoctorProgressPhase(label), run, options.json !== true);
@@ -349,6 +354,7 @@ export async function prepareDoctorRuntimeChecks(
       env: process.env,
     }),
   );
+  onDeletionJournal?.(deletionJournal);
   for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
     runtime.log(message);
   }

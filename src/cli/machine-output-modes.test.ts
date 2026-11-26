@@ -20,7 +20,11 @@ it("detects non-TTY doctor lint without changing terminal output", () => {
 });
 
 it("reserves doctor JSON output with or without explicit lint mode", () => {
-  for (const args of [argv("doctor", "--json"), argv("doctor", "--lint", "--json")]) {
+  for (const args of [
+    argv("doctor", "--json"),
+    argv("doctor", "--lint", "--json"),
+    argv("doctor", "--fix", "--externally-managed", "--non-interactive", "--json"),
+  ]) {
     expect(isDoctorMachineOutput({ argv: args, stdoutIsTTY: true })).toBe(true);
   }
 });

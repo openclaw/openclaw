@@ -92,6 +92,7 @@ export function createDoctorHealthContribution(
           checks: healthChecks,
           dryRun,
           progress: ctx.options.json !== true,
+          ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
         });
         ctx.cfg = result.config;
         renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
@@ -104,12 +105,23 @@ export function createDoctorHealthContribution(
         for (const warning of result.warnings) {
           ctx.runtime.error(warning);
         }
+        if (result.configChangesSkipped) {
+          ctx.repairEvidence?.remaining(
+            "config",
+            result.changes.length
+              ? result.changes
+              : ["Deployment-owned configuration requires repair."],
+          );
+        }
         if (configBeforeRepair !== JSON.stringify(result.config)) {
           ctx.configResult.pendingChangePanels = [
             ...(ctx.configResult.pendingChangePanels ?? []),
             ...result.changes,
           ];
         } else {
+          if (!result.configChangesSkipped) {
+            ctx.repairEvidence?.applied(id, result.changes);
+          }
           for (const change of result.changes) {
             ctx.runtime.log(change);
           }
@@ -119,7 +131,7 @@ export function createDoctorHealthContribution(
 }
 
 export function recordDoctorHealthWarnings(
-  ctx: Pick<DoctorHealthFlowContext, "updateWarnings">,
+  ctx: Pick<DoctorHealthFlowContext, "updateWarnings" | "repairEvidence">,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
   options?: { prepend?: boolean },
@@ -134,13 +146,20 @@ export function recordDoctorHealthWarnings(
       ),
     ...warnings,
   ];
+  for (const finding of findings.filter((entry) => entry.severity !== "info")) {
+    ctx.repairEvidence?.remaining(finding.checkId, [finding.message]);
+  }
+  ctx.repairEvidence?.summarize(warnings);
   ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
     options?.prepend ? [...added, ...existing] : [...existing, ...added],
   );
 }
 
 export function reportDoctorHealthFinding(
-  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings">,
+  ctx: Pick<
+    DoctorHealthFlowContext,
+    "runtime" | "healthFindings" | "updateWarnings" | "repairEvidence"
+  >,
   finding: HealthFinding,
 ): void {
   recordDoctorHealthWarnings(
@@ -216,10 +235,16 @@ export function collectDoctorHealthResultWarnings(params: {
 }
 
 /** Startup repairs may report before the full health context exists. */
-export function createDoctorHealthFindingBuffer(runtime: DoctorHealthFlowContext["runtime"]) {
-  const buffer: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings"> & {
+export function createDoctorHealthFindingBuffer(
+  runtime: DoctorHealthFlowContext["runtime"],
+  repairEvidence?: DoctorHealthFlowContext["repairEvidence"],
+) {
+  const buffer: Pick<
+    DoctorHealthFlowContext,
+    "runtime" | "healthFindings" | "updateWarnings" | "repairEvidence"
+  > & {
     healthFindings: HealthFinding[];
-  } = { runtime, healthFindings: [] };
+  } = { runtime, healthFindings: [], ...(repairEvidence ? { repairEvidence } : {}) };
   return {
     buffer,
     reportFindings(this: void, findings: readonly HealthFinding[], warnings?: readonly string[]) {

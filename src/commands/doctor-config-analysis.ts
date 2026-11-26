@@ -462,3 +462,12 @@ function noteMcpOriginWarning(cfg: OpenClawConfig): void {
     "Doctor warnings",
   );
 }
+
+export async function noteDoctorRecoveryDiskUsage(cfg: OpenClawConfig): Promise<void> {
+  const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
+    await import("./recovery-disk-usage.js");
+  note(
+    formatRecoveryDiskUsage(await collectRecoveryDiskUsage({ cfg, env: process.env })),
+    "Recovery copies (read-only)",
+  );
+}

@@ -124,6 +124,8 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  onChanges?: (changes: readonly string[]) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
   integrityCheck?: "quick" | "full";
 }): Promise<{ found: number; repaired: number }> {
   const env = params.env ?? process.env;
@@ -136,6 +138,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
+      onWarnings: params.onWarnings,
       failureLabel: "Failed to inspect chat history headers",
       selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
@@ -155,9 +158,9 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       }
       const headerTimestamp = timestampMsToIsoString(snapshot.rows[0]?.createdAt ?? Number.NaN);
       if (!headerTimestamp) {
-        note(
-          `- Failed to repair transcript ${sessionId} (${target.agentId}): invalid first-row timestamp`,
-          NOTE_TITLE,
+        reportError(
+          `- Failed to repair transcript ${sessionId} (${target.agentId})`,
+          new Error("invalid first-row timestamp"),
         );
         return;
       }
@@ -233,6 +236,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           },
         );
         repaired += 1;
+        params.onChanges?.([`Repaired headers for session ${sessionId} (${target.agentId}).`]);
       } catch (error) {
         reportError(`- Failed to repair transcript ${sessionId} (${target.agentId})`, error);
       }

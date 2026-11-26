@@ -53,6 +53,20 @@ export async function runWriteConfigHealth(
     // same candidate would fail identically and duplicate the warning.
     return false;
   }
+  if (ctx.options.externallyManaged === true) {
+    const changesPending =
+      (ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true) ||
+      JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+    if (changesPending) {
+      const { reportDoctorExternalConfigRepairs } = await import("./doctor-external-config.js");
+      await reportDoctorExternalConfigRepairs(ctx);
+      ctx.repairEvidence?.remaining("config", [
+        "Deployment-owned config requires changes. Update the deployment source, redeploy it, then rerun Doctor repair.",
+      ]);
+      return false;
+    }
+    return true;
+  }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { copyConfigResolutionFactsThroughRewrite } = await import("../config/resolution-facts.js");
   const { ConfigMutationConflictError, readConfigFileSnapshot, transformConfigFile } =

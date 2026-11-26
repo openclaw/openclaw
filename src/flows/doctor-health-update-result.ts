@@ -1,14 +1,21 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 // Publishes a Doctor pass's outcome to the updater that launched it.
 import type { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { retainCurrentDeferredUpdateWarnings } from "../infra/deferred-update-warnings.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { resolveDoctorUpdateRun } from "../infra/update-deferred-model-retirement.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
+  UpdateDoctorError,
+  normalizeUpdatePostInstallDoctorWarnings,
   writeUpdatePostInstallDoctorResult,
   type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { collectDoctorHealthResultWarnings } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
@@ -63,4 +70,90 @@ export async function publishDoctorUpdateResult(params: {
         : { configInputHash: updateResult.capture.inputHash }),
     },
   });
+}
+
+export async function createDoctorFailureResult(
+  error: unknown,
+  refusalWarnings: string[],
+  includeWarnings: boolean,
+): Promise<UpdatePostInstallDoctorResult> {
+  const causes = collectNestedErrorCandidates(error);
+  const { classifyDoctorMaintenanceRefusal } =
+    await import("../commands/doctor-maintenance-inspection.js");
+  const maintenanceRefusal = classifyDoctorMaintenanceRefusal(error);
+  const unsafeConfigWrite = causes.find(
+    (cause): cause is ConfigWritePostCommitError =>
+      cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored",
+  );
+  const schemaRefusal = causes.find(
+    (cause): cause is UpdateSchemaRefusalError => cause instanceof UpdateSchemaRefusalError,
+  );
+  const refusalFacts = causes.flatMap((cause) =>
+    cause instanceof UpdateDoctorError || cause instanceof DoctorStateMigrationRefusalError
+      ? cause.failureFacts
+      : [],
+  );
+  return {
+    status: "error",
+    ...(maintenanceRefusal.kind === "data-at-risk" ? { maintenanceRefusal } : {}),
+    ...(includeWarnings && refusalWarnings.length > 0 ? { warnings: refusalWarnings } : {}),
+    failureFacts:
+      !unsafeConfigWrite && !schemaRefusal && refusalFacts.length > 0
+        ? refusalFacts
+        : [
+            createUpdateFailureFact({
+              leaseLoss: createUpdateErrorFact("doctor", error).leaseLoss,
+              check: unsafeConfigWrite
+                ? "config-write"
+                : schemaRefusal
+                  ? "database-schema-preflight"
+                  : "doctor",
+              code: unsafeConfigWrite
+                ? "rollback-state-unverified"
+                : (schemaRefusal?.code ?? "doctor-failed"),
+              message: unsafeConfigWrite
+                ? `${unsafeConfigWrite.publication} config publication; rollback ${unsafeConfigWrite.rollbackStatus}. ${unsafeConfigWrite.message}`
+                : (schemaRefusal?.message ??
+                  (error instanceof Error ? error.message : String(error))),
+            }),
+          ],
+  };
+}
+
+export function createDoctorCompletedResult(
+  ctx: DoctorHealthFlowContext,
+  maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>,
+  pluginWarnings: string[],
+): UpdatePostInstallDoctorResult {
+  const maintenanceWarnings = maintenance?.warnings ?? [];
+  const rawWarnings = [
+    ...pluginWarnings,
+    ...(ctx.configResult.warnings ?? []),
+    ...maintenanceWarnings,
+    ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
+      receipt.outcome === "warning" ||
+      receipt.outcome === "skipped" ||
+      receipt.outcome === "deferred"
+        ? receipt.warnings
+        : [],
+    ),
+    ...(ctx.postInstallDoctorResult?.warnings ?? []),
+  ];
+  // Contribution warnings are classified when recorded, before their display limits.
+  ctx.repairEvidence?.summarize(
+    rawWarnings.filter((warning) => !maintenanceWarnings.includes(warning)),
+  );
+  const warnings = normalizeUpdatePostInstallDoctorWarnings(rawWarnings);
+  return {
+    ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
+    ...(warnings.length ? { warnings } : {}),
+    ...(maintenance?.failureFacts?.length
+      ? {
+          failureFacts: [
+            ...maintenance.failureFacts,
+            ...(ctx.postInstallDoctorResult?.failureFacts ?? []),
+          ],
+        }
+      : {}),
+  };
 }

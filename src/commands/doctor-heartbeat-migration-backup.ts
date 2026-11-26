@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
+import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
@@ -18,6 +19,7 @@ export async function prepareDoctorMigrationBackups(params: {
   check: "quick" | "full";
   verifiedSnapshots: readonly BackupSqliteSnapshotFact[];
   automaticRepair: boolean;
+  onMigration?: (stepId: string, result: MigrationMessages) => void;
   runtime: Pick<RuntimeEnv, "log">;
   measure: DoctorProgressMeasure;
 }) {
@@ -53,6 +55,7 @@ export async function prepareDoctorMigrationBackups(params: {
       verifiedSnapshots,
     }),
   );
+  params.onMigration?.("database-backup", backups);
   for (const message of [...backups.changes, ...backups.warnings]) {
     runtime.log(message);
   }
@@ -70,6 +73,7 @@ export async function prepareDoctorMigrationBackups(params: {
       schemaPreparationPending: hasUnpreparedSchemas(schemas, backups.versionMigrations),
     }),
   );
+  params.onMigration?.("heartbeat-backup", heartbeatBackups);
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
     runtime.log(message);
   }

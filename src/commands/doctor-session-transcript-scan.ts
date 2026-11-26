@@ -20,6 +20,7 @@ export async function scanDoctorSessionTranscripts(
     env: NodeJS.ProcessEnv;
     title: string;
     failureLabel: string;
+    onWarnings?: (warnings: readonly string[]) => void;
     cleanScanIdentity?: (target: ExistingAgentDatabaseTarget) => readonly unknown[];
     selectSessionIds?: (
       reader: ReadOnlySqliteTranscriptReader,
@@ -36,8 +37,11 @@ export async function scanDoctorSessionTranscripts(
 ): Promise<void> {
   const signal = resolveSqliteInspectionSignal();
   signal?.throwIfAborted();
-  const reportError = (message: string, error: unknown) =>
-    note(`${message}: ${formatErrorMessage(error).replace(/\s+/g, " ").trim()}`, params.title);
+  const reportError = (message: string, error: unknown) => {
+    const warning = `${message}: ${formatErrorMessage(error).replace(/\s+/g, " ").trim()}`;
+    note(warning, params.title);
+    params.onWarnings?.([warning]);
+  };
   for (const candidate of projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
     params.env,

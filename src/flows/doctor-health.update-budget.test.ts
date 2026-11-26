@@ -58,7 +58,8 @@ function recordContributions(
 
 const observed = vi.hoisted(() => ({ now: 0, events: [] as string[] }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-vi.mock("./doctor-auth-health.js", () => ({
+vi.mock("./doctor-auth-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-auth-health.js")>()),
   runAuthProfileMigration: async () => {},
   runAuthProfileDiagnostics: async (ctx: { cfg: OpenClawConfig }) => {
     observed.events.push("auth-inspection");

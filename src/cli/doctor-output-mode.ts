@@ -3,6 +3,12 @@ import { hasMachineOutputOption } from "./machine-output-argv.js";
 
 /** Bare doctor JSON and non-TTY lint runs own machine-readable stdout. */
 export function isDoctorMachineOutput(params: MachineOutputResolverParams): boolean {
+  if (
+    hasMachineOutputOption(params.argv, "--externally-managed") &&
+    hasMachineOutputOption(params.argv, "--json")
+  ) {
+    return true;
+  }
   const lint = hasMachineOutputOption(params.argv, "--lint");
   if (lint) {
     return hasMachineOutputOption(params.argv, "--json") || !params.stdoutIsTTY;

@@ -12,6 +12,7 @@ import {
   updateMigrateCommand,
 } from "../cli/update-cli/update-command-migrate.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import { runAgentMemorySchemaHealth } from "../flows/doctor-health-contribution-runners.state.js";
 import * as doctorHealth from "../flows/doctor-health.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
@@ -31,8 +32,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import * as memorySchema from "./doctor-agent-memory-schema.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { seedSessionEntry } from "./doctor-session-entry-state.test-support.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -72,6 +75,111 @@ async function withContainerState(run: (stateDir: string, workspace: string) => 
     await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () => run(stateDir, workspace));
   });
 }
+
+describe("externally managed canonical Doctor repair", () => {
+  const options = {
+    repair: true,
+    externallyManaged: true,
+    nonInteractive: true,
+    json: true,
+  } as const;
+
+  it("repairs released state without changing deployment config", async () => {
+    await withContainerState(async (stateDir) => {
+      const databasePath = seedSchema19Agent(stateDir);
+      const configPath = path.join(stateDir, "openclaw.json");
+      const configBefore = fs.readFileSync(configPath);
+      const report = await doctorHealth.runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      );
+      expect(report.applied.length).toBeGreaterThan(0);
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+      } finally {
+        database.close();
+      }
+    });
+  });
+
+  it("does not report convergence when memory repair returns warnings", async () => {
+    await withContainerState(async () => {
+      vi.spyOn(memorySchema, "noteDoctorAgentMemorySchemaHealth").mockResolvedValue({
+        repaired: [],
+        warnings: ["Agent worker memory schema remains locked."],
+      });
+      mocks.runContributions.mockImplementationOnce(runAgentMemorySchemaHealth);
+      const report = await doctorHealth.runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      );
+      expect(report.ok).toBe(false);
+      expect(report.remaining).toContainEqual({
+        stepId: "doctor",
+        message: "Agent worker memory schema remains locked.",
+      });
+    });
+  });
+
+  it("reports committed raw session repairs before a later contribution fails", async () => {
+    await withContainerState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const seeded = seedSessionEntry(env, "raw-repair", { endedAt: "2026-07-02T00:00:00.000Z" });
+      closeOpenClawAgentDatabasesForTest();
+      mocks.runContributions.mockRejectedValueOnce(new Error("later contribution failed"));
+      const report = await doctorHealth.runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      );
+      expect(report.ok).toBe(false);
+      const database = new DatabaseSync(seeded.databasePath, { readOnly: true });
+      try {
+        const row = database
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(seeded.sessionKey);
+        expect(JSON.parse(String(row?.entry_json)).endedAt).toBe(
+          Date.parse("2026-07-02T00:00:00.000Z"),
+        );
+      } finally {
+        database.close();
+      }
+      expect(report.applied).toContainEqual({
+        stepId: "session-entry-state",
+        changes: ["Canonicalized entry state for 1 durable session row(s)."],
+      });
+    });
+  });
+
+  it("retains committed preflight evidence when a later contribution fails", async () => {
+    await withContainerState(async (_stateDir, workspace) => {
+      const legacyPath = path.join(workspace, "openclaw-workspace-state.json");
+      const setup = { version: 1, setupCompletedAt: "2026-07-02T00:00:00.000Z" };
+      fs.writeFileSync(legacyPath, JSON.stringify(setup));
+      mocks.runContributions.mockRejectedValueOnce(new Error("later contribution failed"));
+      const report = await doctorHealth.runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      );
+      expect(report.ok).toBe(false);
+      expect((await readWorkspaceStateSnapshot(workspace)).setup).toEqual(setup);
+      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(
+        report.applied.filter((entry) =>
+          entry.changes.includes("Migrated workspace setup state to SQLite."),
+        ),
+      ).toEqual([
+        { stepId: "workspace-state", changes: ["Migrated workspace setup state to SQLite."] },
+      ]);
+      expect(
+        report.remaining.some((entry) => entry.message.includes("later contribution failed")),
+      ).toBe(true);
+    });
+  });
+});
 
 function seedSchema19Agent(stateDir: string, unsafe = false): string {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -176,7 +284,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       // A later update counts once its external supervisor accepts it, not at migration.
       const now = Date.now;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 1000);
-      vi.spyOn(doctorHealth, "runDoctorHealthFlow").mockResolvedValue();
+      vi.spyOn(doctorHealth, "runDoctorHealthFlow").mockResolvedValue(undefined);
       const backupRoot = path.join(path.dirname(stateDir), ".openclaw-update", "next", "native");
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         await updateMigrateCommand(backupRoot);

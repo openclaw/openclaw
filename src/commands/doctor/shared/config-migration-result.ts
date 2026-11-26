@@ -7,6 +7,7 @@ import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/sta
 import type {
   LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationStepReceipt,
+  MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
 import type { PluginCache } from "../../../plugins/plugin-cache.js";
@@ -38,6 +39,7 @@ export type DoctorConfigPreflightOptions = {
   preparePluginMetadataSnapshot?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
+  onStateMigrationMessage?: (stepId: string, result: MigrationMessages) => void;
   /** Unattended diagnostics inspect plugin packages without downloading or replacing them. */
   deferPluginPackageRepair?: boolean;
 };

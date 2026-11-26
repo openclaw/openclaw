@@ -22,6 +22,8 @@ export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  onChanges?: (changes: readonly string[]) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
   integrityCheck?: "quick" | "full";
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -36,6 +38,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
+      onWarnings: params.onWarnings,
       failureLabel: "Failed to inspect or rewrite labels",
       // Frozen migration identity plus loaded build/codec and the exact target/profile.
       cleanScanIdentity: (target) => [
@@ -127,6 +130,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
             },
           );
           repairedSessions += 1;
+          params.onChanges?.([`Repaired labels for session ${sessionId} (${target.agentId}).`]);
           repairedEvents += updates.length;
         } catch (repairError) {
           reportError(

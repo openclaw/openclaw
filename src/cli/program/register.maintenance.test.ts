@@ -96,6 +96,24 @@ afterEach(() => {
 });
 
 describe("registered maintenance commands", () => {
+  it("dispatches externally managed JSON repair instead of advisory lint", async () => {
+    await runCli("doctor --fix --externally-managed --non-interactive --json");
+    expectDoctorOptions({
+      repair: true,
+      externallyManaged: true,
+      nonInteractive: true,
+      json: true,
+    });
+  });
+  it.each([
+    ["--externally-managed --non-interactive", "requires --fix or --repair"],
+    ["--externally-managed --fix", "requires --non-interactive"],
+    ["--externally-managed --fix --non-interactive --force", "cannot be combined with --force"],
+  ])("rejects incomplete or conflicting deployment repair: %s", async (args, reason) => {
+    await runCli(`doctor ${args}`);
+    expectNoCalls(doctorCommand, runDoctorLintCli);
+    expectFailure(reason, false);
+  });
   it("bounds a leaked handle only for the executable's Doctor", async () => {
     const { withCliProcessScope } = await import("../runtime-cleanup-scope.js");
     await runCli("doctor --fix --non-interactive");

@@ -1,4 +1,5 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
+import type { DoctorRepairEvidenceSink } from "../commands/doctor-externally-managed-repair.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
@@ -99,11 +100,13 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../status/summary.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  /** Bounded updater display projection; classify raw warnings via recordDoctorHealthWarnings. */
   updateWarnings?: string[];
   /** Findings awaiting the final current-state summary; effects and prompts remain streamed. */
   healthFindings?: HealthFinding[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
+  repairEvidence?: DoctorRepairEvidenceSink;
 };
 
 /** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */

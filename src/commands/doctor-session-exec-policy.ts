@@ -23,9 +23,9 @@ export async function repairLegacySessionExecPolicy(params: {
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
   integrityCheck?: "quick" | "full";
-}): Promise<void> {
+}) {
   const messages: string[] = [];
-  await repairCanonicalSessionEntries({
+  const report = await repairCanonicalSessionEntries({
     ...params,
     updateDeliveryProjection: false,
     transform(entry: LegacySessionEntry, sessionKey, phase) {
@@ -93,4 +93,5 @@ export async function repairLegacySessionExecPolicy(params: {
     }
     note(messages.join("\n"), "Session exec policy");
   }
+  return report;
 }

@@ -212,3 +212,45 @@ it.each(["repair", "generate", "backup failure", "replacement", "kind change"] a
     expectNote(backup);
   },
 );
+
+it("preserves deployment-owned Gateway credentials during externally managed repair", async () => {
+  const { ctx, entry, run, backups } = await createFixture(REDACTED_SENTINEL, {
+    repair: true,
+    externallyManaged: true,
+    json: true,
+  });
+  const remaining = vi.fn();
+  ctx.repairEvidence = {
+    remaining,
+    applied: vi.fn(),
+    complete: vi.fn(),
+    migration: vi.fn(),
+    receipts: vi.fn(),
+    summarize: vi.fn(),
+  };
+  await run();
+  expect(await readToken(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+  expect(backups()).toEqual([]);
+  expectNote("deployment source");
+  expect(ctx.healthFindings).toContainEqual(
+    expect.objectContaining({ fixHint: expect.stringContaining("deployment source") }),
+  );
+  expect(remaining).toHaveBeenCalledWith("core/doctor/gateway-auth", [
+    expect.stringContaining(tokenRef.id),
+  ]);
+});
+
+it("keeps optional trusted-proxy fallback removal in deployment guidance", async () => {
+  const { ctx, run } = await createFixture(REDACTED_SENTINEL, { externallyManaged: true });
+  ctx.cfg.gateway = {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: { userHeader: "x-forwarded-user" },
+      password: REDACTED_SENTINEL,
+    },
+  };
+  await run();
+  expectNote("Replace or remove the optional password");
+  expectNote("deployment source");
+  expect(ctx.cfg.gateway.auth?.password).toBe(REDACTED_SENTINEL);
+});
