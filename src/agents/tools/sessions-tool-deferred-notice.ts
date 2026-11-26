@@ -55,6 +55,11 @@ export async function reportDeferredSessionVisibilityFailure(
     ),
   );
   if (!report.ok) {
+    // The transcript writer, not the chat's visibility read, decides whether a
+    // snooze notice still belongs here. Never redirect it after rollover.
+    if (operation === "snooze" && report.error.code === "session-rebound") {
+      return;
+    }
     throw new Error("Session visibility notice unavailable: " + report.error.code);
   }
 }

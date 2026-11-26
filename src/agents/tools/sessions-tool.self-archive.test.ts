@@ -195,8 +195,6 @@ describe("sessions tool self-snooze", () => {
         request.sessionMutationCommitGuard?.();
         if (scenario === "ack lost after commit") {
           await update({ sessionId, snoozedUntil, updatedAt: Date.now() });
-        } else if (scenario === "transcript replaced") {
-          await update({ sessionId: "next-transcript", updatedAt: Date.now() });
         } else if (scenario === "manual wake before read") {
           cancelSelfSnooze(target);
         }
@@ -217,8 +215,12 @@ describe("sessions tool self-snooze", () => {
         });
         await recorder.persistApproved();
       }
+      // Visibility is a chat fact; describe need not expose a transcript id.
       return {
-        session: scenario === "no visible row" ? null : { ...row, key: sessionKey },
+        session:
+          scenario === "no visible row"
+            ? null
+            : { key: sessionKey, kind: "direct", snoozedUntil: row?.snoozedUntil },
       } as never;
     });
     using continuation = vi.spyOn(inProcessGateway, "runWithGatewayToolContinuationContext");
@@ -227,10 +229,14 @@ describe("sessions tool self-snooze", () => {
       await withSessionControllerOwner(operation, () =>
         tool.execute("snooze", { action: "patch", snoozedUntil }),
       );
+      if (scenario === "transcript replaced") {
+        await update({ sessionId: "next-transcript", updatedAt: Date.now() });
+        operation.updateSessionId("next-transcript");
+      }
     } finally {
       operation.complete();
     }
-    await Promise.allSettled(continuation.mock.results.map((result) => result.value));
+    await Promise.all(continuation.mock.results.map((result) => result.value));
     const recorded = await events(
       scenario === "transcript replaced" ? "next-transcript" : sessionId,
     );

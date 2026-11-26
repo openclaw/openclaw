@@ -132,8 +132,8 @@ export async function scheduleSelfSnooze(params: {
               return;
             }
             const row = described?.session;
-            const observed = row?.key === key && row.sessionId !== undefined;
-            if (observed && (row.sessionId !== reportSessionId || row.snoozedUntil === until)) {
+            const observed = row?.key === key;
+            if (observed && row.snoozedUntil === until) {
               return;
             }
             await reportDeferredSessionVisibilityFailure({
