@@ -19,7 +19,6 @@ import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
-  scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { sha256Base64Url } from "./crypto-digest.js";
@@ -32,11 +31,7 @@ import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js"
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
 import type { UsageCostWorkerDatabase } from "./session-cost-usage-worker.types.js";
-import type {
-  ParsedTranscriptEntry,
-  UsageCostTranscriptFile,
-  UsageRollupTiming,
-} from "./session-cost-usage.types.js";
+import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
@@ -592,27 +587,25 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   // Appended rows follow any inherited history, so only full scans drop it. An
   // appended tail is already the active branch and continues the stored cursor;
   // a full scan resolves billing and timing through canonical navigation.
-  const billed: { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } = appendOnly
+  const { entries, timing, visibleLeafId }: ReturnType<typeof selectBilledUsageEntries> = appendOnly
     ? {
+        visibleLeafId: incremental?.visibleLeafId,
         entries: records.flatMap((record) =>
           isCanonicalSessionTranscriptEntry(record) && record.usageEntry ? [record.usageEntry] : [],
         ),
       }
     : selectBilledUsageEntries(records);
-  const visibleLeafId = appendOnly
-    ? incremental?.visibleLeafId
-    : (scanSessionTranscriptTree(records).leafId ?? undefined);
   // Release the navigation projection before building timestamp buckets. Drain
   // the selected entries in billing order so completed pricing batches can be
   // collected while those buckets grow.
   records.length = 0;
-  billed.entries.reverse();
+  entries.reverse();
   function* drainBilledEntries() {
-    while (billed.entries.length > 0) {
-      yield billed.entries.pop()!;
+    while (entries.length > 0) {
+      yield entries.pop()!;
     }
   }
-  await scan.addEntries(drainBilledEntries(), billed.timing);
+  await scan.addEntries(drainBilledEntries(), timing);
   // A rewrite arriving during this background scan is handled by its publication;
   // the next refresh observes the new generation and rebuilds this derived cache.
   return scan.finish({
