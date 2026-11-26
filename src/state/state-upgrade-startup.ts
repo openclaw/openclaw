@@ -40,7 +40,12 @@ export async function upgradeStateOnGatewayStart(
   try {
     // Existing offline custody checks the stopped owner read-only, then admits
     // schema work through lock.run; config-only custody cannot write databases.
-    lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+    lock = await acquireGatewayLock({
+      env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      waitForTransientSchemaOwner: true,
+    });
   } catch (error) {
     throw explainMachineFailure(error, resolveStateDir(env));
   }
