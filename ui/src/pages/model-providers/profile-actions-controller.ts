@@ -98,7 +98,15 @@ export function createModelProviderProfileActions(options: {
       key,
       targets,
       scope,
-      disconnect && { ...disconnect, retry: () => void logout(cardId, targets, disconnect) },
+      disconnect && {
+        ...disconnect,
+        // The toast outlives the page state; retry only under the Gateway and agent it named.
+        retry: () => {
+          if (scope.isCurrent()) {
+            void logout(cardId, targets, disconnect);
+          }
+        },
+      },
     );
     options.onLogoutStarted({ cardId, completion });
     return completion;
