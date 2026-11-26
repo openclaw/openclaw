@@ -18,8 +18,12 @@ export async function updateGitHubToolIdentityConfig(params: {
   identity?: GitHubToolIdentityConfig;
   expectedIdentity?: GitHubToolIdentityConfig | null;
   agentLifecycleBinding?: AgentLifecycleBinding;
+  pathPrepend?: { expected: string[] | null; value: string[] };
   writeOptions?: ConfigWriteOptions;
 }): Promise<OpenClawConfig> {
+  if (params.pathPrepend && (params.scope !== "agent" || !params.identity)) {
+    throw new Error("GitHub execution path activation requires an agent identity.");
+  }
   const mutation = await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
@@ -57,6 +61,12 @@ export async function updateGitHubToolIdentityConfig(params: {
       ) {
         throw new Error("GitHub identity changed while setup was in progress.");
       }
+      if (
+        params.pathPrepend &&
+        !isDeepStrictEqual(entry?.tools?.exec?.pathPrepend ?? null, params.pathPrepend.expected)
+      ) {
+        throw new Error("Agent execution path changed while GitHub setup was in progress.");
+      }
       if (!entry && params.identity && !params.agentLifecycleBinding) {
         Object.assign(draft, applyAgentConfig(draft, { agentId: params.agentId }));
         entry = resolveMutableAgentEntry(draft, params.agentId);
@@ -70,6 +80,10 @@ export async function updateGitHubToolIdentityConfig(params: {
           entry.tools.github?.allowInSandbox === undefined
             ? params.identity
             : { ...params.identity, allowInSandbox: entry.tools.github.allowInSandbox };
+        if (params.pathPrepend) {
+          entry.tools.exec ??= {};
+          entry.tools.exec.pathPrepend = params.pathPrepend.value;
+        }
       } else {
         unsetConfigValueAtPath(entry, ["tools", "github"]);
       }

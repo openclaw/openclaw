@@ -129,6 +129,46 @@ from Gateway startup. Exec environment overrides do not change the reader's redi
 
 Choosing a different identity or inheritance target selects another profile for new runs. An admitted run keeps its prior profile selection, and already-launched local exec processes keep their launch token until they exit. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
 
+### Atomic agent account activation
+
+Operators can include an `activation` object in `tools.github.authorize.start`
+for `scope: "agent"`:
+
+```json
+{
+  "scope": "agent",
+  "agentId": "release",
+  "activation": {
+    "expectedAccountId": 42,
+    "resetGitAuthor": true,
+    "pathPrepend": ["/opt/agent-tools/bin"]
+  }
+}
+```
+
+The Gateway verifies the authorized account's numeric ID before selecting its
+profile. `resetGitAuthor: true` replaces an existing custom author with that
+account's login and GitHub noreply email. Omitting it preserves the custom author.
+An optional `pathPrepend` replaces that agent's `tools.exec.pathPrepend` in the
+same guarded config write as the profile and author. A changed identity or exec
+path while authorization is pending rejects the cutover.
+
+Use this with a previously prepared agent-specific Git wrapper when switching
+signers. The wrapper must select the intended GPG home and signing key. For SSH
+remotes, it must also select the intended SSH config; managed GitHub HTTPS
+authentication does not select an SSH key. `pathPrepend` only selects the wrapper
+directory. OpenClaw does not create keys or validate signing or SSH behavior.
+Verify a signed commit and the intended remote authentication before cutover.
+The shared account and sibling agents remain unchanged. Existing runs
+keep their captured identity and exec environment; new runs receive the combined
+selection after the Gateway applies the saved config. OAuth polling reports
+success only after runtime application. A `config_not_applied` failure means the
+credential and combined config are saved but have not activated. Enable config
+reload or restart the Gateway, then confirm runtime status before cutover.
+This is not a run-admission hold or immediate credential revocation.
+The existing exec-path limits still apply, including node and remote placement
+boundaries.
+
 If cleanup cannot read a directory's identity, it leaves that directory untouched, logs a warning with the path and reason, and continues checking the remaining profiles. Missing directories are skipped without a warning.
 
 Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.

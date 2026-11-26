@@ -1,6 +1,9 @@
 // Gateway Protocol schemas for durable user profiles and email aliases.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
+import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
+import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import {
   GitHubIdentityFactsSchema,
   ToolsGitHubAuthorizePendingResultSchema,
@@ -10,10 +13,7 @@ import {
   ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema,
   ToolsGitHubAuthorizeNetworkErrorResultSchema,
   ToolsGitHubAuthorizeFailedResultSchema,
-} from "./agents-models-skills.js";
-import { closedObject } from "./closed-object.js";
-import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
-import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
+} from "./tools-github.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 

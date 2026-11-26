@@ -1,4 +1,4 @@
-import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
+import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/tools-github.ts";
 import type {
   PersonalGitHubStatus,
   UsersGitHubStatusResult,

@@ -101,6 +101,27 @@ it("round-trips exact pending and refresh records under opaque hidden names", as
   expect(records.size).toBe(0);
 });
 
+it("persists agent activation with its execution path preimage", async () => {
+  const record = {
+    ...deviceRecord,
+    activation: {
+      expectedAccountId: 42,
+      resetGitAuthor: true as const,
+      pathPrepend: ["/agent/bin"],
+    },
+    expectedPathPrepend: null,
+  };
+  await writeGitHubDeviceAuthorizationRecord(record);
+  expect(await readGitHubDeviceAuthorizationRecord(requestId)).toEqual(record);
+  for (const invalid of [
+    { ...record, expectedPathPrepend: undefined },
+    { ...record, scope: "system", agentLifecycleBinding: undefined },
+  ]) {
+    seed(requestId, invalid);
+    expect(await readGitHubDeviceAuthorizationRecord(requestId)).toBeUndefined();
+  }
+});
+
 it("rejects an own __proto__ key in persisted provenance", async () => {
   seed(requestId, {
     ...deviceRecord,

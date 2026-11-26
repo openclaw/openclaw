@@ -27,6 +27,10 @@ type AuthorizationDependencies = GitHubIdentityDependencies & {
   ) => void;
 };
 
+function savedAwaitingActivation(result: AuthorizationPollResult): boolean {
+  return result.status === "failed" && result.reason === "config_not_applied";
+}
+
 // The device flow owns timers and cancellation; callers own connection/access fences
 // and the distinct personal-credential or shared-configuration mutation boundary.
 export function createGitHubDeviceAuthorization(deps: AuthorizationDependencies) {
@@ -216,7 +220,7 @@ export function createGitHubDeviceAuthorization(deps: AuthorizationDependencies)
       {
         canDispatch: () => isCurrent(operation),
         dispatchError: "Access changed before GitHub authorization was checked.",
-        shouldRefresh: (result) => result.status === "success",
+        shouldRefresh: (result) => result.status === "success" || savedAwaitingActivation(result),
       },
     );
     if (!mutation.ok) {
@@ -265,6 +269,8 @@ export function createGitHubDeviceAuthorization(deps: AuthorizationDependencies)
         deps.authorizationSucceeded?.();
         state = { phase: "idle" };
         succeeded = true;
+      } else if (savedAwaitingActivation(result)) {
+        state = { phase: "config_not_applied", message: refreshError ?? undefined };
       } else {
         state = { phase: result.status };
       }

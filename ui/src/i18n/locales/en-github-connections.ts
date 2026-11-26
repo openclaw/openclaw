@@ -105,6 +105,9 @@ const enGitHubConnections = {
     githubExpires: "Code expires",
     githubOpen: "Open github.com/login/device",
     githubCopyCode: "Copy code",
+    githubAccountSaved: "GitHub account saved",
+    githubActivationPending:
+      "The Gateway will use this account after its configuration reloads. If automatic reload is disabled, restart the Gateway.",
     githubAuthorizationFailed: "Couldn’t sign in to GitHub. Try again.",
     githubExpired: "The one-time code expired. Connect again to request a new code.",
     githubDenied: "GitHub sign-in was denied. Connect again when you’re ready.",

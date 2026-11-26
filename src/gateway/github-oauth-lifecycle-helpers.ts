@@ -110,11 +110,18 @@ export function captureGitHubOAuthAuthorizationIdentity(
 
 export function identityStillSelected(
   config: OpenClawConfig,
-  location: { scope: GitHubIdentityScope; agentId: string },
+  location: Pick<GitHubDeviceAuthorizationRecord, "scope" | "agentId" | "expectedPathPrepend">,
   expected: GitHubToolIdentityConfig | null,
 ): boolean {
   const current = resolveConfiguredGitHubToolIdentity({ config, ...location });
-  return isDeepStrictEqual(current ?? null, expected);
+  return (
+    isDeepStrictEqual(current ?? null, expected) &&
+    (location.expectedPathPrepend === undefined ||
+      isDeepStrictEqual(
+        resolveAgentConfig(config, location.agentId)?.tools?.exec?.pathPrepend ?? null,
+        location.expectedPathPrepend,
+      ))
+  );
 }
 
 export function authorizationStillOwned(

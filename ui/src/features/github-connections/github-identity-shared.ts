@@ -36,7 +36,12 @@ export type GitHubAuthorizationState =
       message?: string;
     })
   | {
-      phase: "access_denied" | "expired" | "incorrect_device_code" | "failed";
+      phase:
+        | "access_denied"
+        | "expired"
+        | "incorrect_device_code"
+        | "failed"
+        | "config_not_applied";
       message?: string;
     };
 
