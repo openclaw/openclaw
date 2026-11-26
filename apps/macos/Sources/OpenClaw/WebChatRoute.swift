@@ -28,11 +28,14 @@ extension WebChatRoute {
               let path = ControlUIDocumentHost.appPath(
                   fromDocumentPath: url.path(percentEncoded: true), baseURL: baseURL)
         else { return nil }
-        guard path.hasPrefix("/chat/") else { return url }
-        guard let route = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let entry = DashboardRouteMap.dashboardURL(
-                  byAppendingSameAppPath: "/__openclaw__/session-entry", to: baseURL),
-              var components = URLComponents(url: entry, resolvingAgainstBaseURL: false)
+        // Mirror the Gateway's public-reader routing: only those chat documents need the private entry.
+        guard path.hasPrefix("/chat/"), path != "/chat/",
+              let route = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return url }
+        guard !Self.isCatalogThread(path: path, route: route) else { return url }
+        guard let entry = DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: "/__openclaw__/session-entry", to: baseURL),
+            var components = URLComponents(url: entry, resolvingAgainstBaseURL: false)
         else { return nil }
         // Match the Gateway's session-entry return-query contract. Keep raw
         // encoding (including '+' semantics), and credentials only in the outer hash.
@@ -48,6 +51,18 @@ extension WebChatRoute {
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         components.percentEncodedFragment = route.percentEncodedFragment
         return components.url
+    }
+
+    /// External catalog threads on an agent's main chat are app-shell documents, never public publications.
+    private static func isCatalogThread(path: String, route: URLComponents) -> Bool {
+        let agentPath = path.dropFirst("/chat/".count)
+        guard !(agentPath.hasSuffix("/") ? agentPath.dropLast() : agentPath).contains("/") else { return false }
+        let items = route.queryItems ?? []
+        return ["catalog", "host", "thread"].allSatisfy { key in
+            let values = items.filter { $0.name == key }
+            return values.count == 1 &&
+                values[0].value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     private static func isRecoveryQueryItem(_ item: URLQueryItem) -> Bool {

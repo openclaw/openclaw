@@ -59,6 +59,33 @@ struct WebChatDocumentRouteTests {
         }
     }
 
+    @Test(arguments: [
+        "/chat/",
+        "/chat/main?catalog=codex&host=local&thread=t1",
+        "/chat/main/?catalog=codex&host=local&thread=t1&sourceHomeId=home",
+        "/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain#panel=details",
+    ])
+    @MainActor
+    func `recovery keeps documents the Gateway already serves as the private app shell`(_ path: String) throws {
+        let base = try #require(URL(string: "https://gateway.invalid/control/"))
+        let document = try #require(URL(string: "https://gateway.invalid/control" + path))
+        #expect(WebChatRoute.recoveryDocumentURL(for: document, baseURL: base) == document)
+    }
+
+    @Test(arguments: [
+        "/chat/main?catalog=codex&host=local",
+        "/chat/main?catalog=codex&host=local&thread=%20",
+        "/chat/main?catalog=codex&host=local&thread=t1&thread=t2",
+        "/chat/main/main?catalog=codex&host=local&thread=t1",
+    ])
+    @MainActor
+    func `recovery enters incomplete or session-scoped catalog links through the private entry`(_ path: String) throws {
+        let base = try #require(URL(string: "https://gateway.invalid/control/"))
+        let document = try #require(URL(string: "https://gateway.invalid/control" + path))
+        let url = try #require(WebChatRoute.recoveryDocumentURL(for: document, baseURL: base))
+        #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.path == "/control/__openclaw__/session-entry")
+    }
+
     @Test(arguments: ["", "/control", "/control/"])
     func `native documents enter the private app shell while navigation stays canonical`(_ mount: String) throws {
         let base = try #require(URL(string: "https://gateway.invalid\(mount)"))
