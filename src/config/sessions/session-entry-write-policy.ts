@@ -45,6 +45,18 @@ export function applySessionEntryWritePolicy(
           : {}),
       };
     }
+    const sourceRunId = normalizedEntry.resumeAfterRestart?.sourceRunId;
+    const nextRunId = normalizedEntry.lifecycleRunId;
+    if (
+      sourceRunId &&
+      nextRunId &&
+      nextRunId !== canonicalPreviousEntry.lifecycleRunId &&
+      nextRunId !== sourceRunId
+    ) {
+      // Admission has transferred this row to another run. Its shutdown must not recover
+      // receipts or requester authority from a predecessor whose marker clear failed.
+      delete normalizedEntry.resumeAfterRestart;
+    }
     if (
       !Object.hasOwn(normalizedEntry, "lifecycleRestartScope") &&
       canonicalPreviousEntry.lifecycleRestartScope

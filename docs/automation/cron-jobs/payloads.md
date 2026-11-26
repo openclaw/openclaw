@@ -46,6 +46,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
+  When the model catalog lists supported levels, the Control UI asks you to choose one before saving a new model and level combination. If an existing job has a level the model no longer offers, you can still pause it or edit other settings.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
   On `automations edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
@@ -413,7 +414,9 @@ Use a normal final reply for a visible result and `NO_REPLY` for silence.
 or `needs_attention`). `no_change` needs no summary; every other outcome requires
 a trimmed summary of 1–2000 characters. Repeating the accepted result returns it
 again; a different second result is rejected. It records the result without
-sending a notification by itself. Structured results are retained in run history. After a
+sending a notification by itself. In the Control UI, run history shows each recorded outcome.
+An enabled job that reports `blocked` or `needs_attention` keeps its summary visible in
+Automations through quiet checks. Reporting `progress` or `done` clears that notice. After a
 successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result

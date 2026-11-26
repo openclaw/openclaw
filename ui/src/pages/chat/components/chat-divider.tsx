@@ -17,7 +17,6 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionCard } from "./chat-message-deferred.tsx";
-import { formatModelLabel } from "./chat-model-picker-options.ts";
 import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
@@ -158,10 +157,7 @@ function NoticeModel(props: {
   );
   const name = createMemo(() => {
     const entry = catalogEntry();
-    return formatModelLabel({
-      provider: provider(),
-      label: entry?.name.trim() || entry?.alias?.trim() || reference()?.model || props.value,
-    });
+    return entry?.name.trim() || entry?.alias?.trim() || reference()?.model || props.value;
   });
   const icon = () => (
     <ProviderBrandIcon

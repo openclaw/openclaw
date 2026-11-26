@@ -255,7 +255,12 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   it("retains the discovered canonical model when its preload subsequently fails", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
     prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
-      new LmstudioModelLoadError(EMBEDDING_MODEL, undefined, new Error("fixture preload rejected")),
+      new LmstudioModelLoadError(
+        EMBEDDING_MODEL,
+        2048,
+        false,
+        new Error("fixture preload rejected"),
+      ),
     );
 
     const result = await requireEmbeddingAdapter().create({

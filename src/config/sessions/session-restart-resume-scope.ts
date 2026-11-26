@@ -25,6 +25,34 @@ export function createRestartResumeMarker(
 }
 
 /**
+ * A new execution supplies its own evidence. A second shutdown before admission may
+ * keep the original source only while the supervisor's restart scope still matches.
+ */
+export function createLiveRestartResumeMarker(
+  entry: Pick<
+    InternalSessionEntry,
+    "lifecycleRunId" | "lifecycleRestartScope" | "resumeAfterRestart"
+  >,
+  { sourceRunId: liveRunId, ...marker }: Omit<RestartResumeMarker, "scope">,
+): RestartResumeMarker {
+  const scope = resolveRestartResumeScope();
+  let sourceRunId = liveRunId;
+  if (!entry.lifecycleRunId && !isRestartResumeEntryOutOfScope(entry, scope)) {
+    sourceRunId = entry.resumeAfterRestart?.sourceRunId;
+  } else if (sourceRunId !== entry.lifecycleRunId) {
+    sourceRunId = undefined;
+  }
+  return createRestartResumeMarker(
+    {
+      ...marker,
+      ...(sourceRunId ? { sourceRunId } : {}),
+      operatorSource: marker.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
+    },
+    scope,
+  );
+}
+
+/**
  * Work interrupted under another scope was ended by the supervisor and never resumes. A
  * shutdown marker names its scope; without one, the scope the latest run started under does.
  */

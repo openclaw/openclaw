@@ -3,10 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
+import { captureCommandOwnerIdentity } from "../auto-reply/command-owner-facts.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelOperatorAdminAuthority } from "../gateway/channel-operator-authority.js";
 import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -21,6 +22,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
+  createDelegatedUpdateRequesterAuthority,
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
   prepareUpdateRequesterIdentity,
@@ -90,10 +92,11 @@ async function linkedAdmins() {
     accountId: identity.accountId,
     senderId: identity.senderId,
   };
-  const authorizationSource = resolveCommandOwnerAuthority(
+  const authorizationSource = captureCommandOwnerIdentity(
     config,
     channelRequester,
     options,
+    resolveChannelOperatorAdminAuthority,
   ).source;
   expect(authorizationSource).toBe(`profile:${ada.id}`);
   return {
@@ -138,8 +141,12 @@ it.each(["reassignment", "role change in original state"])(
       unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
       linkUserChannelIdentity(fixture.grace.id, fixture.identity, fixture.options);
       expect(
-        resolveCommandOwnerAuthority(fixture.config, fixture.channelRequester, fixture.options)
-          .source,
+        captureCommandOwnerIdentity(
+          fixture.config,
+          fixture.channelRequester,
+          fixture.options,
+          resolveChannelOperatorAdminAuthority,
+        ).source,
       ).toBe(`profile:${fixture.grace.id}`);
     } else {
       setUserProfileRole(fixture.ada.id, "member", fixture.options);
@@ -279,6 +286,56 @@ it.each([true, false])(
     expect(authority.isCurrent()).toBe(false);
   },
 );
+
+it.each(["discord", "mattermost"])(
+  "keeps a typed %s owner current only while the owner entry remains configured",
+  async (channel) => {
+    const registry = createTestPluginRegistry().registry;
+    registry.plugins.push(
+      createPluginRecord({ id: channel, status: "error", channelIds: [channel] }),
+    );
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: channel,
+      message: "pending",
+      code: "plugin-state-migration",
+    });
+    const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(
+      new PluginLoadFailureError(registry, registry.plugins),
+    );
+    setActivePluginRegistry(registry);
+    try {
+      await writeConfig({ commands: { ownerAllowFrom: [`${channel}:user:100000000000000001`] } });
+      const authority = await authorityFor({ channel, senderId: "100000000000000001" });
+      expect(authority.isCurrent()).toBe(true);
+      await writeConfig({ commands: { ownerAllowFrom: [`${channel}:user:100000000000000002`] } });
+      expect(authority.isCurrent()).toBe(false);
+    } finally {
+      await clearActivePluginRegistry(registry);
+    }
+  },
+);
+
+it("checks a Telegram owner against the Doctor migration without publishing it", async () => {
+  const legacy = (owner: string) =>
+    JSON.stringify({
+      commands: { ownerAllowFrom: [`telegram:${owner}`] },
+      skills: { workshop: { autonomous: { mode: "auto", channelNotices: true } } },
+    });
+  const original = legacy("1001");
+  await writeConfig(original);
+  const authority = await createDelegatedUpdateRequesterAuthority(
+    { channel: "telegram", senderId: "1001", authorizationSource: "configured-owner" },
+    "run",
+    { assertCurrent() {} },
+    env,
+  );
+  expect(authority.isCurrent()).toBe(true);
+  expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  await writeConfig(legacy("1002"));
+  expect(authority.isCurrent()).toBe(false);
+});
 
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",
