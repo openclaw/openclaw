@@ -42,7 +42,9 @@ which can be started again.
   an agent turn over every unlinked claim, so nightly uses more tokens.
   Maintenance itself never starts it.
 - **Learn from conversations** saves the decisions, preferences, commitments,
-  and lessons in your conversations. Ongoing runs check for newly finished
+  and lessons from conversations belonging to the agent running the scribe.
+  This applies even when session tools normally allow cross-agent reads.
+  Ongoing runs check for newly finished
   conversations daily at 4:00 AM in your time zone. Conversations already
   learned from are skipped. Defaults are active conversations from the last 30
   days.
@@ -263,6 +265,16 @@ turn did. The page asks for an update once per automation revision. A
 scribe that is running or whose conversation is not found is updated on a later
 load. Until the Scribes tab loads, a scribe keeps running its earlier message,
 which still works.
+
+### Review earlier conversation learning
+
+If an earlier run learned from another agent's conversations, later runs ignore
+those checkpoint entries. Open the affected agent's vault and use the
+`Knowledge scribe checkpoint · Learn from conversations` note and claim citations to
+identify records that need review. Withdraw out-of-scope claims or correct
+mixed-source claims and their page State after reviewing the evidence. The
+upgrade does not automatically remove checkpoint entries, claims, or evidence.
+See [Corrections](/plugins/knowledge/corrections) for what withdrawal retains.
 
 ## States
 
