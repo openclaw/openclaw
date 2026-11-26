@@ -4,23 +4,13 @@ import {
   readUpgradeSurvivorScenarioCatalog,
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "../../scripts/lib/upgrade-survivor-policy.mjs";
-import catalog from "../../scripts/lib/upgrade-survivor-scenarios.json" with { type: "json" };
 
 const scenarios = { scenarios: ["base"], assertionOnlyScenarios: ["codex-allowlist-survival"] };
 describe("inert upgrade-survivor catalog", () => {
-  it("keeps the large SQLite budget explicit and pinned only to the catalog floor", () => {
-    expect(parseUpgradeSurvivorScenarios("sqlite-migration-budget")).toEqual([
-      "sqlite-migration-budget",
-    ]);
+  it("keeps the large SQLite budget out of aggregates and other baselines", () => {
     for (const alias of ["reported-issues", "far-reaching"]) {
       expect(parseUpgradeSurvivorScenarios(alias)).not.toContain("sqlite-migration-budget");
     }
-    expect(
-      supportsUpgradeSurvivorScenarioAtBaseline(
-        "sqlite-migration-budget",
-        `openclaw@${catalog.oldestSupportedBaseline}`,
-      ),
-    ).toBe(true);
     for (const baseline of ["openclaw@latest", "openclaw@2026.6.1", "openclaw@2026.11.8"]) {
       expect(supportsUpgradeSurvivorScenarioAtBaseline("sqlite-migration-budget", baseline)).toBe(
         false,

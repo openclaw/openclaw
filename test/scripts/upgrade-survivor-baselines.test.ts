@@ -125,8 +125,6 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     expect(resolveBaselines(args)).toEqual(["openclaw@2026.10.4"]);
     writeJson(file, { ...catalog, oldestSupportedBaseline: null });
     expect(() => resolveBaselines(args)).toThrow("declared oldestSupportedBaseline");
-    writeFileSync(file, "throw new Error('must never execute candidate policy')");
-    expect(() => resolveBaselines(args)).toThrow("valid inert scenario catalog");
   });
 
   it("plans exactly one daily floor cell and keeps weekly supported-line inputs unchanged", () => {

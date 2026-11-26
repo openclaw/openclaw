@@ -1,0 +1,13 @@
+# Class A nightly gate: 456 net test lines against origin/main 74797accc35e;
+# allocate exactly the excess above the unchanged 400-line allowance.
+# upgrade-survivor-nightly-chain.test.ts: complete startup-owner custody,
+# real production trial/preimages, unchanged copy delegation, occupied-data
+# accounting and independent canonical-content checks; 10 GiB work is opt-in.
+# upgrade-survivor-baselines.test.ts: candidate-SHA catalog resolution through
+# the real workflow shell and planner, one daily cell and unchanged weekly inputs.
+# upgrade-survivor-catalog.test.ts: exclude the expensive cell from aggregate
+# aliases and reject non-floor baselines, which positive planner proof cannot cover.
+# package-acceptance-workflow.test.ts: preserve the existing cron/input guard
+# while adding the isolated daily schedule.
+# Removed parser-positive and malformed-catalog cases overlapping stronger owners.
+56
