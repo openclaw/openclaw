@@ -191,7 +191,7 @@ Invalid configuration reports `invalid-config` before database schema inspection
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
 An ownership refusal during loading includes the `gateway-ownership-unverified`
-failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+failure fact and advises stopping the recorded Gateway before retrying. Active
 maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
 Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that

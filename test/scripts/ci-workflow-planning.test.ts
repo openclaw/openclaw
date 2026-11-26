@@ -310,9 +310,12 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/update-managed-service-handoff-engine.test.ts"], true],
     ...[
       "src/infra/gateway-lock.ts",
+      "src/infra/gateway-lock-payload.ts",
       "src/infra/gateway-lock-recovery.ts",
       "src/infra/gateway-lock-recovery-lease.ts",
       "src/infra/gateway-lock-recovery-postgres.ts",
+      "src/infra/gateway-owner-lease.ts",
+      "src/infra/gateway-owner-lease.read.ts",
       "src/infra/gateway-postgres-custody.ts",
       "src/infra/gateway-postgres-owner.ts",
       "src/channels/message/ingress-monitor.scheduling.test.ts",
