@@ -5,7 +5,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
-import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
+import {
+  prepareAgentDatabaseLeaseProvenance,
+  readAgentDatabaseLeaseProvenance,
+} from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -412,7 +415,9 @@ export function acquireGatewayOwnerLease(params: {
       constructionFailure = { error };
       throw error;
     }
-    await heartbeat.ready;
+    // On Windows the optional boot-identity probe can time out. Do not run it
+    // synchronously in markListening or while holding the SQLite writer.
+    await Promise.all([heartbeat.ready, prepareAgentDatabaseLeaseProvenance()]);
   })();
   let released = false;
   return {
