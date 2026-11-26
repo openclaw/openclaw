@@ -367,8 +367,6 @@ describeSpawnTransports(
     it("fails closed when the service host exits", async () => {
       const tempDir = tempDirs.make("openclaw-service-child-host-");
       const source = `
-        process.env.OPENCLAW_TEST_SERVICE_CHILD_TRACE = "1";
-        console.error("service-host-probe: start", process.pid);
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
         ${await serviceChildHostTransportPrelude(tempDir)}
         const { createChildAdapter } = await import(${JSON.stringify(new URL("./child.ts", import.meta.url).href)});
@@ -377,26 +375,20 @@ describeSpawnTransports(
           stdinMode: "pipe-closed",
         }));
         await ready;
-        console.error("service-host-probe: ready", adapter.pid);
         let output = "";
         adapter.onStdout((chunk) => { output += chunk; });
         while (!/^\\d+ \\d+/u.test(output)) {
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        console.error("service-host-probe: output-ready");
         process.stdout.write("PROBE " + output.trim() + "\\n", () => process.exit(0));
       `;
-      const { stdout, stderr } = await runExec(
+      const { stdout } = await runExec(
         process.execPath,
         ["--import", "tsx", "--input-type=module", "-e", source],
         {},
       );
       const [rootPid, descendantPid] = parsePidPair(stdout, true);
-      try {
-        await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
-      } catch (cause) {
-        throw new Error(`service host descendants remained alive:\n${stderr}`, { cause });
-      }
+      await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
     });
   },
   managedTransports,
