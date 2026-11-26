@@ -643,7 +643,7 @@ describe("retained npm package integrity", () => {
           ),
         ]),
       );
-      vi.mocked(fs.lstat).mockRestore();
+      vi.restoreAllMocks();
       if (retainedChanged) {
         // A same-size write with restored times after the baseline is still caught at restore.
         const retained = path.join(transaction.backupRoot, relative);
