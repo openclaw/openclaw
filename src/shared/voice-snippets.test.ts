@@ -146,4 +146,77 @@ describe("static snippet catalog", () => {
       }),
     ).toThrow("language tag");
   });
+
+  it("keeps full catalogs disableable and exportable as catalog and record metadata grow", () => {
+    const envelope = {
+      ...createVoiceSnippetCatalog(),
+      revision: Number.MAX_SAFE_INTEGER,
+      snippets: Array.from({ length: 96 }, (_, index): VoiceSnippet => ({
+        ...definition,
+        schemaVersion: 1,
+        id: `capacity-${index}`,
+        name: `Capacity ${index}`,
+        triggers: [`capacity ${index}`],
+        revision: Number.MAX_SAFE_INTEGER,
+        enabled: false,
+        body: "x".repeat(VOICE_SNIPPET_BODY_BYTES),
+      })),
+    };
+    const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    let remaining = VOICE_SNIPPET_CATALOG_BYTES - bytes(envelope);
+    // A control character uses one body byte but six JSON bytes. Fill the real
+    // maximum-width metadata envelope without exceeding any individual body limit.
+    const remainder = remaining % 5;
+    envelope.snippets[0]!.name += "x".repeat(remainder);
+    remaining -= remainder;
+    for (const snippet of envelope.snippets) {
+      const escaped = Math.min(remaining / 5, VOICE_SNIPPET_BODY_BYTES);
+      snippet.body = "\u0001".repeat(escaped) + "x".repeat(VOICE_SNIPPET_BODY_BYTES - escaped);
+      remaining -= escaped * 5;
+    }
+    expect(bytes(envelope)).toBe(VOICE_SNIPPET_CATALOG_BYTES);
+    const definitions = envelope.snippets.map((snippet) => ({
+      ...snippet,
+      revision: 9,
+      enabled: true,
+    }));
+    let current = validateVoiceSnippetCatalog({
+      ...envelope,
+      revision: 9,
+      enabled: true,
+      snippets: definitions,
+    });
+    for (const enabled of [false, true]) {
+      current = editVoiceSnippetCatalog(current, { type: "enabled", enabled });
+      expect(current.enabled).toBe(enabled);
+      expect(current.snippets).toEqual(definitions);
+    }
+    for (const enabled of [false, true]) {
+      const snippet = current.snippets[0]!;
+      current = editVoiceSnippetCatalog(current, {
+        type: "save",
+        snippet: { ...snippet, enabled },
+        expectedRevision: snippet.revision,
+      });
+      expect(current.snippets[0]?.enabled).toBe(enabled);
+    }
+    const expectedDefinitions = [{ ...definitions[0], revision: 11 }, ...definitions.slice(1)];
+    expect(current.snippets).toEqual(expectedDefinitions);
+    const exported = exportVoiceSnippetCatalog(current);
+    for (const target of [current, createVoiceSnippetCatalog()]) {
+      const restored = editVoiceSnippetCatalog(target, { type: "import", data: exported });
+      expect(restored.snippets).toEqual(expectedDefinitions);
+      expect(restored.enabled).toBe(target.enabled);
+    }
+    const oversized = current.snippets.map((snippet, index) =>
+      index === 0 ? { ...snippet, name: `${snippet.name}x` } : snippet,
+    );
+    expect(() =>
+      editVoiceSnippetCatalog(current, {
+        type: "import",
+        data: JSON.stringify({ schemaVersion: 1, snippets: oversized }),
+      }),
+    ).toThrow("9 MiB");
+    expect(exportVoiceSnippetCatalog(current)).toBe(exported);
+  });
 });

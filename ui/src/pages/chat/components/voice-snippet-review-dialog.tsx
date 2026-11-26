@@ -77,7 +77,7 @@ function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
             <textarea
               class="settings-input voice-snippets-preview"
               readonly
-              spellcheck={false}
+              spellcheck="false"
               value={view.read().sourceText}
               ref={(element) => (source = element)}
             />
@@ -121,7 +121,7 @@ function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
             <textarea
               class="settings-input voice-snippets-preview"
               readonly
-              spellcheck={false}
+              spellcheck="false"
               value={view.read().text}
               ref={(element) => (preview = element)}
             />

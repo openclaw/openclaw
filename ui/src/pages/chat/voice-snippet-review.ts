@@ -120,7 +120,7 @@ export class VoiceSnippetReview {
       this.result = result;
       // HTML text controls normalize CR and cannot promise NUL fidelity. Keep the exact
       // string available for an explicit UTF-8 download instead of silently changing it.
-      this.fallbackOnly = /[\r\u0000]/u.test(result.text);
+      this.fallbackOnly = result.text.includes("\r") || result.text.includes("\u0000");
       this.error = this.fallbackOnly ? "unsupported-encoding" : null;
     } catch {
       if (this.current() && revision === this.revision) {

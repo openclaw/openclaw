@@ -2,4 +2,5 @@
 # conformance, real SQLite/Gateway ownership, dialog CRUD/recovery, captured draft
 # cancellation/encoding/length and real Send boundary regressions, browser journey.
 # Distinct user-requested AC01-AC11 proof boundaries; no duplicate snapshot suite.
-1431
+# Includes the full-capacity disable/export/import regression with metadata growth.
+1504

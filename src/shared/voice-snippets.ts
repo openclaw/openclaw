@@ -202,7 +202,12 @@ export function validateVoiceSnippetCatalog(value: unknown): VoiceSnippetCatalog
       }
     }
   }
-  if (voiceSnippetUtf8Bytes(JSON.stringify(value)) > VOICE_SNIPPET_CATALOG_BYTES) {
+  // Reserve every record's revision/enable metadata so a full catalog can still
+  // be disabled and re-imported as revisions grow. This measures capacity only.
+  const capacity = JSON.stringify(value, (key: string, field: unknown) =>
+    key === "revision" ? Number.MAX_SAFE_INTEGER : key === "enabled" ? false : field,
+  );
+  if (voiceSnippetUtf8Bytes(capacity) > VOICE_SNIPPET_CATALOG_BYTES) {
     throw new VoiceSnippetValidationError("catalog-too-large");
   }
   return value as VoiceSnippetCatalog;
@@ -265,12 +270,13 @@ export function editVoiceSnippetCatalog(
     }
     const valid = validateVoiceSnippetCatalog({ ...imported, revision: 0, enabled: false });
     const current = new Map(catalog.snippets.map((snippet) => [snippet.id, snippet]));
-    snippets = valid.snippets.map((snippet) => {
+    for (const snippet of valid.snippets) {
       const previous = current.get(snippet.id);
-      return previous
-        ? { ...snippet, revision: previous.revision + Number(!sameDefinition(previous, snippet)) }
-        : snippet;
-    });
+      if (previous) {
+        snippet.revision = previous.revision + Number(!sameDefinition(previous, snippet));
+      }
+    }
+    snippets = valid.snippets;
   } else {
     const id = edit.type === "save" ? edit.snippet.id : edit.id;
     const previous = snippets.find((snippet) => snippet.id === id);

@@ -434,6 +434,8 @@ This version permits 500 definitions including disabled entries, one to eight
 trigger names per definition, 256 characters per name or trigger, a 16 KiB UTF-8
 body, a 9 MiB serialized catalog/import, and 64 KiB of expanded text per capture.
 These bounds are enforced at both the storage and expansion boundaries.
+The catalog reserves space for revision and enabled-state metadata so a full
+catalog can still be disabled and restored from its own export.
 
 Disabling voice snippets retains definitions and restores ordinary dictation.
 The existing profile database retains them across restarts and same-version

@@ -50,7 +50,7 @@ function renderVoiceSnippetCatalogDialog(
   onClose: () => void,
   returnFocus: HTMLElement | null,
 ) {
-  const state = projectOwner(owner, (owner) => owner);
+  const state = projectOwner(owner, (source) => source);
   const [query, setQuery] = createSignal("");
   const [editing, setEditing] = createSignal<VoiceSnippet>();
   const [deleting, setDeleting] = createSignal<VoiceSnippet>();
@@ -185,18 +185,20 @@ function renderVoiceSnippetCatalogDialog(
                 initial={snippet}
                 busy={state.read().busy}
                 onCancel={back}
-                onSave={async (definition) => {
-                  if (
-                    await owner.edit({
+                onSave={(definition) =>
+                  owner
+                    .edit({
                       type: "save",
                       snippet: definition,
                       expectedRevision: snippet.revision || null,
                     })
-                  ) {
-                    setStatus(t("chat.dictation.snippets.saved"));
-                    back();
-                  }
-                }}
+                    .then((saved) => {
+                      if (saved) {
+                        setStatus(t("chat.dictation.snippets.saved"));
+                        back();
+                      }
+                    })
+                }
               />
             )}
           </Show>
@@ -301,13 +303,13 @@ function renderVoiceSnippetCatalogDialog(
                 checked={state.read().catalog?.enabled ?? false}
                 disabled={state.read().busy}
                 onChange={(event) => {
-                  void owner
-                    .edit({ type: "enabled", enabled: event.currentTarget.checked })
-                    .then((saved) => {
-                      if (saved) {
-                        setStatus(t("chat.dictation.snippets.updated"));
-                      }
-                    });
+                  const enabled = event.currentTarget.checked;
+                  event.currentTarget.checked = owner.catalog?.enabled ?? false;
+                  void owner.edit({ type: "enabled", enabled }).then((saved) => {
+                    if (saved) {
+                      setStatus(t("chat.dictation.snippets.updated"));
+                    }
+                  });
                 }}
               />
               {t("chat.dictation.snippets.enabled")}
@@ -573,7 +575,7 @@ function SnippetEditor(props: {
           class="settings-input voice-snippets-preview"
           name="snippetBody"
           required
-          spellcheck={false}
+          spellcheck="false"
           value={draft.body}
           disabled={props.busy}
           onInput={(event) => {
