@@ -15,6 +15,7 @@ import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import * as transcriptProjection from "./components/chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -29,7 +30,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestoring) => {
+function createPaneMountFixture() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const clock = createFrameClock();
   vi.stubGlobal("requestAnimationFrame", clock.request);
@@ -49,7 +50,12 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestori
       flush();
     }
   };
-  function mountPane(paneId: string, restoring = false, initialSubmission = false) {
+  function mountPane(
+    paneId: string,
+    restoring = false,
+    initialSubmission = false,
+    overrides: Partial<ReturnType<typeof createChatProps>> = {},
+  ) {
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -57,6 +63,7 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestori
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
       restoring,
       initialSubmission,
+      ...overrides,
     });
     chat.transcript.start();
     onTestFinished(() => chat.transcript.dispose());
@@ -111,6 +118,11 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestori
     };
   }
 
+  return { mountPane, paint, settlePaints };
+}
+
+it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestoring) => {
+  const { mountPane, paint, settlePaints } = createPaneMountFixture();
   const pane = mountPane("mount-reveal");
   const composer = pane.getByRole<HTMLTextAreaElement>("textbox");
   const viewport = pane.container.querySelector(".chat-thread-viewport");
@@ -206,4 +218,117 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestori
   expect(warmCreated.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   expect(warmCreated.container.querySelector(".chat-conversation-loading")).toBeNull();
   warmCreated.unmount();
+});
+
+function simulateProjectionCost(cost: number) {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const project = transcriptProjection.projectChatTranscript;
+  vi.spyOn(transcriptProjection, "projectChatTranscript").mockImplementation((...args) => {
+    const result = project(...args);
+    if (!result.isEmpty && !result.isLoading) {
+      now += cost;
+    }
+    return result;
+  });
+  return (milliseconds: number) => {
+    now += milliseconds;
+  };
+}
+
+it("splits the first costly history after the loading shell has settled", async () => {
+  const { mountPane, settlePaints } = createPaneMountFixture();
+  const elapse = simulateProjectionCost(16);
+  const pending = Promise.withResolvers<void>();
+  const yieldTask = vi.fn(() => pending.promise);
+  vi.stubGlobal("scheduler", { yield: yieldTask });
+  const pane = mountPane("late-history", false, false, { messages: [], loading: true });
+  await settlePaints();
+  const composer = pane.getByRole<HTMLTextAreaElement>("textbox");
+  const viewport = pane.container.querySelector(".chat-thread-viewport");
+  composer.focus();
+  expect(pane.container.querySelector(".chat-thread-inner")).not.toBeNull();
+  expect(pane.container.querySelector(".chat-virtual-row")).toBeNull();
+  expect(yieldTask).not.toHaveBeenCalled();
+  // Empty receipts and time waiting for history must not spend the preparation budget.
+  elapse(1_000);
+  pane.update({ chat: { ...pane.chat, messages: [], loading: false } });
+  expect(pane.container.querySelector(".agent-chat__empty")).not.toBeNull();
+  expect(yieldTask).not.toHaveBeenCalled();
+  const history = {
+    ...pane.chat,
+    loading: false,
+    messages: [{ role: "assistant", content: "First arriving history", timestamp: 1 }],
+  };
+  pane.update({ chat: history });
+  expect(pane.container.querySelector(".chat-virtual-row")).toBeNull();
+  expect(yieldTask).toHaveBeenCalledTimes(1);
+  expect(pane.getByRole("textbox")).toBe(composer);
+  expect(document.activeElement).toBe(composer);
+  expect(pane.container.querySelector(".chat-thread-viewport")).toBe(viewport);
+  // A second receipt during the one yield supplies the rows without another yield.
+  const latest = { ...history, messages: [{ ...history.messages[0]!, content: "Latest history" }] };
+  pane.update({ chat: latest });
+  expect(yieldTask).toHaveBeenCalledTimes(1);
+  pending.resolve();
+  await pending.promise;
+  flush();
+  await settlePaints();
+  expect(pane.container.textContent).toContain("Latest history");
+  expect(pane.container.textContent).not.toContain("First arriving history");
+  const row = pane.container.querySelector(".chat-virtual-row");
+  expect(row).not.toBeNull();
+  const yielded = yieldTask.mock.calls.length;
+  pane.update({ chat: { ...latest, assistantName: "Renamed assistant" } });
+  expect(pane.container.querySelector(".chat-virtual-row")).toBe(row);
+  expect(yieldTask).toHaveBeenCalledTimes(yielded);
+});
+
+it.each([
+  { name: "cheap first history", cost: 15, restoring: false, initial: false, late: false },
+  { name: "restored history", cost: 16, restoring: true, initial: false, late: false },
+  { name: "initial submission", cost: 16, restoring: false, initial: true, late: false },
+  { name: "later accepted submission", cost: 16, restoring: false, initial: false, late: true },
+])("keeps $name immediate after an empty shell", async ({ cost, restoring, initial, late }) => {
+  const { mountPane, settlePaints } = createPaneMountFixture();
+  const elapse = simulateProjectionCost(cost);
+  const pending = Promise.withResolvers<void>();
+  const yieldTask = vi.fn(() => pending.promise);
+  vi.stubGlobal("scheduler", { yield: yieldTask });
+  const pane = mountPane("immediate-history", restoring, initial, { messages: [], loading: true });
+  await settlePaints();
+  elapse(1_000);
+  pane.update({
+    chat: {
+      ...pane.chat,
+      loading: false,
+      initialSubmission: initial || late,
+      messages: [{ role: "assistant", content: "Immediate history", timestamp: 1 }],
+    },
+  });
+  expect(pane.container.querySelector(".chat-virtual-row")).not.toBeNull();
+  expect(pane.container.textContent).toContain("Immediate history");
+  expect(yieldTask).not.toHaveBeenCalled();
+  pane.unmount();
+  pending.resolve();
+});
+
+it("retires the costly first-row task when the pane closes", async () => {
+  const { mountPane, settlePaints } = createPaneMountFixture();
+  simulateProjectionCost(16);
+  const pending = Promise.withResolvers<void>();
+  const yieldTask = vi.fn(() => pending.promise);
+  vi.stubGlobal("scheduler", { yield: yieldTask });
+  const pane = mountPane("closed-first-rows");
+  await settlePaints();
+  expect(yieldTask).toHaveBeenCalledTimes(1);
+  expect(pane.container.querySelector(".chat-virtual-row")).toBeNull();
+  const prepared = vi.mocked(transcriptProjection.projectChatTranscript).mock.results.at(-1)!;
+  const renderRows = vi.spyOn(prepared.value, "renderRows");
+  pane.unmount();
+  pending.resolve();
+  await pending.promise;
+  flush();
+  expect(renderRows).not.toHaveBeenCalled();
+  expect(pane.container.querySelector(".chat-thread")).toBeNull();
 });

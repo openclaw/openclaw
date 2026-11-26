@@ -20,5 +20,8 @@
 # attribution, missing/duplicate coverage and independent cleanup, while retaining
 # ordinary warm capture behavior. This adds 306 test lines. Another 25 lines
 # distinguish a recorded navigation prefix gap from missing post-hello coverage.
-# Full branch growth is 1347 lines; the shared allowance remains 400.
-947
+# Preserve the first populated transcript budget after loading/empty receipts,
+# with cheap/cached/submission immediacy, one-yield continuity and disposal.
+# These real-pane owner cases add 125 lines using the existing mount fixture.
+# Full branch growth is 1472 lines; the shared allowance remains 400.
+1072

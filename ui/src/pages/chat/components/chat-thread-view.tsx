@@ -324,16 +324,17 @@ function ChatThreadContent(
   );
   const splitColdRows =
     !input.props.restoring && !input.props.initialSubmission && splitChatConstruction;
-  const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
+    const started = splitColdRows ? performance.now() : 0;
     const projection = projectChatTranscript(
       input.props,
       session,
       searchState,
       input.projectAutomations,
     );
+    const preparationMs = splitColdRows ? performance.now() - started : 0;
     expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
     if (projection.isEmpty || projection.isLoading) {
@@ -342,19 +343,19 @@ function ChatThreadContent(
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
-    return { session, projection };
+    return { session, projection, preparationMs };
   });
-  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
-  if (splitColdRows) {
-    current();
-  }
-  const [renderReady, setRenderReady] = createSignal(
-    !splitColdRows || performance.now() - started <= 15,
-  );
-  onSettled(() => {
-    if (!renderReady()) {
-      void yieldChatTask().then(() => setRenderReady(true));
+  // Loading/empty shells do not spend the first-row budget. Once admitted, rows
+  // stay mounted; a submission acknowledged after the shell still stays immediate.
+  const [renderReady, setRenderReady] = createSignal<boolean | undefined>((previous) => {
+    if (previous === true || !splitColdRows || input.props.initialSubmission) {
+      return true;
     }
+    if (previous === false) {
+      return false;
+    }
+    const { projection, preparationMs } = current();
+    return projection.isLoading || projection.isEmpty ? undefined : preparationMs <= 15;
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isLoading = createMemo(() => current().projection.isLoading);
@@ -387,7 +388,7 @@ function ChatThreadContent(
     return height === undefined ? null : { content: headerContent, height };
   };
   const contents = createMemo(() => {
-    if (!renderReady()) {
+    if (renderReady() === false) {
       return (
         <div class="chat-thread-inner">
           {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
@@ -434,6 +435,22 @@ function ChatThreadContent(
   });
   return (
     <>
+      <Show when={renderReady() === false}>
+        {() => {
+          onSettled(() => {
+            let active = true;
+            void yieldChatTask().then(() => {
+              if (active) {
+                setRenderReady(true);
+              }
+            });
+            return () => {
+              active = false;
+            };
+          });
+          return null;
+        }}
+      </Show>
       <Show when={input.presented && root()}>
         {(element) => {
           onSettled(() => {
