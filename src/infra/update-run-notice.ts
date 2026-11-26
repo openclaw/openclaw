@@ -197,7 +197,12 @@ export function renderUpdateRunSummary(
 
 /** Only this renderer's terminal summaries may settle an earlier completion. */
 export function isUpdateRunTerminalNoticeText(text: string): boolean {
-  const lines = text.split("\n");
+  // Previously stored completion notices keep their original wording on replay.
+  const currentText = text.replace(
+    "\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+    "\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+  );
+  const lines = currentText.split("\n");
   if (
     /^Failed step: .+\./u.test(lines[1] ?? "") &&
     (lines.slice(2).join("\n").startsWith("Next: ") ||
@@ -249,14 +254,9 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
       return true;
     }
   }
-  if (text === `ℹ️ OpenClaw abandoned update reconciled.\n${UPDATE_RUN_DETAILS}`) {
+  if (currentText === `ℹ️ OpenClaw abandoned update reconciled.\n${UPDATE_RUN_DETAILS}`) {
     return true;
   }
-  // Previously stored completion notices keep their original wording on replay.
-  const currentText = text.replace(
-    "\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
-    "\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
-  );
   return (
     [...UPDATE_RUN_HEADLINES.keys()].some(
       (status) =>

@@ -489,7 +489,9 @@ describe("update repair ledger recovery", () => {
           { kind: "update", status: "error", ts: now, stats: { runId: run.runId } },
           { warn: (message) => `warning: ${message}`, muted: (message) => `muted: ${message}` },
         ),
-      ).toBe("muted: ℹ️ OpenClaw abandoned update reconciled.");
+      ).toBe(
+        "muted: ℹ️ OpenClaw abandoned update reconciled.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+      );
       expect(getUpdateRun(run.runId)).toEqual(repaired);
       await updateRepairCommand({});
       expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined, undefined);

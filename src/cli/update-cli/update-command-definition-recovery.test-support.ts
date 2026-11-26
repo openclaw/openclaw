@@ -7,6 +7,7 @@ import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-
 import * as portsInspect from "../../infra/ports-inspect.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import * as processExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -187,8 +188,12 @@ export function registerUnverifiedDefinitionRecoveryTests({
       expect(recorded?.origin.nextAction).not.toMatch(/keep the gateway stopped/i);
       expect([
         recorded?.reason,
-        ...(recorded?.steps.map((step) => step.detail) ?? []),
+        ...(recorded?.steps.flatMap((step) => [
+          step.detail,
+          ...(step.failureFacts?.map((fact) => fact.message) ?? []),
+        ]) ?? []),
       ]).toContainEqual(expect.stringContaining(reportedDetail));
+      expect(renderUpdateRunSummary(recorded!)).toContain(reportedDetail);
     },
   );
   const answered = { serviceRunning: true, pid: 4321, port: 18789, runningVersion: "2026.9.3" };
