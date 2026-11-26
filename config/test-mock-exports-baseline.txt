@@ -3643,7 +3643,6 @@
 ["src/commands/models/list.status.test.ts","../../agents/provider-auth-aliases.js","05da398b6a4978c9499e896e0ce9c919d632f0f34cecdde2e012429a2e32795c",1]
 ["src/commands/models/list.status.test.ts","../../agents/workspace.js","011b3d71afd7571f3370de2e5e5632b41f7cd7158f60d8733e571365f9e1485f",1]
 ["src/commands/models/list.status.test.ts","../../infra/provider-usage.js","de419a01c1038c2da2373d310892698ba1a369259037fd278623cb437122f966",1]
-["src/commands/models/list.status.test.ts","../../infra/shell-env.js","462e1aebe721b233df0ab8077cce1155e909a0fb3123e2faec37f87077b404c2",1]
 ["src/commands/models/list.status.test.ts","../../plugins/payload-verification.js","1f71f67169f80a103b8153d6a135c97e86a21937d0682824920def98ffaed6ca",1]
 ["src/commands/models/list.status.test.ts","../../plugins/provider-runtime.js","b9b6fd15c71cef2b7eab6c80d806e182e2c777807a1cbf3760c5e1f70b1d8ecb",1]
 ["src/commands/models/list.status.test.ts","../../plugins/synthetic-auth.runtime.js","f0e8c24c7b692eef444e0e839b0805d81759445db3beb0e1efb54c9c33dbf735",1]
