@@ -14,4 +14,5 @@
 # agent-scope test this change rewrote, so the replacement test now counts in full.
 # openclaw/small became the exact Lean migration and openclaw/compact kept the old small
 # behavior: the Lean parity fixtures against main's Lean cases add 152 lines (1733 total).
-1733
+# Merge of main 9239eeb adds the shared USER.md budget test (20 lines) and the count against that base is 1752.
+1752
