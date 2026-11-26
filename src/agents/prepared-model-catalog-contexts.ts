@@ -119,13 +119,13 @@ export class PreparedCatalogContexts<T extends Generation> {
 
   releaseGeneration(
     owner: string | undefined,
-    generation: T,
-    release = () => generation.release(),
+    prepared: T,
+    release = () => prepared.release(),
   ): Promise<void> {
     const previous = this.active?.previous;
     return this.releaseForOwners(
       owner,
-      previous?.prepared === generation ? previous.owners : undefined,
+      previous?.prepared === prepared ? previous.owners : undefined,
       release,
     );
   }
