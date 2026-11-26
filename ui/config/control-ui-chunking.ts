@@ -85,7 +85,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";
@@ -154,6 +155,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
@@ -192,7 +194,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":

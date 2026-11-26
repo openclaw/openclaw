@@ -40,25 +40,31 @@ export function factoryGitHubClientProof(input: {
   const actorId = client?.authenticatedFactoryGitHubAccountId;
   const profileId = client?.authenticatedUserProfile?.profileId;
   const principal = `github:${resolveGitHubHost()}:${actorId}`;
+  if (
+    client?.connect.role !== "operator" ||
+    (!client.connect.scopes?.includes("operator.write") &&
+      !client.connect.scopes?.includes("operator.admin") &&
+      !client.connect.scopes?.includes("operator.read")) ||
+    client.internal?.authenticatedOperator !== true
+  ) {
+    throw new Error("Factory GitHub requires an authenticated operator connection.");
+  }
   const assertCurrent = () => {
     input.assertCurrent();
     if (
       client?.invalidated ||
-      client?.connect.role !== "operator" ||
-      (!client.connect.scopes?.includes("operator.write") &&
-        !client.connect.scopes?.includes("operator.admin") &&
-        !client.connect.scopes?.includes("operator.read")) ||
-      !client.connId ||
+      !client?.connId ||
       client.connectionSignal?.aborted ||
-      client.internal?.authenticatedOperator !== true ||
-      client.internal.syntheticClient ||
-      client.internal.agentRuntimeIdentity ||
-      client.internal.agentToolCaller ||
+      client.internal?.syntheticClient ||
+      client.internal?.agentRuntimeIdentity ||
+      client.internal?.agentToolCaller ||
       client.authenticatedUserId !== principal ||
       client.authenticatedFactoryGitHubAccountId !== actorId ||
       client.authenticatedUserProfile?.profileId !== profileId
     ) {
-      throw new Error("Factory GitHub caller authority changed.");
+      throw new Error(
+        "Factory GitHub caller connection or identity changed. Reconnect and try again.",
+      );
     }
   };
   assertCurrent();

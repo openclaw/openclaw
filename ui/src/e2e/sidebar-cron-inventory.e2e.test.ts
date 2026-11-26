@@ -12,7 +12,13 @@ import { sidebarCronJob, captureSidebarUiProof } from "./sidebar-customization.t
 
 const suite = createControlUiE2eSuite({ name: "Sidebar automation inventory" });
 const pageResponse = (offset: number) => ({
-  jobs: [sidebarCronJob({ id: `job-${offset}`, name: `Report ${offset}` })],
+  jobs: [
+    sidebarCronJob({
+      id: `job-${offset}`,
+      name: `Report ${offset}`,
+      state: { lastRunStatus: offset === 0 ? "ok" : "error", nextRunAtMs: 1 },
+    }),
+  ],
   snapshotRevision: "inventory",
   total: 2,
   limit: 1,
@@ -79,9 +85,29 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
+      const clock = page.locator('.sidebar-rail [data-sidebar-entry="route:cron"] a');
       await expect
-        .poll(() => page.locator(".sidebar-issues-button__count").textContent())
-        .toBe("2");
+        .poll(() => clock.getAttribute("aria-description"))
+        .toBe("An automation has failed");
+      const finish = async (offset: number, lastRunStatus: "ok" | "error") => {
+        const job = pageResponse(offset).jobs[0]!;
+        await gateway.emitGatewayEvent("cron", {
+          action: "finished",
+          jobId: job.id,
+          job: { ...job, state: { ...job.state, lastRunStatus } },
+        });
+      };
+      await finish(0, "error");
+      await finish(1, "ok");
+      await expect
+        .poll(() => clock.getAttribute("aria-description"))
+        .toBe("An automation has failed");
+      await page.locator(".sidebar-issues-button").click();
+      const inbox = page.locator("#sidebar-issues-panel");
+      await inbox.locator(".sidebar-issues-panel__empty").waitFor();
+      expect(await inbox.getByText(/Report [01]/).count()).toBe(0);
+      await finish(0, "ok");
+      await expect.poll(() => clock.getAttribute("aria-description")).toBeNull();
       expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toEqual([
         expect.objectContaining({ compact: true }),
         expect.objectContaining({ compact: true, offset: 1 }),

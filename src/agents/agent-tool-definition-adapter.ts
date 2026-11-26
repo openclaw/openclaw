@@ -4,6 +4,7 @@ import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { readOperatorRefusalToolText } from "../gateway/operator-refusal.js";
 /**
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
@@ -74,7 +75,7 @@ function buildToolExecutionErrorResult(params: {
   return jsonResult({
     status: "error",
     tool: params.toolName,
-    error: params.message,
+    error: readOperatorRefusalToolText(params.cause, params.toolName) ?? params.message,
     ...(permissionMissing ? { permissionMissing } : {}),
   });
 }

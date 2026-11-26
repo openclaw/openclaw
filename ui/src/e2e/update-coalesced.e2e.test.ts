@@ -230,6 +230,10 @@ suite.define(() => {
 
       try {
         const dialog = updateDialog(page);
+        await dialog.locator('[data-run-status="failed"]').waitFor();
+        const diagnostics = dialog.locator(".update-run-view__diagnostics");
+        expect(await diagnostics.getAttribute("open")).toBeNull();
+        await diagnostics.locator("summary").click();
         await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
         expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
           "fail",

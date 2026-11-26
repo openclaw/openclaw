@@ -265,7 +265,9 @@ type EnglishCatalog = TranslationMap & {
       | "automationPrefix"
       | "actionRequiresConnection"
       | "actionUnavailable"
-      | "actionRequiresScope"
+      | "actionPermissionDenied"
+      | "movePermissionDenied"
+      | "createPermissionDenied"
       | "actionRequiresOwnership"
       | "draftCleanupFailed"
       | "createdBy"
@@ -705,7 +707,9 @@ const startupEnglish = {
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
-    actionRequiresScope: "This action requires {scope} access.",
+    actionPermissionDenied: "You don’t have permission to do this.",
+    movePermissionDenied: "You don’t have permission to move this session.",
+    createPermissionDenied: "You don’t have permission to create a session.",
     actionRequiresOwnership: "Only the session creator or an admin can make this change.",
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
     createdBy: "Created by {name}",
@@ -911,6 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation has failed",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -937,6 +942,7 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
+    settingsGroupTeam: "Team",
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
@@ -1022,8 +1028,10 @@ const startupEnglish = {
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
+    roles: "Roles",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",
@@ -1533,10 +1541,8 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
     errorSummary: "Couldn’t complete this action. Try again.",
-    errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
@@ -1556,8 +1562,6 @@ const startupEnglish = {
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
-    errorBusySummary: "OpenClaw is busy. Check status before trying again.",
-    errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
     errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",
@@ -1694,6 +1698,9 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
+      running: "Compacting",
+      completed: "Compacted context",
+      duration: "Duration: {duration}",
       savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {

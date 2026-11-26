@@ -862,6 +862,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
     const observerModel = "mock-openai/observer-failure-fixture";
     const pluginId = "qa-announce-suppression";
+    const suppressionLog = "QA Slack announcement cancelled by fixture policy";
     const pluginDir = path.join(directory, pluginId);
     await writePluginManifest(pluginDir, pluginId);
     await fs.writeFile(
@@ -869,8 +870,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       `module.exports = {
       id: ${JSON.stringify(pluginId)},
       register(api) {
-        api.on("message_sending", (event) => event.content.includes(${JSON.stringify(cancelledMarker)})
-          ? { cancel: true, cancelReason: "synthetic announcement policy" } : undefined);
+        api.on("message_sending", (event) => {
+          if (!event.content.includes(${JSON.stringify(cancelledMarker)})) return;
+          api.logger.info(${JSON.stringify(suppressionLog)});
+          return { cancel: true, cancelReason: "synthetic announcement policy" };
+        });
       }
     };`,
     );
@@ -1032,7 +1036,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
               sessionKey: run.requesterSessionKey,
               status: run.execution.status,
               deliveryStatus: run.delivery?.status,
-              error: run.delivery?.lastError,
             }
           : undefined;
         return (
@@ -1041,13 +1044,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         );
       }, `settled ${caseName} task`);
       tasks.push(terminalTask!);
-      expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe(
-        caseName === "visible" ? "failed" : "delivered",
-      );
+      // Child-result settlement is not evidence of a visible channel send.
+      expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe("delivered");
       if (caseName === "visible") {
-        expect(terminalTask?.error, JSON.stringify(terminalTask)).toContain(
-          "cancelled_by_message_sending_hook",
-        );
+        await waitForFact(() => gateway.logs().includes(suppressionLog), "Slack suppression hook");
       }
       // Delivery settlement does not join the final observer digest. Wait before
       // admitting another turn on this session so its failure cannot be dropped.
@@ -1081,7 +1081,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
   }, 240_000);
 
-  it("retains ambiguous Discord announcement custody after an unidentified send", async () => {
+  it("settles a consumed child result while Discord tracks an unidentified send", async () => {
     const directory = await createDirectory("discord-announce-", cleanups);
     const marker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
     const { writes, adapter, api } = await createPresentationTransport(
@@ -1200,8 +1200,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
     });
     let task: ReturnType<typeof readQaSubagentRuns>[number] | undefined;
     let taskRuns: ReturnType<typeof readQaSubagentRuns> = [];
-    let queued: { recoveryState?: string; lastError?: string } | undefined;
-    let delivery: { status?: string; disposition?: string } | undefined;
+    let sawUnidentifiedSendInQueue = false;
+    let delivery: NonNullable<typeof task>["delivery"];
     const settlementHistory: Array<{ at: number; state: object }> = [];
     let lastSettlementState: string | undefined;
     const observedQueueIds = new Set<string>();
@@ -1243,7 +1243,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
           entry.channel === "discord" &&
           entry.lastError === "platform send returned no delivery identity",
       );
-      queued = pending;
+      // Transport recovery can reconcile the queue row independently of child settlement.
+      sawUnidentifiedSendInQueue ||= pending?.recoveryState === "unknown_after_send";
       // Keep IDs from before the send becomes ambiguous, so a later
       // compacted receipt can still be matched after it loses its session key.
       for (const row of pendingRows) {
@@ -1285,11 +1286,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       return (
         task?.execution.status === "terminal" &&
-        delivery?.disposition === "ambiguous" &&
-        Boolean(queued) &&
-        gateway.logs().includes("automatic completion delivery could not be confirmed")
+        delivery?.status === "delivered" &&
+        delivery.requesterDelivery?.state === "consumed" &&
+        sawUnidentifiedSendInQueue
       );
-    }, "ambiguous announcement settlement").catch((error: unknown) =>
+    }, "child settlement and unidentified Discord send").catch((error: unknown) =>
       rethrowWithDeliveryDiagnostics(error, () => {
         const requests = createRequestSummary();
         for (const { method, route } of writes) {
@@ -1303,6 +1304,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           parentAcknowledged,
           completions,
           unidentifiedSends: writes.filter((write) => write.identityOmitted).length,
+          sawUnidentifiedSendInQueue,
           settlementHistory,
           requests: requests.snapshot(),
           ...deliveryQueueDiagnostics(
@@ -1313,11 +1315,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         };
       }),
     );
-    expect(delivery?.status).toBe("pending");
     expect(requesterSettledBeforeWorker).toBe(true);
     expect(parentAcknowledged).toBe(true);
     expect(taskRuns).toHaveLength(1);
-    expect(queued?.recoveryState).toBe("unknown_after_send");
     expect(writes.filter((write) => write.identityOmitted)).toHaveLength(1);
     expect(
       [...api.messages.values()].filter((message) =>

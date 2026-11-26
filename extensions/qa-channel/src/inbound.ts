@@ -2,8 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilderAsync,
+  formatAgentEnvelope,
   formatInboundMediaUnavailableText,
+  resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -290,10 +291,6 @@ export async function handleQaInbound(params: {
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
   });
-  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
-    cfg: params.config,
-    route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
-  });
   const wasMentioned = isGroup
     ? channelRuntime.mentions.matchesMentionPatterns(
         inbound.text,
@@ -364,10 +361,20 @@ export async function handleQaInbound(params: {
         notice: `[${unavailableCount} QA attachment${unavailableCount === 1 ? "" : "s"} unavailable]`,
       })
     : inbound.text;
-  const body = buildEnvelope({
+  // Read from the channel runtime's session owner. The embedded QA runner owns
+  // its session metadata in memory; the Gateway runtime still uses its worker.
+  const previousTimestamp = await channelRuntime.session.readSessionUpdatedAtAsync({
+    storePath: channelRuntime.session.resolveStorePath(config.session?.store, {
+      agentId: route.agentId,
+    }),
+    sessionKey: threadKeys.sessionKey,
+  });
+  const body = formatAgentEnvelope({
     channel: params.channelLabel,
     from: inbound.senderName || inbound.senderId,
     timestamp: inbound.timestamp,
+    previousTimestamp,
+    envelope: resolveEnvelopeFormatOptions(config),
     body: bodyForAgent,
   });
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({

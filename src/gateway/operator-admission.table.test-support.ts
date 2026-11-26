@@ -7,6 +7,7 @@ import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM } from "../../test/helpers/tls-fixture.js";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 import type { FollowupRun } from "../auto-reply/reply/queue/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot, writeConfigFile } from "../config/config.js";
 import {
@@ -67,6 +68,7 @@ export class AdmissionCase {
   readonly deliveries: unknown[] = [];
   readonly terminals = new Map<string, Deferred<string>>();
   readonly observedRunScopes: string[][] = [];
+  readonly replayGrants: TurnGrant[] = [];
   readonly queuedOwners: boolean[] = [];
   ownerToolChecks = 0;
   ingressScopeCeiling = [...WRITER];

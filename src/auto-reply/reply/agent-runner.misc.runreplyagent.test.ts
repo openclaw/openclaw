@@ -374,10 +374,8 @@ describe("runReplyAgent auto-compaction token update", () => {
             compactionCount: 0,
           });
           if (compactAfterFlush) {
-            expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
-              expect.objectContaining({ trigger: "budget" }),
-              expect.objectContaining({ requestBudget: { ...requestBudget, pendingTokens: 0 } }),
-            );
+            // Fitting maintenance waits for the next attempt's request boundary.
+            expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
           }
         }
       } finally {

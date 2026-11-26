@@ -383,6 +383,7 @@ function resolvePreparedAssistantMediaPolicy(
     localRoots,
     workspaceOnly,
     reader,
+    profileId: auth.authenticatedUserProfile?.profileId,
     canAllow: auth.operatorScopes.includes("operator.admin"),
   };
 }

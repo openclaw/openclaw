@@ -18,7 +18,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore } from "../cron/store.js";
-import { testApi as loggingTestApi } from "../logging/logger.test-support.js";
+import { flushLogger } from "../logging/logger.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
@@ -231,7 +231,7 @@ function setRemoteFixtures(fixtures: Fixture[]) {
 }
 
 it.for(["skill", "plugin", "clawhub-plugin"] as const)(
-  "fences %s publication for read-only and revoked operators through native Add",
+  "fences %s publication for read-only operators and finishes an Add admitted before revocation",
   async (kind, { signal }) => {
     const state = await createOpenClawTestState({
       label: `bundled-${kind}-authority`,
@@ -335,7 +335,12 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       const revoked = await makeFixture(kind, "revoked");
       setRemoteFixtures([allowed, revoked]);
       const policyPath = state.path("bundled-policy.cjs");
-      await fs.writeFile(policyPath, "// Synthetic external operator policy.\n", { mode: 0o700 });
+      // Exercise real policy-path admission without relying on the runner's Node toolcache.
+      await fs.writeFile(
+        policyPath,
+        `#!${process.execPath}\nthrow new Error("Expected the mocked policy transport");\n`,
+        { mode: 0o700 },
+      );
       let armed = false;
       let skillPreflight: string | undefined;
       const finalPolicySources: string[] = [];
@@ -457,7 +462,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         security: {
           installPolicy: {
             enabled: true,
-            exec: { source: "exec", command: process.execPath, args: [policyPath] },
+            exec: { source: "exec", command: policyPath },
           },
         },
       });
@@ -754,8 +759,9 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       release.resolve();
       await withinTest(policyReturned.promise, signal);
       await reply;
-      // Join the actual allocation owner after native cleanup, so absence cannot
-      // pass while the disconnected request still has installation work in flight.
+      // Authority is checked once, when Add starts: revoking the device while installation is in
+      // flight applies to the next request, so the admitted Add finishes its publication. Join the
+      // allocation owner so the check sees the finished installation, not work still in flight.
       await withOpenClawStateLeaseAsync(
         {
           scope: "core:template-add-allocation",
@@ -765,14 +771,16 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         },
         captureOpenClawStateWorkerContext({ env: state.env }),
         async () => {
-          await noEffects(revoked, revokedWorkspace, true);
-          expect(await fs.stat(finalSource).catch(() => null)).toBeNull();
+          expect(await effects(revoked, revokedWorkspace)).toMatchObject({
+            agent: expect.objectContaining({}),
+            published: true,
+          });
         },
       );
       expect(finalPolicySources).toHaveLength(1);
       expect(recoveryRestart).not.toHaveBeenCalled();
     } catch (error) {
-      await loggingTestApi.flushFileLogQueueForTests();
+      await flushLogger();
       const log = await fs.readFile(state.path("gateway.log"), "utf8").catch(() => "");
       throw new Error(
         `${String(error)}\n${log

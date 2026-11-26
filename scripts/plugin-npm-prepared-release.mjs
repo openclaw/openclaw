@@ -251,6 +251,8 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     {
       run: await client.getRunAttempt(runId, runAttempt),
       manifest,
+      fastTrackRequest: params.fastTrackRequest,
+      fastTrackPublication: params.fastTrackPublication,
       expectedRepository: repository,
       expectedRunId: runId,
       expectedRunAttempt: runAttempt,
@@ -271,9 +273,13 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
+    // A selected retained producer is bound by the Q that admitted this validation.
     requireValue(
       authenticated.qualification.candidateSha === sourceSha &&
-        authenticated.qualification.qualificationSha === producerSha &&
+        authenticated.qualification.qualificationSha ===
+          (current.manifest.publicationArtifactSource
+            ? current.manifest.workflowSha
+            : producerSha) &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -682,25 +688,28 @@ export async function selectUnpublishedPreparedNpmPackages(params) {
       sourcePackageJson: join(params.sourceRoot, entry.packageDir, "package.json"),
       outputDir: join(params.outputDir, entry.extensionId),
     });
+    const deferred = deferrals.some((deferral) => deferral.packageName === entry.packageName);
+    // The final roster runs after the plugin child completes. A missing version
+    // here is pending readback, not discovery of unpublished work.
+    const requireVisible = params.requirePublished && !deferred;
     const { alreadyPublished } = await verifyPreparedNpmRegistry({
       packageName: entry.packageName,
       version: entry.version,
       publishTags: [entry.publishTag],
       route: entry.route,
       tarballPath: qualified.tarballPath,
-      allowMissing: true,
+      allowMissing: !requireVisible,
       fetchImpl: params.fetchImpl,
+    }).catch((/** @type {unknown} */ error) => {
+      if (requireVisible && error instanceof NpmRegistryUnavailableError) {
+        throw new NpmRegistryUnavailableError(
+          `Plugin npm child completed; final roster readback for ${entry.packageName}@${entry.version}: ${error.message}`,
+          { cause: error },
+        );
+      }
+      throw error;
     });
-    requireValue(
-      alreadyPublished ||
-        !params.requirePublished ||
-        deferrals.some((deferred) => deferred.packageName === entry.packageName),
-      `${entry.packageName}@${entry.version}: final core publication requires the complete original plugin roster.`,
-    );
-    if (
-      !alreadyPublished &&
-      !deferrals.some((deferred) => deferred.packageName === entry.packageName)
-    ) {
+    if (!alreadyPublished && !deferred) {
       pending.push(entry);
     }
   }
@@ -758,7 +767,8 @@ async function verifyNpmRegistryPublication(params, tarball) {
     "Invalid prepared npm publication request.",
   );
   const deadlineMs = params.allowMissing === true ? undefined : npmRegistryReadbackDeadline();
-  const pendingMessage = `${params.packageName}@${params.version}: exact version is not visible yet; verification pending. Retry readback, not publication.`;
+  const packageUrl = `https://registry.npmjs.org/${encodeURIComponent(params.packageName)}`;
+  const pendingMessage = `${params.packageName}@${params.version}: exact version is not visible at ${packageUrl}; verification pending. Retry readback, not publication.`;
   let registry;
   let version;
   for (;;) {
@@ -767,7 +777,7 @@ async function verifyNpmRegistryPublication(params, tarball) {
     }
     registry = await fetchNpmRegistryPackumentWithRetry({
       packageName: params.packageName,
-      packageUrl: `https://registry.npmjs.org/${encodeURIComponent(params.packageName)}`,
+      packageUrl,
       fetchImpl: params.fetchImpl,
       deadlineMs,
     });

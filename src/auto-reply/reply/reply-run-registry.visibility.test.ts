@@ -109,7 +109,6 @@ it.each([false, true])(
         profileId,
         scopes: ["operator.read", "operator.write"],
         gatewayAccessGrant: null,
-        assertCurrent() {},
       });
     const owner = authority("alice");
     const other = authority("bob");

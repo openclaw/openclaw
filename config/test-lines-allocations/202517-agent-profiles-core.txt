@@ -10,4 +10,6 @@
 # Test names across those suites are distinct behaviors (budget caps, never-widen,
 # size-selection off, native-owned thread), so no test restates another.
 # Exact measured net growth minus the standard 400-line allowance.
-1571
+# On main 90ba7624 the count is 10 higher: main #205403 removed the old localModelLean
+# agent-scope test this change rewrote, so the replacement test now counts in full.
+1581

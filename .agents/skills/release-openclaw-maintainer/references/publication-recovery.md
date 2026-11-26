@@ -315,9 +315,9 @@ ClawHub publication and recovery run independently from the existing dispatch
 point. A ClawHub failure must not fail or stall core publication, GitHub
 finalization, main closeout, or the retrospective PR; a core-parent failure
 must not cancel already-authorized ClawHub work. Retain the original authorization
-and revalidate the ClawHub lane's own authority before effects. Historical
-`wait_for_clawhub=true` parents could fail on one plugin and strand staged
-siblings; recover those ClawHub attempts separately, without holding core recovery.
+and revalidate the ClawHub lane's own authority before effects. Older coupled
+parents could fail on one plugin and strand staged siblings; recover those
+ClawHub attempts separately, without holding core recovery.
 The release plan checks the public version publication-state endpoint: pending
 and failed versions are excluded from republishing, while only absent versions become
 candidates. Reconcile pending attempts with their original publication owner;

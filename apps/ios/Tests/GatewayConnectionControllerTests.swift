@@ -3518,7 +3518,7 @@ private func pendingHandoffDiagnostic(
         #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
         let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
         #expect(snoozed == [session])
-        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
+        #expect(SessionPresentation.detail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

@@ -66,7 +66,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 Set `models.providers.<id>.name` and `icon` to customize how a provider appears
 in model pickers and provider settings. These fields are presentation only: the
 provider ID, model references, credentials, routing, and existing sessions stay
-unchanged. Omit them to keep the existing appearance.
+unchanged. Omit `name` to use the label that the provider plugin declares.
 
 ```json5
 {

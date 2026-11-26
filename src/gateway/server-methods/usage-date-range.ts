@@ -2,11 +2,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   createTimeZoneDayKeyFormatter,
   resolveTimezone,
-  resolveTimeZoneDayStartMs,
 } from "../../infra/format-time/format-datetime.js";
-import type { UsageDailyBucket } from "../../infra/session-cost-usage.js";
+import type { UsageDailyBucket, UsageCivilDays } from "../../infra/session-cost-usage.types.js";
+import { createUsageCalendar, type UsageCalendar } from "../../shared/usage-calendar.js";
 
-export type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
+export type DateRange = {
+  startMs: number;
+  endMs: number;
+  civilDays?: UsageCivilDays;
+  includeUntimestamped?: boolean;
+};
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
@@ -22,8 +27,6 @@ type DateInterpretationResolution =
   | { ok: true; value: DateInterpretation }
   | { ok: false; error: string };
 type DateParts = { year: number; monthIndex: number; day: number };
-
-const MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS = 1;
 
 const parseDateParts = (raw: unknown): DateParts | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
@@ -60,54 +63,41 @@ const shiftDateParts = (parts: DateParts, days: number): DateParts => {
   };
 };
 
-const datePartsToStartMs = (
-  parts: DateParts,
-  interpretation: DateInterpretation,
-): number | undefined => {
-  const { year, monthIndex, day } = parts;
-  if (interpretation.mode === "gateway") {
-    // The host zone can skip a civil date. The constructor then lands on the
-    // next midnight, and the window ends before it starts.
-    const local = new Date(year, monthIndex, day);
-    if (
-      local.getFullYear() !== year ||
-      local.getMonth() !== monthIndex ||
-      local.getDate() !== day
-    ) {
-      return undefined;
-    }
-    return local.getTime();
-  }
-  if (interpretation.mode === "time-zone") {
-    return resolveTimeZoneDayStartMs(
-      formatDateParts(year, monthIndex, day),
-      interpretation.timeZone,
-    );
-  }
-  const utcStart = Date.UTC(year, monthIndex, day);
-  return interpretation.mode === "utc-offset"
-    ? utcStart - interpretation.utcOffsetMinutes * 60 * 1000
-    : utcStart;
-};
+const DAY_MS = 86_400_000;
 
-const datePartsToEndMs = (
-  parts: DateParts,
-  interpretation: DateInterpretation,
-): number | undefined => {
-  const lookaheadDays =
-    interpretation.mode === "time-zone" || interpretation.mode === "gateway"
-      ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS
-      : 1;
-  // A 24-hour date-line transition can remove one civil date entirely. Range
-  // resolution separately verifies the requested day; this only finds its end.
-  for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
-    const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, daysAhead), interpretation);
-    if (nextDayStartMs !== undefined) {
-      return nextDayStartMs - 1;
+/** Intersect the civil day with each constant-offset period around it. */
+function zonedDayBounds(midnight: number, calendar: UsageCalendar) {
+  const low = midnight - DAY_MS;
+  const high = midnight + 2 * DAY_MS;
+  const before = calendar.at(low).offset;
+  const after = calendar.at(high).offset;
+  const firstStart = midnight - before;
+  const lastEnd = midnight + DAY_MS - after - 1;
+  if (before === after) {
+    return { startMs: firstStart, endMs: lastEnd };
+  }
+  // IANA offset transitions are separated by more than this three-day window.
+  // Unlike local day labels, membership in the old offset period is monotonic.
+  let left = low;
+  let right = high;
+  while (left < right) {
+    const middle = left + Math.floor((right - left) / 2);
+    if (calendar.at(middle).offset === before) {
+      left = middle + 1;
+    } else {
+      right = middle;
     }
   }
-  return undefined;
-};
+  const firstEnd = Math.min(left - 1, firstStart + DAY_MS - 1);
+  const lastStart = Math.max(left, midnight - after);
+  if (firstStart > firstEnd) {
+    return lastStart <= lastEnd ? { startMs: lastStart, endMs: lastEnd } : undefined;
+  }
+  if (lastStart > lastEnd) {
+    return { startMs: firstStart, endMs: firstEnd };
+  }
+  return { startMs: firstStart, endMs: lastEnd, disjoint: firstEnd + 1 < lastStart };
+}
 
 /**
  * Parse a UTC offset string in the format UTC+H, UTC-H, UTC+HH, UTC-HH, UTC+H:MM, UTC-HH:MM.
@@ -143,6 +133,10 @@ export const resolveDateInterpretation = (params: {
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
     if (params.timeZone !== undefined && params.timeZone !== null) {
       const requestedTimeZone = normalizeOptionalString(params.timeZone);
+      // "Local" on a UTC client and explicit UTC use the same calendar and snapshot.
+      if (requestedTimeZone === "UTC") {
+        return { ok: true, value: { mode: "utc" } };
+      }
       const timeZone = requestedTimeZone ? resolveTimezone(requestedTimeZone) : undefined;
       if (!timeZone) {
         // Browser tzdata can lead Gateway ICU. Preserve legacy fixed-offset
@@ -178,12 +172,19 @@ export const resolveDateInterpretation = (params: {
 
 export const resolveDayBucket = (
   interpretation: DateInterpretation,
+  civilDays?: UsageCivilDays,
 ): UsageDailyBucket | undefined => {
   if (interpretation.mode === "gateway") {
-    return undefined;
+    return civilDays
+      ? { mode: "time-zone", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, civilDays }
+      : undefined;
   }
   if (interpretation.mode === "time-zone") {
-    return { mode: "time-zone", timeZone: interpretation.timeZone };
+    return {
+      mode: "time-zone",
+      timeZone: interpretation.timeZone,
+      ...(civilDays && { civilDays }),
+    };
   }
   return {
     mode: "utc-offset",
@@ -219,7 +220,7 @@ export const formatDateLabel = (ms: number, interpretation: DateInterpretation):
 };
 
 const formatDateParts = (year: number, monthIndex: number, day: number): string =>
-  `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  `${String(year).padStart(4, "0")}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
   const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
@@ -278,43 +279,67 @@ export const resolveDateRange = (
     return interpretationResolution;
   }
   const interpretation = interpretationResolution.value;
-  const todayDateParts = getDateParts(now, interpretation);
-  const todayEndMs = datePartsToEndMs(todayDateParts, interpretation);
-  if (todayEndMs === undefined) {
-    return { ok: false, error: "calendar day does not exist in requested time zone" };
-  }
-
-  const { startDate: startDateParts, endDate: endDateParts } = dates;
-  // Explicit date windows are atomic. A single boundary must not silently
-  // fall through to the unrelated default 30-day range.
-  if ((startDateParts === undefined) !== (endDateParts === undefined)) {
+  const { startDate: explicitStart, endDate: explicitEnd } = dates;
+  if ((explicitStart === undefined) !== (explicitEnd === undefined)) {
     return { ok: false, error: "startDate and endDate must be provided together" };
   }
-
-  if (startDateParts && endDateParts) {
-    const startMs = datePartsToStartMs(startDateParts, interpretation);
-    const endStartMs = datePartsToStartMs(endDateParts, interpretation);
-    const endMs = datePartsToEndMs(endDateParts, interpretation);
-    if (startMs === undefined || endStartMs === undefined || endMs === undefined) {
-      return { ok: false, error: "calendar day does not exist in requested time zone" };
-    }
-    if (startMs > endStartMs) {
-      return { ok: false, error: "startDate must not be after endDate" };
-    }
-    return { ok: true, value: { startMs, endMs } };
-  }
-
   const rangeDays = RANGE_DAYS.get(params.range);
-  if (rangeDays === "all") {
-    return {
-      ok: true,
-      value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
-    };
+  const all = !explicitStart && rangeDays === "all";
+  const end = explicitEnd ?? getDateParts(now, interpretation);
+  const days =
+    typeof rangeDays === "number" ? rangeDays : Math.max(1, parseDays(params.days) ?? 30);
+  const start = explicitStart ?? (all ? end : shiftDateParts(end, 1 - days));
+  const calendarBucket = resolveDayBucket(interpretation);
+  const calendar =
+    calendarBucket?.mode === "utc-offset"
+      ? undefined
+      : createUsageCalendar(
+          calendarBucket ?? {
+            mode: "time-zone",
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          },
+        );
+  const bounds = (
+    parts: DateParts,
+  ): { startMs: number; endMs: number; disjoint?: boolean } | undefined => {
+    const midnight = Date.UTC(parts.year, parts.monthIndex, parts.day);
+    if (calendar) {
+      return zonedDayBounds(midnight, calendar);
+    }
+    const startMs =
+      midnight -
+      (interpretation.mode === "utc-offset" ? interpretation.utcOffsetMinutes * 60_000 : 0);
+    return { startMs, endMs: startMs + DAY_MS - 1 };
+  };
+  let startDay = bounds(start);
+  if (!startDay && !explicitStart && !all) {
+    // A date-line change can skip one civil day. A trailing range starts at the next real day.
+    startDay = bounds(shiftDateParts(start, 1));
   }
-  const days = Math.max(1, rangeDays ?? parseDays(params.days) ?? 30);
-  const startMs = datePartsToStartMs(shiftDateParts(todayDateParts, -(days - 1)), interpretation);
-  if (startMs === undefined) {
+  const endDay =
+    start.year === end.year && start.monthIndex === end.monthIndex && start.day === end.day
+      ? startDay
+      : bounds(end);
+  if (!startDay || !endDay) {
     return { ok: false, error: "calendar day does not exist in requested time zone" };
   }
-  return { ok: true, value: { startMs, endMs: todayEndMs } };
+  if (startDay.startMs > endDay.startMs) {
+    return { ok: false, error: "startDate must not be after endDate" };
+  }
+  return {
+    ok: true,
+    value: {
+      startMs: all ? 0 : startDay.startMs,
+      endMs: endDay.endMs,
+      ...(all ? { includeUntimestamped: true } : {}),
+      ...(startDay.disjoint || endDay.disjoint
+        ? {
+            civilDays: {
+              from: all ? "" : formatDateParts(start.year, start.monthIndex, start.day),
+              through: formatDateParts(end.year, end.monthIndex, end.day),
+            },
+          }
+        : {}),
+    },
+  };
 };

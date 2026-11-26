@@ -15,16 +15,13 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  CI_PROOF_TEST_FILES,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-  isCiProofTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
+import { CI_PROOF_TEST_FILES, isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
@@ -847,7 +844,7 @@ describe("CI changed Node test plan", () => {
 
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
     ];
     const artifactTarget = "test/scripts/build-all.test.ts";
@@ -924,7 +921,7 @@ describe("CI changed Node test plan", () => {
 
   it("pays for heavy-row splits by merging compatible small rows before the matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-run-timings.test.ts",
       "test/scripts/ci-test-timings.test.ts",
@@ -1851,7 +1848,6 @@ describe("CI changed Node test plan", () => {
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const shards = createChangedNodeTestShards([target]);
@@ -1860,7 +1856,6 @@ describe("CI changed Node test plan", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>

@@ -19,7 +19,7 @@
     "additionalProperties": false,
     "properties": {
       "enabled": { "type": "boolean", "default": true },
-      "ownerHandles": {
+      "allowedCallers": {
         "type": "array",
         "items": { "type": "string" },
         "default": []
@@ -51,9 +51,9 @@
   },
   "uiHints": {
     "enabled": { "label": "Enable FaceTime Voice" },
-    "ownerHandles": {
-      "label": "Owner FaceTime Handles",
-      "help": "Only these handles may place or receive bridged calls. Every listed handle receives authenticated owner privileges."
+    "allowedCallers": {
+      "label": "Allowed FaceTime Handles",
+      "help": "Only these handles may place or receive bridged calls. Owner tools follow commands.ownerAllowFrom (for example facetime:+12065550123)."
     },
     "realtime.provider": { "label": "Realtime Provider", "advanced": true },
     "realtime.model": { "label": "Realtime Model", "advanced": true },

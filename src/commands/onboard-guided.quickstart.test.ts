@@ -1,32 +1,15 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
+import { setEntrypoint } from "./onboard-entrypoint.test-support.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
 
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function setEntrypoint(kind: "npx" | "durable"): Promise<string> {
-  const root = testTempDirs.make("openclaw-guided-entrypoint-");
-  const entrypoint =
-    kind === "npx"
-      ? path.join(root, ".npm", "_npx", "testhash", "node_modules", "openclaw", "openclaw.mjs")
-      : path.join(root, "node_modules", "openclaw", "openclaw.mjs");
-  await fs.mkdir(path.dirname(entrypoint), { recursive: true });
-  await fs.writeFile(entrypoint, "");
-  const originalArgv = [...process.argv];
-  process.argv = [process.execPath, await fs.realpath(entrypoint)];
-  onTestFinished(() => {
-    process.argv = originalArgv;
-  });
-  return process.argv[1]!;
-}
 
 describe("runGuidedOnboarding quick start", () => {
   const {
@@ -64,9 +47,14 @@ describe("runGuidedOnboarding quick start", () => {
 
       const transcript = capture.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(transcript).toContain("Local setup");
-      expect(transcript.split("Everything's in place.")).toHaveLength(2);
+      const completion =
+        choice === "skip"
+          ? "OpenClaw setup is saved. Connect AI before opening chat."
+          : "Everything's in place.";
+      expect(transcript.split(completion)).toHaveLength(2);
       if (choice === "skip") {
         expect(transcript).toContain("Next steps");
+        expect(transcript).not.toContain("Everything's in place.");
       }
     },
   );
@@ -400,7 +388,10 @@ describe("runGuidedOnboarding quick start", () => {
           OPENCLAW_LOCALE: locale,
         },
         async () => {
-          const entrypoint = await setEntrypoint(kind);
+          const entrypoint = await setEntrypoint(
+            testTempDirs.make("openclaw-guided-entrypoint-"),
+            kind,
+          );
           if (kind === "npx") {
             expect(await isDisposableEntrypoint(entrypoint)).toBe(true);
           }

@@ -88,10 +88,7 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       try {
-        const fields = await backfillSessionRowTranscriptFields(
-          transcriptParams(row, entry),
-          signal,
-        );
+        const fields = await backfillSessionRowTranscriptFields(transcriptParams(row, entry));
         const live = params.read(id);
         // A replacement/private-session revocation must not publish another session's text.
         if (!closed() && live?.entry && params.current(row)) {

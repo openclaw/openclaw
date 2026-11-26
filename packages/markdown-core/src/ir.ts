@@ -431,16 +431,12 @@ function parseHtmlLexeme(state: StateInline, silent: boolean, enableUnderline: b
   const underlineTag =
     enableUnderline && tag && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
   if (!silent) {
-    const token = state.push(
-      !underlineTag || underlineTag.selfClosing
-        ? RAW_HTML_TOKEN_TYPE
-        : underlineTag.closing
-          ? "underline_close"
-          : "underline_open",
-      "",
-      0,
-    );
-    if (!underlineTag || underlineTag.selfClosing) {
+    if (underlineTag && !underlineTag.selfClosing) {
+      const type = underlineTag.closing ? "underline_close" : "underline_open";
+      // Plain image labels preserve the authored tag even when it represents a style in body text.
+      state.push(type, "", 0).markup = raw;
+    } else {
+      const token = state.push(RAW_HTML_TOKEN_TYPE, "", 0);
       // Preserve the complete lexeme before entity decoding or text joining; raw
       // anchors intentionally leave linkLevel unchanged so their bodies still linkify.
       token.content = raw;
@@ -990,10 +986,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "image": {
         const meta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
           ?.assistantTranscriptRoleImage;
-        appendImageAlternative(
-          resolveRenderTarget(state),
-          meta ?? { text: token.content ?? "", spans: [] },
-        );
+        appendImageAlternative(resolveRenderTarget(state), meta, token);
         break;
       }
       case "softbreak":

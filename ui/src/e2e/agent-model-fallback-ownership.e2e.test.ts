@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent model fallback ownership",
@@ -107,12 +108,11 @@ suite.define(() => {
       }
 
       await page.getByText(writerWorkspace, { exact: true }).waitFor();
-      const primaryTrigger = page.locator(
-        'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"]) .picker-select__trigger',
-      );
+      const editor = page.locator("openclaw-agents-page");
+      const primaryTrigger = editor.getByRole("button", { name: /^Model:/ });
       await expectText(primaryTrigger).toContain(primaryModel);
 
-      const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
+      const fallbacks = await openAgentFallbackChain(editor);
       await fallbacks.waitFor({ timeout: 10_000 });
       await expect
         .poll(() =>

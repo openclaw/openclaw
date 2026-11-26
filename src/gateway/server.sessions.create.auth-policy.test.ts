@@ -128,8 +128,6 @@ it("retains committed initial turns and admitted inference through fencing and g
       assert(recorder);
       const input = readReplySourceInput(params.replyOptions);
       assert(input);
-      const authority = input.sourceAdapter?.authority;
-      assert(authority);
       expect(recorder.getPersistedMessage?.()).toBeDefined();
       scenario.dispatchStarted = true;
       scenario.dispatchEntered.resolve();
@@ -137,7 +135,6 @@ it("retains committed initial turns and admitted inference through fencing and g
       try {
         const persisted = await recorder.persistApproved();
         input.abortSignal.throwIfAborted();
-        authority.assertCurrent();
         if (persisted) {
           scenario.provider();
         }

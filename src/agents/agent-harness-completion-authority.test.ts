@@ -207,7 +207,7 @@ it.each(["release", "revoke", "gateway-close"] as const)(
       const custody = (await capture())!;
       try {
         source.release();
-        expect(source.authority.assertCurrent).not.toThrow();
+        expect(source.authority.signal?.aborted).not.toBe(true);
         const observer = createOperatorClient({
           profileId: "other-owner",
           scopes: ["operator.admin"],
