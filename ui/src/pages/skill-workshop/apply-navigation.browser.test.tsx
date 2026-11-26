@@ -14,16 +14,22 @@ it("keeps the applied skill open when an earlier Retry returns its old draft lis
     summary: "Berry draft",
     createdAtMs: 2,
   };
+  const saved = {
+    name: plum.skillName,
+    live: false,
+    versions: [{ id: "plum-archived", action: "archive", createdAtMs: 1 }],
+  };
   const original = {
     agentId: "research",
     mode: "propose",
     root: "/synthetic/workshop",
     skills: [],
-    archived: [],
+    archived: [saved],
     drafts: [plum, berry],
   };
   const applied = {
     ...original,
+    archived: [{ ...saved, live: true }],
     skills: [
       {
         name: plum.skillName,
@@ -60,7 +66,7 @@ it("keeps the applied skill open when an earlier Retry returns its old draft lis
   const runtimeConfig = createRuntimeConfigStub();
   runtimeConfig.state.lastError = "Configuration unavailable";
   const context = createContext(request, {
-    methods: ["skills.workshop.applyDraft"],
+    methods: ["skills.workshop.applyDraft", "skills.workshop.archive", "skills.workshop.restore"],
     runtimeConfig,
     search: `?draft=${plum.id}`,
   });
@@ -78,13 +84,19 @@ it("keeps the applied skill open when an earlier Retry returns its old draft lis
   await expect.element(description).toBeVisible();
   expect(context.router.getState().location.search).toBe("?skill=plum-notes");
 
+  const archive = page.getByRole("button", { name: "Archive", exact: true });
+  const restore = page.getByRole("button", { name: "Restore", exact: true });
+  await expect.element(archive).toBeEnabled();
+
   retry.resolve(original);
   // The older inventory has arrived when the live skill's list description disappears.
   await expect.element(description).not.toBeInTheDocument();
+  await expect.element(restore).not.toBeInTheDocument();
   expect(context.router.getState().location.search).toBe("?skill=plum-notes");
   await expect.element(instructions).toBeVisible();
 
   await page.getByRole("button", { name: "Retry" }).click();
   await expect.element(description).toBeVisible();
+  await expect.element(archive).toBeEnabled();
   expect(context.router.getState().location.search).toBe("?skill=plum-notes");
 });

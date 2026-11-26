@@ -79,6 +79,16 @@ export function Detail(props: {
   const versions = createMemo(
     () => snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [],
   );
+  // An older list can omit the open live skill. Restore belongs to a selected archived copy.
+  const canRestore = () => {
+    const { target: selected, result, current } = viewer();
+    return (
+      selected.versionId !== undefined &&
+      result !== undefined &&
+      current === undefined &&
+      versions().some((version) => version.id === selected.versionId)
+    );
+  };
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === target().name),
   );
@@ -141,17 +151,19 @@ export function Detail(props: {
       summary={description()}
       byline={byline()}
       actions={
-        <MutationButton
-          view={props.view}
-          label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-          title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
-          mutation={{
-            method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
-            name: target().name,
-          }}
-          actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-          icon={skill() ? "archive" : "archiveRestore"}
-        />
+        <Show when={skill() || canRestore()}>
+          <MutationButton
+            view={props.view}
+            label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+            title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+            mutation={{
+              method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
+              name: target().name,
+            }}
+            actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
+            icon={skill() ? "archive" : "archiveRestore"}
+          />
+        </Show>
       }
       panel={
         <>
