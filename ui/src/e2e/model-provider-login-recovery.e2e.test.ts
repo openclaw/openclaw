@@ -145,7 +145,7 @@ suite.define(() => {
       await page.reload();
       await paste.fill("http://127.0.0.1:1455/callback?code=typed");
       finished = true;
-      await page.getByText("Example is ready", { exact: true }).waitFor({ timeout: 5000 });
+      await page.getByText("Example connected", { exact: true }).waitFor({ timeout: 5000 });
       expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
     });
   });
