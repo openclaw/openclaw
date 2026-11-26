@@ -56,6 +56,89 @@ const open = (namespace: string, env = state().env) =>
     resolve: () => moduleSource,
   });
 
+it("deletes the captured keys together from host-owned stores without a plugin module", async () => {
+  const openData = (namespace: string) =>
+    createPluginStateKeyedStore<string>("operation-test", options(namespace));
+  const first = openData("prune-first");
+  const second = openData("prune-second");
+  const other = openData("unrelated");
+  for (const store of [first, second, other]) {
+    await store.register("key", "delete");
+    await store.register("neighbor", "keep");
+  }
+  // Older repairable stores can exceed the 10,000-key read batch. The last key
+  // still belongs to this same write, even if later caller code edits the array.
+  const keys = Array.from({ length: 10_001 }, (_, i) => `absent-${i}`);
+  keys.push("key", "key");
+  const write = first.deleteKeys(keys, { alsoFrom: second });
+  keys.fill("neighbor");
+  await write;
+  const dispatch = vi.spyOn(workerClient, "executePluginStateOperationInWorker");
+  try {
+    await first.deleteKeys(["key"], { alsoFrom: first });
+    await first.deleteKeys(["key"], { alsoFrom: openData("prune-first") });
+    expect(dispatch.mock.calls.map(([input]) => input.writeStores)).toEqual([[0], [0]]);
+  } finally {
+    dispatch.mockRestore();
+  }
+  expect(await first.lookup("key")).toBeUndefined();
+  expect(await second.lookup("key")).toBeUndefined();
+  expect(await first.lookup("neighbor")).toBe("keep");
+  expect(await second.lookup("neighbor")).toBe("keep");
+  expect(await other.lookup("key")).toBe("delete");
+});
+
+it("preserves both stores when a sibling loses its grant before commit", async () => {
+  const first = open("prune-first");
+  const second = open("prune-second");
+  await first.register("key", "first");
+  await second.register("key", "second");
+  let active = true;
+  let rejectedAtCommit = false;
+  const bound = second.withCurrent({
+    assertCurrent() {
+      if (!active) {
+        rejectedAtCommit = true;
+        throw new Error("retired sibling");
+      }
+    },
+  });
+  sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      active = false;
+    }
+    admit(request, grant);
+  });
+  await expect(first.deleteKeys(["key"], { alsoFrom: bound })).rejects.toMatchObject({
+    code: "PLUGIN_STATE_WRITE_FAILED",
+  });
+  expect(rejectedAtCommit).toBe(true);
+  expect(await first.lookup("key")).toBe("first");
+  expect(await second.lookup("key")).toBe("second");
+});
+
+it("refuses foreign or unbound stores before exact-key deletion", async () => {
+  const first = open("prune-owner");
+  await first.register("key", "original");
+  await invalid(first.deleteKeys(["key", "   "]));
+  await invalid(first.deleteKeys(["key", "x".repeat(513)]));
+  await invalid(first.deleteKeys(Array(50_001).fill("key")));
+  await first.deleteKeys(Array(50_000).fill("missing"));
+  const foreign = createPluginStateKeyedStore("another-plugin", options("other"));
+  const anotherDatabase = open("other", {
+    ...state().env,
+    OPENCLAW_STATE_DIR: path.join(state().stateDir, "other"),
+  });
+  for (const other of [
+    foreign,
+    anotherDatabase,
+    { lookup: first.lookup, entries: first.entries },
+  ]) {
+    await invalid(first.deleteKeys(["key"], { alsoFrom: other }));
+  }
+  expect(await first.lookup("key")).toBe("original");
+});
+
 const read = (operation: PluginStateOperation<FixtureOperations>, store = 0) =>
   operation.execute({ type: "read", input: { store, key: "key" } }, { writeStores: [] });
 const move = (
