@@ -1216,7 +1216,6 @@ src/infra/exec-approval-text-sanitize.ts	1
 src/infra/exec-approvals-authorization.kernel.ts	10
 src/infra/exec-approvals-cron-policy.ts	1
 src/infra/exec-request-context.ts	24
-src/infra/gateway-lock-recovery-postgres.ts	1
 src/infra/gateway-owner-lease.ts	1
 src/infra/install-package-dir.ts	1
 src/infra/legacy-acp-migration-source.ts	4
