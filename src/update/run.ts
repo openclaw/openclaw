@@ -317,6 +317,7 @@ export async function prepareUpdate(params: {
         target.kind === "git"
           ? await prepareGit({
               checkout: target.checkout,
+              runningRoot: params.runningRoot,
               sha: target.sha,
               staging: staging.path,
               node,

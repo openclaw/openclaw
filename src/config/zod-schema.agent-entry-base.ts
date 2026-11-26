@@ -113,6 +113,7 @@ export const AgentEntryBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
+  sharedUserDir: z.string().trim().min(1).optional(),
   agentProfileId: z.enum(AGENT_PROFILE_SELECTORS).optional(),
   skills: z.array(z.string()).optional(),
   subagents: z

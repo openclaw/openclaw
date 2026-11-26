@@ -224,7 +224,10 @@ it.each([
   if (action === "restore") {
     await click(timeline, "Undo");
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("skills.workshop.archive", skillTarget),
+      expect(request).toHaveBeenCalledWith("skills.workshop.archive", {
+        ...skillTarget,
+        undoRestoreChangeId: change.id,
+      }),
     );
   } else if (versionId === VERSION && scopes.some((scope) => scope === "operator.admin")) {
     expect(button(timeline, "Undo")?.disabled).toBe(false);

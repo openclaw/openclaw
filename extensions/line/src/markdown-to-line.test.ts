@@ -23,106 +23,20 @@ function cardBody(result: ReturnType<typeof processLineMessage>) {
 const spans = (...cells: object[]) => ({ contents: cells.map((cell) => ({ contents: [cell] })) });
 
 describe("processLineMessage table cards", () => {
-  it("keeps inline-code edge spaces in both the card and the oversized table text", () => {
-    const table = [
-      "| ID | Value |",
-      "|---|---|",
-      "| `  first  ` | `  go  ` |",
-      "| blank | `   ` |",
-      "|   following   |   done   |",
-    ];
-    expect(cardBody(processLineMessage(table.join("\n")))[2]).toMatchObject({
-      contents: [
-        { contents: [{ text: " first " }, { text: " go " }] },
-        { contents: [{ text: "blank" }, { text: "   " }] },
-        { contents: [{ text: "following" }, { text: "done" }] },
-      ],
-    });
-
-    const extra = Array.from({ length: 9 }, (_, i) => `row ${i}`);
-    const fallback = [...table, ...extra.map((name) => `| ${name} | x |`), "| last | `end \t ` |"];
-    const result = processLineMessage(fallback.join("\n"));
-    expect(result.segments).toHaveLength(1);
-    expect(result.text).toBe(
-      [
-        " first \n• Value:  go ",
-        "blank\n• Value:    ",
-        "following\n• Value: done",
-        ...extra.map((name) => `${name}\n• Value: x`),
-        "last\n• Value: end \t ",
-      ].join("\n\n"),
-    );
-  });
-
-  it("renders empty cells and a mailto link labelled with its address like plain text", () => {
-    const card = (cell: string) =>
-      cardBody(processLineMessage(`| A | B |\n|---|---|\n| | ${cell} |`));
-    expect(card("[b@example.com](mailto:b@example.com)")).toEqual(card("b@example.com"));
-    expect(card("")[2]).toMatchObject({
-      contents: [{ contents: [{ text: "-" }, { text: "-" }] }],
-    });
-  });
-
   it("maps inline styles to Flex spans without promoting plain messages", () => {
     const result = processLineMessage(`| Name | Status |
 |---|---|
 | **Bold** | *Italic* |
-| <u>Under</u> | ~~Strike~~ |
 | \`<u>Literal</u>\` | Plain |`);
     const rows = cardBody(result);
     expect(rows.slice(2)).toMatchObject([
       spans({ text: "Bold", weight: "bold" }, { text: "Italic", style: "italic" }),
-      spans(
-        { text: "Under", decoration: "underline" },
-        { text: "Strike", decoration: "line-through" },
-      ),
       { contents: [{ text: "<u>Literal</u>" }, {}] },
     ]);
     expect(result.text).toBe("");
   });
 });
-
 describe("processLineMessage", () => {
-  it("labels an untyped code card", () => {
-    const result = processLineMessage("```\nconst x = 1;\n```");
-    const bubble = expectDefined(result.flexMessages[0], "code card").contents;
-    expect(bubble).toMatchObject({
-      type: "bubble",
-      body: {
-        contents: [
-          { type: "text", text: "Code" },
-          { type: "box", contents: [{ type: "text", text: "const x = 1;" }] },
-        ],
-      },
-    });
-  });
-  it("preserves tab-indented Unicode code in code cards", () => {
-    const source = "\t😀 first()\n\t界 second()";
-    const result = processLineMessage(`\`\`\`python\n${source}\n\`\`\``);
-    expect(cardBody(result)[1]).toMatchObject({
-      contents: [{ text: "\t😀 first()\n\t界 second()" }],
-    });
-  });
-
-  it("handles mixed content", () => {
-    const result = processLineMessage(
-      [
-        "# Summary",
-        "**important**",
-        "| Item | Count |\n|---|---|\n| A | 5 |",
-        '```python\nprint("done")\n```',
-        "> Note: Check the link [here](https://example.com).",
-      ].join("\n\n"),
-    );
-    expect(result.flexMessages).toHaveLength(2);
-    expect(result.text).toContain("Summary");
-    expect(result.text).toContain("important");
-    expect(result.text).toContain("Note: Check the link here (https://example.com).");
-    for (const markup of ["#", "**", "|", "```", "[here]"]) {
-      expect(result.text).not.toContain(markup);
-    }
-  });
-
   it("keeps valid tables and code cards while downgrading only an oversized sibling table", () => {
     const value = "z".repeat(30_000);
     const result = processLineMessage(

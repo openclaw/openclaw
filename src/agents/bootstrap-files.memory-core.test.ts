@@ -107,6 +107,50 @@ it.each(["agent", "worktree", "roster-less worktree"] as const)(
       expect(await load()).toEqual(["Shared preferences"]);
     }),
 );
+it("loads the shared USER.md only for agents that opt in", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    registerMemoryCapability("memory-core", {
+      runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
+    });
+    const sharedUserDir = state.statePath("shared");
+    await fs.mkdir(sharedUserDir, { recursive: true });
+    await fs.writeFile(path.join(sharedUserDir, "USER.md"), "Shared preferences");
+    const workspaces = Object.fromEntries(
+      await Promise.all(
+        ["alpha", "beta", "gamma"].map(async (id) => {
+          const workspace = state.statePath(`workspace-${id}`);
+          await fs.mkdir(workspace, { recursive: true });
+          await fs.writeFile(path.join(workspace, "USER.md"), `${id} workspace preferences`);
+          return [id, workspace] as const;
+        }),
+      ),
+    );
+    const config = {
+      agents: {
+        entries: {
+          alpha: { workspace: workspaces.alpha, sharedUserDir },
+          beta: { workspace: workspaces.beta, sharedUserDir },
+          gamma: { workspace: workspaces.gamma },
+        },
+      },
+    };
+    const load = async (agentId: string) =>
+      (
+        await resolveBootstrapContextForRun({
+          workspaceDir: workspaces[agentId]!,
+          config,
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+        })
+      ).contextFiles.filter((file) => file.path.endsWith("USER.md"));
+    expect(await load("alpha")).toEqual([
+      { path: path.join(sharedUserDir, "USER.md"), content: "Shared preferences" },
+    ]);
+    expect((await load("beta")).map((file) => file.content)).toEqual(["Shared preferences"]);
+    expect((await load("gamma")).map((file) => file.content)).toEqual([
+      "gamma workspace preferences",
+    ]);
+  }));
 it("restores USER.md to automatic context when the owner saves an edit", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     registerMemoryCapability("memory-core", {

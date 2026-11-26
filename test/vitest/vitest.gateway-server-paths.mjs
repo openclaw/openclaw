@@ -556,7 +556,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/store-revocation-notify.test.ts",
   "src/gateway/worker-environments/store-runtime-refresh.test.ts",
   "src/gateway/worker-environments/store-worker.test.ts",
-  "src/gateway/worker-environments/store.benchmark.test.ts",
   "src/gateway/worker-environments/store.test.ts",
   "src/gateway/worker-environments/transcript-commit-store.test.ts",
   "src/gateway/worker-environments/transcript-commit.delivery-mirror.test.ts",

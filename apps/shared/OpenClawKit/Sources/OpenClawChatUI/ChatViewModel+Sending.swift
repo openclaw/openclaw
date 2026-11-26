@@ -529,13 +529,13 @@ extension OpenClawChatViewModel {
         pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
         runMessageScopesByRunID[runId] = currentRunMessageScope()
 
-        // Clear input immediately for responsive UX (before network await).
-        if input == draft.input {
+        // Reconnect can suspend long enough for a new draft to have the same text.
+        if input == draft.input, self.composerRevision(for: draft.session.key) == draft.composerRevision {
             input = ""
         }
         let sentAttachmentIDs = Set(draft.attachments.map(\.id))
         attachments.removeAll { sentAttachmentIDs.contains($0.id) }
-        // A live send has no outbox insert to clear its draft, so write the cleared composer now.
+        // A live send has no outbox insert to clear its draft, so persist the current composer now.
         self.flushComposerDraftText()
 
         return LiveSendAttempt(
