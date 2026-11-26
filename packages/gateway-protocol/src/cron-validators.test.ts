@@ -223,7 +223,8 @@ describe("cron protocol validators", () => {
     checkUpdate(patch).toBe(accepted);
   });
 
-  it("accepts jobs without the retired wake setting and rejects it on add and update", () => {
+  it("accepts response-only wake metadata while rejecting it on add and update", () => {
+    expect(Value.Check(CronJobSchema, { ...jobWithState(), wakeMode: "now" })).toBe(true);
     expect(isAdd(minimalAddParams)).toBe(true);
     expect(isAdd({ ...minimalAddParams, wakeMode: "now" })).toBe(false);
     expect(isUpdate(update({ wakeMode: "next-heartbeat" }))).toBe(false);

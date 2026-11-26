@@ -47,6 +47,8 @@ export function cronJobReadView(
   const publicJob = toPublicCronJob(job);
   return {
     ...publicJob,
+    // Released protocol-v4 clients require this response field, not a stored setting.
+    wakeMode: "now" as const,
     configRevision: resolveCronJobConfigRevision(job),
     reauthorizationRequired: cronJobNeedsCreatorReauthorization({ job }),
     nextRunAtMs: job.state.nextRunAtMs,
@@ -74,6 +76,7 @@ export function cronJobDefinitionFromReadView(
     reauthorizationRequired: _reauthorizationRequired,
     streamExecutionHost: _streamExecutionHost,
     payloadSource: _payloadSource,
+    wakeMode: _wakeMode,
     nextRunAtMs: _nextRunAtMs,
     lastRunAtMs: _lastRunAtMs,
     lastRunStatus: _lastRunStatus,

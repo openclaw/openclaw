@@ -497,7 +497,7 @@ const CronJobStatePatchSchema = closedObject(
   ]).properties,
 );
 
-/** Persisted cron job definition returned by scheduler list/get APIs. */
+/** Public cron job read projection returned by scheduler APIs. */
 export const CronJobSchema = closedObject({
   id: NonEmptyString,
   declarationKey: Type.Optional(CronDeclarationKeySchema),
@@ -538,6 +538,13 @@ export const CronJobSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
+  wakeMode: Type.Optional(
+    Type.Literal("now", {
+      deprecated: true,
+      description:
+        "Derived response-only compatibility for released clients; retained until protocol v4 retires.",
+    }),
+  ),
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
