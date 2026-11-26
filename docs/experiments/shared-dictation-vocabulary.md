@@ -22,23 +22,25 @@ is adjacent transcription-hint work; it is neither the implementation's parent n
 proof of shared authorization or provider acceptance. P03, M06, and M11 are local
 design identifiers from the supplied dictation package, not upstream PR numbers.
 
-| Review identity            | Recorded value                                                                                                                                                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Implementation source base | `openclaw/openclaw:main`, `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                                                                 |
-| Published fork branch      | `CompleteDotTech/openclaw:feat/dictation-shared-dictionaries`                                                                                                                                                                        |
-| Accepted P03 or M11 parent | None identified in the inspected base                                                                                                                                                                                                |
-| Tested implementation head | Exact commit and source hashes are recorded in the accompanying `validation-receipt.json`; the PR body must identify its published head.                                                                                             |
-| Initial fork draft         | [Fork proposal draft #1](https://github.com/CompleteDotTech/openclaw/pull/1); current review/head details are recorded in the selected issue and validation receipt. Production integration and readiness require design acceptance. |
+| Review identity            | Recorded value                                                                                                                                                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implementation source base | `openclaw/openclaw:main`, `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                                                                |
+| Published fork branch      | `CompleteDotTech/openclaw:feat/dictation-shared-dictionaries`                                                                                                                                                                       |
+| Accepted P03 or M11 parent | None identified in the inspected base                                                                                                                                                                                               |
+| Tested implementation head | Exact commit and source hashes are recorded in the accompanying `validation-receipt.json`; the PR body must identify its published head.                                                                                            |
+| Upstream review draft      | [openclaw/openclaw#205820](https://github.com/openclaw/openclaw/pull/205820); exact current head/base and CI state are recorded in the PR and validation receipt. Production integration/readiness still require design acceptance. |
 
 The recovered four-commit implementation was published through the authenticated
 GitHub connection. Published head `927da4c148bd31c913a647366249b982a51bd9ff` has
 the exact source tree `b3a8f9b8d13c3d5c8dbacf1d329a7110e8526b3d` of the previously
 tested local head `058b21e885e3b3fedccbdeb66643abd525c163ff`. Each corresponding
 commit tree was verified; only commit metadata and resulting commit IDs changed.
-The fork draft targets its real `main` branch, observed at
+The initial fork draft targeted its real `main` branch, observed at
 `f76b87badadd0c4d244d6529fb4da41894eb8b83`, with the source base above as its merge
-base. This initial review surface does not establish completed upstream
-implementation or maintainer acceptance. Repository guidance permits an upstream
+base. The [fork-local review #1](https://github.com/CompleteDotTech/openclaw/pull/1)
+was closed unmerged after the upstream design-review draft became the canonical
+review. Neither publication establishes completed implementation or maintainer
+acceptance. Repository guidance permits an upstream
 draft to seek design review; production contract activation and readiness remain
 gated on the recorded decision. Subsequent qualification evidence is recorded below.
 
@@ -313,7 +315,7 @@ with the validation receipt.
 | Full build                                                                        | BLOCKED: default preflight could not see the process memory limit and stopped before cleaning output. A supported explicit 1,536-MiB heap attempt completed native protocol, script checks, plugin assets, AI and package phases, then failed in main `tsdown` when a child received SIGKILL; overall exit 1. No full-build success is claimed.                                                                                                        |
 | Required unused-file scan                                                         | FAIL / BLOCKED: the production Knip scan reports `src/realtime-transcription/vocabulary-collections.ts` as unused because it has no production registration. The full-tree scan exhausted the explicit 1,536-MiB JavaScript heap and aborted (SIGABRT). No entrypoint or ignore was fabricated to hide the unregistered proposal.                                                                                                                      |
 | Other full test/script type graphs                                                | NOT RUN to completion; the full core graph remains capacity-blocked. The earlier narrow pure-boundary check is not a substitute.                                                                                                                                                                                                                                                                                                                       |
-| Required CI                                                                       | NOT RUN: the fork draft exists, but the inspected published head has zero statuses, check runs, and Actions runs. A combined status of `pending` with zero entries does not establish a queued job.                                                                                                                                                                                                                                                    |
+| Required CI                                                                       | NOT RUN to completion. At qualification head `70bac82c4c24bded28615002d52701940ee3494a`, [CI](https://github.com/openclaw/openclaw/actions/runs/45773743254) reports `action_required` with zero jobs; [Proof](https://github.com/openclaw/openclaw/runs/139752289972) is skipped. PR context/evidence passed, which is not build/test proof. Current-head status is recorded in the PR/receipt.                                                       |
 | Production authorization, migration, UI/accessibility, provider and spoken corpus | NOT RUN; accepted production integration is absent. E8 qualifies actual worker storage under synthetic grants only.                                                                                                                                                                                                                                                                                                                                    |
 
 The first E8 attempt failed during setup because the thread owner had no host
