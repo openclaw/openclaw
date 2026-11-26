@@ -207,7 +207,7 @@ const enModelSetup = {
       gatewayReconnecting: "Disconnected. Waiting to reconnect…",
       notComplete: "You’re signed in, but model setup isn’t complete yet.",
     },
-    providerConnected: "{provider} is ready",
+    providerConnected: "{provider} connected",
   },
 } satisfies TranslationMap;
 

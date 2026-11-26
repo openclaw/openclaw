@@ -223,7 +223,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   return files;
 }
 
-/** Measurement-only ownership; adding it must not change runtime partitioning. */
+/** Effective measurement ownership; timer/isolated runtime exception checks also use it. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
   if (config === "test/vitest/vitest.unit-fast.config.ts") {
     const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);

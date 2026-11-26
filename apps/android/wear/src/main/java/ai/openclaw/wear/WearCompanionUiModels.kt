@@ -30,12 +30,6 @@ internal data class WearSessionSummary(
   val openOnWatch: Boolean = false,
 )
 
-internal data class WearModelSummary(
-  val ref: String,
-  val name: String,
-  val selected: Boolean,
-)
-
 internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
   val phoneNodeId: String? = null,
@@ -51,11 +45,11 @@ internal data class WearConversationSnapshot(
   val sessionSearchResults: List<WearSessionSummary> = emptyList(),
   val sessionSearchHasMore: Boolean = false,
   val sessionSearchSupported: Boolean = false,
-  val models: List<WearModelSummary> = emptyList(),
+  val models: List<WearModel> = emptyList(),
   val modelCatalogRefreshFailed: Boolean = false,
   val sessionModelCatalogSupported: Boolean = false,
   val modelSearchQuery: String? = null,
-  val modelSearchResults: List<WearModelSummary> = emptyList(),
+  val modelSearchResults: List<WearModel> = emptyList(),
   val modelControlsSupported: Boolean = false,
   val modelSearchSupported: Boolean = false,
   val messages: List<WearChatMessage> = emptyList(),
@@ -105,13 +99,6 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
       openOnWatch = session.key == selectedSession?.key,
     )
 
-  fun modelSummary(model: WearModel) =
-    WearModelSummary(
-      ref = model.ref,
-      name = model.name,
-      selected = model.ref == selectedModelRef,
-    )
-
   return WearConversationSnapshot(
     phoneNodeId = phoneNodeId,
     activeAgentId = selectedSession?.agentId ?: activeAgentId,
@@ -127,7 +114,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     sessionSearchResults = sessionSearchResults.map(::sessionSummary),
     sessionSearchHasMore = sessionSearchHasMore,
     sessionSearchSupported = WearProxyCapability.SessionSearchPagination in proxyCapabilities,
-    models = models.map(::modelSummary),
+    models = models,
     modelControlsSupported = WearProxyCapability.ModelControls in proxyCapabilities,
     modelCatalogRefreshFailed = modelCatalogRefreshFailed,
     sessionModelCatalogSupported = WearProxyCapability.SessionScopedModelCatalog in proxyCapabilities,
@@ -135,7 +122,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
       WearProxyCapability.ModelCatalogSearch in proxyCapabilities &&
         WearProxyCapability.SessionScopedModelCatalog in proxyCapabilities,
     modelSearchQuery = modelSearchQuery,
-    modelSearchResults = modelSearchResults.map(::modelSummary),
+    modelSearchResults = modelSearchResults,
     messages = messages,
     streamingAssistantText = streamText,
     selectedModelRef = selectedModelRef,

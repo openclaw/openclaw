@@ -19,7 +19,6 @@ import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
-  type SubagentCancellationControl,
   type SubagentRunKillResult,
   type SubagentKillTargetState,
 } from "./subagent-control.types.js";
@@ -44,7 +43,6 @@ type SubagentKillSettlementOwnerParams = {
   releaseClaim: (claim: SubagentKillClaim) => Promise<boolean>;
   session: SubagentKillSession;
   stateContext: OpenClawStateWorkerContext;
-  cancellationControl: Pick<SubagentCancellationControl, "assertCurrent">;
   stopAcceptance: { accepted: boolean; queuedOnly?: boolean };
   suppressTaskDelivery?: boolean;
   withdrawQueuedReservation: () => void;
@@ -94,8 +92,8 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
     }
   };
 
-  const assertCancellationCurrent = () => {
-    params.cancellationControl.assertCurrent();
+  // The claim is the kill's authority: only the claimed row and session incarnation stay checked.
+  const assertClaimCurrent = () => {
     if (!isCurrent() || !ownsSessionIncarnation()) {
       throw new Error("Subagent ownership changed before cancellation; retry.");
     }
@@ -174,9 +172,6 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
         context: params.stateContext,
         assertCurrent: () => {
           params.assertState();
-          if (!params.stopAcceptance.accepted) {
-            params.cancellationControl.assertCurrent();
-          }
           if (!isCurrent()) {
             throw new Error("Subagent kill settlement lost its original claim.");
           }
@@ -217,7 +212,7 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
   const settle = async (claim: SubagentKillClaim) => retireObligations(await settleKill(claim));
 
   return {
-    assertCancellationCurrent,
+    assertClaimCurrent,
     isCurrent,
     ownsIntent,
     ownsSessionIncarnation,

@@ -92,7 +92,7 @@ export async function readLastGatewayErrorLine(
     GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line)),
   );
   if (match && GATEWAY_OWNERSHIP_REFUSAL.test(match)) {
-    return "Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it.";
+    return "Gateway ownership could not be verified. Stop the recorded Gateway before retrying.";
   }
   return match ?? null;
 }

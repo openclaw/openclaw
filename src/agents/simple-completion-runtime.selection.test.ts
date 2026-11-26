@@ -35,6 +35,29 @@ function expectRoute(
   ).toMatchObject({ provider, modelId, ...(profileId ? { profileId } : {}) });
 }
 
+it("reads configured aliases only when the selected model can use them", () => {
+  const readAlias = vi.fn(() => "quick");
+  const cfg = completionConfig(
+    "fixture",
+    { baseUrl: "http://localhost", models: [completionModelDefinition({ id: "actual" })] },
+    withAgents({
+      model: "fixture/actual",
+      models: {
+        "fixture/actual": {
+          get alias() {
+            return readAlias();
+          },
+        },
+      },
+    }),
+  );
+  const options = { rawConfig: true, manifestPlugins: [] };
+  expectRoute(cfg, "fixture", "actual", { ...options, modelRef: "fixture/actual@work" }, "work");
+  expect(readAlias).not.toHaveBeenCalled();
+  expectRoute(cfg, "fixture", "actual", { ...options, modelRef: "fixture/quick@work" }, "work");
+  expect(readAlias).toHaveBeenCalledTimes(1);
+});
+
 it("resolves explicit aliases in the selected agent scope", () => {
   const cfg = withAgents(
     { model: "openai/global-model", models: { "openai/global-model": { alias: "fast" } } },

@@ -12,6 +12,7 @@ const enRouteSubtitles = {
     apps: "Companion apps for phone, watch, desktop, and browser.",
     portals: "Live previews from agent-run applications.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
+    roles: "What each person can do on this Gateway.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     projects: "Repositories and workspaces people can start sessions in.",

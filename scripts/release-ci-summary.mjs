@@ -4102,7 +4102,8 @@ async function validateReleaseEvidenceGraph(
     }
     const packet = parseFastTrackPacket(fastTrackRequest);
     const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
-    if (packet.request.policy === "approved-fast-track-v1") {
+    // Beta-prerelease fast-tracks carry no reference and skip delta measurement.
+    if (packet.request.policy === "approved-fast-track-v1" && packet.request.reference) {
       if (
         execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--is-shallow-repository"], {
           encoding: "utf8",

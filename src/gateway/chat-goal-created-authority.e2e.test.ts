@@ -513,13 +513,15 @@ it(
             }),
           });
           cleanup.defer(() => disconnectGatewayClient(revoked));
+          // A session-read personal profile sends through session participation, which hides
+          // a session the revoked person can no longer join instead of naming the scope.
           await expect(
             revoked.request("chat.send", {
               sessionKey: scenario.sessionKey,
               message: `Try again: ${scenario.prompt}`,
               idempotencyKey: randomUUID(),
             }),
-          ).rejects.toThrow("missing scope: operator.write");
+          ).rejects.toThrow(`Session "${scenario.sessionKey}" was not found.`);
           const refusedDrained = await wait(waitForGatewayActiveWork(30_000));
           expect(refusedDrained.drained).toBe(true);
           expect(scenario.parentCalls).toBe(5);

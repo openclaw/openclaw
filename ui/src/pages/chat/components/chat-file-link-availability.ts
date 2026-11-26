@@ -60,6 +60,11 @@ export async function checkFileLinkAvailability(
     }
     // Matches openFile's owner resolution for a link without a containing document.
     const sessionKey = target.sessionKey ?? workspace.sessionKey;
+    // The session row already says this viewer cannot read its workspace: opening the
+    // link shows that reason, and a stat probe would only be refused.
+    if (sessionKey === workspace.sessionKey && state.sessionWorkspaceReadDisabledReason) {
+      continue;
+    }
     const key = JSON.stringify([sessionKey, target.messageEntryId ?? null, target.path]);
     const known = availability.get(key);
     if (known === "missing") {

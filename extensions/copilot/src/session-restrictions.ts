@@ -2,7 +2,7 @@ import type { SessionConfig } from "@github/copilot-sdk";
 
 const COPILOT_ISOLATED_EXCLUDED_TOOLS = ["builtin:*", "mcp:*", "custom:*"] as const;
 
-/** Disable every ambient SDK capability for a prompt-only or settled final turn. */
+/** Disable ambient startup capabilities; callers disable remote export before sending. */
 export function createCopilotIsolatedSessionRestrictions(): Partial<SessionConfig> {
   return {
     availableTools: [],
@@ -25,7 +25,6 @@ export function createCopilotIsolatedSessionRestrictions(): Partial<SessionConfi
     mcpServers: {},
     memory: { enabled: false },
     pluginDirectories: [],
-    remoteSession: "off",
     requestCanvasRenderer: false,
     requestExtensions: false,
     skillDirectories: [],

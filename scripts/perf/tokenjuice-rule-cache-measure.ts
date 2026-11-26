@@ -11,6 +11,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentToolResultMiddlewareEvent } from "../../src/plugins/agent-tool-result-middleware-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -88,12 +89,7 @@ const before = process.memoryUsage().heapUsed;
 const hostLoad = loadavg();
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const cpuBefore = process.cpuUsage();
 const started = performance.now();

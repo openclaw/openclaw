@@ -4,7 +4,10 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { findErrorProperty, isFailoverError } from "../../agents/failover/error.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  createPreparedModelRuntimeSnapshotBorrow,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
@@ -44,6 +47,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { finishReplyOperationBackend } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
+import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
@@ -59,9 +63,13 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
-import type { CronAgentExecutionPhaseUpdate, CronFailureNotificationDetail } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import { finalizeCronRun, resolveCronRecoveryClassification } from "./run-finalize.js";
+import {
+  finalizeCronRun,
+  resolveCronRecoveryClassification,
+  resolveCronRecoveryFailureDetail,
+} from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare-context.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
@@ -196,7 +204,7 @@ async function runCronIsolatedAgentTurnInTrace(
         await prepared.context.workspaceLease?.release();
       },
     };
-    let leaseActive = true;
+    const snapshotBorrow = createPreparedModelRuntimeSnapshotBorrow(preparedRuntimeLease.snapshot);
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
     try {
@@ -558,9 +566,7 @@ async function runCronIsolatedAgentTurnInTrace(
               // text instead of the mechanical watchdog reason.
               const recoveryClassification = resolveRecoveryClassification();
               const error =
-                recoveryClassification &&
-                recoveryClassification.trim().length > 0 &&
-                !interruptedByRestart
+                recoveryClassification?.trim() && !interruptedByRestart
                   ? resolveRecoveryClassification(true)
                   : isCronLaneTimeout
                     ? abortReason()
@@ -568,6 +574,9 @@ async function runCronIsolatedAgentTurnInTrace(
               // Preserve the provider's closed reason before user-facing text replaces the error object.
               const errorReason = findErrorProperty(err, (candidate) =>
                 isFailoverError(candidate) ? candidate.reason : undefined,
+              );
+              const configurationRefusal = resolveCronConfigurationRefusal(
+                isCronLaneTimeout ? undefined : err,
               );
               outcome = "error";
               outcomeError = error;
@@ -597,29 +606,28 @@ async function runCronIsolatedAgentTurnInTrace(
                 // history and chat alert. Restart precedence is preserved: when the
                 // failure was an interrupted restart, errorClassification already wins
                 // and we omit the stall detail.
-                ...(!interruptedByRestart &&
-                recoveryClassification &&
-                recoveryClassification.trim().length > 0
-                  ? {
-                      failureNotificationDetail: {
-                        kind: "agent-stall",
-                        classification: recoveryClassification,
-                      } satisfies CronFailureNotificationDetail,
-                    }
-                  : {}),
-                ...(!isCronLaneTimeout &&
-                !interruptedByRestart &&
-                executionStarted &&
-                !admissionDisposition
-                  ? { agentTerminal: readAgentTerminalSnapshot(err) }
-                  : {}),
+                failureNotificationDetail: interruptedByRestart
+                  ? undefined
+                  : (configurationRefusal?.failureNotificationDetail ??
+                    resolveCronRecoveryFailureDetail(recoveryClassification)),
+                agentTerminal:
+                  !isCronLaneTimeout &&
+                  !interruptedByRestart &&
+                  executionStarted &&
+                  !admissionDisposition
+                    ? readAgentTerminalSnapshot(err)
+                    : undefined,
                 interruptedByRestart,
                 errorClassification:
                   err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }
                     : err instanceof CronSessionLifecycleClaimError
                       ? { kind: "session-conflict" }
-                      : resolveCronAgentErrorClassification(terminalOutcome, errorReason),
+                      : resolveCronAgentErrorClassification(
+                          terminalOutcome,
+                          errorReason,
+                          configurationRefusal?.errorClassification,
+                        ),
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),
@@ -711,10 +719,10 @@ async function runCronIsolatedAgentTurnInTrace(
               }
             }
           }),
-        () => (leaseActive ? preparedRuntimeLease.snapshot : undefined),
+        snapshotBorrow.read,
       );
     } finally {
-      leaseActive = false;
+      snapshotBorrow.close();
     }
   }
 }

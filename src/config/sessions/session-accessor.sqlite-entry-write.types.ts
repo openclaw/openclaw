@@ -2,6 +2,7 @@ import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { trackSessionEntryCacheWrite } from "./session-accessor.sqlite-entry-cache.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
+import type { SessionArchiveUndoIntent } from "./session-archive-undo.js";
 import type {
   SessionEntryWindowFacts,
   SessionEntryWindowRow,
@@ -13,11 +14,13 @@ import type {
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryWriteOptions = {
+  archiveUndo?: SessionArchiveUndoIntent;
   allowStoredAliases?: boolean;
   /** Only the personal involvement owner may replace this logical-node state. */
   profileInvolvement?: SessionEntry["profileInvolvement"];
   /** Only the provider review owner may replace a generation-bound pause. */
   providerReviewMutation?: boolean;
+  shellCallMutation?: boolean;
   /** Canonical row revalidated in this write transaction; null proves absence. */
   canonicalPreviousEntry?: SessionEntry | null;
   /** Raw canonical columns from the same transaction, for exact no-op comparison. */

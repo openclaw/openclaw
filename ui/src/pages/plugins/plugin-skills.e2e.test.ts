@@ -117,7 +117,7 @@ function responses(installed: boolean) {
       catalog: detail,
       components: { ...calendarInspection.components, skills: [skill.name], skillDetails: [skill] },
     },
-    [readMethod]: bundle(shortDocument),
+    [readMethod]: bundle(`---\nname: calendar\n---\n\tcalendar check\n\n${shortDocument}`),
   };
 }
 
@@ -143,6 +143,7 @@ describeControlUiE2e("Plugin skill document routes", () => {
         : { source: "catalog", catalogId, version: "2.1.0", skillName: skill.name },
     );
     await heading.waitFor();
+    expect(await dialog.locator("article pre code").textContent()).toBe("calendar check\n");
     const header = dialog.locator("header");
     expect(await header.getByRole("heading").textContent()).toBe(skill.name);
     expect(await header.locator("p").textContent()).toBe(skillSummary);

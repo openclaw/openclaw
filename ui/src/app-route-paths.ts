@@ -71,6 +71,7 @@ const APP_ROUTE_DEFINITIONS = {
   secrets: { path: "/settings/secrets" },
   advanced: { path: "/settings/advanced" },
   approvals: { path: "/settings/approvals" },
+  roles: { path: "/settings/roles" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },

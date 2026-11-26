@@ -57,6 +57,7 @@ export type StoredComposerSession = {
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   draftRevision?: number;
+  draftAttachmentVersion?: string;
   queue?: ChatQueueItem[];
   updatedAt: number;
 };
@@ -363,6 +364,9 @@ export function normalizeStoredSession(entry: unknown): StoredComposerSession | 
     ...(goalMode ? { goalMode } : {}),
     ...(replyTarget ? { replyTarget } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
+    ...(typeof entry.draftAttachmentVersion === "string" && entry.draftAttachmentVersion
+      ? { draftAttachmentVersion: entry.draftAttachmentVersion }
+      : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,
   };

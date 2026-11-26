@@ -28,6 +28,7 @@ export class TranscriptOffsetState {
   touching = false;
   touchScrolling = false;
   nativeInputActive = false;
+  inputTargetsStart = false;
   // WebKit starts a keyboard scroll a frame after keydown, so the previous movement's idle
   // (timer or scrollend) can arrive in between. Only the input's own scrolling can end it.
   inputAwaitingScroll = false;
@@ -277,6 +278,9 @@ export function observeTranscriptOffset(
     }
   };
   const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
+    if (!maintenance) {
+      owner.state.inputTargetsStart = false;
+    }
     // Measurement retries can move the old end after the grown range commits.
     // Layout/composer receipts already carry their anchor correction separately.
     if (maintenance && before !== after) {
@@ -505,6 +509,7 @@ export function observeTranscriptOffset(
     owner.state.pendingInteractionAnchor = null;
     owner.state.maintenanceScrollOffset = null;
     owner.state.nativeInputActive = true;
+    owner.state.inputTargetsStart = event instanceof KeyboardEvent && event.key === "Home";
     inputGesture = true;
     owner.state.inputAwaitingScroll = true;
     // Native scrolling may precede input delivery. Attribute the gesture before
@@ -653,6 +658,7 @@ export function observeTranscriptOffset(
     owner.state.touching = false;
     owner.state.touchScrolling = false;
     owner.state.nativeInputActive = false;
+    owner.state.inputTargetsStart = false;
     listeners.abort();
   };
 }

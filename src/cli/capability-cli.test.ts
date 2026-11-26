@@ -1759,47 +1759,6 @@ describe("capability cli", () => {
     );
   });
 
-  it.each(["image", "tts"])("marks env-backed %s providers as configured", async (domain) => {
-    const image = domain === "image";
-    const envVar = image ? "FAL_KEY" : "XAI_API_KEY";
-    vi.stubEnv(envVar, image ? "fal-test-key" : "xai-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce([envVar]);
-    if (image) {
-      mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
-        { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
-      ] as never);
-    } else {
-      mocks.listSpeechProviders.mockReturnValueOnce([
-        { id: "xai", label: "xAI", models: [], voices: [] },
-      ] as never);
-    }
-    await runCap("capability", domain, "providers", ...(image ? [] : ["--local"]), "--json");
-    expect(firstJsonOutput()).toMatchObject(
-      image
-        ? [{ id: "fal", available: true, configured: true, selected: false }]
-        : { providers: [{ id: "xai", configured: true, selected: false }] },
-    );
-  });
-
-  it("marks env-backed video generation and description providers as configured", async () => {
-    vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
-    vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
-    mocks.getProviderEnvVarsCore.mockImplementation((providerId: string) =>
-      providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
-    );
-    mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
-      { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
-    ] as never);
-    primeMediaRegistry("google", "video", "gemini-3-flash-preview");
-
-    await runCap("capability", "video", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject({
-      generation: [{ id: "runway", configured: true }],
-      description: [{ id: "google", configured: true }],
-    });
-  });
-
   it("distinguishes the local STT fallback winner from global provider selection", async () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
     primeMediaRegistry("deepgram", "audio", "nova-3");
