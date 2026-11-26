@@ -11,7 +11,7 @@ import { hasUncommittedSqliteWrites } from "./sqlite-schema-facts.js";
 
 export type SqliteIntegrityCheckOptions = {
   check?: "quick" | "full";
-  /** Constraint-only migration admission; never a full database verification. */
+  /** Agent version step: catalog and declared tables only; never a full database verification. */
   schemaOnly?: true;
   /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
   tables?: readonly string[];
