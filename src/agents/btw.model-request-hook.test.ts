@@ -57,6 +57,11 @@ describe("before_model_request on side questions", () => {
         id: "native-user",
         message: btw.createUserTranscriptMessage([{ type: "text", text: SECRET }]),
       }),
+      btw.createTranscriptEntry({
+        id: "native-assistant",
+        parentId: "native-user",
+        message: btw.createAssistantTranscriptMessage([{ type: "text", text: "noted" }]),
+      }),
     ]);
     const sent: unknown[] = [];
     btw.registerAgentHarness({
