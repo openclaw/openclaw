@@ -22,6 +22,7 @@ export type TranscriptReadNotes = {
 };
 
 export type TranscriptSummarySnapshot = {
+  hasSpeakerAliases?: boolean;
   inputRevision: string;
   nextSequence: number;
   stoppedAt?: string;

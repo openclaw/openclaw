@@ -1060,6 +1060,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/transcripts/capture-stop.test.ts",
   "src/transcripts/capture-append-drain.test.ts",
   "src/transcripts/library.test.ts",
+  "src/transcripts/store-summary-snapshot.test.ts",
   "src/transcripts/live-summary.test.ts",
   "src/transcripts/status.producer.test.ts",
   "src/transcripts/status.test.ts",
