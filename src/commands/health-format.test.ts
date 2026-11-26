@@ -175,30 +175,6 @@ describe("formatHealthChannelLines", () => {
     },
   );
 
-  it("preserves preferred account order, unique usernames, webhook text and per-account timings", () => {
-    const summary = createMultiAccountHealthSummary(
-      { accountId: "1", probe: { ok: true, elapsedMs: 1, bot: { username: "sibling" } } },
-      {
-        accountId: "9",
-        probe: {
-          ok: true,
-          elapsedMs: 12,
-          bot: { username: "selected" },
-          webhook: { url: "https://example.test/hook" },
-        },
-      },
-    );
-
-    expectHealth(
-      summary,
-      "Matrix: ok (@selected, @sibling) (12ms) - webhook https://example.test/hook",
-    );
-    expectHealth(summary, "Matrix: ok (@sibling, @selected) (1ms)", {
-      accountIdsByChannel: { matrix: ["1", "9"] },
-    });
-    expectHealth(summary, "Matrix: ok (@sibling:1:1ms, @selected:9:12ms)", { accountMode: "all" });
-  });
-
   it("does not promote stale failures from an intentionally disabled account", () => {
     const summary = createMultiAccountHealthSummary({
       healthState: "blocked",

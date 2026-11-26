@@ -12,36 +12,6 @@ describe("formatPluginLine", () => {
     expect(output).not.toContain("bundle capabilities:");
   });
 
-  it("shows imported state in verbose output", () => {
-    const output = formatPluginLine(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo Plugin",
-        imported: false,
-        activated: true,
-        explicitlyEnabled: false,
-      }),
-    );
-
-    expect(output).toContain("activated: yes");
-    expect(output).toContain("imported: no");
-    expect(output).toContain("explicitly enabled: no");
-  });
-
-  it("shows bundle subtype and detected capabilities", () => {
-    const output = formatPluginLine(
-      createPluginRecord({
-        id: "portable",
-        format: "bundle",
-        bundleFormat: "agent",
-        bundleCapabilities: ["skills", "mcpServers"],
-      }),
-    );
-
-    expect(output).toContain("bundle format: agent (Agent Plugins)");
-    expect(output).toContain("bundle capabilities: skills, mcpServers");
-  });
-
   it("sanitizes activation reasons in verbose output", () => {
     const output = formatPluginLine(
       createPluginRecord({

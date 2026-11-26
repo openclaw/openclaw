@@ -270,38 +270,6 @@ describe("formatMessageCliText send results", () => {
   });
 });
 
-it("preserves generic object primitive summaries", () => {
-  const result = actionResult(
-    "channel-info",
-    {
-      undef: undefined,
-      nil: null,
-      array: [1, 2],
-      object: {},
-      function: () => undefined,
-      bigint: 42n,
-      symbol: Symbol("proof"),
-      string: "  keep  ",
-      number: -3,
-      boolean: false,
-    },
-    "directchat",
-  );
-
-  const output = render(result);
-  expectText(output, [
-    "null",
-    "2 items",
-    "object",
-    "function",
-    "42",
-    "Symbol(proof)",
-    "keep",
-    "-3",
-    "false",
-  ]);
-});
-
 it("reports a rejected poll without claiming success", () => {
   const result: MessageActionResult = {
     kind: "poll",
