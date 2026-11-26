@@ -311,6 +311,7 @@ type TranscriptReadRow = Awaited<
 >;
 
 function transcriptParticipants(value: string | null): string[] {
+  // SAFETY: readQuery serializes only the typed columns from transcriptSpeakerRosterRows.
   const observations = JSON.parse(value ?? "[]") as TranscriptSpeakerRosterRow[];
   const label = createTranscriptSpeakerLabels();
   const participants = new Set<string>();
