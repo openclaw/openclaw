@@ -383,33 +383,32 @@ describe("Gateway owner lease", () => {
     },
   );
 
+  const stale = GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1;
   it.each([
-    { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
-    { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
-    { kind: "foreign namespace", age: 0, pid: process.pid },
-    { kind: "foreign namespace", age: 0 },
-    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS },
-    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
-    { kind: "unavailable namespace", age: 0 },
-    { kind: "invalid namespace", age: 0 },
-  ])("handles $kind with a $age ms heartbeat", async ({ kind, age, pid }) => {
+    { kind: "crashed legacy", age: stale, namespace: null },
+    { kind: "crashed qualified", age: stale, namespace: "foreign", reclaim: true },
+    { kind: "foreign namespace", age: 0, namespace: "foreign", pid: process.pid },
+    { kind: "foreign namespace", age: 0, namespace: "foreign" },
+    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS, namespace: "foreign" },
+    { kind: "foreign namespace", age: stale, namespace: "foreign", reclaim: true },
+    { kind: "namespace proof required", age: stale, namespace: "foreign", requireProof: true },
+    { kind: "unavailable namespace", age: 0, namespace: null },
+    { kind: "invalid namespace", age: 0, namespace: { platform: "unknown" } },
+  ])("handles $kind with a $age ms heartbeat", async ({ kind, namespace, age, ...scenario }) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF", scenario.requireProof ? "1" : undefined);
     await using owner = fixture();
-    const namespace = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
-    const qualified = kind === "crashed qualified" || kind === "foreign namespace";
-    const host = kind === "foreign namespace" ? namespace.host : "previous-container";
+    const local = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
+    const host = kind === "foreign namespace" ? local.host : "previous-container";
+    const foreign = { ...local, host, pidNsInode: String(BigInt(local.pidNsInode) + 1n) };
     vi.spyOn(Date, "now").mockReturnValue(Date.now());
     seedOwner(owner.env, {
-      pid: pid ?? 2_147_483_647,
+      pid: scenario.pid ?? 2_147_483_647,
       host,
       ...(kind.startsWith("crashed") ? { expiresAt: null } : {}),
-      processNamespace: qualified
-        ? { ...namespace, host, pidNsInode: "foreign" }
-        : kind === "invalid namespace"
-          ? { platform: "unknown" }
-          : null,
+      processNamespace: namespace === "foreign" ? foreign : namespace,
       heartbeatAt: Date.now() - age,
     });
-    if (qualified && age > GATEWAY_OWNER_HEARTBEAT_STALE_MS) {
+    if (scenario.reclaim) {
       const lease = owner.acquire();
       await lease.ready;
       expect(lease.previousOwner).toMatchObject({ owner: "previous-generation", state: "dead" });
@@ -418,6 +417,7 @@ describe("Gateway owner lease", () => {
       expect(() => owner.acquire()).toThrow("cannot verify Gateway ownership");
       const current = readGatewayOwnerLease({ env: owner.env });
       expect(current).toMatchObject({ owner: "previous-generation", state: "unknown" });
+      expect(current?.heartbeatAt).toBe(Date.now() - age);
     }
   });
 

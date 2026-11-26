@@ -4,6 +4,7 @@ import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
+import { isTruthyEnvValue } from "./env.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
@@ -176,6 +177,15 @@ export function classifyGatewayOwnerProcessNamespace(
   if (owner.platform !== current.platform) {
     return "unknown";
   }
+  if (
+    options.readGatewayHeartbeat &&
+    owner.platform === "linux" &&
+    current.platform === "linux" &&
+    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+    (owner.identity !== current.identity || isForeignLinuxNamespace(owner, current))
+  ) {
+    return "unknown";
+  }
   if (options.readGatewayHeartbeat && isForeignLinuxNamespace(owner, current)) {
     // Docker and Podman default to a container ID hostname, already stored in the record.
     if (
@@ -251,6 +261,8 @@ export const LockPayloadSchema = z.object({
   parentStartTime: z.number().optional(),
   // Null and absent identities cannot establish the owner's process namespace.
   processNamespace: GatewayProcessNamespaceSchema.nullable().optional(),
+  // Keep the Linux PID 1 start time outside the namespace object for older strict readers.
+  pidNsInitStartTicks: z.number().int().nonnegative().optional(),
   // Shipped readers ignore this sibling; the nested namespace must remain rollback-compatible.
   machineIdentity: MachineIdentitySchema.nullable().optional(),
 });

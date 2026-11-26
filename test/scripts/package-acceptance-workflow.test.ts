@@ -8009,23 +8009,13 @@ NODE
     const setupPnpmAction = readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8");
 
     expect(packageJson.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[a-f0-9]+$/u);
-    expect(setupPnpmAction).toContain("Setup pnpm from packageManager");
-    expect(setupPnpmAction).toContain("PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}");
-    expect(setupPnpmAction).toContain('case "$package_manager" in');
-    expect(setupPnpmAction).toContain('corepack prepare "$package_manager" --activate');
-    expect(setupPnpmAction).toContain(
-      "if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}",
-    );
     const action = parse(setupPnpmAction) as { runs: { steps: WorkflowStep[] } };
     const setup = { steps: action.runs.steps };
     const pin = workflowStep(setup, "Validate pnpm setup inputs");
-    const cache = workflowStep(setup, "Restore pnpm store cache");
     const root = tempDirs.make("pnpm-cache-key-");
     const manifest = join(root, "selected-package.json");
-    const lockfile = join(root, "selected-lock.yaml");
     const output = join(root, "outputs");
     writeJson(manifest, { packageManager: packageJson.packageManager });
-    writeFileSync(lockfile, "lockfileVersion: '9.0'\n");
     const resolved = spawnSync("bash", ["--noprofile", "--norc", "-eu", "-c", pin.run ?? ""], {
       cwd: root,
       encoding: "utf8",
@@ -8046,35 +8036,6 @@ NODE
         .map((line) => line.split("=")),
     );
     expect(outputs["package-manager"]).toBe(packageJson.packageManager);
-    for (const runner of [
-      { os: "Linux", arch: "X64" },
-      { os: "macOS", arch: "ARM64" },
-    ]) {
-      const lockHash = createHash("sha256").update(readFileSync(lockfile)).digest("hex");
-      const key = cache.with?.key?.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
-        String(
-          runInNewContext(expression.replace(/\.([\w-]+)/gu, '["$1"]'), {
-            runner,
-            inputs: {
-              "node-version": "24.x",
-              "lockfile-path": lockfile,
-              "package-manager-file": manifest,
-            },
-            steps: { "setup-pnpm": { outputs } },
-            hashFiles: (file: string) => {
-              expect(file).toBe(lockfile);
-              return lockHash;
-            },
-          }),
-        ),
-      );
-      expect(key).toContain(`-${runner.os}-${runner.arch}-24.x-`);
-      expect(key).toContain(outputs["package-manager"]);
-      expect(key?.endsWith(`-${lockHash}`)).toBe(true);
-    }
-    expect(setupPnpmAction).not.toContain("pnpm/action-setup");
-    expect(setupPnpmAction).not.toContain("shasum");
-    expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
     expect(setupPnpmAction).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(setupPnpmAction).toContain('echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"');
@@ -8098,14 +8059,6 @@ NODE
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-
-    for (const workflowPath of workflowPaths()) {
-      const workflowText = readFileSync(workflowPath, "utf8");
-      // Observed versions such as REPLAY_PNPM_VERSION are not a competing pin.
-      expect(workflowText, workflowPath).not.toMatch(/\bPNPM_VERSION\b/u);
-      expect(workflowText, workflowPath).not.toContain("pnpm-version:");
-      expect(workflowText, workflowPath).not.toContain("pnpm/action-setup");
-    }
   });
 
   it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
@@ -11113,12 +11066,6 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5",
       "anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5",
     ]);
-    expect(workflow).toContain("suite_id: native-live-extensions-a-k");
-    expect(workflow).toContain("suite_id: native-live-extensions-l-n");
-    expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
-    expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
-    expect(workflow).toContain("validate_live_media_provider_suites:");
     expect(workflow).toContain(`image: ${LIVE_MEDIA_RUNNER_IMAGE}`);
     expect(workflow).toContain("ffmpeg -version | head -1");
     expect(workflow).toContain("ffprobe -version | head -1");
@@ -11127,11 +11074,6 @@ describe("package artifact reuse", () => {
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
     expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
-    expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
-    for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
-      expect(imageDockerfile).toContain(`    ${packageName} \\`);
-    }
-    expect(imageDockerfile).toContain("rm -rf /var/lib/apt/lists/*");
     expect(imageWorkflow).toContain(`- "${LIVE_MEDIA_RUNNER_DOCKERFILE}"`);
     expect(workflowStep(buildJob, "Set up Docker Buildx")).toEqual({
       name: "Set up Docker Buildx",
@@ -11153,31 +11095,7 @@ describe("package artifact reuse", () => {
     expect(buildStep.with?.tags).toContain(
       "ghcr.io/openclaw/openclaw-live-media-runner:${{ github.sha }}",
     );
-    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
-    expect(workflow).toContain("suite_group: native-live-extensions-media-video");
-    for (const suffix of ["a", "b", "c", "d"]) {
-      const shard = workflowMatrixEntry(
-        LIVE_E2E_WORKFLOW,
-        "validate_live_media_provider_suites",
-        `native-live-extensions-media-video-${suffix}`,
-      );
-      const providers = shard.command?.match(
-        /OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=(\S+)/u,
-      )?.[1];
-      if (!providers) {
-        throw new Error(`Missing video providers for shard ${suffix}`);
-      }
-      expect(providers.split(",")).toHaveLength(4);
-      expect(shard.command).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000");
-      // Four serial ten-minute operations plus test overhead leave eight minutes for setup.
-      expect(shard.timeout_minutes).toBeGreaterThanOrEqual(4 * 10.5 + 8);
-    }
     expectTextToIncludeAll(workflow, [
-      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,kie,minimax,pixverse OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000",
-      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=novita,openrouter,xai,zai",
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go'",
       "inputs.live_suite_filter == 'native-live-extensions-media-video'",

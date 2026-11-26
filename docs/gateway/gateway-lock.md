@@ -93,6 +93,29 @@ on the same state directory. If the old container resumes after takeover, it can
 briefly run alongside the replacement until its next restart. SQLite's native
 locking still protects the database file.
 
+### Supervisor-verified recovery
+
+Set `OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF=1` on every process that can take
+ownership of the shared state, including the Gateway and Doctor. With this
+setting, a stale heartbeat or a matching container hostname cannot authorize
+takeover from another Linux PID namespace.
+
+Before starting the Gateway, a supervisor can recover the records of a container
+it has verified stopped. Supply the namespace identity captured in that container:
+
+```sh
+openclaw gateway recover-lock --terminated-namespace "$namespace_json" --json
+```
+
+The JSON object contains `platform` (`linux`), `host` (the hostname), `identity`
+(the kernel boot ID), `pidNsInode` (the decimal PID namespace inode as a string),
+and `pidNsInitStartTicks` (PID 1's start time in kernel clock ticks).
+OpenClaw checks every lock file and the Gateway database lease against that
+identity. When PID numbers overlap with the caller's namespace, it also checks
+that each recorded process stopped. If the supervisor cannot verify the previous
+container, or a foreign record lacks the PID 1 start time, leave recovery to an
+operator.
+
 ## Operational notes
 
 - If the port is occupied by a different, non-gateway process, the error is the same; free the port or choose another with `openclaw gateway --port <port>`.

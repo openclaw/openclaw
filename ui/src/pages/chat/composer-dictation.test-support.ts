@@ -111,8 +111,8 @@ export function setupComposerDictationTestHarness() {
     });
   }
 
-  function click(target: HTMLElement) {
-    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  function click(target: HTMLElement, detail = 1) {
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail }));
   }
 
   function pointer(type: string): Event {

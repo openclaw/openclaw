@@ -222,6 +222,37 @@ describe("pending input additive schema", () => {
     expect(tableExists(admitted, "session_pending_inputs")).toBe(false);
   });
 
+  it("migrates a version 43 store without checking undeclared relations", async () => {
+    const options = fixture();
+    const filename = openOpenClawAgentDatabase(options).path;
+    {
+      using old = await previousDatabase(filename);
+      old.exec(`
+        ALTER TABLE session_members DROP COLUMN access;
+        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
+        PRAGMA user_version = 43;
+        UPDATE schema_meta SET schema_version = 43 WHERE meta_key = 'primary';
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision)
+        VALUES ('agent:main:missing', 'tab', 'Orphan', 0, 'user', 0);
+      `);
+    }
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      await migratePreviousDatabase(options, filename);
+      // The step owns only its declared tables; the next start's whole-file check finds the orphan.
+      expect(prepare.mock.calls.map(([sql]) => sql)).not.toContainEqual(
+        expect.stringMatching(/^PRAGMA (?:quick_check|foreign_key_check);?$/u),
+      );
+    } finally {
+      prepare.mockRestore();
+    }
+    const admitted = openOpenClawAgentDatabase(options).db;
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+  });
+
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
   });

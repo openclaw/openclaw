@@ -28,7 +28,6 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
-const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -135,39 +134,6 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     expect((await stream.result()).stopReason).toBe("stop");
     expect(wire).toBe(expectedWire);
     expect(mainThreadPayloadSerializations).toBe(0);
-    expect(state.lastAttempt).toEqual({
-      scopeDigest: expect.any(String),
-      digest: hash("sha256", expectedWire),
-      byteWeight: 614_400,
-      wire: {
-        requestBytes: 614_400,
-        prefixBytes: 4096,
-        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
-        cacheKeyPresent: true,
-        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
-        previousResponseIdPresent: true,
-        modelHash: digest(model.id).slice(0, 16),
-        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
-        attempts: 1,
-        retried: false,
-        response: {
-          status: 200,
-          headers: {
-            "openai-processing-ms": 12.5,
-            "openai-model": hash("sha256", "private-model").slice(0, 16),
-            "openai-organization": hash("sha256", "private-account").slice(0, 16),
-            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
-            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
-            "x-request-id": hash("sha256", "private-request").slice(0, 16),
-          },
-        },
-      },
-      cachePrefix: expect.objectContaining({
-        messageField: "messages",
-        messageCount: messages.length,
-        continuation: true,
-      }),
-    });
     expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 

@@ -76,7 +76,7 @@ it.each([
   [
     "usage",
     ["src/infra/session-cost-usage-worker.ts"],
-    [...configIO, ...sessions("accessor"), aiTransports],
+    [...configIO, ...sessions("accessor accessor.sqlite-archive-read"), aiTransports],
   ],
   [
     "exact entry mutation",

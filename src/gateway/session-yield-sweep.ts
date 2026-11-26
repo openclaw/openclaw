@@ -11,6 +11,10 @@ import { hasRetainedSessionContinuation } from "./session-continuation-lifetime.
 import { recordUnreachableYieldFailure } from "./session-restart-resume-failure.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
+// A projection revision fences every row publication, including delivery-only changes.
+// Keep just the parked keys. Their in-memory wake sources can change between ticks.
+const parkedKeysByRevision = new WeakMap<object, ReadonlySet<string>>();
+
 /** Reconcile session lifecycle facts, including turns that never belonged to subagent_runs. */
 export async function sweepUnreachableSessionYields(
   resolveGatewayContext: GatewayContextResolver,
@@ -21,12 +25,20 @@ export async function sweepUnreachableSessionYields(
     return;
   }
   await projection.prepareSelection({ metadataOnly: true, includeCatalog: false });
-  const candidates = projection.selectEntries({ sortBy: null }, true);
+  signal.throwIfAborted();
+  const revision = projection.sharingRevision;
+  const knownKeys = revision && parkedKeysByRevision.get(revision);
+  const candidates = projection.selectEntries(
+    { sortBy: null, candidateSessionIdsOrKeys: knownKeys },
+    true,
+  );
+  const discoveredKeys = revision && !knownKeys ? new Set<string>() : undefined;
   for (const { key: sessionKey, agentId, entry, storeTarget } of candidates) {
     signal.throwIfAborted();
     if (!isParkedSessionYield(entry)) {
       continue;
     }
+    discoveredKeys?.add(sessionKey);
     if (
       hasAgentRunContextExecutionOwner(entry.lifecycleRunId!) ||
       isSessionControllerWorkActive(
@@ -47,6 +59,9 @@ export async function sweepUnreachableSessionYields(
       continue;
     }
     await recordUnreachableYieldFailure({ sessionKey, agentId, entry, signal });
+  }
+  if (revision && discoveredKeys && projection.sharingRevision === revision) {
+    parkedKeysByRevision.set(revision, discoveredKeys);
   }
 }
 

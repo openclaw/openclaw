@@ -757,7 +757,7 @@ var External = [
     /(^provider$|^apiKey$|^agentId$)/u,
     /\S/u,
     /(^provider$|^profileId$|^warning$)/u,
-    /(^provider$|^profileIds$|^credentialType$|^agentId$)/u,
+    /(^provider$|^profileIds$|^credentialType$|^revoke$|^agentId$)/u,
     /(^provider$|^profileIds$|^agentId$)/u,
     /(^operation$|^agentId$)/u,
     /(^refresh$|^refreshUsage$|^agentId$)/u,
@@ -807,7 +807,7 @@ var External = [
     /(^agentId$)/u,
     /(^agentId$|^limit$|^beforeMs$)/u,
     /(^agentId$|^name$|^filePath$|^versionId$|^draftId$)/u,
-    /(^agentId$|^name$|^reason$)/u,
+    /(^agentId$|^name$|^reason$|^undoRestoreChangeId$)/u,
     /(^agentId$|^name$|^versionId$)/u,
     /(^agentId$|^runId$)/u,
     /(^agentId$|^skillKey$)/u,
@@ -4508,6 +4508,7 @@ var External = [
     (value.credentialType === void 0 ||
       !("credentialType" in value) ||
       check_502(value.credentialType)) &&
+    (value.revoke === void 0 || !("revoke" in value) || check_331(value.revoke)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_277(value.agentId)),
   check_501 = (value) =>
     Array.isArray(value) &&
@@ -5236,7 +5237,10 @@ var External = [
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_65(value.agentId)) &&
     check_6(value.name) &&
-    (value.reason === void 0 || !("reason" in value) || check_653(value.reason)),
+    (value.reason === void 0 || !("reason" in value) || check_653(value.reason)) &&
+    (value.undoRestoreChangeId === void 0 ||
+      !("undoRestoreChangeId" in value) ||
+      check_65(value.undoRestoreChangeId)),
   check_653 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
