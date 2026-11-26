@@ -59,7 +59,7 @@ export type AgentHarnessToolSurfaceRuntime = ReturnType<
 
 export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0],
-  "executeTool" | "disableToolSearch" | "preparedToolOverrideAllowlist"
+  "executeTool" | "disableToolSearch" | "preparedToolOverrideAllowlist" | "loadsOnDemandTools"
 > & {
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };

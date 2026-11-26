@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import type {
   SessionSharingRole,
   SessionSuggestion,
@@ -6,10 +7,10 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import type { IconName } from "../../../components/solid/icon.tsx";
-import { PersonReferenceLabel } from "../../../components/solid/person-reference-label.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { findChatSubmissionMessage } from "../../../lib/chat/history-message-identity.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
 
@@ -51,29 +52,38 @@ export function ChatSessionSuggestions(props: {
 
   return (
     <Show when={visible().length > 0}>
-      <div class="session-suggestions" aria-live="polite">
+      <div class="chat-queue session-suggestions" aria-live="polite">
         <For
           each={expanded() ? visible() : visible().slice(0, 3)}
           keyed={(suggestion) => suggestion.id}
         >
           {(suggestion) => {
             const author = () => suggestion().author.label ?? suggestion().author.id;
+            // Suggestion authors are Gateway identities, like queued sends and sent user turns.
+            const sender = () => ({
+              id: suggestion().author.id,
+              name: author(),
+              identity: suggestion().author.identity ?? {
+                type: "profile" as const,
+                id: suggestion().author.id,
+              },
+              profileAvatarUrl: suggestion().author.avatarUrl,
+            });
             const awaitingApproval = () =>
               (props.role === "viewer" || props.role === "member") &&
               suggestion().state === "pending";
             return (
-              <article
-                class={["session-suggestion", { preview: awaitingApproval() }]}
-                data-suggestion-id={suggestion().id}
-              >
+              <article class="session-suggestion" data-suggestion-id={suggestion().id}>
                 <details class="session-suggestion__details">
-                  <summary class="session-suggestion__summary">
-                    <b class="session-suggestion__author">
-                      <Show when={awaitingApproval()} fallback={author()}>
-                        <PersonReferenceLabel profileId={suggestion().author.id} label={author()} />
-                      </Show>
-                    </b>
-                    <span class="session-suggestion__text">{suggestion().text}</span>
+                  <summary
+                    class="session-suggestion__summary"
+                    title={`${author()}: ${suggestion().text}`}
+                  >
+                    <ChatAuthorAvatar sender={sender()} hideTooltip />
+                    <span class="session-suggestion__preview">
+                      <b class="session-suggestion__author">{author()}</b>{" "}
+                      <span class="session-suggestion__text">{suggestion().text}</span>
+                    </span>
                   </summary>
                   <div class="session-suggestion__body">{suggestion().text}</div>
                 </details>

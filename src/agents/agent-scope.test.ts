@@ -94,17 +94,6 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("merges experimental flags from defaults with per-agent overrides", () => {
-    const cfg = agentConfig({
-      defaults: { experimental: { localModelLean: true } },
-      entries: { main: { experimental: { localModelLean: false } } },
-    });
-
-    expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
-      localModelLean: false,
-    });
-  });
-
   it.each([
     ["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"],
     [modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]), "openai/gpt-5.4"],

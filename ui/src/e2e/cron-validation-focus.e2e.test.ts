@@ -36,7 +36,11 @@ suite.define(() => {
       await expect.poll(() => input.getAttribute("aria-invalid")).toBe("true");
       await summary.click();
       expect(await input.isVisible()).toBe(false);
-      const link = page.locator(".cron-form-status__link").filter({ hasText: "From:" });
+      const status = page.locator(".cron-form-status");
+      expect(await status.locator(".cron-help").textContent()).toBe(
+        "Select a field below to fix it.",
+      );
+      const link = status.getByRole("button", { name: /^From:/u });
       await link.focus();
       await page.keyboard.press("Enter");
       const outcome = await input.evaluate((element) => ({

@@ -53,6 +53,10 @@ import {
   type OpenClawStateDatabaseOptions,
   type StateWriteTransactionOptions,
 } from "./openclaw-state-db-contract.js";
+import {
+  repairDoctorStateSchema,
+  repairDoctorStateSchemaAsync,
+} from "./openclaw-state-db-doctor-repair.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { assertStateFileSnapshotAllowed, isStatePostgres } from "./openclaw-state-db-engine.js";
 import { assertStateDatabaseSchemaAdmission } from "./openclaw-state-db-existing-schema.js";
@@ -70,12 +74,7 @@ import {
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { readOnlyStateDatabase } from "./openclaw-state-db-read-connection.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import {
-  repairStateSchema,
-  repairStateSchemaAsync,
-  repairDoctorStateSchema,
-  repairDoctorStateSchemaAsync,
-} from "./openclaw-state-db-repair.js";
+import { repairStateSchema, repairStateSchemaAsync } from "./openclaw-state-db-repair.js";
 import {
   assertOpenClawStateSchemaRepairAllowed,
   isExistingOpenClawStateSchema,

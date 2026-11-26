@@ -14,6 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
 import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
+import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
@@ -205,6 +206,32 @@ describe("SQLite integrity child", () => {
     expect(readSqliteDatabaseIntegrityVerification(database)?.verifiedAt).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("does not publish full integrity verification when a worker tolerates stale FTS", async () => {
+    const ddl = "CREATE VIRTUAL TABLE search USING fts5(text);";
+    const { source } = fixture(
+      "stale-fts",
+      ddl + "INSERT INTO search(text) VALUES ('ab'||char(65534)||'cd');",
+    );
+    installSqliteFtsTokenizerMismatch(source, "search");
+    using database = openNodeSqliteDatabase(source);
+    const check = "full" as const;
+    await expect(
+      assertSqliteIntegrityInWorker(source, 5_000, new AbortController().signal),
+    ).rejects.toThrow(/malformed inverted index/u);
+    runSqliteIntegrityCheckInWorkerSync({
+      database,
+      databaseLabel: source,
+      check,
+      ftsSchemas: [ddl],
+    });
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, { check, ftsSchemas: [ddl] }),
+      { busyTimeoutMs: 5_000, signal: new AbortController().signal, beforeResume: () => {} },
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
   });
 
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {

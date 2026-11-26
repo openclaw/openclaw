@@ -452,6 +452,7 @@ function groupChatItemSegment(
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
+    const suggestedBy = role === "user" ? normalized.suggestedBy : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const runId =
       role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
@@ -500,7 +501,8 @@ function groupChatItemSegment(
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           currentGroup.senderSession?.label !== normalized.senderSession?.label ||
           currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
-          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender) ||
+          senderIdentityKey(currentGroup.suggestedBy) !== senderIdentityKey(suggestedBy)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -514,6 +516,7 @@ function groupChatItemSegment(
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
+        ...(suggestedBy ? { suggestedBy } : {}),
         ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
         messages: [source],
         visibleContent,

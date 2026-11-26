@@ -190,6 +190,7 @@ public final class OpenClawChatViewModel {
     // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
+    var rosterClock = OpenClawChatSessionSnooze.RosterClock()
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
 
@@ -1112,6 +1113,7 @@ extension OpenClawChatViewModel {
             }
             if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
+            self.rosterClock = .init(timestamp: res.ts, activityExpiresAt: res.activityExpiresAt)
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
                 self.unreadPatchGuard.observe(
@@ -1122,7 +1124,8 @@ extension OpenClawChatViewModel {
                     unread: session.unread)
             }
             if let sidebarData, let sidebarRead {
-                sidebarData.receive(organized, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
+                // Keep wire order in live Mac membership, not in the offline cache.
+                sidebarData.receive(res.sessions, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
             } else {
                 self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             }
@@ -1174,15 +1177,6 @@ extension OpenClawChatViewModel {
                 fastOverrideCleared: self.lastSuccessfulFastOverrideClearedByTarget[target] == true,
                 verboseOverrideCleared: self.lastSuccessfulVerboseOverrideClearedByTarget[target] == true)
         }
-    }
-
-    func invalidateSessionMetadataReadiness() {
-        self.sessionMetadataGeneration &+= 1
-        self.readySessionMetadataGeneration = nil
-    }
-
-    var hasCurrentSessionMetadata: Bool {
-        self.readySessionMetadataGeneration == self.sessionMetadataGeneration
     }
 
     private func applySessionSwitch(

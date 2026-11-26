@@ -78,14 +78,14 @@ export function createFaceTimeCallEventHandler(params: {
         ? undefined
         : resolveAuthorizedFaceTimeCaller({
             event,
-            ownerHandles: params.config.ownerHandles,
+            allowedCallers: params.config.allowedCallers,
           });
     if (owner) {
       return owner;
     }
     if (pending.delivery !== "cancelling") {
       params.logger.warn(
-        "[facetime] cancelling correlated outbound call because its handle is no longer authorized; add it to ownerHandles before dialing again",
+        "[facetime] cancelling correlated outbound call because its handle is no longer authorized; add it to allowedCallers before dialing again",
       );
     }
     try {
@@ -271,7 +271,7 @@ export function createFaceTimeCallEventHandler(params: {
     if (isIncomingRingingCall(event)) {
       const owner = resolveAuthorizedFaceTimeCaller({
         event,
-        ownerHandles: params.config.ownerHandles,
+        allowedCallers: params.config.allowedCallers,
       });
       if (owner) {
         await answerIncoming(event, owner, peer);
@@ -337,7 +337,7 @@ export function createFaceTimeCallEventHandler(params: {
           ? undefined
           : resolveAuthorizedFaceTimeCaller({
               event,
-              ownerHandles: params.config.ownerHandles,
+              allowedCallers: params.config.allowedCallers,
             });
       if (authorizedPending && (!owner || !canPromotePendingDial(authorizedPending))) {
         return;
