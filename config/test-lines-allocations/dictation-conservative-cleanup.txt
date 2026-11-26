@@ -1,0 +1,3 @@
+# M02: authored corpus, streaming/source and draft authority boundaries,
+# direct composer restoration/length limits, and real browser review flow.
+1023
