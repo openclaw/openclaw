@@ -6,7 +6,7 @@ import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
@@ -118,6 +118,14 @@ describe("directory watch host", () => {
     const helper = spawned.mock.results[0]!.value;
     const exited = once(helper, "exit");
     let replacement: ReturnType<typeof watchDirectory> | undefined;
+    onTestFinished(async () => {
+      missing.close();
+      replacement?.close();
+      if (helper.exitCode === null && helper.signalCode === null) {
+        helper.kill("SIGKILL");
+      }
+      await exited;
+    });
     missing.on("error", (_error, pathUnavailable) => {
       missing.close();
       if (readmit) {
@@ -125,22 +133,15 @@ describe("directory watch host", () => {
       }
       failed.resolve(pathUnavailable);
     });
-    try {
-      await expect(failed.promise).resolves.toBe(true);
-      if (readmit) {
-        await ready.promise;
-        expect(spawned).toHaveBeenCalledTimes(1);
-        expect(helper.stdin!.writableEnded).toBe(false);
-        replacement!.close();
-      }
-      expect(helper.stdin!.writableEnded).toBe(true);
-      await exited;
-    } finally {
-      missing.close();
-      replacement?.close();
-      helper.stdin!.end();
-      await exited;
+    await expect(failed.promise).resolves.toBe(true);
+    if (readmit) {
+      await ready.promise;
+      expect(spawned).toHaveBeenCalledTimes(1);
+      expect(helper.stdin!.writableEnded).toBe(false);
+      replacement!.close();
     }
+    expect(helper.stdin!.writableEnded).toBe(true);
+    await exited;
   });
 
   it("keeps observation recoverable when helper startup throws", async () => {
