@@ -12,6 +12,7 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -170,21 +171,29 @@ it.each([false, true])(
       };
       config.tools = { ...config.tools, codeMode: { enabled: true }, swarm: { enabled: true } };
       await fixture.writeConfig(config);
-      const result = await fixture.run([
-        "agent",
-        "--local",
-        "--agent",
-        "main",
-        "--session-id",
-        randomUUID(),
-        "--message",
-        parentTask,
-        "--thinking",
-        "off",
-        "--timeout",
-        "60",
-        "--json",
-      ]);
+      const result = await runCliProcessChild({
+        env: fixture.env,
+        // Match the source SDK's native ESM loader; the full tsx CJS hook
+        // rewrites import-only dependencies when bundled plugins load.
+        nodeArgs: [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("src/entry.ts"),
+          "agent",
+          "--local",
+          "--agent",
+          "main",
+          "--session-id",
+          randomUUID(),
+          "--message",
+          parentTask,
+          "--thinking",
+          "off",
+          "--timeout",
+          "60",
+          "--json",
+        ],
+      });
       expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
       expect(JSON.parse(result.stdout)).toMatchObject({ payloads: [{ text: "parent complete" }] });
       expect(childRequests, result.stderr).toBe(spawn ? 1 : 0);
