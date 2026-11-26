@@ -433,7 +433,7 @@ exhausted but the reply still continues:
 
 ### Memory flush
 
-Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction.
+Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction. When a reply is waiting for a private flush, model output keeps the wait alive without exposing the flush text. If the flush sends no output for `agents.defaults.compaction.timeoutSeconds`, OpenClaw stops the flush and continues preparing the reply.
 
 The flush uses the active session model and its normal fallback chain. To keep memory extraction local, use a local model for the session and configure local fallbacks.
 

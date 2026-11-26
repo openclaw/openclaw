@@ -391,6 +391,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
     joinObservation: params.joinObservation,
+    onMemoryFlushModelProgress: params.onMemoryFlushModelProgress,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
