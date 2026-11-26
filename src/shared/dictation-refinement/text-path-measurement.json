@@ -1,0 +1,1347 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-11-26T09:20:46.233Z",
+  "source": {
+    "headRevision": "8cea5c4fcd73a4464b6b0d9da49cf80972c900c9",
+    "baselineRevision": "d11cb0518f095ac0eef7d232510e8783a209754f",
+    "sourceTreeDirty": false,
+    "sourceSha256": "e19496f2deaa8cfe693fd0d405a3073227949f0dfd1f809d03372975306e3f46",
+    "sourcePaths": [
+      "scripts/perf/dictation-refinement-measure.mts",
+      "src/shared/dictation-refinement/coordinator.ts",
+      "src/shared/dictation-refinement/plan.ts",
+      "src/shared/dictation-refinement/types.ts",
+      "src/shared/dictation-refinement/validation.ts",
+      "src/talk/dictation-refinement-model.ts"
+    ],
+    "comparison": "raw-disabled and deterministic arms execute the same current source; baselineRevision is recorded provenance, not a historical checkout measurement"
+  },
+  "environment": {
+    "node": "v24.22.3",
+    "v8": "13.6.233.17-node.63",
+    "platform": "linux",
+    "release": "6.18.57",
+    "arch": "x64",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "logicalCpus": 9,
+    "memoryBytes": 10451427328,
+    "hostLoad": [
+      2.62,
+      3.37,
+      2.99
+    ],
+    "gcExposed": true
+  },
+  "method": {
+    "samplesPerWarmArm": 200,
+    "warmupPerArm": 20,
+    "samplesPerColdArm": 5,
+    "order": "alternating raw/deterministic then deterministic/raw; sequential, never concurrent",
+    "cold": "fresh Node process and first coordinator call; import and process startup reported separately",
+    "warm": "module and coordinator reused; request construction excluded from elapsed timing",
+    "memory": "per-call RSS/heap samples include observer allocation; not retained-heap or leak proof",
+    "model": "disabled; config/auth/provider modules not imported",
+    "requestCounts": "logical coordinator-to-adapter attempts only; HTTP/auth/SDK egress counts are not measured",
+    "limits": {
+      "transcriptBytes": 32768,
+      "contextBytes": 8192,
+      "vocabularyBytes": 8192,
+      "payloadBytes": 65536,
+      "outputBytes": 32768,
+      "instructionBytes": 4096,
+      "snapshots": 32,
+      "spans": 256,
+      "edits": 256,
+      "processors": 32,
+      "deadlineMs": 2500
+    },
+    "maximumRetainedWarmSamples": 400,
+    "coordinatorImportMs": 38.80159699999996
+  },
+  "qualifications": [
+    "Synthetic finalized text, en-US, whitespace-only deterministic transformation.",
+    "No microphone, Stop/STT, browser paint, clipboard, external insertion, or end-to-end deadline qualification.",
+    "No historical source performance comparison; no semantic quality or strict-local egress proof.",
+    "Cold and optional model percentile estimates use small samples; provider/model/auth failures remain visible in status and warning counts."
+  ],
+  "workloads": [
+    {
+      "words": 30,
+      "contextBytes": 1520,
+      "transcriptBytes": 175,
+      "warm": {
+        "raw": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 0.14369699999997465,
+            "p50": 0.28116399999998976,
+            "p95": 4.171251999999981,
+            "p99": 30.123362000000043,
+            "max": 113.11504100000002,
+            "mean": 1.9337153499999962
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 0.016357421875,
+            "p50": 0.035888671875,
+            "p95": 1.1865234375,
+            "p99": 8.752197265625,
+            "max": 68.203369140625,
+            "mean": 0.6369384765625
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -8163920,
+            "p50": 164120,
+            "p95": 169560,
+            "p99": 199472,
+            "max": 209536,
+            "mean": -291.24
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 113868800,
+            "p50": 119111680,
+            "p95": 119635968,
+            "p99": 119635968,
+            "max": 119635968,
+            "mean": 118660792.32
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14294104,
+            "p50": 18418600,
+            "p95": 22213592,
+            "p99": 22608296,
+            "max": 22792240,
+            "mean": 18469977.68
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 175,
+            "p50": 175,
+            "p95": 175,
+            "p99": 175,
+            "max": 175,
+            "mean": 175
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 200
+          },
+          "warnings": {
+            "disabled": 200
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 0.3039489999999887,
+            "p50": 0.5633100000000013,
+            "p95": 9.260428999999931,
+            "p99": 87.50262599999996,
+            "max": 109.352846,
+            "mean": 4.094144679999989
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 0.17529296875,
+            "p50": 0.320556640625,
+            "p95": 5.613525390625,
+            "p99": 33.71923828125,
+            "max": 83.122802734375,
+            "mean": 2.461234130859375
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -7923856,
+            "p50": 395160,
+            "p95": 408160,
+            "p99": 411232,
+            "max": 480216,
+            "mean": 65422.12
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 113868800,
+            "p50": 119111680,
+            "p95": 119635968,
+            "p99": 119635968,
+            "max": 119635968,
+            "mean": 118665379.84
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14448520,
+            "p50": 18475832,
+            "p95": 22227560,
+            "p99": 22578952,
+            "max": 22625184,
+            "mean": 18502778.52
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 171,
+            "p50": 171,
+            "p95": 171,
+            "p99": 171,
+            "max": 171,
+            "mean": 171
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 200
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 200,
+              "min": 0.084716796875,
+              "p50": 0.14453125,
+              "p95": 2.5361328125,
+              "p99": 30.3681640625,
+              "max": 31.074951171875,
+              "mean": 1.194197998046875
+            },
+            "deterministic": {
+              "count": 200,
+              "min": 0.0732421875,
+              "p50": 0.122802734375,
+              "p95": 2.4755859375,
+              "p99": 7.594970703125,
+              "max": 50.0087890625,
+              "mean": 0.928892822265625
+            },
+            "validation": {
+              "count": 200,
+              "min": 0.000732421875,
+              "p50": 0.001220703125,
+              "p95": 0.0673828125,
+              "p99": 0.20703125,
+              "max": 1.04443359375,
+              "mean": 0.013258056640625
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 200,
+          "min": -26.79568900000004,
+          "p50": 0.2613529999999855,
+          "p95": 4.477996000000076,
+          "p99": 66.22847699999988,
+          "max": 107.26830199999995,
+          "mean": 2.160429329999993
+        },
+        "wallMs": 1370.332632,
+        "cpuMicros": {
+          "user": 1454970,
+          "system": 20774
+        },
+        "memoryBefore": {
+          "rss": 113868800,
+          "heapTotal": 33980416,
+          "heapUsed": 14083232,
+          "external": 12267406,
+          "arrayBuffers": 1260871
+        },
+        "memoryAfter": {
+          "rss": 119635968,
+          "heapTotal": 33980416,
+          "heapUsed": 20173432,
+          "external": 12271195,
+          "arrayBuffers": 1419317
+        }
+      },
+      "cold": {
+        "raw": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 2.4451949999999556,
+            "p50": 2.5651190000000383,
+            "p95": 6.795816000000002,
+            "p99": 6.795816000000002,
+            "max": 6.795816000000002,
+            "mean": 3.435501600000009
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 0.810791015625,
+            "p50": 0.9599609375,
+            "p95": 2.048095703125,
+            "p99": 2.048095703125,
+            "max": 2.048095703125,
+            "mean": 1.202978515625
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 39.281138000000055,
+            "p50": 53.31401800000003,
+            "p95": 54.61449600000003,
+            "p99": 54.61449600000003,
+            "max": 54.61449600000003,
+            "mean": 48.89062100000005
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 395.196516,
+            "p50": 479.303774,
+            "p95": 1454.9953169999994,
+            "p99": 1454.9953169999994,
+            "max": 1454.9953169999994,
+            "mean": 801.6831563999999
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 270832,
+            "p50": 270840,
+            "p95": 271368,
+            "p99": 271368,
+            "max": 271368,
+            "mean": 271041.6
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 104685568,
+            "p50": 105840640,
+            "p95": 106819584,
+            "p99": 106819584,
+            "max": 106819584,
+            "mean": 105779200
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 16550296,
+            "p50": 16566480,
+            "p95": 16696608,
+            "p99": 16696608,
+            "max": 16696608,
+            "mean": 16588104
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 175,
+            "p50": 175,
+            "p95": 175,
+            "p99": 175,
+            "max": 175,
+            "mean": 175
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 5
+          },
+          "warnings": {
+            "disabled": 5
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 3.5193009999999845,
+            "p50": 3.7676529999999957,
+            "p95": 5.406901000000005,
+            "p99": 5.406901000000005,
+            "max": 5.406901000000005,
+            "mean": 4.120268399999963
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 1.8486328125,
+            "p50": 2.036865234375,
+            "p95": 3.800537109375,
+            "p99": 3.800537109375,
+            "max": 3.800537109375,
+            "mean": 2.353759765625
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 53.862975000000006,
+            "p50": 57.14106999999996,
+            "p95": 79.579383,
+            "p99": 79.579383,
+            "max": 79.579383,
+            "mean": 61.29960219999998
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 428.4806980000012,
+            "p50": 545.4964450000007,
+            "p95": 623.4250489999995,
+            "p99": 623.4250489999995,
+            "max": 623.4250489999995,
+            "mean": 540.5985612000002
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 581072,
+            "p50": 581920,
+            "p95": 584320,
+            "p99": 584320,
+            "max": 584320,
+            "mean": 582472
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 104611840,
+            "p50": 105656320,
+            "p95": 106418176,
+            "p99": 106418176,
+            "max": 106418176,
+            "mean": 105532620.8
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 16879088,
+            "p50": 16944936,
+            "p95": 17018944,
+            "p99": 17018944,
+            "max": 17018944,
+            "mean": 16944419.2
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 171,
+            "p50": 171,
+            "p95": 171,
+            "p99": 171,
+            "max": 171,
+            "mean": 171
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 5
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 5,
+              "min": 0.69189453125,
+              "p50": 0.7666015625,
+              "p95": 2.724853515625,
+              "p99": 2.724853515625,
+              "max": 2.724853515625,
+              "mean": 1.143359375
+            },
+            "deterministic": {
+              "count": 5,
+              "min": 0.348388671875,
+              "p50": 0.39306640625,
+              "p95": 0.442626953125,
+              "p99": 0.442626953125,
+              "max": 0.442626953125,
+              "mean": 0.3970703125
+            },
+            "validation": {
+              "count": 5,
+              "min": 0.023681640625,
+              "p50": 0.03076171875,
+              "p95": 0.05419921875,
+              "p99": 0.05419921875,
+              "max": 0.05419921875,
+              "mean": 0.0341796875
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 5,
+          "min": -2.517684000000088,
+          "p50": 1.0642359999998803,
+          "p95": 2.9617060000000492,
+          "p99": 2.9617060000000492,
+          "max": 2.9617060000000492,
+          "mean": 0.6847667999999544
+        }
+      }
+    },
+    {
+      "words": 80,
+      "contextBytes": 1520,
+      "transcriptBytes": 463,
+      "warm": {
+        "raw": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 0.2543549999991228,
+            "p50": 0.2990609999997105,
+            "p95": 1.8567960000000312,
+            "p99": 2.3848440000001574,
+            "max": 3.3063359999996464,
+            "mean": 0.46586659499988853
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 0.013671875,
+            "p50": 0.02197265625,
+            "p95": 0.057861328125,
+            "p99": 0.2763671875,
+            "max": 2.102294921875,
+            "mean": 0.046063232421875
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -7983120,
+            "p50": 371680,
+            "p95": 380280,
+            "p99": 380376,
+            "max": 428920,
+            "mean": 39903.68
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 119767040,
+            "p50": 119767040,
+            "p95": 119767040,
+            "p99": 119767040,
+            "max": 119767040,
+            "mean": 119767040
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14611112,
+            "p50": 18751056,
+            "p95": 22449896,
+            "p99": 22765040,
+            "max": 22884288,
+            "mean": 18727102.44
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 463,
+            "p50": 463,
+            "p95": 463,
+            "p99": 463,
+            "max": 463,
+            "mean": 463
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 200
+          },
+          "warnings": {
+            "disabled": 200
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 0.5936469999996916,
+            "p50": 0.713778999999704,
+            "p95": 2.72451700000056,
+            "p99": 3.3124860000007175,
+            "max": 5.868468000000576,
+            "mean": 0.9987826099999529
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 0.350341796875,
+            "p50": 0.410400390625,
+            "p95": 1.884765625,
+            "p99": 2.55419921875,
+            "max": 2.956787109375,
+            "mean": 0.594588623046875
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -7466504,
+            "p50": 914552,
+            "p95": 921328,
+            "p99": 922880,
+            "max": 955952,
+            "mean": -43374.04
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 119767040,
+            "p50": 119767040,
+            "p95": 119767040,
+            "p99": 119767040,
+            "max": 119767040,
+            "mean": 119767040
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14537616,
+            "p50": 18608296,
+            "p95": 22452272,
+            "p99": 22824984,
+            "max": 22866696,
+            "mean": 18706269.96
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 459,
+            "p50": 459,
+            "p95": 459,
+            "p99": 459,
+            "max": 459,
+            "mean": 459
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 200
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 200,
+              "min": 0.173583984375,
+              "p50": 0.190185546875,
+              "p95": 0.68408203125,
+              "p99": 2.272705078125,
+              "max": 2.3115234375,
+              "mean": 0.283084716796875
+            },
+            "deterministic": {
+              "count": 200,
+              "min": 0.1591796875,
+              "p50": 0.172607421875,
+              "p95": 0.784912109375,
+              "p99": 2.254638671875,
+              "max": 2.753662109375,
+              "mean": 0.288985595703125
+            },
+            "validation": {
+              "count": 200,
+              "min": 0.00048828125,
+              "p50": 0.0009765625,
+              "p95": 0.001708984375,
+              "p99": 0.001953125,
+              "max": 0.056640625,
+              "mean": 0.001280517578125
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 200,
+          "min": -2.614831000000777,
+          "p50": 0.40896799999973155,
+          "p95": 2.4376940000001923,
+          "p99": 2.9764180000020133,
+          "max": 5.443626000000222,
+          "mean": 0.5329160150000644
+        },
+        "wallMs": 307.63552099999833,
+        "cpuMicros": {
+          "user": 316833,
+          "system": 16570
+        },
+        "memoryBefore": {
+          "rss": 119767040,
+          "heapTotal": 32931840,
+          "heapUsed": 14291504,
+          "external": 12199112,
+          "arrayBuffers": 1260895
+        },
+        "memoryAfter": {
+          "rss": 119767040,
+          "heapTotal": 32931840,
+          "heapUsed": 15272296,
+          "external": 12187052,
+          "arrayBuffers": 1269638
+        }
+      },
+      "cold": {
+        "raw": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 2.3148309999999697,
+            "p50": 2.6615220000000477,
+            "p95": 2.91130899999996,
+            "p99": 2.91130899999996,
+            "max": 2.91130899999996,
+            "mean": 2.638823599999989
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 0.749267578125,
+            "p50": 0.903564453125,
+            "p95": 0.927001953125,
+            "p99": 0.927001953125,
+            "max": 0.927001953125,
+            "mean": 0.854736328125
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 35.610206000000005,
+            "p50": 45.52650599999998,
+            "p95": 57.28959100000003,
+            "p99": 57.28959100000003,
+            "max": 57.28959100000003,
+            "mean": 46.6612908
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 393.49136400000134,
+            "p50": 443.1462479999991,
+            "p95": 477.6734720000004,
+            "p99": 477.6734720000004,
+            "max": 477.6734720000004,
+            "mean": 438.2189024000003
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 523920,
+            "p50": 524472,
+            "p95": 527848,
+            "p99": 527848,
+            "max": 527848,
+            "mean": 525376
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 103944192,
+            "p50": 105287680,
+            "p95": 106790912,
+            "p99": 106790912,
+            "max": 106790912,
+            "mean": 105191833.6
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 16768608,
+            "p50": 16822384,
+            "p95": 16952984,
+            "p99": 16952984,
+            "max": 16952984,
+            "mean": 16857132.8
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 463,
+            "p50": 463,
+            "p95": 463,
+            "p99": 463,
+            "max": 463,
+            "mean": 463
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 5
+          },
+          "warnings": {
+            "disabled": 5
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 3.1976609999999823,
+            "p50": 3.5060679999999707,
+            "p95": 3.968256999999994,
+            "p99": 3.968256999999994,
+            "max": 3.968256999999994,
+            "mean": 3.532804199999987
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 1.791259765625,
+            "p50": 1.932373046875,
+            "p95": 2.16796875,
+            "p99": 2.16796875,
+            "max": 2.16796875,
+            "mean": 1.9267578125
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 34.365898000000016,
+            "p50": 40.27247600000004,
+            "p95": 44.02784100000002,
+            "p99": 44.02784100000002,
+            "max": 44.02784100000002,
+            "mean": 39.16954440000002
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 344.3417250000002,
+            "p50": 389.492526,
+            "p95": 773.9379470000003,
+            "p99": 773.9379470000003,
+            "max": 773.9379470000003,
+            "mean": 520.4167334000001
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 1219504,
+            "p50": 1222392,
+            "p95": 1228640,
+            "p99": 1228640,
+            "max": 1228640,
+            "mean": 1223046.4
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 104558592,
+            "p50": 104935424,
+            "p95": 106647552,
+            "p99": 106647552,
+            "max": 106647552,
+            "mean": 105235251.2
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 17518664,
+            "p50": 17539464,
+            "p95": 17654080,
+            "p99": 17654080,
+            "max": 17654080,
+            "mean": 17556132.8
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 459,
+            "p50": 459,
+            "p95": 459,
+            "p99": 459,
+            "max": 459,
+            "mean": 459
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 5
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 5,
+              "min": 0.62939453125,
+              "p50": 0.778564453125,
+              "p95": 0.87939453125,
+              "p99": 0.87939453125,
+              "max": 0.87939453125,
+              "mean": 0.755126953125
+            },
+            "deterministic": {
+              "count": 5,
+              "min": 0.42041015625,
+              "p50": 0.49755859375,
+              "p95": 0.531005859375,
+              "p99": 0.531005859375,
+              "max": 0.531005859375,
+              "mean": 0.482470703125
+            },
+            "validation": {
+              "count": 5,
+              "min": 0.021728515625,
+              "p50": 0.0302734375,
+              "p95": 0.052001953125,
+              "p99": 0.052001953125,
+              "max": 0.052001953125,
+              "mean": 0.033203125
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 5,
+          "min": 0.28734600000001365,
+          "p50": 1.0169030000000134,
+          "p95": 1.3067349999999465,
+          "p99": 1.3067349999999465,
+          "max": 1.3067349999999465,
+          "mean": 0.8939805999999976
+        }
+      }
+    },
+    {
+      "words": 500,
+      "contextBytes": 1520,
+      "transcriptBytes": 2871,
+      "warm": {
+        "raw": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 1.2495049999997718,
+            "p50": 1.4419979999984207,
+            "p95": 2.5815959999999905,
+            "p99": 7.540580000000773,
+            "max": 13.13345500000105,
+            "mean": 1.7451564950000193
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 0.01953125,
+            "p50": 0.030029296875,
+            "p95": 0.0693359375,
+            "p99": 0.443359375,
+            "max": 2.194580078125,
+            "mean": 0.05381591796875
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -14776128,
+            "p50": 2346192,
+            "p95": 2363656,
+            "p99": 2364152,
+            "max": 2381528,
+            "mean": 300459.32
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 119767040,
+            "p50": 135626752,
+            "p95": 135626752,
+            "p99": 135626752,
+            "max": 135626752,
+            "mean": 132583260.16
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14876848,
+            "p50": 22287840,
+            "p95": 30280464,
+            "p99": 30994432,
+            "max": 31418904,
+            "mean": 22243155.28
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 2871,
+            "p50": 2871,
+            "p95": 2871,
+            "p99": 2871,
+            "max": 2871,
+            "mean": 2871
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 200
+          },
+          "warnings": {
+            "disabled": 200
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 200,
+            "min": 3.1573500000013155,
+            "p50": 3.621823999999833,
+            "p95": 5.39666699999907,
+            "p99": 13.184842999999091,
+            "max": 49.364700000000084,
+            "mean": 4.190529674999961
+          },
+          "coordinatorMs": {
+            "count": 200,
+            "min": 1.807373046875,
+            "p50": 2.1015625,
+            "p95": 3.181396484375,
+            "p99": 7.894287109375,
+            "max": 37.621337890625,
+            "mean": 2.492730712890625
+          },
+          "moduleImportMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "childProcessWallMs": {
+            "count": 200,
+            "min": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "heapDeltaBytes": {
+            "count": 200,
+            "min": -11288736,
+            "p50": 5844656,
+            "p95": 5916112,
+            "p99": 5924832,
+            "max": 5924832,
+            "mean": -288083.76
+          },
+          "sampledRssBytes": {
+            "count": 200,
+            "min": 119767040,
+            "p50": 135626752,
+            "p95": 135626752,
+            "p99": 135626752,
+            "max": 135626752,
+            "mean": 132639621.12
+          },
+          "sampledHeapUsedBytes": {
+            "count": 200,
+            "min": 14857328,
+            "p50": 21909304,
+            "p95": 30129816,
+            "p99": 31053944,
+            "max": 31466264,
+            "mean": 22503554.2
+          },
+          "outputBytes": {
+            "count": 200,
+            "min": 2867,
+            "p50": 2867,
+            "p95": 2867,
+            "p99": 2867,
+            "max": 2867,
+            "mean": 2867
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 200
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 200,
+              "min": 0.900634765625,
+              "p50": 1.02197265625,
+              "p95": 1.5126953125,
+              "p99": 3.41015625,
+              "max": 7.84521484375,
+              "mean": 1.14999755859375
+            },
+            "deterministic": {
+              "count": 200,
+              "min": 0.8759765625,
+              "p50": 1.0009765625,
+              "p95": 1.736083984375,
+              "p99": 5.972412109375,
+              "max": 28.1240234375,
+              "mean": 1.29759521484375
+            },
+            "validation": {
+              "count": 200,
+              "min": 0.000732421875,
+              "p50": 0.001220703125,
+              "p95": 0.002197265625,
+              "p99": 0.003662109375,
+              "max": 0.069580078125,
+              "mean": 0.002049560546875
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 200,
+          "min": -8.062911000000895,
+          "p50": 2.201269000001048,
+          "p95": 3.5673810000007506,
+          "p99": 7.044465999999375,
+          "max": 36.231244999999035,
+          "mean": 2.445373179999942
+        },
+        "wallMs": 1218.8621739999999,
+        "cpuMicros": {
+          "user": 1229910,
+          "system": 39841
+        },
+        "memoryBefore": {
+          "rss": 119767040,
+          "heapTotal": 32931840,
+          "heapUsed": 14398648,
+          "external": 12192155,
+          "arrayBuffers": 1260895
+        },
+        "memoryAfter": {
+          "rss": 135626752,
+          "heapTotal": 49709056,
+          "heapUsed": 22160280,
+          "external": 12225896,
+          "arrayBuffers": 1308482
+        }
+      },
+      "cold": {
+        "raw": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 5.349685999999963,
+            "p50": 6.477708000000007,
+            "p95": 8.62482399999999,
+            "p99": 8.62482399999999,
+            "max": 8.62482399999999,
+            "mean": 6.8535193999999935
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 0.662109375,
+            "p50": 0.958251953125,
+            "p95": 1.148193359375,
+            "p99": 1.148193359375,
+            "max": 1.148193359375,
+            "mean": 0.90029296875
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 32.17095599999999,
+            "p50": 32.94371699999999,
+            "p95": 53.40478300000001,
+            "p99": 53.40478300000001,
+            "max": 53.40478300000001,
+            "mean": 38.6277128
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 346.4620329999998,
+            "p50": 412.6447819999994,
+            "p95": 453.19712100000106,
+            "p99": 453.19712100000106,
+            "max": 453.19712100000106,
+            "mean": 399.3052331999999
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 389928,
+            "p50": 405184,
+            "p95": 524592,
+            "p99": 524592,
+            "max": 524592,
+            "mean": 436179.2
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 105648128,
+            "p50": 107909120,
+            "p95": 109404160,
+            "p99": 109404160,
+            "max": 109404160,
+            "mean": 107625676.8
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 16693592,
+            "p50": 16789016,
+            "p95": 16926656,
+            "p99": 16926656,
+            "max": 16926656,
+            "mean": 16793995.2
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 2871,
+            "p50": 2871,
+            "p95": 2871,
+            "p99": 2871,
+            "max": 2871,
+            "mean": 2871
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "raw-fallback": 5
+          },
+          "warnings": {
+            "disabled": 5
+          },
+          "phasesMs": {}
+        },
+        "deterministic": {
+          "elapsedMs": {
+            "count": 5,
+            "min": 8.168984000000023,
+            "p50": 11.395147000000065,
+            "p95": 13.212603000000001,
+            "p99": 13.212603000000001,
+            "max": 13.212603000000001,
+            "mean": 10.59375520000001
+          },
+          "coordinatorMs": {
+            "count": 5,
+            "min": 3.97021484375,
+            "p50": 5.34228515625,
+            "p95": 6.751220703125,
+            "p99": 6.751220703125,
+            "max": 6.751220703125,
+            "mean": 5.26708984375
+          },
+          "moduleImportMs": {
+            "count": 5,
+            "min": 31.213833000000022,
+            "p50": 35.34761400000002,
+            "p95": 45.71985000000001,
+            "p99": 45.71985000000001,
+            "max": 45.71985000000001,
+            "mean": 36.92951620000001
+          },
+          "childProcessWallMs": {
+            "count": 5,
+            "min": 335.62799799999993,
+            "p50": 368.93061399999897,
+            "p95": 701.595276,
+            "p99": 701.595276,
+            "max": 701.595276,
+            "mean": 432.4697059999995
+          },
+          "heapDeltaBytes": {
+            "count": 5,
+            "min": 4008120,
+            "p50": 4049488,
+            "p95": 4132864,
+            "p99": 4132864,
+            "max": 4132864,
+            "mean": 4063292.8
+          },
+          "sampledRssBytes": {
+            "count": 5,
+            "min": 106405888,
+            "p50": 107057152,
+            "p95": 109674496,
+            "p99": 109674496,
+            "max": 109674496,
+            "mean": 107658444.8
+          },
+          "sampledHeapUsedBytes": {
+            "count": 5,
+            "min": 20349992,
+            "p50": 20417976,
+            "p95": 20737672,
+            "p99": 20737672,
+            "max": 20737672,
+            "mean": 20474908.8
+          },
+          "outputBytes": {
+            "count": 5,
+            "min": 2867,
+            "p50": 2867,
+            "p95": 2867,
+            "p99": 2867,
+            "max": 2867,
+            "mean": 2867
+          },
+          "logicalModelAdapterAttempts": 0,
+          "statuses": {
+            "refined": 5
+          },
+          "warnings": {},
+          "phasesMs": {
+            "plan": {
+              "count": 5,
+              "min": 1.52685546875,
+              "p50": 1.807373046875,
+              "p95": 1.932861328125,
+              "p99": 1.932861328125,
+              "max": 1.932861328125,
+              "mean": 1.77099609375
+            },
+            "deterministic": {
+              "count": 5,
+              "min": 1.542724609375,
+              "p50": 2.665283203125,
+              "p95": 4.274169921875,
+              "p99": 4.274169921875,
+              "max": 4.274169921875,
+              "mean": 2.763232421875
+            },
+            "validation": {
+              "count": 5,
+              "min": 0.010009765625,
+              "p50": 0.010498046875,
+              "p95": 0.013427734375,
+              "p99": 0.013427734375,
+              "max": 0.013427734375,
+              "mean": 0.010888671875
+            }
+          }
+        },
+        "deterministicMinusRawMs": {
+          "count": 5,
+          "min": 1.9996519999999691,
+          "p50": 3.0898579999999924,
+          "p95": 7.4460750000000075,
+          "p99": 7.4460750000000075,
+          "max": 7.4460750000000075,
+          "mean": 3.740235800000016
+        }
+      }
+    }
+  ]
+}

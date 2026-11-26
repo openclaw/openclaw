@@ -171,14 +171,169 @@ The browser attempt could not launch its required Chromium revision
 system Chromium launcher also has no executable behind it. No screenshot,
 screen-reader, zoom or physical-browser proof is claimed.
 
-Targeted UI and script lint, the shared-core typecheck, the existing native
+Targeted UI, script, shared-core and selected-model lint, the shared-core typecheck, the existing native
 controller census, English-copy baseline, and the CI browser-owner planner's 18
-tests pass. UI lint reports three nonfatal reactive-use warnings. The final
-targeted core/model lint attempt exited 137 without a successful receipt.
-The UI bundle builds, but its three budget warnings and an additional existing
-attachment-progress test failure require an actual-base comparison before being
-classified. The full UI/model type and build graphs remain CI qualification
-work; a passing focused graph does not replace them.
+tests pass. UI lint reports three nonfatal reactive-use warnings. An aggregate
+core/model lint attempt exited 137; separate shared-core and selected-model
+commands later passed on the same source. The final command-registration lint
+also passes.
+
+The existing main-composer suite passes **57/57** both on the exact base and on
+implementation commit `8cea5c4fcd73a4464b6b0d9da49cf80972c900c9`. The combined
+head run with the new preview cases passes **80/80**. An earlier combined run
+failed while waiting for an attachment thumbnail; that failure was not reproduced,
+and its cause is undetermined. No assertion or production code was changed to
+obtain these passes. Together with the focused and planner suites, these are
+**216 distinct passing cases in eight files**, not a sum of repeated runs.
+
+The earlier `pnpm ui:build` completed successfully, with three reported budget
+violations: largest CSS 58,659 B gzip against 58,315 B, chat boot 21 requests
+against 20, and chat boot JS 1,337,077 B gzip against 1,336,272 B. No budget was
+raised. An actual-base build terminated with exit 137 during chunk rendering.
+A final-head build with `NODE_OPTIONS=--max-old-space-size=1536`,
+`RAYON_NUM_THREADS=2`, and `UV_THREADPOOL_SIZE=2` also terminated with exit 137.
+The three budget violations therefore remain **unclassified**, and a successful
+final-head build is pending. The optional view already uses the existing lazy
+dictation-status boundary; the boot manifest was not hand-edited.
+
+The tooling-test typecheck, required by the CI ownership inventory change, also
+exited 137. The canonical unused-file gate started both Knip scans concurrently;
+the production scan was killed with SIGKILL and the outer harness stopped at
+180 seconds without a full-tree receipt. A serial retry found one owned path,
+`src/talk/dictation-refinement-model.ts`, because the documented measurement CLI
+had been registered without Knip's production-entry marker. The exact CLI root
+was corrected; its selected-model arm is the actual dynamic consumer. No adapter
+root, ignore or wildcard was added. Both corrected production and full-tree scans
+pass with **zero unused files**, using the same repository runner and result
+validator serially to reduce peak resource use. They ran on source commit
+`0cd76547856ea8e732dd6f116fa1edeca1fbb565` in 130.83 and 175.79 seconds. The final
+model lint and command-registration lint pass in 10.81 and 6.39 seconds. The
+canonical concurrent invocation remains a failed historical attempt; the
+successful receipts are the serial constituent scans.
+
+The serial scans use `runKnipScans` from `scripts/deadcode-knip-runner.mts` with
+one scan per invocation and the unmodified
+`checkKnipUnusedFileScanResult` validator. Their CLI inputs are:
+
+```sh
+pnpm dlx --package knip@6.40.0 knip --config config/knip.config.ts \
+  --production --no-progress --reporter compact --files --no-config-hints
+pnpm dlx --package knip@6.40.0 knip --config config/knip.all-exports.config.ts \
+  --no-progress --reporter compact --files --no-config-hints
+```
+
+Script erasability passes for 2,024 implementation files. The test-line
+ratchet passes with 2,062 net new lines, the ordinary 400-line allowance, and a
+1,662-line allocation for independent schema, capture, composer, provider and
+browser boundaries. Assertions are not duplicated simply to inflate coverage.
+
+The package-wide root build and complete suite are not qualified by these focused
+receipts. Remote build/type/model-test proof remains required. No Crabbox
+client was available, and automatic PR CI skips drafts under the current proof
+policy. Publishing this draft does not claim CI approval or request a merge.
+
+## Source publication identity
+
+The local shell had no GitHub write credential, so its Git push did not publish
+the branch. The authenticated GitHub connection published the verified Git
+trees through the Git data API. That API assigns commit metadata and therefore
+new commit SHAs. The source tree identities below were checked for exact
+equality before publication; the original local commits are retained.
+
+| Locally verified commit                    | Published commit                                                                                                                        | Identical Git tree                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `8cea5c4fcd73a4464b6b0d9da49cf80972c900c9` | [736e6741517dc9a2301493fd3954c395bf02e301](https://github.com/CompleteDotTech/openclaw/commit/736e6741517dc9a2301493fd3954c395bf02e301) | `cdcff8270ebee40ac12423f5e09e46c7d412eacb` |
+| `0cd76547856ea8e732dd6f116fa1edeca1fbb565` | [e0827788b6935f9c441755fa708855852c502573](https://github.com/CompleteDotTech/openclaw/commit/e0827788b6935f9c441755fa708855852c502573) | `27e6e633f4752b5a53f8a5cc1953d18efb551a6b` |
+
+The final publication adds the qualification document and measurement JSON to
+that source. Those documentation changes do not change the tested runtime or
+Knip graph. A local merge-tree comparison of the implementation with fetched
+upstream `main` at `3ba1361bcf398856b8954f699362a2c663885063` completed without
+conflicts. The tested fork point remains the base recorded at the top; this
+comparison is not a test run on a merged checkout.
+
+## Reproducible synthetic text measurement
+
+The complete [measurement JSON](text-path-measurement.json) records the actual
+clean implementation commit `8cea5c4fcd73a4464b6b0d9da49cf80972c900c9` and source
+SHA-256 `e19496f2deaa8cfe693fd0d405a3073227949f0dfd1f809d03372975306e3f46`.
+The fingerprint covers the core, selected-model adapter and measurement driver;
+subsequent documentation and command-ownership edits do not change those inputs.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/dictation-refinement-measure.mts \
+  --samples 200 --warmup 20 --cold-samples 5 \
+  --baseline-ref d11cb0518f095ac0eef7d232510e8783a209754f
+```
+
+This runs alternating raw-disabled and whitespace-deterministic arms on the
+**same current source**, with synthetic finalized `en-US` text and 1,520 bytes of
+context. `baselineRevision` records source provenance; it is not a historical
+performance run. No model, configuration or credential module is imported in
+this mode. The host was Linux 6.18.57 x64, Node 24.22.3 / V8 13.6, with an AMD EPYC
+9V74, nine exposed logical CPUs and 10,451,427,328 bytes of RAM. Host load at the
+receipt was 2.62 / 3.37 / 2.99. GPU, provider/model, quantization, network RTT/loss,
+and physical-device behavior were not measured.
+
+The times below are the driver's elapsed text-call measurement in milliseconds.
+Warm rows use 200 samples per arm after 20 warmups; cold rows use five separate
+Node processes per arm. Cold p95 and p99 are therefore small-sample maxima, not
+reliable tail estimates. Import and child-process wall time are reported
+separately in the JSON and are excluded from these elapsed-call columns.
+
+| Words | State | Arm           | p50 ms | p95 ms | p99 ms |
+| ----- | ----- | ------------- | -----: | -----: | -----: |
+| 30    | Warm  | Raw disabled  |  0.281 |  4.171 | 30.123 |
+| 30    | Warm  | Deterministic |  0.563 |  9.260 | 87.503 |
+| 80    | Warm  | Raw disabled  |  0.299 |  1.857 |  2.385 |
+| 80    | Warm  | Deterministic |  0.714 |  2.725 |  3.312 |
+| 500   | Warm  | Raw disabled  |  1.442 |  2.582 |  7.541 |
+| 500   | Warm  | Deterministic |  3.622 |  5.397 | 13.185 |
+| 30    | Cold  | Raw disabled  |  2.565 |  6.796 |  6.796 |
+| 30    | Cold  | Deterministic |  3.768 |  5.407 |  5.407 |
+| 80    | Cold  | Raw disabled  |  2.662 |  2.911 |  2.911 |
+| 80    | Cold  | Deterministic |  3.506 |  3.968 |  3.968 |
+| 500   | Cold  | Raw disabled  |  6.478 |  8.625 |  8.625 |
+| 500   | Cold  | Deterministic | 11.395 | 13.213 | 13.213 |
+
+Across these fixtures, all 615 measured deterministic calls returned `refined`
+and all 615 measured disabled calls returned the expected `raw-fallback`/`disabled` result. There
+were zero logical model-adapter attempts and no deterministic timeout/fallback.
+The harness checks expected output for every sample; this does not substitute
+for human semantic adjudication. Maximum sampled RSS was 135,626,752 bytes and
+maximum sampled heap used was 31,466,264 bytes, including runtime and observer
+allocation. These samples are not a retained-heap or leak proof. Per-workload CPU
+time, allocation deltas, phase distributions, outcomes and counts are preserved
+in the full JSON.
+
+The 30-word warm p99 of 87.503 ms is retained, rather than discarded as an outlier.
+This shared-host text benchmark establishes neither the proposed 75 ms
+deterministic product budget nor 750 ms added-model or 1,500 ms Stop-to-preview
+budgets. Capture, final STT, browser paint, explicit insertion, real provider
+requests, impaired networks, offline failures, CPU-load experiments and phone
+qualification remain NOT RUN.
+
+## Remaining native qualification procedure
+
+Run the bundled browser scenario with the repository's supported Chromium and
+capture retained before/after proof through `OPENCLAW_CAPTURE_UI_PROOF`. Exercise
+the default-off baseline, keyboard opt-in, provisional caption, Stop/finishing,
+original inspection, explicit accept/raw choice, cancellation, incomplete
+recovery, RTL, reduced motion and narrow layout. Then repeat the supported
+journey with a real microphone, keyboard-only navigation, a screen reader and
+200% zoom. These are procedures, not completed receipts.
+
+With an accepted locality/admission owner and explicit selected route, observe
+actual speech and refinement connections under local success, model absence,
+failure, cancellation and configured remote fallback. Record attempted egress
+separately from unrelated authentication, updates and Gateway activity. Do not
+infer this result from the synthetic route-policy tests. Collect W1 audio and
+all end-to-end phase timestamps with a human-adjudicated semantic/literal corpus,
+including negation, quantities/units, names/dates, approved expansions, protected
+code/paths and opaque references. Finally test the same retained user state
+through installed upgrade, disabling refinement and downgrade; verify that
+drafts and unrelated feature stores survive.
 
 ## Independent review and unresolved gates
 
