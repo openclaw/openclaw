@@ -22,16 +22,16 @@ or performance result is asserted here.
 
 ## Revision and environment record
 
-| Field | Recorded value |
-| --- | --- |
-| Contribution | `CompleteDotTech/openclaw:feat/dictation-semantic-formatting`; existing draft PR #205791 |
-| Reviewed parent | `75070f7628a8651907294c60ce33037e08be1c85` |
-| Historical feature merge base | `04b854b239cd8ab8a14beae4914ed9c54d791e62` |
-| Source revision for this ledger | The commit containing this repair; future execution must record its actual head and tree |
-| ClawSweeper feedback | [Durable PR review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255), reviewed parent above, completed `2026-11-26T06:50:17.055Z` |
-| Current execution environment | No policy-approved secretless execution environment established; repository code was not run |
-| Build, CI, browser, hardware, provider and AT | NOT RUN on the repair revision; no artifact URLs or named device results are supplied |
-| Maintainer decisions | Private shared owner, preferences, grammar, formats, limits and required fork workflow approval remain open |
+| Field                                         | Recorded value                                                                                                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contribution                                  | `CompleteDotTech/openclaw:feat/dictation-semantic-formatting`; existing draft PR #205791                                                                   |
+| Reviewed parent                               | `75070f7628a8651907294c60ce33037e08be1c85`                                                                                                                 |
+| Historical feature merge base                 | `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                 |
+| Source revision for this ledger               | The commit containing this repair; future execution must record its actual head and tree                                                                   |
+| ClawSweeper feedback                          | [Durable PR review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255), reviewed parent above, completed `2026-11-26T06:50:17.055Z` |
+| Current execution environment                 | No policy-approved secretless execution environment established; repository code was not run                                                               |
+| Build, CI, browser, hardware, provider and AT | NOT RUN on the repair revision; no artifact URLs or named device results are supplied                                                                      |
+| Maintainer decisions                          | Private shared owner, preferences, grammar, formats, limits and required fork workflow approval remain open                                                |
 
 Bind each later result to the actual tested head, base, tree, dependency versions,
 command and exit status. A source commit does not approve a fork workflow, make a
@@ -44,18 +44,18 @@ All execution outcomes in this table are **NOT RUN on this repair revision**.
 The original issue remains open, including native/rich delivery and accessibility
 requirements that the bounded Control UI implementation cannot yet qualify.
 
-| Criterion | Source boundary and authored coverage | Remaining proof or decision |
-| --- | --- | --- |
-| M04-AC01: policy and baseline | Existing browser settings and dictation owner; Preserve default, opt-in and unknown-version fixtures | Real stored-data upgrade and rollback; acceptance of the shared preference owner |
-| M04-AC02: lexical and structural invariants | Source spans, paragraphs, lists, numbering, protected bytes and independent Markdown parsing | Run semantic tests; qualify actual recognition and destination fidelity |
-| M04-AC03: literal markers and reviewed intent | Every unprotected lexical command requires exact confirmation; unselected words stay literal; quotes/code/URLs stay protected | Run core, owner and review UI cases; exercise the real checklist and source invalidation |
-| M04-AC04: bounded validation | Source coverage, grapheme offsets, node/version/count/depth checks, complete fallback at more than 20 command candidates | Run malformed-input and boundary tests; maintainer acceptance and corpus qualification of limits |
-| M04-AC05: deterministic safe rendering | One validated document; independent Markdown/HTML parser fixtures | Run parser checks and observe zero unintended browser resource loads; qualify the accepted rich format |
-| M04-AC06: capability-selected representation | Chat, New Session and Side chat declare Markdown; escaped literals and whole-draft context guard | Built destination journeys and received/rendered message evidence; external rich adapter still unqualified |
-| M04-AC07: lifecycle and at-most-once recovery | Existing capture/final-drain owner, immutable source/target guards, cancellation and unknown-effect receipts | Run owner/session suites and real focus, edit, connection and late-event journeys |
-| M04-AC08: inert text delivery | Captured-range editor replacement, isolated history, recipient identity/access fixtures, preserved whole-draft proposals | Actual selected-range and caret insertion, one Undo/Redo, recipient records, native fallback and no automatic Send |
-| M04-AC09: accessible review | Native controls, status and focus paths; synthetic browser fixture uses one Finish action before review | Built keyboard and named screen-reader session, before/after visuals, 400% zoom, contrast and enlarged text |
-| M04-AC10: upgrade, privacy and resources | Existing settings owner, transient review, bounded benchmark source | Latest-stable upgrade/required rollback, actual egress/provider observation and fresh timing/memory measurements |
+| Criterion                                     | Source boundary and authored coverage                                                                                         | Remaining proof or decision                                                                                        |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| M04-AC01: policy and baseline                 | Existing browser settings and dictation owner; Preserve default, opt-in and unknown-version fixtures                          | Real stored-data upgrade and rollback; acceptance of the shared preference owner                                   |
+| M04-AC02: lexical and structural invariants   | Source spans, paragraphs, lists, numbering, protected bytes and independent Markdown parsing                                  | Run semantic tests; qualify actual recognition and destination fidelity                                            |
+| M04-AC03: literal markers and reviewed intent | Every unprotected lexical command requires exact confirmation; unselected words stay literal; quotes/code/URLs stay protected | Run core, owner and review UI cases; exercise the real checklist and source invalidation                           |
+| M04-AC04: bounded validation                  | Source coverage, grapheme offsets, node/version/count/depth checks, complete fallback at more than 20 command candidates      | Run malformed-input and boundary tests; maintainer acceptance and corpus qualification of limits                   |
+| M04-AC05: deterministic safe rendering        | One validated document; independent Markdown/HTML parser fixtures                                                             | Run parser checks and observe zero unintended browser resource loads; qualify the accepted rich format             |
+| M04-AC06: capability-selected representation  | Chat, New Session and Side chat declare Markdown; escaped literals and whole-draft context guard                              | Built destination journeys and received/rendered message evidence; external rich adapter still unqualified         |
+| M04-AC07: lifecycle and at-most-once recovery | Existing capture/final-drain owner, immutable source/target guards, cancellation and unknown-effect receipts                  | Run owner/session suites and real focus, edit, connection and late-event journeys                                  |
+| M04-AC08: inert text delivery                 | Captured-range editor replacement, isolated history, recipient identity/access fixtures, preserved whole-draft proposals      | Actual selected-range and caret insertion, one Undo/Redo, recipient records, native fallback and no automatic Send |
+| M04-AC09: accessible review                   | Native controls, status and focus paths; synthetic browser fixture uses one Finish action before review                       | Built keyboard and named screen-reader session, before/after visuals, 400% zoom, contrast and enlarged text        |
+| M04-AC10: upgrade, privacy and resources      | Existing settings owner, transient review, bounded benchmark source                                                           | Latest-stable upgrade/required rollback, actual egress/provider observation and fresh timing/memory measurements   |
 
 Headings, tables and inferred Suggest structure remain outside the proposed first
 slice. Deferring universal native insertion does not silently complete the
@@ -213,11 +213,11 @@ links; historical numbers are not carried forward as current results.
 The revised `ui/src/lib/dictation/formatting.bench.ts` authors exactly
 10,000 UTF-16-character workloads within the 20-command confirmation cap:
 
-| Workload | Commands | Blocks | Maximum list depth | Measurement status |
-| --- | --- | --- | --- | --- |
-| Paragraphs | 20 | 21 | 0 | NOT RUN |
-| Escaped paragraphs | 20 | 21 | 0 | NOT RUN |
-| Nested lists | 18 | 7 | 3 | NOT RUN |
+| Workload           | Commands | Blocks | Maximum list depth | Measurement status |
+| ------------------ | -------- | ------ | ------------------ | ------------------ |
+| Paragraphs         | 20       | 21     | 0                  | NOT RUN            |
+| Escaped paragraphs | 20       | 21     | 0                  | NOT RUN            |
+| Nested lists       | 18       | 7      | 3                  | NOT RUN            |
 
 The harness specifies 10 warmups and 100 measured samples per workload, separates
 preparation from validation plus all renderings, and rejects fallback timings.

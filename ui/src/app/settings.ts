@@ -332,8 +332,17 @@ export function persistSessionToken(gatewayUrl: string, token: string) {
 // are replayed over recovery reads, so saving one profile cannot revert a sibling's edits.
 let settingsFallback: SettingsStorageFallback | null = null;
 
-type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
+type LivePreferenceOwner = {
+  gatewayUrl: () => string;
+  read?: () => UiPreferences;
+  refresh: () => void;
+};
 let livePreferenceOwner: LivePreferenceOwner | null = null;
+
+/** Read the mounted owner snapshot without touching browser storage. */
+export function readLiveUiPreferences(): UiPreferences | undefined {
+  return livePreferenceOwner?.read?.();
+}
 
 /** Bind local writes to the mounted runtime, never its credentials. */
 export function bindUiPreferences(owner: LivePreferenceOwner): () => void {

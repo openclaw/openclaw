@@ -51,16 +51,16 @@ lists, and nested lists within the current limit. The grammar is deliberately
 conservative because a text transcript does not establish whether a phrase was
 spoken as an instruction or discussed as ordinary prose.
 
-| Form                                                                                         | Behavior                                                                            |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `Shopping list bullet milk next item eggs next item rice`                                    | After confirmation of `bullet` and both `next item` phrases, keeps the introduction and prepares three items in order. |
-| `bullet milk next item eggs`                                                                 | After confirmation, starts an unordered list and adds a second item. |
-| `step three check power step seven restart`                                                  | After confirmation, keeps the explicit item numbers 3 and 7. |
-| `start list bullet parent nested list bullet child end list next item sibling end list`      | After confirmation of each command, creates a nested list with the child under its original parent. |
-| `new paragraph`, including a standalone or punctuation-delimited occurrence                  | Creates a paragraph boundary only after confirmation of that occurrence. |
-| `new line`, including a standalone or punctuation-delimited occurrence                       | Creates a line break inside the current paragraph or item only after confirmation. |
-| `Our new paragraph starts with a date`                                                       | Keeps the phrase literal unless that occurrence is explicitly selected as a command. |
-| Quotes, backtick/fenced code, URLs, or caller-protected literal spans                        | Keeps marker-looking words literal.                                                 |
+| Form                                                                                    | Behavior                                                                                                               |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `Shopping list bullet milk next item eggs next item rice`                               | After confirmation of `bullet` and both `next item` phrases, keeps the introduction and prepares three items in order. |
+| `bullet milk next item eggs`                                                            | After confirmation, starts an unordered list and adds a second item.                                                   |
+| `step three check power step seven restart`                                             | After confirmation, keeps the explicit item numbers 3 and 7.                                                           |
+| `start list bullet parent nested list bullet child end list next item sibling end list` | After confirmation of each command, creates a nested list with the child under its original parent.                    |
+| `new paragraph`, including a standalone or punctuation-delimited occurrence             | Creates a paragraph boundary only after confirmation of that occurrence.                                               |
+| `new line`, including a standalone or punctuation-delimited occurrence                  | Creates a line break inside the current paragraph or item only after confirmation.                                     |
+| `Our new paragraph starts with a date`                                                  | Keeps the phrase literal unless that occurrence is explicitly selected as a command.                                   |
+| Quotes, backtick/fenced code, URLs, or caller-protected literal spans                   | Keeps marker-looking words literal.                                                                                    |
 
 Every recognized command needs explicit intent confirmation, including list,
 numbered-item, paragraph, and line commands. In the review's marker checklist,
@@ -87,12 +87,12 @@ candidate with a review or fallback status. No renderer paraphrases the content.
 One validated document produces all three representations. Preparing a format
 and successfully inserting it are separate outcomes.
 
-| Representation              | Contract                                                                                                       | Current delivery boundary                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Plain text                  | Paragraph spacing, line breaks, and readable list markers                                                      | Plain preview/copy and original-text recovery through an eligible captured target. |
+| Representation              | Contract                                                                                                       | Current delivery boundary                                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Plain text                  | Paragraph spacing, line breaks, and readable list markers                                                      | Plain preview/copy and original-text recovery through an eligible captured target.                                                               |
 | Markdown                    | `commonmark-0.31.2-lists`: escaped text, paragraphs, hard breaks, and ordered/unordered lists                  | Chat, New Session, and Side chat only when the captured draft is empty or the entire draft is selected and the target supports an undoable edit. |
-| Rich text                   | `safe-blocks-v1`: deterministic `p`, `br`, `ul`, `ol`, and `li` nodes; numeric list `start`/`value` attributes | Semantic preview and preparation only. Native/external rich insertion is not qualified.                                          |
-| Unknown or stale capability | Readable plain candidate                                                                                       | Explicit review/copy; no automatic insertion into another target.                                                                |
+| Rich text                   | `safe-blocks-v1`: deterministic `p`, `br`, `ul`, `ol`, and `li` nodes; numeric list `start`/`value` attributes | Semantic preview and preparation only. Native/external rich insertion is not qualified.                                                          |
+| Unknown or stale capability | Readable plain candidate                                                                                       | Explicit review/copy; no automatic insertion into another target.                                                                                |
 
 The Markdown restriction prevents surrounding code fences, blockquotes, or list
 syntax from changing the meaning of a prepared result. For a partial selection

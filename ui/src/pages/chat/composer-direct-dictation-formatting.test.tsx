@@ -111,14 +111,14 @@ function fixture(mode: "preserve" | "explicit" = "explicit") {
         command.click();
       }
       flush();
-      view.getByRole("button", { name: "Interpret selected commands", exact: true }).click();
+      view.getByRole("button", { name: "Interpret selected commands" }).click();
       flush();
     },
     async start() {
       await vi.dynamicImportSettled();
       flush();
       const start = vi.spyOn(ComposerDictationSession.prototype, "start");
-      const microphone = view.getByRole("button", { name: "Dictate", exact: true });
+      const microphone = view.getByRole("button", { name: "Dictate" });
       microphone.focus();
       microphone.click();
       await vi.dynamicImportSettled();
@@ -146,7 +146,7 @@ it("retains target focus when the focused Finish control is removed before final
   const view = fixture();
   const owner = await view.start();
   const finish = vi.spyOn(owner, "finishActive");
-  const button = view.getByRole("button", { name: "Finish and review", exact: true });
+  const button = view.getByRole("button", { name: "Finish and review" });
   button.focus();
   expect(document.activeElement).toBe(button);
   button.click();
@@ -159,7 +159,7 @@ it("retains target focus when the focused Finish control is removed before final
   view.confirmListCommands();
   expect(owner.formattingReview?.canApply).toBe(true);
   const markdown = owner.formattingReview?.result.markdown;
-  const apply = view.getByRole("button", { name: "Use formatted text", exact: true });
+  const apply = view.getByRole("button", { name: "Use formatted text" });
   apply.focus();
   apply.click();
   flush();
@@ -179,7 +179,7 @@ it("preserves literal Markdown when reviewed dictation replaces the whole direct
   view.confirmListCommands();
   expect(owner.formattingReview?.canApply).toBe(true);
 
-  const apply = view.getByRole("button", { name: "Use formatted text", exact: true });
+  const apply = view.getByRole("button", { name: "Use formatted text" });
   apply.focus();
   apply.click();
   flush();
@@ -210,10 +210,7 @@ it("refuses formatted insertion into an existing Markdown fence in a direct comp
   expect(owner.formattingReview?.result.status).toBe("formatted");
   expect(owner.formattingReview?.canApplyOriginal).toBe(true);
   expect(owner.formattingReview?.canApply).toBe(false);
-  expect(view.getByRole("button", { name: "Use formatted text", exact: true })).toHaveProperty(
-    "disabled",
-    true,
-  );
+  expect(view.getByRole("button", { name: "Use formatted text" })).toHaveProperty("disabled", true);
   expect(owner.acceptFormatting("formatted")).toBe(false);
   expect(view.target.value).toBe(existing);
   expect(view.onMessage).not.toHaveBeenCalled();

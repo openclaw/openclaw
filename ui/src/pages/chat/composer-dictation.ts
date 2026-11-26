@@ -1,6 +1,7 @@
 import {
-  loadSettings,
+  loadUiPreferences,
   patchSettings,
+  readLiveUiPreferences,
   settingsKeyForGateway,
   subscribeSettingsChanges,
 } from "../../app/settings.ts";
@@ -40,7 +41,7 @@ export class ComposerDictationOwner extends EventTarget {
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
   private mode: formatting.DictationFormattingMode =
-    loadSettings().dictationFormatting?.mode ?? "preserve";
+    readLiveUiPreferences()?.dictationFormatting?.mode ?? "preserve";
   private captureMode: formatting.DictationFormattingMode = "preserve";
   private policyRevision = 0;
   private capturePolicyRevision = 0;
@@ -249,7 +250,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private refreshFormattingPolicy(): void {
-    const mode = loadSettings().dictationFormatting?.mode ?? "preserve";
+    const mode =
+      (readLiveUiPreferences() ?? loadUiPreferences()).dictationFormatting?.mode ?? "preserve";
     if (mode !== this.mode) {
       this.mode = mode;
       this.policyRevision++;
@@ -258,7 +260,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private readonly handleSettingsStorage = (event: StorageEvent): void => {
-    if (event.key === null || event.key === settingsKeyForGateway(loadSettings().gatewayUrl)) {
+    const { gatewayUrl } = readLiveUiPreferences() ?? loadUiPreferences();
+    if (event.key === null || event.key === settingsKeyForGateway(gatewayUrl)) {
       // Storage events retain intervening writes even when another tab changes A→B→A.
       this.policyRevision++;
       this.refreshFormattingPolicy();
@@ -299,7 +302,8 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel(false);
     }
     this.options = options;
-    const mode = loadSettings().dictationFormatting?.mode ?? "preserve";
+    const preferences = readLiveUiPreferences();
+    const mode = preferences ? (preferences.dictationFormatting?.mode ?? "preserve") : this.mode;
     if (this.mode !== mode) {
       this.mode = mode;
       this.policyRevision++;
@@ -410,10 +414,11 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(restoreFormattingFocus = true): void {
+    const hadReview = this.review !== undefined;
     const restoreFocus =
       restoreFormattingFocus &&
       !this.disposed &&
-      (this.review !== undefined || (this.captureMode === "explicit" && this.transcribing));
+      (hadReview || (this.captureMode === "explicit" && this.transcribing));
     this.review = undefined;
     this.formattingCapture = undefined;
     const generation = ++this.preparationGeneration;
@@ -422,9 +427,11 @@ export class ComposerDictationOwner extends EventTarget {
     if (this.commits?.size) {
       this.commits.retire();
       this.pendingCommitsChanged();
+    } else if (hadReview) {
+      // Capture phases report their own changes; an idle scope change has nothing to publish.
+      this.pendingCommitsChanged();
     }
     void this.stop({ commit: false });
-    this.pendingCommitsChanged();
     if (restoreFocus) {
       this.restoreFormattingFocus(generation);
     }
