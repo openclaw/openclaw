@@ -434,6 +434,7 @@ export async function executeNodeHostCommand(
             await sendDeniedFollowup("approval-request-failed");
           }
         };
+        await params.admitShellDispatch?.();
         let nodeInvocationStarted = false;
         let nodeInvocationCompleted = false;
 
@@ -605,6 +606,8 @@ export async function executeNodeHostCommand(
         (analysisOk && allowlistSatisfied)) &&
       inlineEvalHit === null,
   });
+  params.signal?.throwIfAborted();
+  await params.admitShellDispatch?.();
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({
     request: params,

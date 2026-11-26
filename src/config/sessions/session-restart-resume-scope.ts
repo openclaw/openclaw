@@ -2,6 +2,19 @@ import type { InternalSessionEntry } from "./types.js";
 
 type RestartResumeMarker = NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
 
+export type PendingSessionShellCalls = {
+  runId: string;
+  calls: { callId: string; key: string }[];
+  notice?: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+    replyToId?: string;
+    operatorSource?: RestartResumeMarker["operatorSource"];
+  };
+};
+
 /**
  * An opaque token chosen by the supervisor. Shutdown stamps restart markers and run starts
  * stamp the session with the current scope; startup resumes only work from the same scope,

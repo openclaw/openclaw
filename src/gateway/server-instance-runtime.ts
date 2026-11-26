@@ -287,6 +287,7 @@ export function createGatewayInstanceRuntime(
         to: payload.to,
         accountId: payload.accountId,
         threadId: payload.threadId,
+        replyToId: payload.replyToId,
         content: payload.text,
         gatewayOwnedDelivery: true,
         bestEffort: true,

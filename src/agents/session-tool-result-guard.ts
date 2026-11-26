@@ -44,6 +44,7 @@ import type {
 } from "./sessions/session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./sessions/session-manager-append-admission.js";
 import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
+import { shellCallResultKey } from "./shell-call-receipt.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -513,9 +514,15 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      // A blocked or failed append must remain pending for transcript repair.
+      // A generated missing-result row or a discarded write cannot settle a shell call.
+      const key = shellCallResultKey(message, context.runId, id ?? undefined);
+      const finalResult = capToolResultForPersistence(persisted.message, maxToolResultChars);
+      const accepted =
+        key && finalResult.role === "toolResult" && finalResult.toolCallId === id
+          ? { ...finalResult, idempotencyKey: key }
+          : finalResult;
       return (yield* appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted.message, maxToolResultChars),
+        accepted,
         context,
         {
           invalidateSerializedPrefixCache:

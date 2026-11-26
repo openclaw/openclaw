@@ -58,6 +58,7 @@ import {
   selectLiveRestartResumeSessions,
   type SessionIdentity,
 } from "./session-restart-resume-selection.js";
+import { pauseInterruptedShellTurn } from "./session-restart-shell.js";
 import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
@@ -495,7 +496,11 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
-              operatorSource: marker.operatorSource,
+              operatorSource:
+                marker.operatorSource ??
+                (marker.sourceRunId && entry.pendingShellCalls?.runId === marker.sourceRunId
+                  ? entry.pendingShellCalls.notice?.operatorSource
+                  : undefined),
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";
@@ -531,6 +536,30 @@ async function resumeRestartStore(
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
             }
+            if (marker.sourceRunId && marker.sourceRunId === entry.pendingShellCalls?.runId) {
+              admissionStage = "shell-recovery";
+              if (
+                await pauseInterruptedShellTurn({
+                  target: { ...target, agentId, sessionKey },
+                  entry,
+                  marker,
+                  assertCurrent: () => {
+                    assertRecoveryCurrent();
+                    authority?.authority.signal?.throwIfAborted();
+                    if (
+                      authority &&
+                      "assertCurrent" in authority &&
+                      typeof authority.assertCurrent === "function"
+                    ) {
+                      authority.assertCurrent();
+                    }
+                  },
+                })
+              ) {
+                summary.record(agentId, sessionKey, "shell-outcome-unknown");
+                continue;
+              }
+            }
             admissionStage = "session-event";
             const receipt = withPluginRuntimeGatewayContextResolver(
               context.resolveGatewayContext,
@@ -550,6 +579,22 @@ async function resumeRestartStore(
             summary.record(agentId, sessionKey, "resumed");
           } catch (error) {
             signal.throwIfAborted();
+            if (admissionStage === "shell-recovery") {
+              // Preserve the marker when recording the host notice failed. New queued user
+              // input drains independently below; the interrupted turn is never dispatched.
+              throw error;
+            }
+            // A failed admission still owns its diagnostic. Only the local transcript
+            // may report the shell uncertainty when requester or workspace validation failed.
+            if (marker.sourceRunId && marker.sourceRunId === entry.pendingShellCalls?.runId) {
+              await pauseInterruptedShellTurn({
+                target: { ...target, agentId, sessionKey },
+                entry,
+                marker,
+                assertCurrent: assertRecoveryCurrent,
+                transcriptOnly: true,
+              });
+            }
             summary.record(agentId, sessionKey, "admission-failed");
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
@@ -565,7 +610,9 @@ async function resumeRestartStore(
             { ...target, agentId, sessionKey },
             (current) =>
               current.sessionId === entry.sessionId &&
-              current.lifecycleRevision === entry.lifecycleRevision
+              current.lifecycleRevision === entry.lifecycleRevision &&
+              current.resumeAfterRestart?.sourceRunId === marker.sourceRunId &&
+              current.resumeAfterRestart?.scope === marker.scope
                 ? { resumeAfterRestart: undefined }
                 : null,
             {

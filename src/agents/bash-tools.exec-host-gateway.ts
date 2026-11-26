@@ -1038,6 +1038,7 @@ export async function processGatewayAllowlist(
         await sendDeniedFollowup("approval-request-failed");
       }
     };
+    await params.admitShellDispatch?.();
     let gatewayInvocationStarted = false;
 
     void (async () => {
