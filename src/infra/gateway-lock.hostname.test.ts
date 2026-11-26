@@ -91,7 +91,7 @@ it.each(
       expect(hasVerifiedLiveSqliteOwner(databasePath)).toBe(false);
     } else {
       expect(() => hasVerifiedLiveSqliteOwner(databasePath)).toThrow(
-        "openclaw gateway recover-lock",
+        "cannot verify Gateway ownership from this process",
       );
     }
   }
@@ -104,7 +104,7 @@ it.each(
       if (row.legacy) {
         expect(acquire).toThrow();
       } else {
-        expect(acquire).toThrow("openclaw gateway recover-lock");
+        expect(acquire).toThrow("cannot verify Gateway ownership from this process");
       }
       expect(fs.readFileSync(ownerPath, "utf8")).toBe(recorded);
     } else {

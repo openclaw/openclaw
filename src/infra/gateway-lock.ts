@@ -261,23 +261,6 @@ export function readLockPayloadSync(
   }
 }
 
-function shouldReclaimGatewayLock(params: {
-  lockPath: string;
-  payload: LockPayload | null;
-  platform: NodeJS.Platform;
-}): boolean {
-  if (classifyGatewayLockProcessNamespace(params.payload, params.lockPath) === "unknown") {
-    throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
-  }
-  const ownerPid = params.payload?.pid;
-  const ownerStatus = ownerPid
-    ? resolveGatewayOwnerStatusSync(ownerPid, params.payload, params.platform, {
-        lockPath: params.lockPath,
-      })
-    : "unknown";
-  return ownerStatus === "dead";
-}
-
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(resolvedStateDir);
@@ -461,6 +444,7 @@ export async function acquireGatewayLock(
     0,
   );
   const deadlineMs = Math.min(opts.lifecycleDeadlineMs ?? Infinity, startedAt + timeoutMs);
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250);
   const startTime = readGatewayLockProcessStartTime(
     process.pid,
     opts.platform ?? process.platform,
@@ -507,8 +491,10 @@ export async function acquireGatewayLock(
     stateOwner =
       borrowedOwner ??
       (await acquireWithWait({
-        deadlineMs,
-        pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
+        // Only an explicit caller deadline ends a wait on a renewing foreign Gateway.
+        deadlineMs:
+          opts.timeoutMs === undefined ? (opts.lifecycleDeadlineMs ?? Infinity) : deadlineMs,
+        pollIntervalMs,
         now,
         sleep: opts.sleep,
         acquire: async () => {
@@ -573,19 +559,25 @@ export async function acquireGatewayLock(
             error instanceof GatewayLockNamespaceError &&
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
-            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            const age = error.heartbeatAgeMs;
+            const remaining =
+              age === undefined ? Math.min(deadlineMs, heartbeatDeadlineMs) - now() : Infinity;
             if (remaining <= 0) {
               return false;
             }
             if (!waited) {
               onWait(
-                `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
+                age === undefined
+                  ? error.message
+                  : `waiting for the previous Gateway to stop (last heartbeat ${Math.floor(age / 1000)}s ago)`,
               );
             }
             waited = true;
             return { delayMs: Math.min(5_000, remaining) };
           }
+          const remaining = deadlineMs - now();
           if (
+            remaining <= 0 ||
             role === "sqlite-maintenance" ||
             !(error instanceof GatewayStateOwnerContentionError)
           ) {
@@ -597,7 +589,7 @@ export async function acquireGatewayLock(
             );
           }
           waited = true;
-          return true;
+          return { delayMs: Math.min(pollIntervalMs, remaining) };
         },
       }));
   } catch (error) {
@@ -663,12 +655,15 @@ export async function acquireGatewayLock(
     assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
-    const shouldReclaim = ({ payload: previous }: { payload: unknown }) =>
-      shouldReclaimGatewayLock({
-        lockPath: paths.stateLockPath,
-        payload: LockPayloadSchema.safeParse(previous).data ?? null,
-        platform: opts.platform ?? process.platform,
-      });
+    const shouldReclaim = ({ payload: previous }: { payload: unknown }) => {
+      const holder = LockPayloadSchema.safeParse(previous).data;
+      return (
+        holder !== undefined &&
+        resolveGatewayOwnerStatusSync(holder.pid, holder, opts.platform ?? process.platform, {
+          lockPath: paths.stateLockPath,
+        }) === "dead"
+      );
+    };
     if (!borrowedOwner) {
       projection = createGatewayStateProjection(
         acquireFileLockSync(paths.stateLockPath, {

@@ -22,7 +22,7 @@ Every server start uses the same admission, including the temporary Gateway star
 2. **Compatibility projection** publishes the owner's PID, process start identity, role, and runtime port in the historical state-local lock. Supported older Gateways use it to detect the current process. It is metadata under the process owner, not an independent lifecycle owner.
 3. **Socket bind** binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) as an exclusive TCP listener.
 
-During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. An unverifiable owner remains protected regardless of heartbeat age and requires explicit operator recovery after its holder has stopped. It logs when waiting starts and when ownership is acquired or the wait expires.
+During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. A Gateway in another Linux PID namespace waits while the previous Gateway renews its heartbeat, even beyond the ordinary five-minute limit. Startup logs report the heartbeat age while waiting and the elapsed time when ownership is acquired.
 
 Startup's earlier shared-state discovery also waits up to five minutes for live offline maintenance to finish, including after an update or service restart. It reports the current maintenance PID and role every 30 seconds, then reports admission or failure. Cancellation still ends the wait. The wait never kills the maintenance process, reclaims its live lock, or repeats admitted discovery work; if it expires, let the recorded process finish before retrying startup.
 
@@ -37,10 +37,10 @@ Startup's earlier shared-state discovery also waits up to five minutes for live 
 - Same-host Windows ownership uses the recorded PID and absolute process start time, without requiring a PowerShell boot-time query. Older records with boot timestamps use the same process-identity checks even when those timestamps disagree. A Linux PID reused as an unrelated worker thread is no longer the original owner. If process identity cannot be confirmed, stop the recorded holder before retrying; do not remove its lock while it may still be running.
 - Linux reads the PID namespace identity from the `/proc/self/ns/pid` symlink, so PRoot environments can verify ownership even when following that link with `stat` fails. The boot identity and namespace link must remain readable; unavailable identity does not disable ownership checks.
 - Only explicitly launcher-bound CLI respawns record their launcher's PID and start identity. Detached update drivers retain independent maintenance ownership. Launcher loss requests graceful termination so Doctor can settle repairs, release leases, and restore services; the heartbeat worker supplies the same cancellation and bounded escalation if the main thread is blocked. Peers preserve custody until the owner exits, then recover its stale claim.
-- A dedicated worker renews the lock's mtime while the Gateway is busy. The worker and its parent measure the last successful renewal using the same wall-clock timestamp, including on Bun where worker-relative clocks have different origins. After a long pause or clock adjustment, the owner verifies the held inode and exact acquisition bytes before renewing. A process that retains its physical lock can resume safely; a removed or replaced lock ends ownership. Persistent renewal failures use a 60-second failure deadline. The shared heartbeat never advances beyond the oldest timestamp supplied to its locks. A stopped heartbeat never permits a foreign process to reclaim the lock automatically.
+- A dedicated worker renews the lock's mtime while the Gateway is busy. The worker and its parent measure the last successful renewal using the same wall-clock timestamp, including on Bun where worker-relative clocks have different origins. After a long pause or clock adjustment, the owner verifies the held inode and exact acquisition bytes before renewing. A process that retains its physical lock can resume safely; a removed or replaced lock ends ownership. Persistent renewal failures use a 60-second failure deadline. The shared heartbeat never advances beyond the oldest timestamp supplied to its locks.
 - Ordinary reads reuse verified process-owner and compatibility-projection custody while the local Gateway or embedded owner accepts work. Owner loss, release, cleanup, and schema-maintenance transitions invalidate the retained paths; there is no per-read expiry timer. Reads without a serving local process owner retain fresh verification. A failed initial verification refuses the affected read; the next read retries.
 - Writes, schema and maintenance transitions, lease grants, and each generic SQLite worker job retain fresh ownership checks at admission. Repeated read-access checks within that admission reuse process custody. This does not replace physical database identity, caller authorization, native-resource custody, or transaction/commit admission.
-- A missing namespace in a legacy Windows or macOS file lock (written before 2026.10.1) permits reclamation only after its heartbeat is more than 90 seconds old and native PID liveness or a recorded process start-time mismatch proves the owner stopped. It never grants local maintenance authority. On those platforms a PID names one process on the whole host. Linux records without a namespace stay unverifiable, because a container in another PID namespace can share the lock directory; recover them explicitly. Other unverifiable process namespaces never permit automatic lock reclamation or grant local maintenance authority. Ordinary access to an existing compatible database, including restart-intent writes for older Gateways, does not require reclamation. Foreign schema and offline-maintenance owners still defer access; metadata snapshots require verified live or dead ownership before choosing a live backup or offline copy.
+- A missing namespace in a legacy Windows or macOS file lock (written before 2026.10.1) permits reclamation only after its heartbeat is more than 90 seconds old and native PID liveness or a recorded process start-time mismatch proves the owner stopped. It never grants local maintenance authority. On those platforms a PID names one process on the whole host. A missing or unreadable Linux namespace stays unverifiable and does not grant maintenance authority. Ordinary access to an existing compatible database, including restart-intent writes for older Gateways, does not require reclamation. Foreign schema and offline-maintenance owners still defer access; metadata snapshots require verified live or dead ownership before choosing a live backup or offline copy.
 - Schema/bootstrap work borrows retained authority from a live local Gateway or maintenance owner. Without one, it briefly acquires the same process gate and historical projection, so a new CLI cannot migrate state beneath a supported older Gateway. Accepted work retains both until it settles, even after its root stops lending authority.
 - The compatibility projection is `$OPENCLAW_STATE_DIR/tmp/openclaw-<uid>/gateway.state.lock` (`openclaw` on platforms without a user ID). New runtimes do not create the historical per-config lock or any `.sqlite` lock companions. Discovery still reads historical config and state locks for supported older runtimes.
 - A live owner blocks another startup before either process binds its port. If the wait expires, startup reports:
@@ -74,39 +74,22 @@ On Unix, destructive cleanup retains SQLite's native exclusion until the databas
 
 Normal upgrades preserve mutual exclusion with older state-local-lock runtimes through the compatibility projection and historical-owner checks. After releasing both sidecars, destructive cleanup removes only empty directories whose filesystem identities still match the directories it owned. A replacement directory or a new owner's files remain intact, and cleanup reports an interrupted removal. The managed update path stops the old service before mutation. Binaries predating state-local ownership retain their existing supported-upgrade stop checks.
 
-## Recover a crashed foreign owner
+<a id="recover-a-crashed-foreign-owner" />
 
-A foreign or unreadable PID namespace, denied process probe, or unavailable boot
-identity cannot prove that an owner is dead. Startup reports the recorded PID,
-host/namespace, heartbeat age, and the inspection command:
+## Container restarts and replacements
 
-```bash
-openclaw gateway recover-lock
-```
+Docker and Podman's default hostname records the container ID. Restarting the
+same container can reclaim a lock from its previous PID namespace immediately.
+A replacement container, or one with a custom hostname that cannot be identified
+as the same container, waits while the previous owner is renewing its heartbeat.
+The previous owner normally renews it every 15 seconds. After more than 90
+seconds without renewal, the replacement takes over automatically. A graceful
+shutdown releases the lock without waiting for expiry.
 
-First confirm that the recorded holder has stopped through its container or
-service manager. Run the exact `openclaw gateway recover-lock --confirm
-<fingerprint>` command printed by inspection, using the same state directory and
-profile. It recovers the inspected sidecars through fs-safe's
-remove-if-unchanged protocol, clears the matching SQLite or PostgreSQL Gateway owner lease
-under exclusive state custody, and releases its temporary custody. A renewed
-heartbeat, changed payload, replaced file, or changed lease invalidates the
-confirmation; inspect again instead of removing lock files by hand. A locally
-verified live holder is always refused.
-
-PostgreSQL inspection uses the selected state family and verifies the original
-anchor, store identity and stable lease-table contract without initializing or
-migrating application schemas. Confirmation serializes with the store's native
-advisory lock, locks and compares the complete lease row, and removes only that
-unchanged owner. Inspection can read a stable lease contract from another application
-schema version, but confirmation requires this binary's current GLOBAL schema version
-before recovering any sidecars or lease. Store unavailability, lock contention and changed records fail
-visibly; they do not authorize automatic foreign-owner reclamation.
-
-Automatic recovery remains available for a verified exited PID or changed process
-start identity within the same PID namespace, and for a verified host reboot.
-Legacy Windows and macOS file locks without a namespace also require an expired heartbeat and native proof that the recorded process stopped; live or unknown owners remain refused, including during confirmed recovery. Elapsed time and missing boot observations alone are not evidence of death. See
-[Gateway recovery CLI](/cli/gateway/running#recover-an-unverifiable-state-lock).
+Do not pause a Gateway for longer than 90 seconds while starting a replacement
+on the same state directory. If the old container resumes after takeover, it can
+briefly run alongside the replacement until its next restart. SQLite's native
+locking still protects the database file.
 
 ## Operational notes
 

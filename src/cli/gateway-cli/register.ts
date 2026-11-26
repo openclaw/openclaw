@@ -24,7 +24,6 @@ import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { gatewayAction } from "./gateway-action.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
-import { addGatewayLockRecoveryCommand } from "./register-recover-lock.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
@@ -236,7 +235,6 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
-  addGatewayLockRecoveryCommand(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 
   gateway

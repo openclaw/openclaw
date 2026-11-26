@@ -37,6 +37,7 @@ import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
+  GATEWAY_OWNER_HEARTBEAT_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -394,8 +395,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Heartbeat age is diagnostic; process evidence, not age, governs recovery.
-        heartbeatMs: Math.floor(STARTUP_MIGRATION_LEASE_TTL_MS / 3),
+        heartbeatMs: GATEWAY_OWNER_HEARTBEAT_MS,
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),
