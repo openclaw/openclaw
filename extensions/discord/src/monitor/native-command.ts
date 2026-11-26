@@ -24,7 +24,12 @@ import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-e
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordAccountDmPolicy } from "../accounts.js";
-import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
+import {
+  Command,
+  type CommandInteraction,
+  type CommandOptions,
+  type DiscordCommand,
+} from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { readDiscordInteractionPolicy } from "./live-policy-interaction.js";
@@ -50,6 +55,7 @@ import type {
   DispatchDiscordCommandInteractionParams,
   DispatchDiscordCommandInteractionResult,
 } from "./native-command-dispatch.js";
+import { createDiscordGoalCommand, type DiscordGoalAction } from "./native-command-goal.js";
 import {
   createDiscordModelPickerFallbackButton as createDiscordModelPickerFallbackButtonUi,
   createDiscordModelPickerFallbackSelect as createDiscordModelPickerFallbackSelectUi,
@@ -94,11 +100,25 @@ function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandD
   };
 }
 
-export function createDiscordNativeCommand(
-  params: DiscordCommandArgContext & {
-    command: NativeCommandSpec | PluginCommandNativeCandidate;
-    ephemeralDefault: boolean;
-  },
+type NativeCommandParams = DiscordCommandArgContext & {
+  command: NativeCommandSpec | PluginCommandNativeCandidate;
+  ephemeralDefault: boolean;
+};
+
+export function createDiscordNativeCommand(params: NativeCommandParams): DiscordCommand {
+  if (params.command.name !== "goal" || "prepareDispatch" in params.command) {
+    return createDiscordNativeCommandLeaf(params);
+  }
+  return createDiscordGoalCommand({
+    command: params.command,
+    ephemeralDefault: params.ephemeralDefault,
+    createSubcommand: (action) => createDiscordNativeCommandLeaf(params, action),
+  });
+}
+
+function createDiscordNativeCommandLeaf(
+  params: NativeCommandParams,
+  goalAction?: DiscordGoalAction,
 ): Command {
   const { command, ephemeralDefault, ...ctx } = params;
   const { cfg, accountId, threadBindings } = ctx;
@@ -173,7 +193,10 @@ export function createDiscordNativeCommand(
         return;
       }
       let commandArgs: CommandArgs | undefined;
-      if (argDefinitions?.length) {
+      if (goalAction) {
+        const text = goalAction.field ? interaction.options.getString(goalAction.field) : null;
+        commandArgs = { values: { action: goalAction.name, ...(text != null ? { text } : {}) } };
+      } else if (argDefinitions?.length) {
         const values: CommandArgValues = {};
         for (const definition of argDefinitions) {
           const getter =

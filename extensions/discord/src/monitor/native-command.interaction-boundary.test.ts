@@ -113,6 +113,15 @@ function createHarness(
       ...commandContext,
       ephemeralDefault: true,
       command: {
+        name: "goal",
+        description: "Show or control the current goal.",
+        acceptsArgs: true,
+      },
+    }),
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: {
         name: "boundary-choice",
         description: "Choose",
         acceptsArgs: true,
@@ -450,6 +459,61 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
         "Failed to apply test-provider/test-model",
       );
     }
+  },
+);
+
+it.each([
+  [
+    "start",
+    "objective",
+    "Count from 1 to 3\nThen finish",
+    "/goal start Count from 1 to 3\nThen finish",
+  ],
+  ["edit", "objective", "Keep /status literal", "/goal edit Keep /status literal"],
+  ["resume", "note", "CI passed", "/goal resume CI passed"],
+  ["pause", "note", undefined, "/goal pause"],
+  ["status", undefined, undefined, "/goal status"],
+  ["clear", undefined, undefined, "/goal clear"],
+  ["complete", "note", "All checks passed", "/goal complete All checks passed"],
+  ["block", "note", "Waiting on access", "/goal block Waiting on access"],
+] as const)(
+  "routes nested /goal %s to the channel command handler",
+  async (action, field, value, prompt) => {
+    harness.dispatch.mockImplementation(async (plan) => {
+      expect(plan.ctxPayload).toMatchObject({
+        Body: prompt,
+        CommandTargetSessionKey: `agent:main:discord:channel:${CHANNEL}`,
+      });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+      };
+    });
+    await harness.client.handleInteraction(
+      createInternalInteractionPayload({
+        ...interactionFor("status", CHANNEL),
+        type: InteractionType.ApplicationCommand,
+        data: {
+          id: "goal-command",
+          name: "goal",
+          type: 1,
+          options: [
+            {
+              name: action,
+              type: ApplicationCommandOptionType.Subcommand,
+              options:
+                field && value !== undefined
+                  ? [{ name: field, type: ApplicationCommandOptionType.String, value }]
+                  : [],
+            },
+          ],
+        },
+      }),
+    );
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
   },
 );
 

@@ -444,6 +444,17 @@ channel or approve tools. Automatic continuation uses the ordinary follow-up
 queue and its delivery, cancellation, and admission rules; it does not create
 a cron schedule or bypass an existing continuation owner.
 
+### Discord native commands
+
+Discord's slash-command picker offers Goal actions as subcommands. Choose
+`/goal start` or `/goal edit`, then fill in the required **objective** field.
+`/goal status` and `/goal clear` need no extra fields. Pause, Resume, Complete,
+and Block offer an optional **note** field for context.
+
+This replaces the native command's separate `action` and `text` options after
+Discord command registration refreshes. Ordinary text `/goal` commands and
+Goal execution are unchanged.
+
 ## Troubleshooting
 
 | Message                                | Meaning                                                                                                                                             |
