@@ -2,6 +2,7 @@ import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerPreparedInput,
+  SessionHistoryWorkerRequestOptions,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
@@ -12,10 +13,11 @@ export function createSessionHistoryWorkerRequestStub(
     inputBytes: number,
     signal?: AbortSignal,
     onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+    options?: SessionHistoryWorkerRequestOptions,
   ) => Promise<SessionTranscriptWorkerValues[SessionHistoryWorkerPreparedInput["kind"]]>,
 ): SessionHistoryWorkerRequestRunner {
-  return async (prepare, inputBytes, receive, signal, onRequest) => {
-    const value = await run(prepare, inputBytes, signal, onRequest);
+  return async (prepare, inputBytes, receive, signal, onRequest, options) => {
+    const value = await run(prepare, inputBytes, signal, onRequest, options);
     // SAFETY: The fixture supplies the response to this prepared request, like the real transport.
     const paired = value as SessionTranscriptWorkerValues[ReturnType<typeof prepare>["kind"]];
     return receive(paired);

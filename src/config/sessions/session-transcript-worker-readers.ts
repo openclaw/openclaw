@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -77,6 +78,22 @@ function shareSummaryRowStrings<T extends { entries: SessionEntrySummary[] }>(va
     shareSummaryIdentityStrings(entry, sessionKey);
   }
   return value;
+}
+
+/**
+ * Gateway preflight facts can cover a whole compaction window. Charge them by the structured
+ * clone that crosses the worker boundary: the UTF-16 JSON estimate overstates them several times
+ * and builds one string as large as the window on the calling thread.
+ */
+function measurePreparedCompactionInputBytes(
+  input: Parameters<Readers["readPreparedCompaction"]>[0],
+): number {
+  const { operation } = input;
+  if (operation.kind !== "plan" || !operation.source) {
+    return JSON.stringify(input).length * 2;
+  }
+  const { source, ...plan } = operation;
+  return JSON.stringify({ ...input, operation: plan }).length * 2 + serialize(source).byteLength;
 }
 
 /** Share stateless methods; each retained read keeps its own admission runner. */
@@ -363,12 +380,14 @@ const readers: Readers & ThisType<ReaderContext> = {
       !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
-  async readPreparedCompaction(input, signal) {
+  async readPreparedCompaction(input, signal, options) {
     return await this.runRequest(
       () => ({ kind: "compaction-preparation", ...input }),
-      JSON.stringify(input).length * 2,
+      measurePreparedCompactionInputBytes(input),
       (value) => value,
       signal,
+      undefined,
+      { timeoutMs: options?.timeoutMs },
     );
   },
   readMaintenance: reader(
