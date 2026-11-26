@@ -172,6 +172,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",
+  "src/state/user-preferences.snippets.test.ts",
   "src/talk/client-voice-session-store.test.ts",
   "src/trajectory/command-export.test.ts",
   "src/trajectory/runtime-retention.sqlite.test.ts",

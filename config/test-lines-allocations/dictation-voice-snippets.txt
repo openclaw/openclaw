@@ -3,4 +3,5 @@
 # cancellation/encoding/length and real Send boundary regressions, browser journey.
 # Distinct user-requested AC01-AC11 proof boundaries; no duplicate snapshot suite.
 # Includes the full-capacity disable/export/import regression with metadata growth.
-1504
+# Includes actual authenticated dispatcher success/failure log privacy assertions.
+1631
