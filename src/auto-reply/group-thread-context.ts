@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type {
   PluginHookMessageContext,
@@ -74,7 +75,7 @@ export function finalizeGroupThreadToolReply(
       content = capture.source?.format(content) ?? content;
     }
     capture.observed = true;
-    capture.text = content?.slice(0, 4_000);
+    capture.text = content === undefined ? undefined : truncateUtf16Safe(content, 4_000);
   }
   return content;
 }

@@ -128,7 +128,7 @@ async function expectVisibleChatBlockRoutesToAccount(
   cfg: OpenClawConfig,
   accountId: string | undefined,
 ): Promise<void> {
-  const coordinator = createVisibleChatAcpCoordinator(cfg);
+  const coordinator = await createVisibleChatAcpCoordinator(cfg);
 
   await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
@@ -171,7 +171,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       },
     });
     dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "transport rewrite" }));
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       dispatcher,
     });
 
@@ -197,7 +197,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         await deliveryGate;
       },
     });
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       dispatcher,
     });
 
@@ -228,7 +228,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("strips split TTS directives from visible ACP block delivery", async () => {
     const dispatcher = createReplyDispatcher({ deliver: async () => {} });
     vi.spyOn(dispatcher, "sendBlockReply");
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       cfg: createAcpTestConfig({
         tts: { enabled: true },
       }),
@@ -250,9 +250,26 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
+  it.each([
+    { chunks: ["~", "\n~~note"], expected: "~\n~~note" },
+    { chunks: ["~", "~", "~lang"], expected: "~~~lang" },
+    { chunks: ["~", "~", "note"], expected: "~\n~\nnote" },
+  ])(
+    "preserves fence line boundaries in final ACP speech: $chunks",
+    async ({ chunks, expected }) => {
+      const coordinator = await createCoordinator({
+        cfg: createAcpTestConfig({ tts: { enabled: true } }),
+      });
+      for (const text of chunks) {
+        await coordinator.deliver("block", { text }, { skipTts: true });
+      }
+      expect(coordinator.getAccumulatedBlockTtsText()).toBe(expected);
+    },
+  );
+
   it("keeps status notices out of ACP block TTS accumulation", async () => {
     const dispatcher = createDispatcher();
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       cfg: createAcpTestConfig({
         tts: { enabled: true },
       }),
@@ -276,7 +293,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("keeps final fallback notices out of ACP transcript accumulation", async () => {
     const dispatcher = createDispatcher();
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       dispatcher,
     });
 
@@ -302,7 +319,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       kind: "tool" | "block" | "final";
       text?: string;
     }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
-    const coordinator = createCoordinator();
+    const coordinator = await createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();
@@ -321,7 +338,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     };
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       dispatcher,
     });
 
@@ -338,7 +355,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
           // Intentionally never resolve to simulate a stuck typing/reaction side effect.
         }),
     );
-    const coordinator = createCoordinator({ onReplyStart });
+    const coordinator = await createCoordinator({ onReplyStart });
 
     const delivered = await raceWithTimeoutResult(
       coordinator.deliver("final", { text: "hello" }).then(() => "delivered"),
@@ -353,7 +370,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("does not fire onReplyStart when reply lifecycle is suppressed", async () => {
     const onReplyStart = vi.fn(async () => {});
     const dispatcher = createDispatcher();
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       dispatcher,
       suppressUserDelivery: true,
       suppressReplyLifecycle: true,
@@ -384,7 +401,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("mirrors routed ACP replies into the target ACP session", async () => {
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       ctx: buildTestCtx({
         Provider: "visiblechat",
         Surface: "visiblechat",
@@ -420,7 +437,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
           }
         : { ok: true, delivered: true, messageId: "unexpected" };
     });
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       shouldRouteToOriginating: true,
       originatingChannel: "visiblechat",
       originatingTo: "channel:thread-1",
@@ -440,7 +457,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       delivered: false,
       suppressed: true,
     });
-    const coordinator = createCoordinator({
+    const coordinator = await createCoordinator({
       shouldRouteToOriginating: true,
       originatingChannel: "visiblechat",
       originatingTo: "channel:thread-1",

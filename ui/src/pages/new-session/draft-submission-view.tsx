@@ -9,7 +9,7 @@ import { participantPalette } from "../../lib/reactive/participant-palette.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "../chat/components/chat-author-avatar.ts";
 import { hasUserFileAttachments } from "../chat/components/chat-message-attachments.ts";
 import { AssistantAttachments, MessageImages } from "../chat/components/chat-message-deferred.tsx";
-import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
+import { projectMessageMedia } from "../chat/components/chat-message-media-projection.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
 import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
 import type { NewSessionBodyProps } from "./draft-body.solid.tsx";
@@ -29,9 +29,10 @@ export function NewSessionSubmission(props: {
   const json = createMemo(() => parseMarkdownJson(markdown()));
   const imageOptions = createMemo(() => ({ onOpenImage: props.onOpenImage }));
   const textOptions = { role: "user", isStreaming: false };
-  const markdownOptions = { codeBlockChrome: "none" } as const;
-  // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
-  // images have their own lightbox handler and remain interactive while pending.
+  // Keep Markdown passive until Chat mounts its interaction owners; fences use
+  // Chat's markup so their rows do not reflow at handoff. Uploaded images have
+  // their own lightbox handler and remain interactive while pending.
+  const markdownOptions = { codeBlockChrome: "none", codeBlockInteraction: "wrap" } as const;
   return (
     <div class="new-session-page__starting chat-thread-inner">
       <div

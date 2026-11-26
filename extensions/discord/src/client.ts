@@ -69,7 +69,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
     ? proxyContext.account
     : resolveDiscordAccount({ cfg: resolvedCfg, accountId: opts.accountId });
   const token = explicitToken ?? resolveToken(account);
-  const { rest, signal, timeoutMs } = opts;
+  const { rest, signal, callerSignal, timeoutMs } = opts;
   if (rest) {
     return { token, rest, account };
   }
@@ -80,6 +80,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
     rest: new RequestClient(token, {
       ...(proxyFetch ? { fetch: proxyFetch } : {}),
       ...(signal ? { signal } : {}),
+      ...(callerSignal ? { callerSignal } : {}),
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     }),
     account,
@@ -96,7 +97,12 @@ export function createDiscordClient(opts: DiscordClientOpts) {
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     verbose: opts.verbose,
-    signal: opts.signal,
+    // Caller cancellation must also stop an outer retry wait; the retry runner
+    // performs no provider I/O itself, so combining both signals is safe.
+    signal:
+      opts.signal && opts.callerSignal
+        ? AbortSignal.any([opts.signal, opts.callerSignal])
+        : (opts.callerSignal ?? opts.signal),
     isGatewayDisconnected: () => {
       const gateway = getGateway(restAccount.accountId);
       return gateway !== undefined && !gateway.isConnected;

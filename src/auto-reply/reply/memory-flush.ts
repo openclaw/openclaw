@@ -3,8 +3,9 @@ import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/interna
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { exceedsContextWindow } from "../../agents/context-pressure.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
-import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../../agents/model-selection-normalize.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
@@ -15,7 +16,7 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
+export { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 
 export function resolveProjectedPromptTokens(
   persistedPromptTokens: number | undefined,
@@ -71,7 +72,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
     contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
   };
   if (normalizedProvider === "anthropic") {
-    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // The default Anthropic trigger matches the local threshold on documented windows, so only an explicit opt-in
     // (which may target any Claude model or a raised trigger) needs local compaction held back.
     if (extraParams.anthropicServerCompaction !== true) {
       return undefined;
@@ -94,6 +95,22 @@ export function resolveResponsesServerCompactionThreshold(params: {
     },
     extraParams,
   ).threshold;
+}
+
+/**
+ * Threshold maintenance is not admission: a failed pre-turn compaction fails the
+ * turn only when the prompt cannot fit the window. Otherwise the turn proceeds.
+ */
+export function settleFailedPreflightCompaction<T>(
+  entry: T,
+  reason: string,
+  tokenCount: number | undefined,
+  contextWindowTokens: number,
+): T {
+  if (exceedsContextWindow(tokenCount, contextWindowTokens)) {
+    throw new Error(`Preflight compaction required but failed: ${reason}`);
+  }
+  return entry;
 }
 
 export function shouldRunPreflightCompaction(params: {

@@ -5,6 +5,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { normalizeContextUsage } from "../agents/usage.js";
 import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
 import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
@@ -348,9 +349,12 @@ function sanitizeNumericMetadata(
     }
   }
   if (fields === USAGE_FIELDS) {
-    const state = readObjectRecord(record.usageReport)?.state;
-    if (state === "available" || state === "unavailable") {
-      projected.usageReport = { state };
+    // Availability markers: whether usage, and its cache split, were reported at all.
+    for (const key of ["usageReport", "cacheTelemetry"] as const) {
+      const state = readObjectRecord(record[key])?.state;
+      if (state === "available" || state === "unavailable") {
+        projected[key] = { state };
+      }
     }
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {
@@ -457,6 +461,18 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
+    // Keep only the direct channel/account provenance needed for native-reference
+    // display. Never expose the requester's profile, grants, or endpoint bindings.
+    const origin = decodeRequesterOrigin(projectedMeta.requesterOrigin);
+    const transport = readRecord(projectedMeta.transport);
+    if (
+      entry.role === "user" &&
+      origin?.accountId &&
+      origin.messageProvider &&
+      transport?.channel === origin.messageProvider
+    ) {
+      projectedMeta.transport = { ...transport, accountId: origin.accountId };
+    }
     // Operational requester custody is independent of redacted display identity.
     delete projectedMeta.requesterOrigin;
     delete projectedMeta.chatInputRecovery;

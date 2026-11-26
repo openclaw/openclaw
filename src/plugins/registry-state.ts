@@ -34,8 +34,9 @@ function mergeModelCatalogHooks(
 }
 
 export type PluginTypedHookPolicy = {
-  allowPromptInjection?: boolean;
+  allowPromptModification?: boolean;
   allowConversationAccess?: boolean;
+  allowModelRequest?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
 };
@@ -47,6 +48,8 @@ type PluginRegistrationCapabilities = {
   setupRuntimeHandlers: boolean;
   /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
+  /** A passive memory backend may register only its memory provider runtime. */
+  memoryBackend: boolean;
 };
 
 /** Decode the public mode once so domain registrars do not repeat string checks. */
@@ -58,6 +61,7 @@ export function resolvePluginRegistrationCapabilities(
     capabilityHandlers,
     setupRuntimeHandlers: mode === "setup-runtime",
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
+    memoryBackend: mode === "memory-backend",
   };
 }
 

@@ -56,24 +56,25 @@ export class TranscriptReportNavigation extends SessionEntryNavigation<ReportNav
     leafEntryId: string | null,
     customType: string,
     readEvent: (seq: number) => Record<string, unknown> | undefined,
-  ): Record<string, unknown>[] | undefined {
+  ): Iterable<Record<string, unknown>> | undefined {
     if (leafEntryId === null) {
       return [];
     }
     if (!this.byId.has(leafEntryId)) {
       return undefined;
     }
-    const events: Record<string, unknown>[] = [];
-    for (const entry of this.getBranch(leafEntryId)) {
-      if (entry.type !== "custom") {
-        continue;
+    const branch = this.getBranch(leafEntryId);
+    return (function* () {
+      for (const entry of branch) {
+        if (entry.type !== "custom") {
+          continue;
+        }
+        const event = readEvent(entry.seq);
+        if (event?.customType === customType) {
+          yield event;
+        }
       }
-      const event = readEvent(entry.seq);
-      if (event?.customType === customType) {
-        events.push(event);
-      }
-    }
-    return events;
+    })();
   }
 }
 

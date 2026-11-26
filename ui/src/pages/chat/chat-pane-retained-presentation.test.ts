@@ -463,6 +463,10 @@ describe("chat pane retained presentation lifecycle", () => {
       try {
         await pane.updateComplete;
         await vi.dynamicImportSettled();
+        for (let frame = 0; frame < 2; frame += 1) {
+          vi.advanceTimersToNextFrame();
+          flush();
+        }
         const state = pane.state;
         const stop = vi.fn();
         const release = vi.fn();

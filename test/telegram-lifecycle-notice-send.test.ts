@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js";
 import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
 import type { ChannelHeartbeatAdapter } from "../src/channels/plugins/types.adapters.js";
+import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createGatewayInstanceRuntime } from "../src/gateway/server-instance-runtime.js";
 import type { GatewayLifecycleRuntime } from "../src/gateway/server-instance-runtime.types.js";
 import { createContext } from "../src/gateway/server-plugin-in-process-dispatch.test-support.js";
+import { deliverOutboundPayloads } from "../src/infra/outbound/deliver.js";
+import { drainPendingDeliveriesCore } from "../src/infra/outbound/delivery-queue-recovery.js";
+import { loadUnfinishedDeliveries } from "../src/infra/outbound/delivery-queue-storage.js";
+import { createPendingFinalFixture } from "../src/infra/outbound/delivery-queue.test-helpers.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -288,3 +294,121 @@ it.each([
     }
   });
 });
+
+// A lost Bot API response must not replay the answer; recovery still owes the chat a notice.
+it.each([false, true])(
+  "delivers the owed notice when recovery stops a final (proven unsent: %s)",
+  async (provenUnsent) => {
+    await withOpenClawTestState({ prefix: "telegram-recovery-notice-" }, async (state) => {
+      const answer = "Completed answer whose delivery cannot be confirmed";
+      const visible: string[] = [];
+      let answerAttempts = 0;
+      const api = await startJsonLoopback((body, response) => {
+        const payload: TelegramPayload = JSON.parse(body);
+        if (payload.text === answer) {
+          answerAttempts++;
+          if (provenUnsent) {
+            replyJson(
+              response,
+              { ok: false, error_code: 400, description: "Bad Request: message thread not found" },
+              400,
+            );
+          } else {
+            response.destroy();
+          }
+          return;
+        }
+        visible.push(payload.text ?? "");
+        replyJson(response, {
+          ok: true,
+          result: {
+            message_id: 100 + visible.length,
+            date: 1,
+            chat: { id: 123, type: "private" },
+            text: payload.text,
+          },
+        });
+      });
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "123456:restart-notice-fixture",
+            apiRoot: api.url,
+          },
+        },
+      };
+      const { runtime, restore, deliveryContext } = createLifecycle("notice", cfg);
+      const sessionKey = "agent:main:telegram:direct:123";
+      const storePath = path.join(state.stateDir, "sessions.json");
+      const { completion, entry } = createPendingFinalFixture(
+        storePath,
+        "restart-final",
+        sessionKey,
+        {
+          text: answer,
+          context: deliveryContext,
+          now: Date.now(),
+        },
+      );
+      try {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          {
+            ...entry,
+            delivery: {
+              kind: "external",
+              route: { channel: "telegram", accountId: "default" },
+              context: deliveryContext,
+              origin: {},
+            },
+          },
+        );
+        await expect(
+          deliverOutboundPayloads({
+            cfg,
+            channel: "telegram",
+            to: "123",
+            accountId: "default",
+            payloads: [{ text: answer }],
+            queuePolicy: "required",
+            deliveryIntentId: completion.deliveryId,
+            deliveryCompletion: completion,
+            maxRetries: 1,
+          }),
+        ).rejects.toThrow();
+        expect(answerAttempts).toBe(1);
+        expect(visible).toEqual([]);
+        expect((await loadUnfinishedDeliveries(state.stateDir))[0]?.recoveryState).toBe(
+          provenUnsent ? undefined : "unknown_after_send",
+        );
+        const log = { info() {}, warn() {}, error() {} };
+        const recover = () =>
+          drainPendingDeliveriesCore({
+            cfg,
+            stateDir: state.stateDir,
+            log,
+            deliver: deliverOutboundPayloads,
+            drainKey: "telegram-restart-notice",
+            logLabel: "recovery",
+            selectEntry: () => ({ match: true, bypassBackoff: true }),
+          });
+        await recover();
+        expect(answerAttempts).toBe(1);
+        expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
+        expect(visible).toEqual([
+          expect.stringContaining("I couldn’t confirm whether my previous reply"),
+        ]);
+        expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+          "acknowledged",
+        );
+        await recover();
+        expect(visible).toHaveLength(1);
+        expect(answerAttempts).toBe(1);
+      } finally {
+        runtime.close();
+        restore();
+        await api.close();
+      }
+    });
+  },
+);

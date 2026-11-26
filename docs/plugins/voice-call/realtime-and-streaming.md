@@ -30,7 +30,7 @@ Runtime behavior:
 - On models that support function tools, Voice Call exposes the built-in `openclaw_end_call` realtime tool. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. GPT-Live uses native delegation to the same call-owned agent consult instead. The realtime model can delegate when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
-- `realtime.idleHangupMs` optionally ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running and is disabled when unset.
+- `realtime.idleHangupMs` ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running. When unset, outbound calls use 30 seconds and inbound calls have no speech-idle timeout.
 - On hosts with the shared context resolver, Voice Call always tells the realtime model that it speaks for an OpenClaw agent that may have other sessions and work. `realtime.agentContext.enabled` is default-off and controls the additional configured identity and profile-file context. Supported older hosts retain the [legacy context behavior](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability cannot return session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
@@ -46,6 +46,14 @@ Host speech detection pauses local interruption while an agent consult is in
 flight. Once an active-call helper accepts a hang-up, cancelling the consult
 does not interrupt that control action. The helper still checks that its bound
 call is active before acting.
+
+Caller transcripts during carrier playback and its 400 ms echo tail require
+detected caller speech or a provider barge-in. This prevents unconfirmed echo
+from becoming a new host caller turn. During opening-greeting playback, caller
+audio and transcripts are withheld and provider barge-in cannot clear the greeting.
+Normal interruption resumes after the greeting response ends and carrier playback
+drains. Before greeting audio starts and on later turns, audio reaches the realtime
+provider, which owns its own speech detection and responses.
 
 ### GPT-Live
 
@@ -210,9 +218,10 @@ OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
 
 Set `realtime.idleHangupMs` to end a connected call after that much speech
 silence. Caller speech, caller transcripts, assistant transcript/audio, and an
-in-flight agent consult reset or pause this timer. Unset leaves this behavior
-disabled. Hold music is not speech, so choose a value that fits the expected
-hold time.
+in-flight agent consult reset or pause this timer. When unset, outbound calls
+end after 30 seconds of speech inactivity, including silent pickups and silence
+after voicemail greetings. Inbound calls have no default speech-idle timeout.
+Hold music is not speech, so choose a value that fits the expected hold time.
 
 If the realtime provider ends its session first, OpenClaw also ends the carrier
 call, including when the provider reports a normal close. This prevents a silent

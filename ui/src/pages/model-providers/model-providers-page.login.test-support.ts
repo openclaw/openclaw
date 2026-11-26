@@ -109,13 +109,13 @@ async function clickEnabled(page: ModelProvidersPageTestElement, selector: strin
   await page.updateComplete;
 }
 
+/** The page lists every provider; this waits until its catalog rows can start a connection. */
 export async function openPicker(page: ModelProvidersPageTestElement) {
   await waitForProviders(page);
-  await clickEnabled(page, "[data-models-connect]");
 }
 
 export async function selectProvider(page: ModelProvidersPageTestElement, provider: string) {
-  await clickEnabled(page, `[data-models-login-provider="${provider}"]`);
+  await clickEnabled(page, `[data-models-catalog-provider="${provider}"] button`);
 }
 
 export async function chooseLogin(page: ModelProvidersPageTestElement, label = "Example API key") {

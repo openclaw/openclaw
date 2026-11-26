@@ -4,7 +4,7 @@ import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-c
 import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
 import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +12,7 @@ import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physic
 import { recordSessionRowSelection } from "../infra/gateway-work-metrics.js";
 import { getMainThreadTaskName } from "../infra/main-thread-stall.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -80,7 +81,7 @@ export async function readSessionRowLookup(
           ),
       );
     },
-    projectionLane,
+    sessionStoreLane,
   );
 }
 
@@ -260,6 +261,21 @@ export function prepareSessionRowScopes(
 ) {
   const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
+  // Resident stores are keyed by canonical filename. Admission may name the same file
+  // another way (a different case on a case-insensitive volume), so resolve each physical
+  // target once here; row queries then compare the prepared strings only.
+  const residentTargets = new Map<string, string>();
+  const residentTarget = (pathname: string) => {
+    let target = residentTargets.get(pathname);
+    if (target === undefined) {
+      target =
+        residentPaths.get(pathname) ??
+        residentPaths.get(resolveDatabasePathKey(pathname)) ??
+        pathname;
+      residentTargets.set(pathname, target);
+    }
+    return target;
+  };
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const admittedIdentity = (pathname: string) => {
     const identity = getSqliteDatabaseAdmissionIdentityForPath(pathname);
@@ -302,11 +318,11 @@ export function prepareSessionRowScopes(
         const agentId = identity.slice(0, separator);
         const locator = path.resolve(identity.slice(separator + 1));
         const owners = aliases.get(locator) ?? new Map<string, string>();
-        owners.set(agentId, residentPath(physical.storePath));
+        owners.set(agentId, residentTarget(physical.storePath));
         aliases.set(locator, owners);
       }
       const paths = resolved.durableTargets.map((target) =>
-        residentPath(
+        residentTarget(
           expectDefined(
             resolved.physicalTargets.get(`${target.agentId}\0${target.storePath}`),
             "physical source",
@@ -314,6 +330,7 @@ export function prepareSessionRowScopes(
         ),
       );
       return {
+        targets: resolved.durableTargets,
         paths: new Map(paths.map((pathname, index) => [pathname, index])),
         path: paths.length === 1 ? (filenames.get(paths[0]!) ?? paths[0]!) : "(multiple)",
         configuredAgentIds: resolved.configuredAgentIds,
@@ -352,6 +369,7 @@ export function prepareSessionRowScopes(
       : undefined;
     const scope = requestedAgentId
       ? (agents.get(requestedAgentId) ?? {
+          targets: [],
           paths: new Map<string, number>(),
           path: "(multiple)",
           agentId: requestedAgentId,

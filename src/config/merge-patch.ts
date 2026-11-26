@@ -41,11 +41,7 @@ export function createMergePatch(
       const updates: PlainObject[] = [];
       for (const entry of targetValue) {
         const baseEntry = baseById.get(entry.id);
-        const update = createMergePatch(
-          baseEntry,
-          applyMergePatch(baseEntry, entry, options),
-          options,
-        );
+        const update = createMergePatch(baseEntry, entry, options);
         if (isRecord(update) && Object.keys(update).length > 0) {
           updates.push({ ...update, id: entry.id });
         }

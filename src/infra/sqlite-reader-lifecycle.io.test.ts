@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { observeSqliteReaderCounters, type SqliteReaderCounter } from "./sqlite-reader-metrics.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
@@ -15,11 +16,22 @@ vi.mock("node:worker_threads", async (original) => ({
 }));
 const resources = sqliteMaintenanceFixture();
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const counters = new Map<string, SqliteReaderCounter>();
+let stopCounters: () => unknown;
 beforeEach(() => {
   Object.defineProperty(process, "platform", { value: "linux" });
+  vi.spyOn(process, "argv", "get").mockReturnValue([
+    "node",
+    "/synthetic/src/config/sessions/session-transcript.worker.ts",
+  ]);
+  vi.spyOn(fs, "readlinkSync").mockReturnValue("1234/task/5678");
   warn.mockReset();
+  stopCounters = observeSqliteReaderCounters((counter) => counters.set(counter.operation, counter));
 });
-afterEach(() => Object.defineProperty(process, "platform", platform));
+afterEach(() => {
+  stopCounters();
+  Object.defineProperty(process, "platform", platform);
+});
 
 function procfs(...samples: Array<number | string | Error>) {
   const read = fs.readFileSync;
@@ -40,6 +52,7 @@ function procfs(...samples: Array<number | string | Error>) {
 it.each(["sync", "async", "rejected"])(
   "attributes one heavy %s operation across nested reads",
   async (kind) => {
+    const previous = counters.get("sessions.history.summary")?.values.slice() ?? [0n, 0n];
     const db = resources.entries();
     const read = procfs(4096, 64 * 1024 * 1024 + 4096);
     const context = { sessionId: "synthetic", rows: 0 };
@@ -80,6 +93,8 @@ it.each(["sync", "async", "rejected"])(
       "heavy SQLite reader operation",
       expect.objectContaining({
         operation: "sessions.history.summary",
+        workerScript: "session-transcript.worker.js",
+        nativeThreadId: 5678,
         readBytes: 64 * 1024 * 1024,
         context: {
           ...context,
@@ -89,8 +104,30 @@ it.each(["sync", "async", "rejected"])(
       }),
     );
     expect(read.mock.calls.filter(([file]) => file === "/proc/thread-self/io")).toHaveLength(2);
+    expect([...counters.get("sessions.history.summary")!.values]).toEqual([
+      previous[0]! + 1n,
+      previous[1]! + BigInt(64 * 1024 * 1024),
+    ]);
+    expect(counters.has("nested")).toBe(false);
   },
 );
+
+it("keeps heavy-read diagnostics when procfs identity is unavailable without exposing paths", () => {
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "/private/custom-worker.js"]);
+  vi.spyOn(fs, "readlinkSync").mockImplementation(() => {
+    throw new Error("procfs unavailable");
+  });
+  procfs(0, 64 * 1024 * 1024);
+  withSqliteReaderOwner({ operation: "synthetic", ownerKind: "worker" }, () => {}, undefined, {
+    warn,
+  });
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "heavy SQLite reader operation",
+    expect.objectContaining({ workerScript: "other", readBytes: 64 * 1024 * 1024 }),
+  );
+  expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("nativeThreadId");
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("/private/");
+});
 
 it.each([
   [0, 64 * 1024 * 1024 - 1],
@@ -99,6 +136,7 @@ it.each([
   [new Error("EACCES"), 999999999],
   [0, new Error("ENOENT")],
 ])("keeps small or unavailable counters silent (%s, %s)", (before, after) => {
+  const previous = counters.get("small")?.values.slice() ?? [0n, 0n];
   procfs(before, after);
   expect(
     withSqliteReaderOwner({ operation: "small", ownerKind: "worker" }, () => 42, undefined, {
@@ -106,6 +144,11 @@ it.each([
     }),
   ).toBe(42);
   expect(warn).not.toHaveBeenCalled();
+  const measured = typeof before === "number" && typeof after === "number" && after >= before;
+  expect([...(counters.get("small")?.values ?? [0n, 0n])]).toEqual([
+    previous[0]! + (measured ? 1n : 0n),
+    previous[1]! + (measured ? BigInt(after - before) : 0n),
+  ]);
 });
 
 it("does not read procfs off Linux or for main-thread owners", () => {
@@ -134,4 +177,22 @@ it("preserves the synchronous failure when the heavy-read sink throws", () => {
       { warn },
     ),
   ).toThrow("original failure");
+});
+
+it("bounds operation labels without dropping overflow reads", () => {
+  const total = () =>
+    [...counters.values()].reduce((sum, counter) => sum + Number(counter.values[0]), 0);
+  const before = total();
+  procfs(...Array.from({ length: 600 }, (_, index) => index * 4096));
+  for (let index = 0; index < 300; index++) {
+    withSqliteReaderOwner(
+      { operation: `synthetic.${index}`, ownerKind: "worker" },
+      () => 42,
+      undefined,
+      { warn },
+    );
+  }
+  expect(counters.size).toBeLessThanOrEqual(257);
+  expect(total() - before).toBe(300);
+  expect(counters.get("other")!.values[0]).toBeGreaterThan(0n);
 });

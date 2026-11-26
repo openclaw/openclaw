@@ -70,7 +70,7 @@ describe("GitHub OAuth client", () => {
   });
 
   it("re-probes a remotely revoked token after expiry without caching its rejection", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(2_000);
     const probe = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ id: 202, login: "revoked-user" }))
@@ -85,7 +85,7 @@ describe("GitHub OAuth client", () => {
   it("serves stale display facts while strict verification waits for revocation", async ({
     signal,
   }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const refresh = createDeferredCore<Response>();
     const probe = vi
       .spyOn(globalThis, "fetch")

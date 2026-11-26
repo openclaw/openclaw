@@ -22,7 +22,7 @@ import {
 } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import type { HookPolicyEntry, HookSource } from "./types.js";
-import { prepareWorkspaceHookEntries, type HookSourceFact } from "./workspace.js";
+import type { HookSourceFact } from "./workspace.js";
 
 function buildImportUrl(handlerPath: string, source: HookSource): string {
   const base = pathToFileURL(handlerPath).href;
@@ -84,7 +84,7 @@ export async function prepareInternalHooks(
   const shouldLoadHook = (entry: HookPolicyEntry) =>
     isHookLoadable({ entry, config: cfg, names: selection.names });
   const discovery = selection.configured
-    ? prepareWorkspaceHookEntries(workspaceDir, {
+    ? (await import("./workspace.js")).prepareWorkspaceHookEntries(workspaceDir, {
         config: cfg,
         ...(opts?.failureMode !== "best-effort"
           ? {

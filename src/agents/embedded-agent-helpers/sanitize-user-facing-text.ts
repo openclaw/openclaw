@@ -37,7 +37,6 @@ import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   stripInternalRuntimeContext,
 } from "../internal-runtime-context.js";
 
@@ -481,12 +480,8 @@ export function userFacingTextFilters(
         }
       : {
           transform: stripInternalRuntimeContext,
-          activationTokens: [
-            INTERNAL_RUNTIME_CONTEXT_BEGIN,
-            INTERNAL_RUNTIME_CONTEXT_END,
-            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-            RUNTIME_CONTEXT_HEADER,
-          ],
+          // The canonical preflight also recognizes reflowed whitespace in carrier notices.
+          create: () => createConditionalTextProjector(stripInternalRuntimeContext, () => true),
         },
     {
       transform: stripInboundMetadata,

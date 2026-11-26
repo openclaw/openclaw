@@ -38,9 +38,9 @@ public enum ChatTranscriptExporter {
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let stem = self.sanitizedFileStem(title)
             ?? self.sanitizedFileStem(key)
-            ?? "chat-transcript"
+            ?? "chat"
         let boundedStem = self.boundedFileStem(stem)
-        return "\(boundedStem.isEmpty ? "chat-transcript" : boundedStem).md"
+        return "\(boundedStem.isEmpty ? "chat" : boundedStem).md"
     }
 
     private static func sanitizedFileStem(_ value: String) -> String? {
@@ -74,7 +74,7 @@ public enum ChatTranscriptExporter {
             return title.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
         }
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        return key.isEmpty ? "Chat transcript" : key.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
+        return key.isEmpty ? "Chat" : key.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
     }
 
     private static func body(for message: OpenClawChatMessage) -> String? {

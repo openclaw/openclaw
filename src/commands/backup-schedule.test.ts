@@ -85,6 +85,7 @@ describe("scheduled backups", () => {
         payload: {
           kind: "command",
           argv: ["openclaw", "backup", "git", "create", "--repository", repository, "--all"],
+          timeoutSeconds: 86_400,
         },
       }),
     );
@@ -152,6 +153,7 @@ describe("scheduled backups", () => {
             "--push",
             "--exclude-secrets",
           ],
+          timeoutSeconds: 86_400,
         },
       }),
     );
@@ -226,6 +228,7 @@ describe("scheduled backups", () => {
           "--keep-monthly",
           "0",
         ],
+        timeoutSeconds: 86_400,
       });
       expect(
         summarizeBackupSchedules([
@@ -444,7 +447,7 @@ describe("scheduled backups", () => {
         await runCli([...enableArgs, "--every", "6h"]);
         expect(await cron.readJob(managed.id)).toMatchObject({
           schedule: { everyMs: 21_600_000 },
-          payload: { argv: expect.arrayContaining(["--global"]) },
+          payload: { argv: expect.arrayContaining(["--global"]), timeoutSeconds: 86_400 },
         });
         if (renamed) {
           await runCli(["cron", "edit", managed.id, "--name", "Nightly operator backup"]);

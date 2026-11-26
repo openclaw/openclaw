@@ -1,5 +1,7 @@
+import { stripVTControlCharacters } from "node:util";
 import { createPluginStateKeyedStoreV2ForTests as openStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import {
   closeOpenClawStateDatabaseAsync,
   observeHostDataSql,
@@ -28,6 +30,7 @@ const record: ReplyContext = {
 };
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    setLoggerOverride(null);
     vi.restoreAllMocks();
     resetSignalReplyAuthorsForTests();
     await closeOpenClawStateDatabaseAsync();
@@ -52,30 +55,55 @@ function installRuntime() {
         openStore<T>("signal", { ...options, env }, { assertCurrent() {} }),
     },
   });
-  const logger = runtime.logging.getChildLogger({});
-  vi.spyOn(runtime.logging, "getChildLogger").mockReturnValue(logger);
   vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
-  return { runtime, logger };
+  return runtime;
 }
 
-it.each(["lookup", "register"] as const)("retains memory after %s fails", async (stage) => {
-  const { runtime, logger } = installRuntime();
-  const store = runtime.state.openKeyedStoreV2({ namespace: "failures", maxEntries: 10 });
-  vi.spyOn(runtime.state, "openKeyedStoreV2").mockReturnValue(store);
-  vi.spyOn(store, "lookup").mockResolvedValue(record);
-  vi.spyOn(store, stage).mockRejectedValue(new Error("storage unavailable"));
-  await register();
+function watchConsoleWarnings() {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  // Styling adds color codes when the runner forces color, so compare visible text only.
+  return { lines: () => stripVTControlCharacters(warn.mock.calls.flat().map(String).join("\n")) };
+}
+
+it.each(["lookup", "register"] as const)(
+  "prints %s failures on the console and keeps memory",
+  async (stage) => {
+    const runtime = installRuntime();
+    const store = runtime.state.openKeyedStoreV2({ namespace: "failures", maxEntries: 10 });
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockReturnValue(store);
+    vi.spyOn(store, "lookup").mockResolvedValue(record);
+    vi.spyOn(store, stage).mockRejectedValue(new Error("storage unavailable"));
+    const consoleWarn = watchConsoleWarnings();
+    await register();
+    await expect(resolveContext(reply)).resolves.toEqual({
+      author: input.author,
+      body: stage === "lookup" ? "new" : "stored",
+    });
+    expect(consoleWarn.lines()).toMatch(
+      /\[signal\] persistent reply author state failed error=.*storage unavailable/su,
+    );
+  },
+);
+
+it("prints an unavailable reply author store on the console", async () => {
+  const runtime = installRuntime();
+  vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(() => {
+    throw new Error("state database is locked");
+  });
+  const consoleWarn = watchConsoleWarnings();
+  await register({ body: "memory fallback" });
   await expect(resolveContext(reply)).resolves.toEqual({
     author: input.author,
-    body: stage === "lookup" ? "new" : "stored",
+    body: "memory fallback",
   });
-  expect(logger.warn).toHaveBeenCalledWith("Signal persistent reply author state failed", {
-    error: "Error: storage unavailable",
-  });
+  expect(consoleWarn.lines()).toMatch(
+    /\[signal\] persistent reply author state unavailable error=.*locked/su,
+  );
 });
 
 it("persists and reloads merged reply context with zero parent-thread SQL", async () => {
-  const { runtime } = installRuntime();
+  const runtime = installRuntime();
   const { calls: counters } = observeHostDataSql();
   const failOpen = () => {
     throw new Error("store temporarily unavailable");

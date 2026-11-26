@@ -1,4 +1,5 @@
-import { ChildProcess, type SpawnOptions } from "node:child_process";
+import type { SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -104,9 +105,10 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
       databaseExistsAtAdmission.push(
         fsSync.existsSync(resolveOpenClawStateSqlitePath(options.env)),
       );
-      const child = new ChildProcess();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
       const exitCode = params.exitCode ?? (params.verdict.verdict === "admit" ? 0 : 3);
       queueMicrotask(() => {
         child.stdout?.emit("data", JSON.stringify(params.verdict));

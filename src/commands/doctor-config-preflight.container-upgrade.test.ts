@@ -13,8 +13,6 @@ import {
 } from "../cli/update-cli/update-command-migrate.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import * as doctorHealth from "../flows/doctor-health.js";
-import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
-import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -24,6 +22,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentV19Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -35,7 +34,6 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import * as configFlow from "./doctor-config-flow.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -78,10 +76,7 @@ async function withContainerState(run: (stateDir: string, workspace: string) => 
 function seedSchema19Agent(stateDir: string, unsafe = false): string {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-  const schema = fs.readFileSync(
-    new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
-    "utf8",
-  );
+  const schema = agentV19Schema();
   expect(createHash("sha256").update(schema).digest("hex")).toBe(
     "fe93217454642e911608f81afc53c9fb3bb7c20cc32bc73f8f6eeaaf232b91b8",
   );
@@ -115,16 +110,11 @@ function seedSchema19Agent(stateDir: string, unsafe = false): string {
 }
 
 describe("container image replacement Doctor repair and startup readiness", () => {
-  it("preserves schema 19 at startup, then backs it up and repairs it through Doctor", async () => {
+  it("backs up and repairs schema 19 through Doctor before container startup", async () => {
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);
-      const original = fs.readFileSync(databasePath);
       await withAgentDatabaseStartupAdmission(
         async () => {
-          await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
-            code: 78,
-          });
-          expect(fs.readFileSync(databasePath)).toEqual(original);
           await repairContainerState();
           await runStartupConfigPreflight({ gateway: true });
           expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
@@ -167,7 +157,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       await cleanupSessionStateForTest({ stateDir });
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
-      const protectedBackups = inspect();
+      const protectedBackups = await inspect();
       expect(protectedBackups.artifacts).toHaveLength(2);
       expect(
         protectedBackups.artifacts.every(
@@ -191,17 +181,21 @@ describe("container image replacement Doctor repair and startup readiness", () =
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         await updateMigrateCommand(backupRoot);
         await cleanupSessionStateForTest({ stateDir });
+        const pending = await inspect();
+        const originals = pending.artifacts.filter((item) => item.path !== legacyBackup);
+        expect(originals).toHaveLength(3);
         expect(
-          inspect().artifacts.filter(
+          pending.artifacts.filter(
             (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
           ),
         ).toHaveLength(0);
         await updateFinishCommand(backupRoot);
+        expect(originals.filter((item) => fs.existsSync(item.path))).toEqual([]);
       });
       clock.mockRestore();
       await cleanupSessionStateForTest({ stateDir });
-      const preview = inspect();
-      expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);
+      const preview = await inspect();
+      expect(preview.artifacts).toHaveLength(1);
       expect(preview.artifacts).toContainEqual(
         expect.objectContaining({
           path: legacyBackup,
@@ -209,20 +203,12 @@ describe("container image replacement Doctor repair and startup readiness", () =
           reason: "unmanifested-recovery-original",
         }),
       );
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview,
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      });
-      expect(retired.status, JSON.stringify(retired, null, 2)).toBe("complete");
-      expect(retired.totals.removedFiles).toBe(3);
       expect(fs.existsSync(legacyBackup)).toBe(true);
       expect(fs.existsSync(databasePath)).toBe(true);
     });
   });
 
-  it("leaves legacy workspace and audit state untouched until Doctor repairs them", async () => {
+  it("imports legacy workspace and audit state at startup and preserves recovery originals", async () => {
     await withContainerState(async (stateDir, workspace) => {
       closeOpenClawStateDatabaseForTest();
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
@@ -234,22 +220,17 @@ describe("container image replacement Doctor repair and startup readiness", () =
       const legacyPath = path.join(workspace, "openclaw-workspace-state.json");
       const setup = { version: 1, setupCompletedAt: "2026-07-02T00:00:00.000Z" };
       fs.writeFileSync(legacyPath, JSON.stringify(setup));
-      const original = fs.readFileSync(databasePath);
-      await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
-        code: 78,
-      });
-      expect(fs.readFileSync(databasePath)).toEqual(original);
       expect(fs.readFileSync(legacyPath, "utf8")).toBe(JSON.stringify(setup));
-
-      await repairContainerState();
       await runStartupConfigPreflight({ gateway: true });
       expect((await readWorkspaceStateSnapshot(workspace)).setup).toEqual(setup);
       expect(fs.existsSync(legacyPath)).toBe(false);
-      expect(
-        fs
-          .readdirSync(workspace)
-          .some((name) => name.startsWith("openclaw-workspace-state.json.migrated.")),
-      ).toBe(true);
+      const archives = fs
+        .readdirSync(workspace)
+        .filter((name) => name.startsWith("openclaw-workspace-state.json.migrated."));
+      expect(archives).toHaveLength(1);
+      expect(fs.readFileSync(path.join(workspace, archives[0]!), "utf8")).toBe(
+        JSON.stringify(setup),
+      );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
         .filter(
@@ -259,20 +240,8 @@ describe("container image replacement Doctor repair and startup readiness", () =
       const fullBackups = backups.filter((name) => !name.endsWith(".scoped.bak"));
       const credentialBackups = backups.filter((name) => name.endsWith(".scoped.bak"));
       expect(fullBackups).toHaveLength(1);
-      expect(credentialBackups).toHaveLength(1);
-      const scope = inspectScopedMigrationSnapshot(
-        path.join(path.dirname(databasePath), credentialBackups[0]!),
-      );
-      expect(scope.sourcePath).toBe(fs.realpathSync(databasePath));
-      expect(scope.userVersion).toBe(1);
-      expect(scope.tables.map((table) => table.name)).toEqual([
-        "device_identities",
-        "device_auth_tokens",
-        "gateway_origin_device_tokens",
-        "exec_approvals_config",
-        "sqlite_stat1",
-        "sqlite_stat4",
-      ]);
+      // The original full image already covers credential retirement.
+      expect(credentialBackups).toEqual([]);
       const before = new DatabaseSync(path.join(path.dirname(databasePath), fullBackups[0]!), {
         readOnly: true,
       });
@@ -298,7 +267,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
     });
   });
 
-  it("isolates a divergent auxiliary database while migrating and admitting the default agent", async () => {
+  it("refuses a divergent required auxiliary database after Doctor repairs the default agent", async () => {
     await withContainerState(async (stateDir, workspace) => {
       await writeOpenClawConfig(path.dirname(stateDir), {
         gateway: { mode: "local" },
@@ -352,20 +321,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
       fs.writeFileSync(retiredPath, retiredBytes);
       await withAgentDatabaseStartupAdmission(
         async () => {
-          await runStartupConfigPreflight({ gateway: true });
-          expect(listAgentDatabaseAdmissionRefusals()).toEqual([
-            expect.objectContaining({
-              agentId: "auxiliary",
-              paths: [auxiliaryPath],
-              embeddedOwnerId: "main",
-              code: "agent-database-ownership-mismatch",
-            }),
-          ]);
-          expect(readStartupMigrationWarning()).toContain("belongs to agent main");
-          expect(readStartupMigrationWarning()).toContain(
-            "Preserve and inspect this database before accepting a fresh agent.",
-          );
-          expect(readStartupMigrationWarning()).toContain(retiredPath);
+          await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
+            code: 78,
+            message: expect.stringContaining("belongs to agent main; requested agent auxiliary"),
+          });
         },
         { deferInspections: false },
       );

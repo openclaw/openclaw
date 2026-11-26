@@ -19,6 +19,7 @@ import { isAuthModeAllowedForModel } from "../model-auth-policy.js";
 import {
   profileTypeToAuthMode,
   resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
 } from "../model-auth-provider-config.js";
 
 type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
@@ -140,10 +141,15 @@ function hasConfiguredCapabilityProviderSignal(params: {
       continue;
     }
     if (
-      hasNonEmptyManifestEnvCandidate(
+      (hasNonEmptyManifestEnvCandidate(
         process.env,
         manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
-      ) &&
+      ) ||
+        resolveUsableCustomProviderApiKey({
+          cfg: params.config,
+          provider: signal.provider,
+          authStore: params.authStore,
+        })) &&
       (!capability ||
         isAuthModeAllowedForModel({ provider: signal.provider, capability, mode: "api-key" }))
     ) {

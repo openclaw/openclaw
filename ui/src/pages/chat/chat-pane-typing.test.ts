@@ -329,7 +329,7 @@ describe("chat pane typing presence", () => {
     const bob = { id: "bob", label: "Bob" };
     render([alice, bob]);
     expect(text(".agent-chat__typing-preview-label")?.trim()).toBe("Alice");
-    expect(text(".chat-group--typing .chat-group-footer")).toContain("is typing...");
+    expect(text(".chat-group--typing .chat-group-footer")).toContain("is typing…");
     expect(all(".chat-group.user.chat-group--peer")).toHaveLength(2);
     expect(query(".agent-chat__typing-group")).toBeNull();
     expect(
@@ -421,7 +421,7 @@ describe("chat pane typing presence", () => {
     expect(all(".agent-chat__typing-person")).toHaveLength(1);
     render(pane.collaboration.typingViews, "none", pane.collaboration.typingOverflow);
     expect(query(".agent-chat__typing-overflow")?.getAttribute("title")).toBe(
-      "Peer 7 — is typing...",
+      "Peer 7 — is typing…",
     );
     expect(all("[role=img]")).toHaveLength(0);
     pane.handleSessionTypingEvent(event(7, false));

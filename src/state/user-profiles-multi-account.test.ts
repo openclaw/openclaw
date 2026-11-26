@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY as organizationKey } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeAsync,
@@ -49,6 +50,159 @@ const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
+  it.each<{
+    label: string;
+    sourceConsent?: boolean;
+    targetPair?: true;
+    targetConsent?: boolean;
+    selected: "source" | "target";
+    expectedConsent?: boolean;
+  }>([
+    {
+      label: "inherits consenting organization credit",
+      sourceConsent: true,
+      selected: "source",
+      expectedConsent: true,
+    },
+    {
+      label: "preserves target opt-out",
+      sourceConsent: true,
+      targetConsent: false,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an opted-out source",
+      sourceConsent: false,
+      targetConsent: true,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an unsigned source",
+      targetConsent: true,
+      selected: "source",
+    },
+    {
+      label: "does not apply source consent to target defaults",
+      sourceConsent: true,
+      targetPair: true,
+      selected: "target",
+    },
+    {
+      label: "retains target defaults and opt-out",
+      sourceConsent: true,
+      targetPair: true,
+      targetConsent: false,
+      selected: "target",
+      expectedConsent: false,
+    },
+  ])("merges proxy credit: $label", async (scenario) => {
+    const source = ensureProfileForEmail("source@example.test", options);
+    const target = ensureProfileForEmail("target@example.test", options);
+    const sourcePair = {
+      name: "Source Person",
+      email: "source-credit@example.test",
+      policy: "test-policy",
+    };
+    const targetPair = {
+      name: "Target Person",
+      email: "target-credit@example.test",
+      policy: "test-policy",
+    };
+    expect(
+      setUserPreferences(
+        source.id,
+        {
+          [organizationKey]: sourcePair,
+          ...(scenario.sourceConsent === undefined ? {} : publicCredit(scenario.sourceConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.sourceConsent === undefined) {
+      expect(
+        setUserPreferences(source.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+    expect(
+      setUserPreferences(
+        target.id,
+        {
+          ...(scenario.targetPair ? { [organizationKey]: targetPair } : {}),
+          ...(scenario.targetConsent === undefined ? {} : publicCredit(scenario.targetConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.targetConsent === undefined && scenario.targetPair) {
+      expect(
+        setUserPreferences(target.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+    linkEmail("source@example.test", target.id, options);
+    expect(readConsent(target.id)).toEqual(
+      scenario.expectedConsent === undefined ? {} : publicCredit(scenario.expectedConsent),
+    );
+    const selected = scenario.selected === "source" ? sourcePair : targetPair;
+    expect(getUserPreferences(target.id, [organizationKey], options)).toEqual({
+      [organizationKey]: selected,
+    });
+    const credit = await resolveAttribution([source.id, target.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    const expected =
+      scenario.expectedConsent === true ? { name: selected.name, email: selected.email } : null;
+    expect(credit.get(source.id)).toEqual(expected);
+    expect(credit.get(target.id)).toEqual(expected);
+  });
+
+  it("retains protected proxy defaults under canonical authority", async () => {
+    const profile = ensureProfileForEmail("oidc:proxy-credit", options);
+    const imported = {
+      name: "Organization Alice",
+      email: "work@example.test",
+      policy: "test-policy",
+    };
+    for (const value of [imported, null]) {
+      expect(await setPreferences(profile.id, { [organizationKey]: value }, options)).toEqual({
+        ok: false,
+        error: { code: "invalid-key", key: organizationKey },
+      });
+    }
+    expect(
+      await setPreferences(
+        profile.id,
+        { [organizationKey]: imported },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    const unsigned = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    expect(unsigned.identities.get(profile.id)).toBeNull();
+    await setPreferences(profile.id, publicCredit(true), options);
+    expect(unsigned.isCurrent()).toBe(false);
+    expect((await resolveAttribution([profile.id], options)).get(profile.id)).toBeNull();
+    const organization = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    expect(organization.identities.get(profile.id)).toEqual({
+      name: imported.name,
+      email: imported.email,
+    });
+    await setPreferences(profile.id, publicCredit(false), options);
+    expect(organization.isCurrent()).toBe(false);
+    expect(
+      (
+        await resolveAttribution([profile.id], { ...options, organizationDefaults: "test-policy" })
+      ).get(profile.id),
+    ).toBeNull();
+  });
+
   it("bounds the directory while preserving merged-profile filtering and account order", async () => {
     const database = openDatabase(options);
     ensureUserProfilesSchema(options, database);
@@ -216,7 +370,7 @@ describe("multi-account people", () => {
     const preparedCredit = await prepareAttribution([work.id], options);
     const credit = await attribution(work.id);
     expect(credit?.accountId).toBe(primary.binding.accountId);
-    if (credit) {
+    if (credit && "login" in credit) {
       credit.login = "caller-edit";
     }
     expect(await attribution(work.id)).toEqual(identity);

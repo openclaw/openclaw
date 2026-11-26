@@ -129,3 +129,59 @@ it.each(
   expect(state.chatRunId).toBe(runId);
   expect(state.chatStream).toBe("Continuing the current reply.");
 });
+
+it.each([
+  "producer metadata",
+  "producer envelope",
+  "conflicting envelope",
+  "client correlation",
+  "missing identity",
+  "missing sequence",
+  "imported",
+  "ordinary assistant",
+  "final source reply",
+  "missing finality",
+  "non-assistant",
+])("checks unadopted source reply ownership with %s", (authority) => {
+  const runId = "setup-run";
+  const message = {
+    role: authority === "non-assistant" ? "toolResult" : "assistant",
+    content: [{ type: "text", text: "Available to install." }],
+    ...(authority === "ordinary assistant"
+      ? {}
+      : {
+          openclawDeliveryMirror: {
+            kind: "message-tool-source-reply",
+            ...(authority === "missing finality"
+              ? {}
+              : { final: authority === "final source reply" }),
+          },
+        }),
+    __openclaw: {
+      ...(authority === "missing identity" ? {} : { id: "setup-card" }),
+      ...(authority === "missing sequence" ? {} : { seq: 2 }),
+      ...(["client correlation", "producer envelope"].includes(authority) ? {} : { runId }),
+      ...(authority === "imported" ? { importedFrom: "test-provider" } : {}),
+    },
+  };
+  const { state } = createSessionEventState({
+    chatRunId: null,
+    chatStream: "Unowned stream remains untouched.",
+    chatStreamStartedAt: 100,
+  });
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    hasActiveRun: true,
+    ...(authority === "conflicting envelope" ? { runId: "other-run" } : {}),
+    ...(authority === "producer envelope" ? { runId } : {}),
+    ...(authority === "client correlation" ? { clientRunId: runId } : {}),
+    message,
+  });
+  const accepted = ["producer metadata", "producer envelope"].includes(authority);
+  expect(state.chatMessages).toEqual(
+    accepted ? [{ ...message, __openclaw: { ...message["__openclaw"], runId } }] : [],
+  );
+  expect(state.chatRunId).toBeNull();
+  expect(state.chatStream).toBe("Unowned stream remains untouched.");
+  expect(state.chatStreamStartedAt).toBe(100);
+});

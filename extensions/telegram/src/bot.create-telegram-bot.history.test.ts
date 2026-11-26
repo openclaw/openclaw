@@ -9,6 +9,7 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { assert, beforeEach, expect, it } from "vitest";
 import {
+  apiCalls,
   chat,
   commandMessage,
   createBot,
@@ -128,6 +129,74 @@ it("bounds the automatic window without deleting quiet history after reopen", as
   expect(JSON.stringify(lastInput().ChannelStructuredContext)).not.toContain("cobalt");
   const retained = await readHistory(group.id, 1, String(quiet[1]!.message_id));
   expect(retained.messages.map(({ body }) => body)).toEqual(["Retain the launch code cobalt"]);
+});
+
+it("attaches photos the sender posted just before a separate mention", async () => {
+  const bot = await createBot(false, true, cfg);
+  const now = Math.floor(Date.now() / 1000);
+  const photo = (fileId: string, date: number, sender: Message["from"] = from) => {
+    const { text: _text, entities: _entities, ...base } = message("", { chat: group, date });
+    return {
+      ...base,
+      from: sender,
+      photo: [{ file_id: fileId, file_unique_id: `${fileId}-u`, width: 1280, height: 960 }],
+    };
+  };
+  const stale = photo("stale-photo", now - 300);
+  const other = photo("other-photo", now - 5, { ...from, id: 42002, first_name: "Bob" });
+  const fresh = photo("fresh-photo", now - 4);
+  const sticker = () => {
+    const {
+      text: _text,
+      entities: _entities,
+      ...base
+    } = message("", { chat: group, date: now - 3 });
+    const fileId = `sticker-${base.message_id}`;
+    return {
+      ...base,
+      sticker: {
+        file_id: fileId,
+        file_unique_id: `${fileId}-u`,
+        type: "regular",
+        width: 512,
+        height: 512,
+        is_animated: false,
+        is_video: false,
+      },
+    };
+  };
+  for (const entry of [
+    stale,
+    other,
+    fresh,
+    ...Array.from({ length: 4 }, sticker),
+    message("from today", { chat: group, date: now - 2 }),
+  ]) {
+    await receive(bot, { message: entry });
+  }
+  const downloads = () =>
+    apiCalls.mock.calls.flatMap(([method, payload]) =>
+      method === "getFile" ? [(payload as { file_id: string }).file_id] : [],
+    );
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  expect(downloads()).toEqual([]);
+
+  await receive(bot, {
+    message: message("@openclaw_bot how do these look", {
+      chat: group,
+      date: now,
+      entities: [{ type: "mention", offset: 0, length: 13 }],
+    }),
+  });
+
+  expect(downloads()).toEqual(["fresh-photo"]);
+  expect(lastInput().media).toEqual([
+    expect.objectContaining({ kind: "image", path: "/tmp/replied-photo.jpg" }),
+  ]);
+  expectContextMessages(
+    { message_id: String(stale.message_id), media_ref: "telegram:file/stale-photo" },
+    { message_id: String(other.message_id), media_ref: "telegram:file/other-photo" },
+  );
 });
 
 it.each([false, true])("retains a username-free channel (%s)", async (senderChat) => {

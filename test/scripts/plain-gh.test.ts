@@ -132,6 +132,33 @@ function runGh(engine: (typeof engines)[number], env: NodeJS.ProcessEnv, cwd?: s
   return runShell('source "$1"; shift; gh_plain "$@"', env, versionArgs, cwd);
 }
 
+it("bounds failed and asynchronous GitHub attempts within each command", async () => {
+  const fixture = makeFixture();
+  const args = ["api", "repos/openclaw/openclaw/actions/runs/1"];
+  await gh.withGithubRequestBudget(2, async (budget) => {
+    fixture.env.FAKE_GH_REJECT = "1";
+    expect(() => gh.execPlainGh(args, fixture.options)).toThrow();
+    delete fixture.env.FAKE_GH_REJECT;
+    await gh.execGhReadAsync(args, fixture.options);
+    await expect(gh.execPlainGhAsync(args, fixture.options)).rejects.toThrow(
+      "request budget exhausted",
+    );
+    expect(budget.used).toBe(2);
+    expect(fixture.calls()).toHaveLength(2);
+  });
+  await gh.withGithubRequestBudget(1, async () => {
+    await Promise.resolve();
+    gh.execGhRead(args, fixture.options);
+  });
+  expect(fixture.calls()).toHaveLength(3);
+  gh.withGithubRequestBudget(1, () => {
+    expect(() => gh.execPlainGh([...args, "--paginate"], fixture.options)).toThrow(
+      "explicit REST requests",
+    );
+  });
+  expect(fixture.calls()).toHaveLength(3);
+});
+
 describe.each(engines)("%s plain gh execution", (engine) => {
   it("preserves a protected refusal and both output streams without fallback", () => {
     const fixture = makeFixture();

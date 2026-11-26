@@ -19,12 +19,14 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
 } from "./hook-agent-finalize.types.js";
 import type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
+import type { PluginHookChannelPairingRequestedHandler } from "./hook-channel-pairing.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookCronChangedEvent,
@@ -41,7 +43,9 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "./hook-message.types.js";
+import { MODEL_HOOK_METADATA, type ModelRequestHooks } from "./hook-model.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+import type { PluginHookRunStoppedHandler } from "./hook-run-stopped.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type {
   PluginHookToolKind,
@@ -70,6 +74,7 @@ export type {
 } from "./hook-agent-finalize.types.js";
 
 export type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -118,6 +123,7 @@ type PluginHookMetadata = {
 
 export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMetadata>> = {
   before_model_resolve: { conversationAccess: true },
+  ...MODEL_HOOK_METADATA,
   agent_turn_prepare: { conversationAccess: true, promptInjection: true },
   before_prompt_build: {
     conversationAccess: true,
@@ -125,10 +131,6 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
     modifyingTimeoutMs: 15_000,
   },
   before_agent_reply: { conversationAccess: true },
-  model_call_started: {},
-  model_call_ended: {},
-  llm_input: { conversationAccess: true },
-  llm_output: { conversationAccess: true },
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.
@@ -156,6 +158,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_message_write: {},
   session_start: {},
   session_end: {},
+  run_stopped: {},
   subagent_delivery_target: {},
   subagent_spawned: {},
   subagent_progress: {},
@@ -173,25 +176,6 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_install: { modifyingTimeoutMs: 15_000 },
   before_agent_run: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
   resolve_exec_env: { modifyingTimeoutMs: 15_000 },
-};
-
-type PluginHookChannelPairingRequestedEvent = {
-  /** Channel that created the pending pairing request. */
-  channel: string;
-  /** Provider account ID for multi-account channel setups. */
-  accountId?: string;
-  /** Channel-scoped sender ID awaiting operator approval. */
-  senderId: string;
-  /** Short-lived code accepted by `openclaw pairing approve`. */
-  code: string;
-  /** Sender-supplied channel metadata for operator notification/audit. Treat as untrusted. */
-  metadata?: Record<string, string | undefined>;
-};
-
-type PluginHookChannelPairingContext = {
-  channelId: string;
-  accountId?: string;
-  senderId: string;
 };
 
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
@@ -756,24 +740,6 @@ type PluginHookBeforeInstallResult = {
   blockReason?: string;
 };
 
-/** Event payload for the before_agent_run gate hook. */
-export type PluginHookBeforeAgentRunEvent = {
-  /** The user's message that triggered this run. */
-  prompt: string;
-  /** Loaded session history before the current prompt is submitted. */
-  messages: unknown[];
-  /** Active system prompt prepared for this run. */
-  systemPrompt?: string;
-  /** Account identity when available. */
-  accountId?: string;
-  /** Channel the message came from. */
-  channelId?: string;
-  /** Sender identity when available. */
-  senderId?: string;
-  /** Trusted sender identity bit when available. */
-  senderIsOwner?: boolean;
-};
-
 /** Result type for before_agent_run. Returns pass/block or void (= pass). */
 type PluginHookBeforeAgentRunResult = InputGateDecision | void;
 
@@ -785,7 +751,9 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
-export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
+type RuntimeHooks = PluginMessageHookHandlerMap & ModelRequestHooks;
+
+export type PluginHookHandlerMap = RuntimeHooks & {
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,
@@ -824,10 +792,7 @@ export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
     PluginHookInboundClaimContext,
     PluginHookInboundClaimResult
   >;
-  channel_pairing_requested: AsyncPluginHook<
-    PluginHookChannelPairingRequestedEvent,
-    PluginHookChannelPairingContext
-  >;
+  channel_pairing_requested: PluginHookChannelPairingRequestedHandler;
   before_dispatch: AsyncPluginHook<
     PluginHookBeforeDispatchEvent,
     PluginHookBeforeDispatchContext,
@@ -859,6 +824,7 @@ export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   ) => PluginHookBeforeMessageWriteResult | void;
   session_start: AsyncPluginHook<PluginHookSessionStartEvent, PluginHookSessionContext>;
   session_end: AsyncPluginHook<PluginHookSessionEndEvent, PluginHookSessionContext>;
+  run_stopped: PluginHookRunStoppedHandler;
   subagent_delivery_target: AsyncPluginHook<
     PluginHookSubagentDeliveryTargetEvent,
     PluginHookSubagentContext,

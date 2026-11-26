@@ -3,11 +3,17 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { normalizePublicationIntent } from "./full-release-publication-contract.mjs";
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
 } from "./lib/npm-publish-plan.mjs";
+import {
+  fastTrackRequestDigest,
+  parseFastTrackRequest,
+  serializeFastTrackRequest,
+} from "./lib/release-fast-track-contract.mts";
 import {
   inspectPublishReleasePage,
   inspectStableCloseoutPreflight,
@@ -43,13 +49,11 @@ import {
   observeReleaseNpmState,
   readReleasePublicationPackages,
 } from "./lib/release-publish-state.mts";
+import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
-import {
-  authenticateFullReleaseValidationEvidence,
-  validateFullReleaseValidationEvidence,
-} from "./validate-full-release-validation-evidence.mjs";
+import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {
   manifest?: PublishPreflightRecord;
@@ -61,7 +65,7 @@ type PreflightContext = {
   npmManifest?: PublishPreflightRecord;
   npmManifestPath?: string;
   npmPreflightRun?: PublishPreflightRecord;
-  fullValidationEvidence?: unknown;
+  fullValidationEvidence?: Awaited<ReturnType<typeof authenticateFullReleaseValidationEvidence>>;
 };
 const SHA = /^[a-f0-9]{40}$/u;
 const POSITIVE_ID = /^[1-9][0-9]*$/u;
@@ -133,10 +137,11 @@ export async function runReleasePublishPreflight(
       ) {
         throw new Error("Core npm publication requires plugin_publish_scope=all-publishable.");
       }
-      if (options.publishOpenclawNpm !== false && options.npmDistTag === "extended-stable") {
-        throw new Error(
-          "Extended-stable core npm publication uses its canonical extended-stable workflow.",
-        );
+      if (options.retiredLinePublicationReason !== undefined) {
+        validateRetiredLineReason(options.retiredLinePublicationReason);
+        if (options.npmDistTag !== "extended-stable") {
+          throw new Error("A retired-line decision requires the extended-stable npm dist-tag.");
+        }
       }
       if (
         options.pluginPublishScope === "selected"
@@ -200,6 +205,10 @@ export async function runReleasePublishPreflight(
     );
   }
   const sourceSha = releaseSha ?? context.targetSha;
+  const includeStableCloseout =
+    !options.tag.includes("-beta.") &&
+    options.npmDistTag !== "extended-stable" &&
+    options.publishOpenclawNpm !== false;
   let workflowRef = options.workflowRef.replace(/^refs\/(?:heads|tags)\//u, "");
   let toolingSha = context.toolingSha ?? "";
   await check(
@@ -241,12 +250,9 @@ export async function runReleasePublishPreflight(
         );
         toolingSha ||= String(main.sha);
         const proposed = `release-publish/${toolingSha.slice(0, 12)}-${Math.floor(Date.now() / 1000)}`;
-        workflowRef = proposed;
-        const remediation = `Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`;
-        if (!context.allowPlannedTag) {
-          throw new Error(`Mutating publish cannot dispatch from main. ${remediation}`);
-        }
-        warn("publisher.planned-tooling", "Protected tooling tag is still pending.", remediation);
+        throw new Error(
+          `Mutating publish cannot dispatch from main. Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`,
+        );
       } else {
         throw new Error(
           "This preflight supports the regular protected-tag publication route; use the extended-stable owner workflow for other routes.",
@@ -302,7 +308,7 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          (!options.fastTrackRequest && selectedRun.conclusion !== "success") ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -321,7 +327,7 @@ export async function runReleasePublishPreflight(
         "validation.manifest",
         "Validation manifest downloaded once.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
-        () => {
+        async () => {
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));
           if (!loaded) {
             throw new Error("Full Release Validation manifest artifact is missing.");
@@ -349,8 +355,9 @@ export async function runReleasePublishPreflight(
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
         };
       }
+      let authenticated;
       if (run && sourceSha && SHA.test(toolingSha)) {
-        await check(
+        authenticated = await check(
           "validation.provenance",
           "Full Release Validation provenance and publication selection authenticated.",
           "Use evidence admitted for this exact release source, tooling lineage, publication route and package selection.",
@@ -383,6 +390,7 @@ export async function runReleasePublishPreflight(
             }
             const validationOptions = {
               run,
+              fastTrackRequest: options.fastTrackRequest,
               manifest: fullManifest,
               expectedRepository: options.repo,
               expectedRunId: options.fullReleaseValidationRunId,
@@ -391,7 +399,6 @@ export async function runReleasePublishPreflight(
               expectedReleaseTag: options.tag,
               expectedTrustedWorkflowFullRef: `refs/${PUBLISH_REF.test(workflowRef) ? "tags" : "heads"}/${workflowRef}`,
               expectedTrustedWorkflowSha: toolingSha,
-              expectedWorkflowBranch: workflowRef,
               expectedPublicationSelection: selection,
               verifierSourceSha: execFileSync(
                 "git",
@@ -403,26 +410,11 @@ export async function runReleasePublishPreflight(
               verifierSourceContent: readFileSync(
                 new URL("./release-ci-summary.mjs", import.meta.url),
               ),
-              isTrustedMainAncestor: (sha: string) => {
-                const result = requirePreflightRecord(
-                  api(`compare/${sha}...main?per_page=1`),
-                  "ancestry",
-                );
-                return result.status === "ahead" || result.status === "identical";
-              },
             };
             if (context.fullValidationEvidence) {
-              const prior = requirePreflightRecord(
-                context.fullValidationEvidence,
-                "authenticated candidate evidence",
-              );
-              const evidence = requirePreflightRecord(prior.evidence, "strict candidate evidence");
-              const validated = validateFullReleaseValidationEvidence({
-                ...validationOptions,
-                getWorkflowSource: (sha: string) => client.getWorkflowSource(sha),
-                validateEvidenceReuseStrictly: () => evidence,
-              });
-              return { ...validated, evidence };
+              const prior = context.fullValidationEvidence;
+              const validated = prior.forPublication(validationOptions);
+              return { ...validated, evidence: prior.evidence };
             }
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },
@@ -431,13 +423,13 @@ export async function runReleasePublishPreflight(
       for (const consumer of [
         "publisher",
         ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
-        ...(!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false
-          ? ["stable-closeout"]
-          : []),
+        ...(includeStableCloseout ? ["stable-closeout"] : []),
       ] as const) {
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            fastTrack: authenticated?.evidence.fastTrack,
+            readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
@@ -514,10 +506,13 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Ask the release credential owner to confirm NPM_TOKEN readiness; see .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. Do not publish or rotate credentials during preflight.",
       );
     }
   }
+  // Sealed FRV npm decisions predate publication, so resume discovery reads the
+  // live core version alongside the current selector.
+  let corePublished = false;
   const npmEvidence =
     evidenceRequired && sourceSha && SHA.test(toolingSha)
       ? await check(
@@ -529,10 +524,15 @@ export async function runReleasePublishPreflight(
               packageName: "openclaw",
               packageUrl: "https://registry.npmjs.org/openclaw",
               maxBytes: 16 * 1024 * 1024,
+              exactVersion: options.tag.slice(1),
             });
             const packument = requirePreflightRecord(
               result.packument,
               "openclaw registry metadata",
+            );
+            corePublished = Object.hasOwn(
+              requirePreflightRecord(packument.versions, "openclaw versions"),
+              options.tag.slice(1),
             );
             const tags = requirePreflightRecord(packument["dist-tags"], "openclaw dist-tags");
             const version = tags[options.npmDistTag];
@@ -551,6 +551,7 @@ export async function runReleasePublishPreflight(
                 fullReleaseValidationRunId: options.fullReleaseValidationRunId,
                 fullReleaseValidationRunAttempt: attempt,
                 fullManifest: manifest,
+                fastTrackRequest: options.fastTrackRequest,
                 pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement ?? "",
                 currentSelectorRef: `v${version}`,
                 currentSelectorSha: resolvePreflightTag(runGh, options.repo, `v${version}`),
@@ -567,7 +568,17 @@ export async function runReleasePublishPreflight(
         "github.release-admission",
         "Visible release metadata passed initial publication checks.",
         "Reconcile the exact public release's canonical notes and dependency evidence; leave docs-published bodies with their publication owner.",
-        () => inspectPublishReleasePage({ repo: options.repo, tag: options.tag, sourceSha, runGh }),
+        () =>
+          inspectPublishReleasePage({
+            repo: options.repo,
+            tag: options.tag,
+            sourceSha,
+            toolingSha,
+            retiredLineReason: options.retiredLinePublicationReason,
+            // Only successful full-evidence npm admission can report build-only.
+            dependencyEvidenceRequired: npmEvidence?.buildOnly !== true,
+            runGh,
+          }),
       );
     }
     const github = await check(
@@ -588,7 +599,7 @@ export async function runReleasePublishPreflight(
     }
   }
   let resume = options.openclawNpmResumeRunId ?? "";
-  if (registry?.corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
+  if (corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
     const tarballSha512 = await check(
       "core-npm.immutable-bytes",
       "Published core tarball matches the prepared release bytes.",
@@ -631,7 +642,7 @@ export async function runReleasePublishPreflight(
       );
     }
   }
-  if (!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false) {
+  if (includeStableCloseout) {
     if (sourceSha) {
       rows.push(
         ...inspectStableCloseoutPreflight({
@@ -657,18 +668,54 @@ export async function runReleasePublishPreflight(
   };
 }
 
+export async function runReleasePublishPreflightCommand(args = process.argv.slice(2)) {
+  if (args[0] === "fast-track") {
+    const { values, positionals } = parseArgs({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { request: { type: "string" } },
+    });
+    if (positionals.length !== 1 || positionals[0] !== "request" || !values.request) {
+      throw new Error(
+        "Usage: pnpm release:publish-preflight fast-track request --request <immutable-request.json>. Preparation only; no machine approval or custom status operation.",
+      );
+    }
+    const request = parseFastTrackRequest(JSON.parse(readFileSync(values.request, "utf8")));
+    if (Date.parse(request.expiresAt) <= Date.now()) {
+      throw new Error("Request expired. Create a new request ID with a fresh expiry.");
+    }
+    process.stdout.write(
+      `${JSON.stringify({
+        requestId: request.requestId,
+        digest: fastTrackRequestDigest(request),
+        payload: serializeFastTrackRequest(request),
+        state: "awaiting-npm-release-environment-approval",
+        instructions:
+          "Supply the exact request packet to the publisher. A release manager approves publication only through the GitHub Actions npm-release environment. No chat decision, approval URL or external approval service is required. Agents must not approve the environment using available tokens.",
+        publicationAuthorized: false,
+      })}\n`,
+    );
+    return;
+  }
+  const parsed = parsePublishPreflightArgs(args);
+  if (!parsed) {
+    return;
+  }
+  if (parsed.options.fastTrackRequest) {
+    parsed.options.fastTrackRequest = readFileSync(parsed.options.fastTrackRequest, "utf8");
+  }
+  const report = await runReleasePublishPreflight(parsed.options);
+  console.log(
+    parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
+  );
+  if (report.failed) {
+    process.exitCode = 1;
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    const parsed = parsePublishPreflightArgs(process.argv.slice(2));
-    if (parsed) {
-      const report = await runReleasePublishPreflight(parsed.options);
-      console.log(
-        parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
-      );
-      if (report.failed) {
-        process.exitCode = 1;
-      }
-    }
+    await runReleasePublishPreflightCommand();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

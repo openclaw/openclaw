@@ -1,3 +1,4 @@
+import process from "node:process";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import {
   hasProviderTransportDispatcherPool,
@@ -13,6 +14,18 @@ const pendingDisposers = new Map<
   symbol,
   { name: string; operation: Promise<void>; deferred: boolean }
 >();
+
+export function pauseNonTtyStdinForCliExit(): void {
+  const stdin = process.stdin;
+  if (stdin.isTTY) {
+    return;
+  }
+  try {
+    stdin.pause();
+  } catch {
+    // Best-effort cleanup for command paths that only inspected stdin.
+  }
+}
 
 export function getPendingCliDisposers(): string[] {
   return [...pendingDisposers.values()].map(({ name }) => name);
@@ -119,8 +132,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       }
     },
     "ai-session-resources": async () => {
-      // Keep the provider runtime outside the CLI bootstrap import graph.
-      const { cleanupSessionResources } = await import("@openclaw/ai/internal/runtime");
+      // Cleanup must not initialize an otherwise unused provider runtime.
+      const { cleanupSessionResources } = await import("@openclaw/ai/internal/session-resources");
       cleanupSessionResources();
     },
     "skills-watchers": async () => {
@@ -163,6 +176,14 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
       await closeOpenClawAgentDatabasesAsync();
+    },
+    "sqlite-snapshots": async () => {
+      // CLI-owned snapshot workers are asynchronous owners. Signal cleanup is too
+      // late for a successful one-shot command, and the synchronous process exit
+      // hook cannot retire a retained native owner safely.
+      const { cleanupSnapshotOperations } =
+        await import("../infra/sqlite-readonly-location-cleanup.js");
+      await cleanupSnapshotOperations();
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {

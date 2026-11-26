@@ -63,7 +63,7 @@ it.each([false, true])("re-pins main and defers only if it moves again: %s", asy
 
 it.each([
   [undefined, copies.keep, false],
-  ["glossary", "finalizer::Keep locale proof", true],
+  ["metadata", "finalizer::Keep locale proof", true],
 ] as const)(
   "preserves full-refresh worker compatibility: %s",
   async (change, expected, retranslatesKeep) => {

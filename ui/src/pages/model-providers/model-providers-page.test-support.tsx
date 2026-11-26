@@ -35,7 +35,6 @@ import {
   modelCatalogEventInvalidation,
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
-import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -78,9 +77,9 @@ export type ModelProvidersPageTestElement = Pick<
 
 const modelPickerLabels = {
   primary: "Model",
-  utility: "Utility Model",
-  fallback: "Fallback Model",
-  decision: "Decision Model",
+  utility: "Utility model",
+  fallback: "Fallback model",
+  decision: "Decision model",
 };
 
 export function modelPicker(
@@ -94,31 +93,11 @@ export function modelPicker(
   return picker!;
 }
 
-export function chatModelPickers(page: Pick<ParentNode, "querySelector">): SelectPicker[] {
-  return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
-}
-
-export async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
-  await page.updateComplete;
-  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
-  expect(retry?.textContent?.trim()).toBe("Retry");
-  retry!.click();
-  await page.updateComplete;
-}
-
 export async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
   // Drain every promise continuation before checking that a retired result stayed absent.
   await setImmediate();
   await page.updateComplete;
   await updatePickers(page.renderRoot);
-}
-
-export function displayedCatalog(page: ModelProvidersPageTestElement) {
-  return peekModelCatalog(
-    page.context.gateway.snapshot.client!,
-    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "" },
-    { allowStale: true },
-  );
 }
 
 export function publishCatalog(
@@ -208,19 +187,19 @@ export async function saveKey(page: ModelProvidersPageTestElement, value: string
   page.view.props.onOpenKeyEditor("openai");
   page.view.props.onKeyDraftChange(value);
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!.click();
 }
 
 export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
-  await page.view.scope.onConnect();
   await page.updateComplete;
   const choice = page.querySelector<HTMLButtonElement>(
-    `[data-models-login-provider="${provider}"]`,
+    `[data-models-catalog-provider="${provider}"] button`,
   );
   expect(choice).not.toBeNull();
   choice!.click();
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
+  // A provider with only a key opens its form directly, without the method step.
+  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")?.click();
   await page.updateComplete;
 }
 
@@ -253,6 +232,8 @@ export function createHarness(initialScopeId: string) {
       }
       case "models.list":
         return { models: [] };
+      case "models.probe":
+        return { provider: "fixture", status: "ok", results: [] };
       case "config.get":
         return {
           config: { agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } } },
@@ -592,11 +573,6 @@ export async function startSelectedLogin(page: ModelProvidersPageTestElement, la
 }
 
 export async function submitCredential(page: ModelProvidersPageTestElement) {
-  const manual = page.querySelector<HTMLDetailsElement>(".wizard-step__manual-entry");
-  if (manual && !manual.open) {
-    manual.querySelector<HTMLElement>("summary")!.click();
-    expect(manual.open).toBe(true);
-  }
   const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
   input.value = "synthetic-test-credential";
   input.dispatchEvent(new Event("input", { bubbles: true }));

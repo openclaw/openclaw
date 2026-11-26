@@ -4,9 +4,12 @@
  * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
  */
 import path from "node:path";
+import { URL } from "node:url";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { pathExistsSync } from "../infra/fs-safe.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
-import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
 /** Compare resolved runtime paths using the declared root's syntax, never the host OS. */
@@ -174,4 +177,72 @@ export function preserveAtPrefixedRelativePath(
         ? literalPath
         : filePath,
     );
+}
+
+export function resolveContainerPathCandidate(filePath: string): string {
+  let candidate = normalizeFileReferencePrefix(filePath);
+  if (/^file:\/\//i.test(candidate)) {
+    const localFilePath = trySafeFileURLToPath(candidate);
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
+      // when it clearly refers to the container workdir (same idea as sandbox-paths).
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return filePath;
+      }
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+        return filePath;
+      }
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return filePath;
+      }
+      candidate = normalizedPathname;
+    }
+  }
+  return candidate;
+}
+
+export function mapContainerPathToWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  const mapped = params.containerWorkdir
+    ? resolveSandboxPathMapping(
+        [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
+        candidate,
+      )
+    : null;
+  return mapped?.hostPath ?? candidate;
+}
+
+export function resolveToolPathAgainstWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const mapped = mapContainerPathToWorkspaceRoot(params);
+  const candidate = normalizeFileReferencePrefix(mapped);
+  if (isWindowsDrivePath(candidate)) {
+    return path.win32.normalize(candidate);
+  }
+  if (path.isAbsolute(candidate)) {
+    return path.resolve(candidate);
+  }
+  return path.resolve(params.root, candidate || ".");
 }

@@ -321,6 +321,33 @@ describe("registerFeishuDriveTools", () => {
     }
   });
 
+  it("creates root folders under the authenticated root token and reports lookup failures", async () => {
+    const request = vi.fn();
+    const createFolder = vi.fn(async () => driveResponse({ token: "fld_new" }));
+    createFeishuToolClientMock.mockReturnValue({ request, drive: { file: { createFolder } } });
+    const tool = buildDriveTool();
+    request.mockResolvedValueOnce(driveResponse({ token: "root_tok" }));
+
+    const created = await tool.execute("mk-root", { action: "create_folder", name: "test" });
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        url: "/open-apis/drive/explorer/v2/root_folder/meta",
+      }),
+    );
+    expect(createFolder).toHaveBeenCalledWith({ data: { name: "test", folder_token: "root_tok" } });
+    expect(created.details).toMatchObject({ token: "fld_new" });
+
+    request.mockRejectedValueOnce(replyHttpError(99991663, "Invalid access token"));
+    const failed = await tool.execute("mk-root-fail", { action: "create_folder", name: "test" });
+
+    expect(failed.details).toMatchObject({
+      error: expect.stringContaining('"feishu_code":99991663'),
+    });
+    expect(createFolder).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces reply_comment HTTP errors when the single supported body fails", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const tool = buildDriveTool();

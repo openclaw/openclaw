@@ -40,7 +40,7 @@ async function pasteAttachment(page: NewSessionElement, text: string) {
   const textarea = await enterMessage(page, "Review the attachment");
   const paste = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(paste, "clipboardData", {
-    value: { items: [], getData: () => text },
+    value: { items: [], files: [], getData: () => text },
   });
   textarea.dispatchEvent(paste);
   expect(paste.defaultPrevented).toBe(true);

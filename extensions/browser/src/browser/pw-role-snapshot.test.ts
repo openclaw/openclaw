@@ -4,6 +4,7 @@ import {
   finalizeRoleSnapshot as finalize,
   getRoleSnapshotIdentityKeys as identityKeys,
   parseRoleRef,
+  redactAiSnapshotFieldValues,
 } from "./pw-role-snapshot.js";
 
 const visible = { snapshot: '- button "Visible" [ref=e1]', refs: { e1: { role: "button" } } };
@@ -59,6 +60,23 @@ describe("pw-role-snapshot", () => {
       maxDepth: 1,
     });
     expect(res.snapshot).toBe('- region "Main" [ref=f1e1]\n  - group');
+  });
+
+  it("does not count unnamed generic wrappers toward maxDepth", () => {
+    const wrappers = Array.from(
+      { length: 8 },
+      (_, level) => `${"  ".repeat(level)}- generic [ref=f1e${level + 10}]:`,
+    );
+    const snapshot = [
+      ...wrappers,
+      `${"  ".repeat(8)}- button "Deep" [ref=f1e1]`,
+      '- generic "Named" [ref=f1e2]:',
+      '  - group "Toolbar":',
+      '    - button "Below named" [ref=f1e3]',
+    ].join("\n");
+    const res = build(snapshot, { interactive: true, compact: true, maxDepth: 1 });
+    expect(res.snapshot).toBe('- button "Deep" [ref=f1e1]');
+    expect(res.refs).toEqual({ f1e1: { role: "button", name: "Deep" } });
   });
 
   it("keeps named branches with refs and drops empty branches when compact", () => {
@@ -117,6 +135,37 @@ describe("pw-role-snapshot", () => {
         delta: { mode: "role", previousKeys: identityKeys({ e1: button }, "role") },
       }).snapshot,
     ).toBe(snapshot);
+  });
+
+  it("masks sensitive and unreferenced AI snapshot field values", async () => {
+    const snapshot = [
+      '- textbox "Email" [ref=e1]: visible@example.test',
+      '- textbox "Password" [active] [ref=e2]:',
+      "  - /placeholder: Your password",
+      "  - text: hunter2",
+      "- 'textbox \"Code: one time\" [ref=f1e3]': 123456",
+      '- textbox "Empty" [ref=e4]',
+      '- textbox "No ref": leaked',
+      '- button "Sign in [ref=e2]: x" [ref=e5]',
+      '- paragraph: textbox "Password" [ref=e2]: page text',
+    ].join("\n");
+    const checked: string[] = [];
+    const redacted = await redactAiSnapshotFieldValues(snapshot, async (ref) => {
+      checked.push(ref);
+      return ref !== "e1";
+    });
+    expect(checked.toSorted()).toEqual(["e1", "e2", "f1e3"]);
+    expect(redacted.split("\n")).toEqual([
+      '- textbox "Email" [ref=e1]: visible@example.test',
+      '- textbox "Password" [active] [ref=e2]:',
+      "  - /placeholder: Your password",
+      "  - text: [redacted]",
+      "- 'textbox \"Code: one time\" [ref=f1e3]': [redacted]",
+      '- textbox "Empty" [ref=e4]',
+      '- textbox "No ref": [redacted]',
+      '- button "Sign in [ref=e2]: x" [ref=e5]',
+      '- paragraph: textbox "Password" [ref=e2]: page text',
+    ]);
   });
 
   it("parses role refs", () => {

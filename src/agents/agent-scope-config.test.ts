@@ -23,6 +23,8 @@ import {
   resolveAgentConfig as agentConfig,
   resolveAgentOperationAgentId as operationAgent,
   resolveAgentWorkspaceDir,
+  readAgentConfigEntry,
+  resolveAgentEntry,
   resolveAmbientOwnerAgentId as ambientOwner,
   resolveDefaultAgentDir as defaultAgentDir,
   resolveDefaultAgentId as defaultAgent,
@@ -305,6 +307,50 @@ describe("agent roster resolution", () => {
       expect(listAgentIds(config)).toEqual(["main", "research"]);
       delete config.agents!.entries!.main;
       expect(listAgentIds(config)).toEqual(["research"]);
+    } finally {
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  });
+
+  it("prepares agent facts once per publication while mutable callers retain independent shells", () => {
+    const previous = getRuntimeConfigSnapshot();
+    const config = fleet({
+      defaults: { fastModeDefault: false },
+      entries: {
+        main: { reasoningDefault: "on", fastModeDefault: false },
+        ops: { reasoningDefault: "off" },
+      },
+    });
+    try {
+      setRuntimeConfigSnapshot(config);
+      const captured = captureRuntimeConfig(config);
+      const first = readAgentConfigEntry(config, "main")!;
+      const other = readAgentConfigEntry(config, "ops")!;
+      const frozen = readAgentConfigEntry(captured, "main")!;
+      expect(first.reasoningDefault).toBe("on");
+      expect(other.reasoningDefault).toBe("off");
+      expect(readAgentConfigEntry(config, "MAIN")).toBe(first);
+      expect(readAgentConfigEntry(config, "ops")).toBe(other);
+      const mutable = resolveAgentEntry(config, "main")!;
+      mutable.reasoningDefault = "off";
+      expect(readAgentConfigEntry(config, "main")).toBe(first);
+      expect(first.reasoningDefault).toBe("on");
+
+      config.agents!.entries!.main!.reasoningDefault = "off";
+      config.agents!.entries!.main!.fastModeDefault = true;
+      setRuntimeConfigSnapshot(config);
+      const reloaded = readAgentConfigEntry(config, "main")!;
+      expect(reloaded).not.toBe(first);
+      expect(reloaded).toMatchObject({ reasoningDefault: "off", fastModeDefault: true });
+      expect(readAgentConfigEntry(captured, "main")).toBe(frozen);
+      expect(frozen).toMatchObject({ reasoningDefault: "on", fastModeDefault: false });
+      clearRuntimeConfigSnapshot();
+      config.agents!.entries!.main!.reasoningDefault = "on";
+      expect(readAgentConfigEntry(config, "main")?.reasoningDefault).toBe("on");
     } finally {
       if (previous) {
         setRuntimeConfigSnapshot(previous);

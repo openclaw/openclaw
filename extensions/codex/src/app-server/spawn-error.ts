@@ -44,7 +44,7 @@ export class CodexAppServerSpawnError extends Error {
     cause: unknown,
   ) {
     super(
-      `Codex catalog updater cannot run: ${command} ${reason}. Repair the executable or working directory and restart the Gateway.`,
+      `Codex cannot run: ${command} ${reason}. Repair the executable or working directory and restart the Gateway.`,
       { cause },
     );
     this.name = "CodexAppServerSpawnError";

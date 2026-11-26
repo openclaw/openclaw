@@ -5,7 +5,7 @@ import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 
-type TelegramBindingTargetKind = "subagent" | "acp";
+type TelegramBindingTargetKind = "subagent" | "acp" | "session";
 
 export type TelegramThreadBindingRecord =
   AccountScopedConversationBindingRecord<TelegramBindingTargetKind> & {
@@ -77,7 +77,8 @@ export function sanitizeStoredBinding(
 ): TelegramThreadBindingRecord | null {
   const conversationId = normalizeOptionalString(entry?.conversationId);
   const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
-  const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
+  const targetKind =
+    entry?.targetKind === "subagent" || entry?.targetKind === "session" ? entry.targetKind : "acp";
   if (!conversationId || !targetSessionKey) {
     return null;
   }

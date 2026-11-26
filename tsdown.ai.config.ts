@@ -16,7 +16,6 @@ const externalDependencies = [
   "@opentelemetry/resources",
   "@opentelemetry/sdk-trace-base",
   "@opentelemetry/semantic-conventions",
-  "openai",
   "typebox",
   "zod",
   "zod-to-json-schema",
@@ -51,6 +50,7 @@ const config = {
     "internal/reasoning-tag-text-partitioner":
       "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
+    "internal/session-resources": "packages/ai/src/session-resources.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
   },
@@ -58,12 +58,18 @@ const config = {
   format: "esm",
   outDir: "packages/ai/dist",
 
-  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
+  copy: [
+    { from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" },
+    { from: "node_modules/openai/LICENSE", rename: "openai.LICENSE" },
+    { from: "node_modules/ws/LICENSE", rename: "ws.LICENSE" },
+  ],
   platform: "node",
   target: "node22",
   deps: {
-    // Ship the chat client's reachable code, not the SDK's full API/source tree.
-    alwaysBundle: [/^@mistralai\/mistralai(?:\/|$)/u],
+    // Preserve OpenAI's self-module namespace aliases in its published declarations.
+    dts: { neverBundle: [/^openai(?:\/|$)/u] },
+    // Avoid loading the SDKs' individual source files when an adapter is first used.
+    alwaysBundle: [/^@mistralai\/mistralai(?:\/|$)/u, /^openai(?:\/|$)/u, /^ws(?:\/|$)/u],
     neverBundle(id) {
       return externalDependencies.some(
         (dependency) => id === dependency || id.startsWith(`${dependency}/`),

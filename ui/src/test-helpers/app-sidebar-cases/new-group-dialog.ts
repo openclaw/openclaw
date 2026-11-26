@@ -26,6 +26,8 @@ const waitForClose = () => waitForFast(() => expect(dialog()).toBeNull());
 async function startGroupMove(methods: string[]) {
   onTestFinished(installDialogPolyfill());
   const { sidebar, harness } = await mountMultiSelect(methods);
+  sidebar.setSessionSortMode("created");
+  await sidebar.updateComplete;
   const write = createDeferred<SessionGroupMutationResult>();
   harness.groupsPut.mockReturnValueOnce(write.promise);
   for (const target of targets) {

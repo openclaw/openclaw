@@ -1,5 +1,6 @@
 import { For, createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -8,9 +9,8 @@ import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAccessProgramControl } from "./chat-access-program-control.tsx";
 import { formatEffortLabel, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 
-/** Shared Speed/Access radio behavior; the session preference remains the caller's state. */
+/** Speed radio behavior; the session preference remains the caller's state. */
 function ChatPreferenceSegments<T extends string>(props: {
-  kind: "speed" | "access";
   label: string;
   options: readonly { value: T; label: string; disabled?: boolean }[];
   selected?: string;
@@ -50,11 +50,7 @@ function ChatPreferenceSegments<T extends string>(props: {
   };
   return (
     <div
-      class={[
-        "chat-controls__speed-options",
-        { "chat-controls__speed-options--plain": props.kind === "speed" },
-      ]}
-      data-chat-access-program={props.kind === "access" ? "true" : undefined}
+      class="chat-controls__speed-options chat-controls__speed-options--plain"
       role="radiogroup"
       aria-label={props.label}
       onKeyDown={onKeyDown}
@@ -70,13 +66,12 @@ function ChatPreferenceSegments<T extends string>(props: {
               type="button"
               role="radio"
               class="chat-controls__speed-option"
-              data-chat-speed-option={props.kind === "speed" ? option().value : undefined}
-              data-chat-access-option={props.kind === "access" ? option().value : undefined}
+              data-chat-speed-option={option().value}
               aria-checked={option().value === props.selected ? "true" : "false"}
               tabindex={index() === tabbableIndex() ? 0 : -1}
               disabled={props.disabled || option().disabled}
               title={
-                props.kind === "speed" && option().value === "ultrafast" && option().disabled
+                option().value === "ultrafast" && option().disabled
                   ? t("chat.modelControls.ultrafastUnavailable")
                   : undefined
               }
@@ -87,7 +82,7 @@ function ChatPreferenceSegments<T extends string>(props: {
                 }
               }}
             >
-              {props.kind === "speed" && ["on", "ultrafast"].includes(option().value) && (
+              {["on", "ultrafast"].includes(option().value) && (
                 <span class="chat-controls__speed-option-icon" aria-hidden="true">
                   <Icon name={option().value === "ultrafast" ? "zapDouble" : "zap"} />
                 </span>
@@ -298,10 +293,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   };
   return (
     <div
-      class={[
-        "chat-controls__inline-select-menu chat-controls__effort-menu",
-        { "chat-controls__effort-menu--access": props.accessProgram !== undefined },
-      ]}
+      class="chat-controls__inline-select-menu chat-controls__effort-menu"
       aria-label={t(
         view().showReasoning ? "chat.modelControls.effort" : "chat.modelControls.fastMode",
       )}
@@ -309,36 +301,38 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       {props.accessProgram && <ChatAccessProgramControl {...props.accessProgram} />}
       {view().showReasoning && (
         <div class="chat-controls__reasoning-panel">
-          <div class="chat-controls__reasoning-head">
-            <span class="chat-controls__effort-heading">{t("chat.modelControls.effort")}</span>
-            <span
-              ref={(element) => (valueLabel = element)}
-              class="chat-controls__effort-value"
-              data-inherited={!view().hasThinkingOverride ? "true" : "false"}
-              aria-hidden="true"
-            >
+          <MenuHeading
+            label={t("chat.modelControls.effort")}
+            trailing={
               <span
-                ref={(element) => (committedLabel = element)}
-                data-chat-thinking-preview-committed
+                ref={(element) => (valueLabel = element)}
+                class="oc-menu-heading__value chat-controls__effort-value"
+                data-inherited={!view().hasThinkingOverride ? "true" : "false"}
+                aria-hidden="true"
               >
-                {view().reasoningValueText}
+                <span
+                  ref={(element) => (committedLabel = element)}
+                  data-chat-thinking-preview-committed
+                >
+                  {view().reasoningValueText}
+                </span>
+                <For each={view().sliderStops} keyed={(stop) => stop.value}>
+                  {(stop, index) => (
+                    <span
+                      ref={elementRef<HTMLSpanElement>((element) => {
+                        previewLabels.add(element);
+                        return () => previewLabels.delete(element);
+                      })}
+                      data-chat-thinking-preview-index={index()}
+                      hidden
+                    >
+                      {formatEffortLabel(stop().label)}
+                    </span>
+                  )}
+                </For>
               </span>
-              <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                {(stop, index) => (
-                  <span
-                    ref={elementRef<HTMLSpanElement>((element) => {
-                      previewLabels.add(element);
-                      return () => previewLabels.delete(element);
-                    })}
-                    data-chat-thinking-preview-index={index()}
-                    hidden
-                  >
-                    {formatEffortLabel(stop().label)}
-                  </span>
-                )}
-              </For>
-            </span>
-          </div>
+            }
+          />
           {view().sliderStops.length > 1 ? (
             <div
               ref={elementRef<HTMLDivElement>((element) => {
@@ -499,9 +493,8 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       )}
       {props.fastMode.supported && (
         <div class="chat-controls__speed-panel chat-controls__speed-panel--inline">
-          <span class="chat-controls__effort-heading">{t("chat.modelControls.speed")}</span>
+          <span class="oc-menu-heading__label">{t("chat.modelControls.speed")}</span>
           <ChatPreferenceSegments
-            kind="speed"
             label={t("chat.modelControls.speed")}
             options={view().speedOptions}
             selected={view().selectedSpeed}

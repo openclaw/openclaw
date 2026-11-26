@@ -17,7 +17,7 @@ import {
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
 import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
-import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsPersonaList, resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
 import {
   isTtsProviderConfiguredAsync,
   listTtsPersonas,
@@ -35,7 +35,7 @@ import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 async function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
-  const settings = resolveTtsSettingsSnapshot({
+  const settings = await resolveTtsSettingsSnapshotAsync({
     cfg,
     preparedTtsPreferences: await prepareTtsPreferences(),
   });
@@ -195,7 +195,21 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
-        respondError(respond, ErrorCodes.UNAVAILABLE, result.error ?? "TTS synthesis failed");
+        const primary = result.attempts?.[0];
+        const unconfiguredProvider =
+          primary?.reasonCode === "not_configured" &&
+          primary.personaBinding !== "missing" &&
+          !result.attempts?.some((attempt) => attempt.outcome === "failed")
+            ? primary.provider
+            : undefined;
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          result.error ?? "TTS synthesis failed",
+          unconfiguredProvider
+            ? { details: { unconfiguredSpeechProvider: unconfiguredProvider } }
+            : undefined,
+        );
         return;
       }
       respond(true, {

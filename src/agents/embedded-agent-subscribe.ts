@@ -31,6 +31,7 @@ import {
 } from "./embedded-agent-utils.js";
 import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
 
@@ -282,6 +283,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.toolActivityPresentation = new ToolActivityPresentation();
     state.liveEditDiffStateById.clear();
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;

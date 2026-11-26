@@ -74,9 +74,7 @@ describe("requestSessionUsage", () => {
     const filters = {
       query: "provider:openai",
       selectedDays: ["2026-07-14"],
-      selectedHours: [12],
       selectedSessions: ["agent:main:chosen"],
-      recentKeys: ["agent:main:chosen"],
       offset: 50,
       sort: "cost",
       sortDirection: "asc",

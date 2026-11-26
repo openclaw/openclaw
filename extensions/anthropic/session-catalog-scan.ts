@@ -105,6 +105,7 @@ const projectTreeSlots = new Map<
 >();
 
 export type ClaudeProjectsTreeSnapshot = {
+  complete?: boolean;
   root: string;
   resolvedRoot?: string;
   projectDirectories: ClaudeProjectDirectorySnapshot[];
@@ -289,7 +290,7 @@ export async function readProjectsTreeSnapshot(
   const full =
     !previous?.resolvedRoot ||
     options.forceRefresh ||
-    current.hardExpiresAt <= Date.now() ||
+    current.hardExpiresAt <= performance.now() ||
     dirty === "all";
   setBoundedCache(projectTreeSlots, root, current, 8, (evicted) => {
     void evicted.watch.close().catch((error: unknown) => {
@@ -375,18 +376,19 @@ export async function readProjectsTreeSnapshot(
       a.name.localeCompare(b.name),
     );
     if (full) {
-      current.hardExpiresAt = Date.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
+      current.hardExpiresAt = performance.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
     }
     if (!complete) {
       // Another dirty directory must not postpone recovery of an earlier failed read.
       current.hardExpiresAt = Math.min(
         current.hardExpiresAt,
-        Date.now() + CLAUDE_PARTIAL_SCAN_TTL_MS,
+        performance.now() + CLAUDE_PARTIAL_SCAN_TTL_MS,
       );
     }
     return {
       root,
       resolvedRoot,
+      complete,
       projectDirectories,
       treeStamp: JSON.stringify([resolvedRoot, projectDirectories.map((dir) => dir.stamp)]),
     };

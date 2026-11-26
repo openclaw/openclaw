@@ -2,8 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
+
+/** Normalize launcher paths for platform-aware identity comparison. */
+export function normalizeServicePathForCompare(
+  value: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
+}
 
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
@@ -97,37 +109,54 @@ export function mergeServicePath(
     }
   };
   addPath(nextPath);
-  if (platform !== "darwin") {
-    addPath(existingPath, { preserve: true });
-    // Regenerated entries are already admitted even when existing-only filters reject them.
-    const platformPath = platform === "win32" ? path.win32 : path.posix;
-    const normalizeOrderEntry = (entry: string) => {
-      const normalized =
-        platform === "win32"
-          ? normalizeServicePathEntry(entry, platform)
-          : platformPath.normalize(entry);
-      return normalized.endsWith("/") && normalized !== platformPath.parse(normalized).root
-        ? normalized.slice(0, -1)
-        : normalized;
-    };
-    const admitted = new Map(segments.map((segment) => [normalizeOrderEntry(segment), segment]));
-    const preserved = (existingPath?.split(path.delimiter) ?? []).flatMap((segment) => {
-      const trimmed = segment.trim();
-      const normalized = platformPath.normalize(trimmed);
-      // Keep admitted spellings because the audit distinguishes trailing separators.
-      const entry = seen.has(trimmed)
-        ? trimmed
-        : seen.has(normalized)
-          ? normalized
-          : admitted.get(normalizeOrderEntry(trimmed));
-      return entry === undefined ? [] : [entry];
-    });
-    const existing = new Set(preserved.map(normalizeOrderEntry));
-    const ordered = [
-      ...segments.filter((segment) => !existing.has(normalizeOrderEntry(segment))),
-      ...preserved,
-    ];
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  const normalizeOrderEntry = (entry: string) => {
+    const normalized =
+      platform === "win32"
+        ? normalizeServicePathEntry(entry, platform)
+        : platformPath.normalize(entry);
+    return normalized.endsWith("/") && normalized !== platformPath.parse(normalized).root
+      ? normalized.slice(0, -1)
+      : normalized;
+  };
+  if (platform === "darwin") {
+    // LaunchAgents keep only regenerated entries, but the installed order among them
+    // survives so the preservation audit accepts the refresh (#204735).
+    const rank = new Map<string, number>();
+    for (const segment of existingPath?.split(path.delimiter) ?? []) {
+      const key = normalizeOrderEntry(segment.trim());
+      if (!rank.has(key)) {
+        rank.set(key, rank.size);
+      }
+    }
+    const position = (segment: string) => rank.get(normalizeOrderEntry(segment));
+    const shared = segments
+      .filter((segment) => position(segment) !== undefined)
+      .toSorted((a, b) => (position(a) ?? 0) - (position(b) ?? 0));
+    let next = 0;
+    const ordered = segments.map((segment) =>
+      position(segment) === undefined ? segment : (shared[next++] ?? segment),
+    );
     return ordered.length > 0 ? ordered.join(path.delimiter) : undefined;
   }
-  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
+  addPath(existingPath, { preserve: true });
+  // Regenerated entries are already admitted even when existing-only filters reject them.
+  const admitted = new Map(segments.map((segment) => [normalizeOrderEntry(segment), segment]));
+  const preserved = (existingPath?.split(path.delimiter) ?? []).flatMap((segment) => {
+    const trimmed = segment.trim();
+    const normalized = platformPath.normalize(trimmed);
+    // Keep admitted spellings because the audit distinguishes trailing separators.
+    const entry = seen.has(trimmed)
+      ? trimmed
+      : seen.has(normalized)
+        ? normalized
+        : admitted.get(normalizeOrderEntry(trimmed));
+    return entry === undefined ? [] : [entry];
+  });
+  const existing = new Set(preserved.map(normalizeOrderEntry));
+  const ordered = [
+    ...segments.filter((segment) => !existing.has(normalizeOrderEntry(segment))),
+    ...preserved,
+  ];
+  return ordered.length > 0 ? ordered.join(path.delimiter) : undefined;
 }

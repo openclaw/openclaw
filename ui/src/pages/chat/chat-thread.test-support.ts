@@ -1,3 +1,4 @@
+import { projectAutomationCreationCards } from "./chat-automation-creation-projection.ts";
 import { buildCachedChatItems } from "./chat-thread.ts";
 
 export type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
@@ -9,6 +10,7 @@ export function createProps(overrides: Partial<CachedChatItemsProps> = {}): Cach
     runId: null,
     messages: [],
     toolMessages: [],
+    projectAutomations: projectAutomationCreationCards,
     streamSegments: [],
     stream: null,
     streamStartedAt: null,

@@ -16,7 +16,8 @@ import type {
   UpdateRunReconciliationResult,
 } from "./update-run-reconciliation.types.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
-import { persistRun, updateRunLedgerSchema as schema, upsertStep } from "./update-run-write.js";
+import { upsertStep } from "./update-run-step-upsert.js";
+import { persistRun, updateRunLedgerSchema as schema } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 
@@ -87,7 +88,7 @@ export function reconcileUpdateRunCandidatesInWorker(
           history.incomplete
         ) {
           throw new Error(
-            "Update history changed during inspection and now needs post-core maintenance. Retry openclaw update repair; if the managed Gateway cannot stop, run openclaw gateway stop first.",
+            "Update history changed during inspection and now needs post-core maintenance. Retry openclaw update repair; if the managed Gateway cannot stop, run openclaw gateway stop --force first.",
           );
         }
       }

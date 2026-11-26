@@ -1,0 +1,63 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/fixture/workspace",
+      "systemAgent": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      }
+    },
+    "ownership": "explicit",
+    "entries": {
+      "main": {
+        "name": "main",
+        "workspace": "/home/fixture/workspace",
+        "agentDir": "/home/fixture/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "main"
+        }
+      },
+      "ops": {
+        "name": "ops",
+        "workspace": "/home/fixture/workspace-ops",
+        "agentDir": "/home/fixture/.openclaw/agents/ops/agent",
+        "identity": {
+          "name": "ops"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "anthropic": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      },
+      "codex": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      }
+    }
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true,
+      "utilityModelSeparation": true
+    },
+    "lastTouchedVersion": "2026.9.37"
+  },
+  "gateway": {
+    "mode": "local"
+  },
+  "talk": {
+    "agentId": "main"
+  }
+}

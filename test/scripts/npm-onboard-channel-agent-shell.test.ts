@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -20,6 +21,7 @@ type Scenario = {
   helpFailure?: boolean;
   doctorExitCode?: number;
   dirtyState?: boolean;
+  realMock?: boolean;
 };
 
 function writeFixture(file: string, content: string | Record<string, unknown>, executable = false) {
@@ -61,11 +63,18 @@ function runScenario(scenario: Scenario = {}) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
   const cli = join(bin, "openclaw");
+  const cliModule = join(bin, "openclaw.mjs");
   writeFixture(
     cli,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+    `#!/bin/bash
+exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" "$@"
+`,
+    true,
+  );
+  writeFixture(
+    cliModule,
+    `import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const env = process.env;
 fs.appendFileSync(env.EVENTS, JSON.stringify(args) + "\\n");
@@ -92,6 +101,13 @@ if (args.includes("--help")) {
 } else if (args[0] === "channels" && args[1] === "add" && env.BUNDLED === "0") {
   if (current && !fs.existsSync(dependencyPath())) fail("external channel needs consent first");
   if (!current) installChannelDependency();
+} else if (args[0] === "assertion" && args[1] === "assert-mock-model-config" && env.REAL_MOCK === "1") {
+  const response = await fetch("http://127.0.0.1:" + args[2] + "/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "fixture", messages: [{ role: "user", content: "hello" }] }),
+  });
+  if (!(await response.text()).includes("OPENCLAW_AGENT_E2E_OK_ASSISTANT")) fail("wrong mock listener");
 } else if (args[0] === "identity") {
   console.log("execution-fixture");
 } else if (args[0] === "doctor" && env.DOCTOR_EXIT_CODE) {
@@ -114,14 +130,14 @@ function installChannelDependency() {
     join(bin, "node"),
     `#!/bin/bash
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs ]; then
-  exec "$REAL_NODE" "$FIXTURE_CLI" assertion "\${@:2}"
+  exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" assertion "\${@:2}"
 fi
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs ]; then
   if [ "$2" = clean-home ]; then exec "$REAL_NODE" "$@"; fi
   if [ "$2" = run-id ]; then printf '%s' admitted-run-fixture; exit 0; fi
   # Projection/storage assertions have their own real SQLite support tests.
   [ "$2" = verify ] || exit 0
-  exec "$REAL_NODE" "$FIXTURE_CLI" identity "\${@:2}"
+  exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" identity "\${@:2}"
 fi
 exec "$REAL_NODE" "$@"
 `,
@@ -142,8 +158,12 @@ export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 openclaw_e2e_install_package() { mkdir -p "$HOME/.openclaw"; }
 openclaw_e2e_package_root() { printf '%s' "$PACKAGE_ROOT"; }
 openclaw_e2e_package_entrypoint() { printf '%s/openclaw.mjs' "$PACKAGE_ROOT"; }
-openclaw_e2e_start_mock_openai() { :; }
-openclaw_e2e_wait_mock_openai() { :; }
+${
+  scenario.realMock
+    ? ""
+    : `openclaw_e2e_start_mock_openai() { :; }
+openclaw_e2e_wait_mock_openai() { printf '%s' 44080; }`
+}
 openclaw_e2e_start_gateway() { "$FIXTURE_CLI" gateway-start; printf '%s' fixture-gateway; }
 openclaw_e2e_wait_gateway_ready() { :; }
 openclaw_e2e_stop_process() {
@@ -170,8 +190,10 @@ openclaw_e2e_stop_process() {
       TMPDIR: root,
       REAL_NODE: testNodeExecPath,
       FIXTURE_CLI: cli,
+      FIXTURE_CLI_MODULE: cliModule,
       PACKAGE_ROOT: packageRoot,
       EVENTS: eventsPath,
+      REAL_MOCK: scenario.realMock ? "1" : "0",
       CONSENT: scenario.consent === false ? "0" : "1",
       BUNDLED: bundled ? "1" : "0",
       HELP_FAILURE: scenario.helpFailure ? "1" : "0",
@@ -302,4 +324,33 @@ it("stops at a failed help probe before mutation", () => {
   const { result, events, detail } = runScenario({ helpFailure: true });
   expect(result.status, detail).toBe(29);
   expect(events).toEqual([["plugins", "install", "--help"]]);
+});
+
+it("uses its own mock listener when the former fixed port is occupied", async () => {
+  const blocker = createServer((_request, response) => response.end("unrelated listener"));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", (error: NodeJS.ErrnoException) => {
+        // Another listener already establishes the occupied-port precondition.
+        if (error.code === "EADDRINUSE") {
+          resolve();
+        } else {
+          reject(error);
+        }
+      });
+      blocker.listen(44080, "127.0.0.1", resolve);
+    });
+    const { result, events, detail } = runScenario({ realMock: true });
+    expect(result.status, detail).toBe(0);
+    const configuredPort = events.find((args) => args[1] === "configure-mock-model")?.[2];
+    expect(Number(configuredPort)).toBeGreaterThan(0);
+    expect(configuredPort).not.toBe("44080");
+    expect(events.find((args) => args[1] === "assert-mock-model-config")?.[2]).toBe(configuredPort);
+  } finally {
+    if (blocker.listening) {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
 });

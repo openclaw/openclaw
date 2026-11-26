@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -20,8 +20,8 @@ import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("tar", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tar")>();
+vi.mock("tar/raw", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar/raw")>();
   return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
 });
 
@@ -99,7 +99,10 @@ describe("standalone backup database completeness", () => {
         target,
         localCompanion: true,
       }),
-    ).rejects.toThrow("requires a local-companion checkpoint");
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: expect.stringContaining("requires a local-companion checkpoint"),
+    });
     await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
     const manifest = await readManifest(fixture.root, fixture.archiveRoot);
     manifest.profile = "local-companion";
@@ -129,6 +132,7 @@ describe("standalone backup database completeness", () => {
     "missing inventory",
   ])("verifies offline local-companion anchors and preserves namespaces (%s)", async (damage) => {
     const sourcePath = "/synthetic/state/state/openclaw.sqlite";
+    const namespace = "openclaw_team-reports_0123456789abcdef";
     const fixture = await writeSmallArchive([{ sourcePath, role: "global" }], []);
     const archivePath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
     const anchorPath = path.join(fixture.root, archivePath);
@@ -138,9 +142,9 @@ describe("standalone backup database completeness", () => {
       database.exec(
         "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)",
       );
-      database.exec(
-        "INSERT INTO openclaw_engine_anchor VALUES ('original-store', 'postgres', 'original_namespace')",
-      );
+      database
+        .prepare("INSERT INTO openclaw_engine_anchor VALUES ('original-store', 'postgres', ?)")
+        .run(namespace);
     }
     const manifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
     const manifest: BackupManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -152,7 +156,7 @@ describe("standalone backup database completeness", () => {
             {
               sourcePath,
               storeId: damage === "identity" ? "other-store" : "original-store",
-              namespace: damage === "namespace" ? "other_namespace" : "original_namespace",
+              namespace: damage === "namespace" ? "other_namespace" : namespace,
             },
           ];
     if (damage === "sidecar") {
@@ -173,6 +177,19 @@ describe("standalone backup database completeness", () => {
     if (damage === "unlisted export") {
       await fs.mkdir(`${anchorPath}.postgres`);
       await fs.writeFile(path.join(`${anchorPath}.postgres`, "database.sqlite"), "undeclared rows");
+    }
+    if (damage === "valid") {
+      const agentPath = "/synthetic/state/agents/main/openclaw-agent.sqlite";
+      const agentFile = path.join(
+        fixture.root,
+        buildBackupArchivePath(fixture.archiveRoot, agentPath),
+      );
+      await fs.mkdir(path.dirname(agentFile), { recursive: true });
+      using agent = new DatabaseSync(agentFile);
+      agent.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT,
+        schema_version INTEGER, agent_id TEXT);
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 1, 'main')`);
+      manifest.sqliteSnapshots!.push({ sourcePath: agentPath, role: "agent", agentId: "main" });
     }
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     const archive = await repack(fixture.root, fixture.archiveRoot, "companion");
@@ -221,7 +238,7 @@ describe("standalone backup database completeness", () => {
       restored.prepare("SELECT store_id, schema FROM openclaw_engine_anchor").get(),
     ).toMatchObject({
       store_id: "original-store",
-      schema: "original_namespace",
+      schema: namespace,
     });
     await expect(fs.stat(path.join(target, `${archivePath}.postgres`))).rejects.toThrow();
   });
@@ -460,6 +477,7 @@ describe("standalone backup database completeness", () => {
 
 describe("archive PostgreSQL capsule verification", () => {
   it.each([
+    "global image",
     "truncated archive",
     "SQLite snapshot",
     "manifest mismatch",
@@ -474,9 +492,12 @@ describe("archive PostgreSQL capsule verification", () => {
     "inner anchor WAL",
     "outer anchor WAL",
   ])(
-    "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
+    "verifies PostgreSQL portable images and rejects damaged capsules before restore (%s)",
     async (damage) => {
-      const sourcePath = "/synthetic/plugins/workboard.sqlite";
+      const globalImage = damage === "global image";
+      const sourcePath = globalImage
+        ? "/synthetic/state/state/openclaw.sqlite"
+        : "/synthetic/plugins/workboard.sqlite";
       const fixture = await writeSmallArchive([], []);
       const anchorPath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
       const directoryPath = `${anchorPath}.postgres`;
@@ -495,6 +516,11 @@ describe("archive PostgreSQL capsule verification", () => {
       {
         using db = new DatabaseSync(path.join(directory, "database.sqlite"));
         db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('retained')");
+        if (globalImage) {
+          db.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
+            INSERT INTO schema_meta VALUES ('primary', 'global');
+            CREATE TABLE agent_databases (agent_id TEXT, path TEXT)`);
+        }
       }
       using walWriter = damage.endsWith(" WAL")
         ? new DatabaseSync(
@@ -543,7 +569,7 @@ describe("archive PostgreSQL capsule verification", () => {
       const manifest = await readManifest(fixture.root, fixture.archiveRoot);
       const globalPath = `${fixture.payload}/state/openclaw.sqlite`;
       await fs.mkdir(path.dirname(path.join(fixture.root, globalPath)), { recursive: true });
-      {
+      if (!globalImage) {
         using db = new DatabaseSync(path.join(fixture.root, globalPath));
         db.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
           INSERT INTO schema_meta VALUES ('primary', 'global');
@@ -567,6 +593,7 @@ describe("archive PostgreSQL capsule verification", () => {
       await writeJson(archiveManifestPath, manifest);
       const readsBefore = vi.mocked(tar.t).mock.calls.length;
       const extractsBefore = vi.mocked(tar.x).mock.calls.length;
+      using removed = vi.spyOn(fs, "rm");
       await expect(
         verifyBackupArchive(
           await repack(
@@ -584,6 +611,14 @@ describe("archive PostgreSQL capsule verification", () => {
       ).resolves.toMatchObject({ ok: true });
       expect(tar.t).toHaveBeenCalledTimes(readsBefore + 1);
       expect(tar.x).toHaveBeenCalledTimes(extractsBefore);
+      if (globalImage) {
+        expect(
+          removed.mock.calls.some(([file]) =>
+            String(file).endsWith(path.join(directoryPath, "database.sqlite")),
+          ),
+        ).toBe(false);
+        return;
+      }
       if (damage === "SQLite snapshot") {
         const dbPath = path.join(fixture.root, globalPath);
         const bytes = await fs.readFile(dbPath);

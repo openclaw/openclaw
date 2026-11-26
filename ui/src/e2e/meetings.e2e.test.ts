@@ -106,6 +106,79 @@ async function expectDetailRequests(gateway: Gateway) {
 }
 
 suite.define(() => {
+  it("keeps a fallback speaker ID compact beside the timestamp", () =>
+    suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const speakerId =
+          "@release_readiness_transcript_captioning_service:collaboration.example.invalid";
+        await installMockGateway(page, {
+          methodResponses: {
+            "transcripts.list": { sessions: [meeting], nextCursor: null },
+            "transcripts.get": {
+              ...detail,
+              utterances: [
+                {
+                  sequence: 1,
+                  speakerId,
+                  startedAt: meeting.startedAt,
+                  text: "Here is the checkpoint.",
+                  final: true,
+                },
+                {
+                  sequence: 2,
+                  speakerId,
+                  speakerLabel: "Ada",
+                  startedAt: meeting.startedAt,
+                  text: "I can review it.",
+                  final: true,
+                },
+              ],
+            } satisfies TranscriptsGetResult,
+          },
+        });
+        await page.goto(suite.server.baseUrl + "meetings");
+        await page.getByRole("link", { name: /Design review/u }).tap();
+        const reader = page.locator(".transcripts-reader");
+        await reader.getByRole("tab", { name: "Transcript", exact: true }).tap();
+        const byline = reader.locator(".transcripts-utterance__byline").first();
+        await byline.getByText(speakerId, { exact: true }).waitFor();
+        expect(
+          await byline.evaluate((el) => {
+            const bounds = el.getBoundingClientRect();
+            const strong = el.querySelector("strong")!;
+            const text = strong.querySelector("bdi")!.firstChild!;
+            const label = document.createRange();
+            label.selectNodeContents(text);
+            const lines = new Set(Array.from(label.getClientRects(), (r) => r.top));
+            label.setStart(text, text.textContent!.lastIndexOf("_service"));
+            const suffix = label.getBoundingClientRect();
+            const time = el.querySelector("time")!.getBoundingClientRect();
+            const name = strong.getBoundingClientRect();
+            return (
+              lines.size === 1 &&
+              strong.title === text.textContent &&
+              suffix.left >= name.left - 1 &&
+              suffix.right <= name.right + 1 &&
+              time.left >= name.right &&
+              time.right <= bounds.right + 1
+            );
+          }),
+        ).toBe(true);
+        expect(
+          await reader.locator(".transcripts-utterance__byline strong").nth(1).textContent(),
+        ).toBe("Ada");
+        await reader.getByRole("link", { name: "Back to library" }).press("Enter");
+        await expect
+          .poll(() =>
+            page
+              .getByRole("searchbox", { name: "Search meetings" })
+              .evaluate((el) => el === document.activeElement),
+          )
+          .toBe(true);
+      },
+    ));
+
   it("returns from capture settings to the same meeting and preserves native new-tab links", () =>
     suite.withPage(
       { viewport: { width: 1440, height: 900 }, locale: "en-US" },
@@ -130,7 +203,17 @@ suite.define(() => {
         const captureUrl = `${suite.server.baseUrl}${capturePath}`;
         await page.goto(meetingUrl);
         const view = page.locator("openclaw-meetings-page");
-        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        const title = view.getByRole("heading", { name: "Design review", exact: true });
+        await title.focus();
+        await expect
+          .poll(() => title.evaluate((heading) => heading === document.activeElement))
+          .toBe(true);
+        const excessFocusWidth = await title.evaluate((heading) => {
+          const text = document.createRange();
+          text.selectNodeContents(heading);
+          return heading.getBoundingClientRect().width - text.getBoundingClientRect().width;
+        });
+        expect(Math.abs(excessFocusWidth)).toBeLessThan(1);
         const capture = view.getByRole("link", { name: "Meeting capture", exact: true });
         expect(await capture.getAttribute("href")).toBe(`/${capturePath}`);
         await capture.click();
@@ -360,6 +443,103 @@ suite.define(() => {
       await expectDetailRequests(gateway);
     }));
 
+  it("keeps a toggled desktop filter disclosure open while the route settles", () =>
+    suite.withPage(
+      { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: { "transcripts.list": { sessions: [meeting], nextCursor: null } },
+        });
+        await page.goto(`${suite.server.baseUrl}meetings`);
+        const view = page.locator("openclaw-meetings-page");
+        await view.getByRole("link", { name: /Design review/ }).waitFor();
+        const disclosure = view.locator(".transcripts-filters details");
+        await disclosure.locator("summary").click();
+        const search = view.getByRole("searchbox", { name: "Search meetings", exact: true });
+        await search.fill("design");
+        await search.press("Enter");
+        await page.waitForURL(/query=design/u);
+        await view.getByRole("link", { name: /Design review/ }).waitFor();
+        await page.waitForTimeout(500);
+        expect(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+          true,
+        );
+      },
+    ));
+
+  it("moves filters to a phone sheet and page actions to a menu without losing either", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "transcripts.list": { sessions: [meeting], nextCursor: null },
+          "transcripts.get": detail,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}meetings`);
+      const view = page.locator("openclaw-meetings-page");
+      await view.getByRole("link", { name: /Design review/ }).waitFor();
+      const filters = view.locator("form.transcripts-filters");
+      const trigger = view.getByRole("button", { name: "Filters", exact: true });
+      const panel = view.getByRole("dialog", { name: "Filters", exact: true });
+      await expectAbsent(view.locator(".transcripts-filters details"));
+      await expectAbsent(view.getByRole("button", { name: "Refresh", exact: true }));
+      expect(await panel.isVisible()).toBe(false);
+
+      const search = view.getByRole("searchbox", { name: "Search meetings", exact: true });
+      await search.fill("design");
+      await search.press("Enter");
+      await page.waitForURL(/query=design/u);
+      expect(await trigger.evaluate((element) => element.classList.contains("active"))).toBe(false);
+      await expect
+        .poll(async () => (await gateway.getRequests("transcripts.list")).at(-1)?.params)
+        .toMatchObject({ query: "design" });
+
+      await trigger.click();
+      await panel.waitFor();
+      await panel.getByRole("searchbox", { name: "Provider", exact: true }).fill("discord-voice");
+      await panel.getByLabel("Started on or after", { exact: true }).fill("2026-08-01");
+      await panel.getByRole("button", { name: "Filter", exact: true }).click();
+      await page.waitForURL(/providerId=discord-voice/u);
+      expect(new URL(page.url()).searchParams.get("query")).toBe("design");
+      expect(new URL(page.url()).searchParams.get("startedAfter")).toBe("2026-08-01");
+      await expect.poll(() => panel.isVisible()).toBe(false);
+      expect(await trigger.evaluate((element) => element.classList.contains("active"))).toBe(true);
+
+      await trigger.click();
+      await panel.getByRole("button", { name: "Clear filters", exact: true }).click();
+      await page.waitForURL((url) => url.search === "");
+      await expect.poll(() => panel.isVisible()).toBe(false);
+      expect(await trigger.evaluate((element) => element.classList.contains("active"))).toBe(false);
+      expect(await search.inputValue()).toBe("");
+      expect(await filters.locator('[name="providerId"]').inputValue()).toBe("");
+
+      const listRequests = (await gateway.getRequests("transcripts.list")).length;
+      // The floating header hosts the page's actions outside the page element.
+      const more = page.getByRole("button", { name: "More actions", exact: true });
+      await more.click();
+      await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("transcripts.list")).length)
+        .toBeGreaterThan(listRequests);
+      await more.click();
+      await page.getByRole("menuitem", { name: "Meeting capture", exact: true }).click();
+      await page.getByRole("heading", { name: "Communications", exact: true }).waitFor();
+      await page.goto(`${suite.server.baseUrl}meetings`);
+      await view.getByRole("link", { name: /Design review/ }).click();
+      await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+      await expectVisible(more);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await view.getByRole("tab", { name: "Transcript", exact: true }).click();
+      const find = view.getByRole("searchbox", { name: "Search within this transcript" });
+      await find.fill("a long query that is wider than the search field on this phone");
+      const submit = view.getByRole("button", { name: "Search", exact: true });
+      await submit.click();
+      const clear = view.getByRole("button", { name: "Clear search", exact: true });
+      await clear.waitFor();
+    }));
+
   it("shows an actionable empty state and refreshes without hiding errors", () =>
     suite.withPage({ viewport: { width: 1200, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -367,7 +547,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}meetings`);
       const view = page.locator("openclaw-meetings-page");
-      await view.getByRole("heading", { name: "Your meeting notes, together" }).waitFor();
+      await view.getByRole("heading", { name: "No meetings yet." }).waitFor();
       expect(
         await view.getByRole("link", { name: "Set up meeting transcripts" }).getAttribute("href"),
       ).toBe("https://docs.openclaw.ai/cli/transcripts");
@@ -379,6 +559,6 @@ suite.define(() => {
       expect(await view.getByRole("alert").textContent()).toContain(
         "Meetings temporarily unavailable",
       );
-      await expectAbsent(view.getByRole("heading", { name: "Your meeting notes, together" }));
+      await expectAbsent(view.getByRole("heading", { name: "No meetings yet." }));
     }));
 });

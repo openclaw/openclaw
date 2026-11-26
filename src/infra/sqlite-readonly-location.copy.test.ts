@@ -11,11 +11,11 @@ import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
 import {
-  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
 import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";

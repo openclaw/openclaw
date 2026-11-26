@@ -124,6 +124,7 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
         const session = createProviderBrowserAuthSession({
           signal: action.signal,
           browserOrigin: client?.browserOrigin,
+          authPolicy: client?.authPolicy,
           browserBinding: {
             cookieName: "openclaw-channel-link-" + params.browserNonce,
             cookieValue: params.browserNonce,
@@ -172,6 +173,14 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
             },
           })
           .then(async ({ code }) => {
+            // The OAuth callback is new work: admit it before exchanging its proof.
+            const callbackAction = await preparePersonalProfileAction(
+              options,
+              "operator.sessions.read",
+            );
+            if (callbackAction.owner !== action.owner) {
+              throw new Error("Account linking changed. Connect again from your profile.");
+            }
             assertCurrent();
             const identity = await adapter.exchange({
               code,

@@ -7,12 +7,8 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import { withTimeout } from "../infra/fs-safe.js";
-import {
-  installLaunchAgent,
-  readLaunchAgentRuntime,
-  resolveLaunchAgentPlistPath,
-  uninstallLaunchAgent,
-} from "./launchd.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
+import { installLaunchAgent, readLaunchAgentRuntime, uninstallLaunchAgent } from "./launchd.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 const STARTUP_TIMEOUT_MS = 45_000;

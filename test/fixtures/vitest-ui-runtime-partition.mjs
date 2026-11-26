@@ -163,7 +163,7 @@ try {
     actual: selectionIds(await sequencer.sort(boundedSpecs)),
   };
   const mixed = [...schedulingSpecs];
-  for (const name of ["unit-mock-registry", "chromium", "unit-timing"]) {
+  for (const name of ["unit-mock-registry", "chromium", "chromium-mock-registry", "unit-timing"]) {
     const project = ctx.getProjectByName(name);
     const specs = schedulingSpecs.map((spec) => project.createSpecification(spec.moduleId));
     scheduling.preserved.push({

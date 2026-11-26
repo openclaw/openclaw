@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import { runSystemAgentGatewayTask } from "../gateway/server-methods/system-agent-execution.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { setPreRestartDeferralCheck } from "../infra/restart.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { getCommandLaneSnapshot, getTotalQueueSize } from "../process/command-queue.js";
 import {
@@ -40,7 +42,9 @@ export async function runHostedStopNativeProbe(params: {
     lockPort: params.port,
     completeBoot: (completion) => appendEvent("boot-completion", completion),
     start: async (options) => {
+      setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
       const host = options?.hostLifecycle;
+      let requestWork: Promise<void> | undefined;
       // External stop/restart must still extinguish this idle descendant. Hosted
       // close owns its graceful IPC exit, as a real server owns worker teardown.
       const child = spawn(
@@ -62,7 +66,7 @@ export async function runHostedStopNativeProbe(params: {
           return;
         }
         requested = true;
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
+        requestWork = runWithGatewayIndependentRootWorkAdmission(async () => {
           let callerLive = true;
           try {
             const lines: string[] = [];
@@ -71,8 +75,8 @@ export async function runHostedStopNativeProbe(params: {
                 { kind: action === "stop" ? "gateway-stop" : "gateway-restart" },
                 {
                   log: (...args) => lines.push(args.join(" ")),
-                  error: () => {
-                    throw new Error("Native hosted-stop audit failed");
+                  error: (...args) => {
+                    throw new Error(`Native hosted-stop audit failed: ${args.join(" ")}`);
                   },
                   exit: () => {
                     throw new Error("SystemAgent attempted process exit");
@@ -134,6 +138,8 @@ export async function runHostedStopNativeProbe(params: {
         startupSettled: Promise.resolve(),
         getTailscaleIngressEndpoint: () => undefined,
         close: async () => {
+          // Match the real server's admitted connection-work drain before resource close.
+          await requestWork;
           assert.equal(responseFinished, true);
           assert.deepEqual(snapshot(), { roots: 0, active: 0, queued: 0 });
           assert.equal(getTotalQueueSize(), 0);

@@ -5,7 +5,7 @@ import {
   selectedOperations,
 } from "../../../sessions/session-controller.lifecycle-projections.js";
 import { captureSessionWorkRunInterruptions } from "../../../sessions/session-controller.lifecycle.js";
-import { hasOperationBackendRunId } from "../../../sessions/session-controller.state.js";
+import { getOperationBackendRunIds } from "../../../sessions/session-controller.state.js";
 import { captureSessionControllerStop } from "../../../sessions/session-controller.stop.js";
 import type { SessionTarget } from "../../../sessions/session-controller.target.js";
 import type { SubagentKillInputSnapshot } from "./subagent-control.types.js";
@@ -34,7 +34,7 @@ export function captureSubagentKillSources(params: {
     operations: [...selectedOperations([target])].filter(
       (operation) =>
         (sessionId === undefined || operation.hasOwnedSessionId(sessionId)) &&
-        (!exactRun || hasOperationBackendRunId(operation, entry.runId)),
+        (!exactRun || getOperationBackendRunIds(operation)?.has(entry.runId)),
     ),
   });
   const queued: SubagentKillInputSnapshot[] = params.captureQueued

@@ -15,6 +15,12 @@ Native SQLite failures include their error codes. Stop the Gateway, preserve the
 database and its SQLite sidecars, resolve the reported cause, then rerun
 `openclaw doctor --fix` against the same state and configuration.
 
+Historical transcript repair scans compressed events without retaining the whole
+scan in the JavaScript heap. Repairs commit bounded batches and advance the
+existing resume cursor only after a session finishes. An interrupted repair can
+be rerun against the same state. This repair adds no schema change and needs no
+larger Node heap.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
@@ -32,6 +38,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
+    Doctor also repairs retained ISO-8601 `endedAt` strings, including June 2026 timestamps. It backs up the database, converts valid timestamps with an explicit UTC or numeric offset to epoch milliseconds, updates indexed session timing, and reports only the repaired count in a warning. Session entries and unrelated fields are preserved; repeating the repair makes no further changes. Invalid dates, timestamps without a timezone, and values requiring sub-millisecond precision remain available for offline repair or restoration with the existing guidance.
+
     Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. The July Doctor importer could still leave `provider` and `lastProvider` aliases on session rows. Session reads refuse those rows with a migration-required error until `openclaw doctor --fix` runs; Doctor backs up the affected SQLite databases, then rewrites the aliases into the current `delivery` state and its query projections together. Rows that still need the retired `room` → `groupChannel` conversion are refused without changing the original store: preserve the state, install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
 
     Relative `session.store` paths resolve against the active state directory. Older versions resolved them against the Gateway's working directory, which could create a second store under `~/agents/` in a systemd installation. Doctor backs up the affected stores and shared state, copies sessions and retained history into the state-relative store, and retires the old registrations after verification. The original database and its backup remain available for recovery. Completed repairs do not replay that retained source or restore conversations deleted later.
@@ -73,6 +81,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. `openclaw update status` and Doctor report deferred plugin repairs; Gateway startup consumes canonical state without reading those pending records.
 
+    If Doctor cannot load a plugin's migration contract during an update, it reports the plugin and the load error, leaves its migration inputs in place, and continues unrelated repairs. Once the contract loads again, `openclaw update repair` or `openclaw doctor --fix` can finish the migration. If the loaded contract disagrees with the manifest's migration actions, their order, or their authority, Doctor refuses the inconsistent plan.
+
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
 
     A missing transcript remains a warning when the available history and session metadata were imported successfully, including while a plugin migration is pending. Later Doctor runs preserve current SQLite edits and deletions instead of replaying the retained index. The missing-history warning keeps that index protected after archival. If a previously missing transcript appears, Doctor preserves it and reports a source conflict for inspection before completing the deferred migration.
@@ -87,7 +97,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     `openclaw doctor --fix`, including the repair pass during `openclaw update`, removes surrounding whitespace from historical task run IDs and child session keys. It repairs related subagent task bindings in the same transaction while preserving task IDs, physical subagent run IDs, and delivery records. If distinct run IDs would become the same ID, Doctor leaves the transaction unchanged and reports the conflicting bindings. New task writes normalize these fields before persistence; Gateway reads use the existing indexes without scanning for whitespace repairs. When replacing a binary directly, run Doctor against the same state before starting the new Gateway; official container image activation includes this repair pass.
 
-    Standalone `openclaw doctor --fix` removes invalid database registrations derived from the `(multiple)` session-store marker on every platform. It deletes verified empty files, preserves data-bearing or unreadable files, and reports retained paths. On Windows, it also consolidates internal database registrations that use both ordinary and extended-length (`\\?\` or `\\?\UNC\`) paths, keeping the newest recorded facts in the state-relative row. External database locations keep their existing spelling. Doctor skips these repairs with a warning during an update, including the candidate Doctor pass, so the updater's captured rollback inventory stays unchanged. Rerun standalone Doctor after the update finishes to repair existing registrations.
+    Standalone `openclaw doctor --fix` removes invalid database registrations derived from the `(multiple)` session-store marker on every platform. It deletes verified empty files, preserves data-bearing or unreadable files, and reports retained paths. On Windows, it also consolidates internal database registrations that use both ordinary and extended-length (`\\?\` or `\\?\UNC\`) paths, keeping the newest recorded facts in the state-relative row. External database locations keep their existing spelling. Doctor skips these repairs during an update, including the candidate Doctor pass, so the updater's captured rollback inventory stays unchanged. It warns only when a registration needs repair, and the warning gives the count. Rerun standalone Doctor after the update finishes to repair those registrations.
 
     Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. Advisory readiness warnings allow the Gateway to start degraded. Startup logs the warnings once with the exact repair command; `openclaw status` and `openclaw doctor` show the running Gateway's warning report. Run `openclaw doctor --fix` against the same state/config, then restart the Gateway. Warning-bearing migrations remain incomplete until a later Doctor run. State that is unsafe to read still refuses startup.
 
@@ -233,7 +243,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     If `hooks.gmail.model` is set, doctor validates the model reference against the catalog and allowlist and warns when it will not resolve or is disallowed.
   </Accordion>
   <Accordion title="7. Sandbox image repair">
-    When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
+    When sandboxing is enabled, Doctor checks the selected container images and warns when one is missing, including after an update changes the default image. Missing images are warnings and do not block updates. Sandboxed turns still require the selected image. `openclaw doctor --fix` can build the default Docker image using the builder shipped in the npm package; updater-driven non-interactive Doctor reports the repair command without building it. Doctor does not silently switch to an older image with different contents. See [Images and setup](/gateway/sandboxing/images-and-setup).
   </Accordion>
   <Accordion title="7b. Plugin install cleanup">
     Doctor repairs legacy official ClawHub install records that predate recorded source authority. With `--fix`, it backfills the existing official host/channel fields only when the original spec and every recorded package identity agree with the official catalog. Local sources, partial or conflicting authority, and unverifiable identities require reinstalling to obtain trust for restricted runtime capabilities. Ordinary legacy npm records with a consistent official spec already satisfy trust. Plugin-scoped state and ingress queues do not require trusted provenance. See [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for refusal reason codes and remedies.

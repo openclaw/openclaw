@@ -51,7 +51,7 @@ export function registerRunMainTimelineTests({
         } else if (subcommand === "run") {
           expect(loadConfigMock).toHaveBeenCalledWith({
             observe: false,
-            skipPluginValidation: true,
+            pluginValidation: "core-only",
           });
         } else {
           expect(loadConfigMock).not.toHaveBeenCalled();

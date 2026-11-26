@@ -30,6 +30,7 @@ import { importRetiredStateSource } from "../../../infra/state-migrations.retire
 import { listRetiredCronStateFiles } from "../../../infra/state-migrations.retired-cron-files.js";
 import { listExistingRetiredStateFiles } from "../../../infra/state-migrations.retired-files.js";
 import { backupLegacyStateSource } from "../../../infra/state-migrations.source-backup.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -54,7 +55,6 @@ import { archiveLegacyCronFile } from "./quarantine-archive.js";
 import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
-  assertCronStateSchemaSupported,
   assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
 } from "./schema-safety.js";
@@ -200,7 +200,8 @@ export async function applyLegacyCronStoreRepair(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
-  assertCronStateSchemaSupported();
+  await assertCronStateSchemaSupportedAsync();
+  await prepareProviderModelPolicySurfaces();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -381,7 +382,9 @@ export async function applyLegacyCronStoreRepair(params: {
               assertRowsUnchanged: assertSnapshotCurrent,
             },
           );
-          changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          if (backup.backupPath) {
+            changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          }
           warnings.push(...backup.warnings);
         }
         await saveCronJobsStore(state.storePath, store, {

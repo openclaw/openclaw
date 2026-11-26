@@ -298,7 +298,7 @@ it.each([
   ["update", "allow", "Save watcher change"],
   ["update", "deny", "It did not stop or change the existing watcher"],
   ["add", "timeout", "This proposal did not create a watcher"],
-  [null, "timeout", "No decision arrived before the deadline"],
+  [null, "timeout", "This approval request expired without a recorded decision."],
 ] as const)(
   "presents %s / %s without overstating execution",
   async (operation, outcome, expected) => {
@@ -318,7 +318,7 @@ it.each([
     await settle(page);
     if (outcome === "allow") {
       expect(text(page, "h1")).toContain("Build monitor");
-      expect(page.textContent).toContain("after you leave this chat, until stopped");
+      expect(page.textContent).toContain("after you leave this session, until stopped");
       expect(page.textContent).toContain("restart automatically");
       expect(decision(page, "deny").textContent?.trim()).toBe("Cancel");
       expect(decision(page).textContent?.trim()).toBe(expected);
@@ -337,9 +337,25 @@ it.each([
       expect(page.textContent).toContain(expected);
       expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
       if (outcome === "timeout") {
-        expect(page.textContent).not.toContain("Another surface or an earlier attempt");
+        expect(page.textContent).not.toContain("A decision was already recorded");
       }
     }
+  },
+);
+
+it.each(["expired", "cancelled"] as const)(
+  "does not claim a recorded decision for %s requests",
+  async (status) => {
+    const base = { ...pendingApproval(), expiresAtMs: 2_000, resolvedAtMs: 2_000 };
+    const approval: ApprovalGetResult["approval"] =
+      status === "expired"
+        ? { ...base, status, reason: "timeout" }
+        : { ...base, status, reason: "run-aborted" };
+    const request = lookupRequest(approval);
+    const { page } = await createPage(request);
+    expect(text(page, ".approval-page__terminal")).toBe("You can close this page.");
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    expect(request.mock.calls).toEqual([["approval.get", { id: approval.id }]]);
   },
 );
 

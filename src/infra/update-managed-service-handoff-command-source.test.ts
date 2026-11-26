@@ -106,3 +106,28 @@ it.each([9_000, 1024 * 1024 + 1])(
     }
   },
 );
+
+it("keeps an elapsed recovery budget across wall-clock steps", () => {
+  let wallClock = 1_700_000_000_000;
+  let elapsed = 0;
+  const budget = runInNewContext(`${MANAGED_HANDOFF_COMMAND_SOURCE}\ncreateMonotonicBudget;`, {
+    Date: { now: () => wallClock },
+    performance: { now: () => elapsed },
+    params: { recoveryTimeoutMs: 2_400_000 },
+    hasManagedUpdateLease: () => true,
+  })(240_000);
+
+  elapsed = 60_000;
+  expect(budget.remainingMs()).toBe(180_000);
+
+  // A wall-clock step must not shorten or stretch the remaining budget, while the
+  // epoch deadline handed to runServiceCommand keeps tracking the live wall clock.
+  wallClock += 3_600_000;
+  expect([budget.remainingMs(), budget.commandDeadlineAt() - wallClock]).toEqual([
+    180_000, 180_000,
+  ]);
+  wallClock -= 7_200_000;
+  expect([budget.remainingMs(), budget.commandDeadlineAt() - wallClock]).toEqual([
+    180_000, 180_000,
+  ]);
+});

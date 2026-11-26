@@ -1,4 +1,7 @@
 const providerAliases = new Map([
+  ["ascii", "ascii-box"],
+  ["asciibox", "ascii-box"],
+  ["boat", "ascii-box"],
   ["blacksmith", "blacksmith-testbox"],
   ["cf", "cloudflare"],
   ["container", "local-container"],

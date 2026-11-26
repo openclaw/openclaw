@@ -1,0 +1,2 @@
+# Prove cold HTTP file-task deletion and root discovery lifecycle, failure fallback, canonical aliases, and compressed symlinks at existing boundaries.
+120

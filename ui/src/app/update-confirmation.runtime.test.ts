@@ -140,7 +140,7 @@ it("refuses a native update without a live authority check", async () => {
   expect(postMessage).not.toHaveBeenCalled();
   expect(startGatewayUpdate).not.toHaveBeenCalled();
   expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-    "Administrator access is required",
+    "You need admin access to change update settings or start an update.",
   );
   findButton("Cancel").click();
   await settled;
@@ -150,7 +150,7 @@ it.each([false, true])("routes a confirmed Mac update with bridge removed: %s", 
   const postMessage = installNativeBridge();
   const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
   const { dialog } = await getRenderedModalDialog(document.body);
-  expect(dialog.getAttribute("aria-label")).toBe("Update Mac app + Gateway");
+  expect(dialog.getAttribute("aria-label")).toBe("Update Mac app and restart?");
   if (removed) {
     Reflect.deleteProperty(window, "webkit");
   }
@@ -343,6 +343,71 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
+it("shows a simple starting state until the progress report arrives", async () => {
+  const drain = createDeferred();
+  const accepted = createDeferred<{ runId: string }>();
+  const progress = createDeferred<{ run: ReturnType<typeof createUpdateRunFixture> }>();
+  const run = createUpdateRunFixture({ phase: "staging" });
+  const request = vi.fn<RequestFn>(async (method) =>
+    method === "update.run"
+      ? accepted.promise
+      : method === "update.runs.get"
+        ? progress.promise
+        : {},
+  );
+  const harness = updateRunHarness(request);
+  const overlays = createApplicationOverlays(harness.gateway, {
+    drainConfigWrites: () => drain.promise,
+  });
+  let operation: Promise<void> | undefined;
+  const settled = confirmAndStartUpdateRuntime({
+    isCurrentTarget: overlays.captureUpdateTarget(),
+    startGatewayUpdate: () => {
+      operation = overlays.runUpdate();
+    },
+    watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+    updateAvailable: UPDATE_AVAILABLE,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+  try {
+    const { modal } = await getRenderedModalDialog(document.body);
+    findButton("Update and restart").click();
+    await flushMicrotasks();
+    flush();
+    const starting = "Starting update…";
+    expect.soft(modal.textContent).toContain(starting);
+    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+    drain.resolve();
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1),
+    );
+    expect.soft(modal.textContent).toContain(starting);
+    accepted.resolve({ runId: run.runId });
+    await waitForSolid(() =>
+      expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true),
+    );
+    expect.soft(modal.textContent).toContain(starting);
+    progress.resolve({ run });
+    await operation;
+    await waitForSolid(() =>
+      expect(modal.querySelector("openclaw-update-run-view")).not.toBeNull(),
+    );
+    expect(modal.textContent).not.toContain(starting);
+    expect(modal.querySelector(".update-run-view")?.getAttribute("data-run-id")).toBe(run.runId);
+    findButton("Close").click();
+    await settled;
+  } finally {
+    drain.resolve();
+    accepted.resolve({ runId: run.runId });
+    progress.resolve({ run });
+    await operation;
+    document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+    await settled;
+    overlays.dispose();
+  }
+});
+
 it.each([
   {
     action: "Close",
@@ -363,15 +428,12 @@ it.each([
   expect(startGatewayUpdate).toHaveBeenCalledOnce();
   const updating = findButton("Updating…");
   expect(updating.disabled).toBe(true);
-  expect(modal.textContent).toContain("Installing the update on the Gateway");
+  expect(modal.textContent).toContain("Starting update…");
 
-  // The Gateway goes away mid-install; the dialog is mounted outside the shell
-  // precisely so it can keep reporting through the disconnect.
+  // A temporary disconnect stays a quiet progress state, not a troubleshooting notice.
   await stream.push({ busy: true, connected: false });
-  expect(modal.textContent).toContain("The Gateway disconnected during the update");
-  expect(modal.textContent).toContain("openclaw triage");
-  expect(modal.textContent).toContain("on the Gateway host");
-  expect(modal.textContent).toContain("local coding agent");
+  expect(modal.textContent).toContain("Reconnecting…");
+  expect(modal.textContent).not.toContain("openclaw triage");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({ failure });
@@ -379,10 +441,10 @@ it.each([
   if (action === "Review update") {
     await stream.push({
       failure,
-      readError: "Could not check for updates: timeout",
+      readError: "Couldn’t check for updates. timeout",
     });
     expect(modal.textContent).toContain(failure);
-    expect(modal.textContent).toContain("Could not check for updates: timeout");
+    expect(modal.textContent).toContain("Couldn’t check for updates. timeout");
   }
   expect(onReviewUpdate).not.toHaveBeenCalled();
   findButton(action).click();
@@ -710,9 +772,7 @@ it.each([
       findButton("Check status").click();
       await statusOperation;
       flush();
-      expect(modal.textContent).toContain(
-        "Could not check for updates: Status refresh unavailable",
-      );
+      expect(modal.textContent).toContain("Couldn’t check for updates. Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
       expect(modal.querySelector(".update-run-view")).toBe(view);
@@ -723,9 +783,7 @@ it.each([
       await flushMicrotasks();
       expect(findButton("Checking status…")).toBe(check);
       expect(check.disabled).toBe(true);
-      expect(modal.textContent).toContain(
-        "Could not check for updates: Status refresh unavailable",
-      );
+      expect(modal.textContent).toContain("Couldn’t check for updates. Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       check.click();
@@ -733,7 +791,7 @@ it.each([
       await statusOperation;
       flush();
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
-      expect(modal.textContent).not.toContain("Could not check for updates");
+      expect(modal.textContent).not.toContain("Couldn’t check for updates");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       expect(view.textContent).toBe(reportText);
       harness.update({ phase: "connecting", client: null });
