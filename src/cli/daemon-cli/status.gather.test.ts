@@ -1491,7 +1491,7 @@ describe("gatherDaemonStatus", () => {
       const running = runtimeStatus === "running";
       const lastError = running
         ? "parse/handle error: Error: ENOSPC: no space left on device, write"
-        : "Gateway ownership could not be verified. Run `openclaw gateway recover-lock` to inspect the holder.";
+        : "Gateway ownership could not be verified. Stop the recorded Gateway before retrying.";
       serviceReadRuntime.mockResolvedValueOnce({ status: runtimeStatus });
       const portUsage: PortUsageTestSummary = {
         ...freePort(19001),

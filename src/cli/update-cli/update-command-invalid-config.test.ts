@@ -54,7 +54,7 @@ it("preserves the ownership refusal through dry-run config loading without leaki
     vi.mocked(defaultRuntime.writeJson).mock.calls,
     vi.mocked(defaultRuntime.error).mock.calls,
   ]);
-  expect(output).toContain("openclaw gateway recover-lock");
+  expect(output).toContain("Stop the recorded Gateway");
   expect(output).not.toContain(privateDetail);
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
 });
