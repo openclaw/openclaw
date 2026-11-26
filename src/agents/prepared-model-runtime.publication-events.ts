@@ -121,7 +121,7 @@ export function createCatalogAttemptReporter(
   owner: Pick<PreparedModelRuntimeOwner, "catalogAttempt">,
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
-  beforeProviderFailure?: () => void,
+  beforeProviderFailure: () => void,
 ) {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
@@ -147,7 +147,7 @@ export function createCatalogAttemptReporter(
         return;
       }
       if (kind === "provider") {
-        beforeProviderFailure?.();
+        beforeProviderFailure();
       }
       for (const provider of failedScope) {
         attempt.failedProviders[kind].add(provider);

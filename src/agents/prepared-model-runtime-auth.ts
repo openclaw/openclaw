@@ -29,57 +29,6 @@ export type PreparedModelRuntimeAuthScope = Readonly<{
 }>;
 
 /** Inventory follows identified accounts; credential use still follows the current auth owner. */
-export function preparedModelCatalogAuthIdentity(
-  source: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
-  includesProvider: (provider: string) => boolean = () => true,
-) {
-  const profiles = Object.entries(source.authStore.profiles).filter(([, profile]) =>
-    includesProvider(profile.provider),
-  );
-  const identifiedOAuth = profiles.filter(
-    ([, profile]) =>
-      profile.type === "oauth" && hasOAuthIdentity(profile) && !isOAuthRefreshFence(profile),
-  );
-  return {
-    profiles: Object.fromEntries(
-      profiles.map(([id, profile]) => {
-        if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
-          return [id, profile];
-        }
-        const {
-          access: _access,
-          refresh: _refresh,
-          expires: _expires,
-          idToken: _idToken,
-          ...account
-        } = profile;
-        return [id, account];
-      }),
-    ),
-    credentials: Object.fromEntries(
-      Object.entries(source.credentials ?? {})
-        .filter(([provider]) => includesProvider(provider))
-        .map(([provider, credential]) => {
-          if (credential.type !== "oauth") {
-            return [provider, credential];
-          }
-          const profileIds = identifiedOAuth
-            .flatMap(([id, profile]) =>
-              profile.type === "oauth" &&
-              normalizeProviderId(profile.provider) === normalizeProviderId(provider) &&
-              profile.access === credential.access &&
-              profile.refresh === credential.refresh &&
-              profile.expires === credential.expires
-                ? [id]
-                : [],
-            )
-            .toSorted();
-          return [provider, profileIds.length ? { profileIds } : credential];
-        }),
-    ),
-  };
-}
-
 export function hasSamePreparedModelCatalogAuth(
   previous: Pick<PreparedModelCatalogAuth, "authStore" | "credentials"> | undefined,
   next: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
@@ -88,9 +37,56 @@ export function hasSamePreparedModelCatalogAuth(
   if (!previous?.credentials || !next.credentials) {
     return false;
   }
+  const identity = (authStore: AuthProfileStore, credentials: Readonly<AuthStorageData>) => {
+    const profiles = Object.entries(authStore.profiles).filter(([, profile]) =>
+      includesProvider(profile.provider),
+    );
+    const identifiedOAuth = profiles.filter(
+      ([, profile]) =>
+        profile.type === "oauth" && hasOAuthIdentity(profile) && !isOAuthRefreshFence(profile),
+    );
+    return {
+      profiles: Object.fromEntries(
+        profiles.map(([id, profile]) => {
+          if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
+            return [id, profile];
+          }
+          const {
+            access: _access,
+            refresh: _refresh,
+            expires: _expires,
+            idToken: _idToken,
+            ...account
+          } = profile;
+          return [id, account];
+        }),
+      ),
+      credentials: Object.fromEntries(
+        Object.entries(credentials)
+          .filter(([provider]) => includesProvider(provider))
+          .map(([provider, credential]) => {
+            if (credential.type !== "oauth") {
+              return [provider, credential];
+            }
+            const profileIds = identifiedOAuth
+              .flatMap(([id, profile]) =>
+                profile.type === "oauth" &&
+                normalizeProviderId(profile.provider) === normalizeProviderId(provider) &&
+                profile.access === credential.access &&
+                profile.refresh === credential.refresh &&
+                profile.expires === credential.expires
+                  ? [id]
+                  : [],
+              )
+              .toSorted();
+            return [provider, profileIds.length ? { profileIds } : credential];
+          }),
+      ),
+    };
+  };
   return isDeepStrictEqual(
-    preparedModelCatalogAuthIdentity(previous, includesProvider),
-    preparedModelCatalogAuthIdentity(next, includesProvider),
+    identity(previous.authStore, previous.credentials),
+    identity(next.authStore, next.credentials),
   );
 }
 

@@ -3,7 +3,6 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
-  preparedModelCatalogAuthIdentity,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
@@ -88,10 +87,18 @@ export function preparedProviderCatalogCredentials(
   provider: string,
   normalize: (provider: string) => string,
 ): string {
+  const { authStore, credentials } = source;
   return fingerprintPreparedRuntimeFacts({
-    ...preparedModelCatalogAuthIdentity(source, (id) => normalize(id) === provider),
+    profiles: Object.fromEntries(
+      Object.entries(authStore.profiles).filter(
+        ([, profile]) => normalize(profile.provider) === provider,
+      ),
+    ),
+    credentials: Object.fromEntries(
+      Object.entries(credentials ?? {}).filter(([id]) => normalize(id) === provider),
+    ),
     order: Object.fromEntries(
-      Object.entries(source.authStore.order ?? {}).filter(([id]) => normalize(id) === provider),
+      Object.entries(authStore.order ?? {}).filter(([id]) => normalize(id) === provider),
     ),
   });
 }

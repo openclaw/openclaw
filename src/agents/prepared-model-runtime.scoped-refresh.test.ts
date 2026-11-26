@@ -1002,7 +1002,7 @@ describe("prepared model runtime scoped refresh", () => {
     }
   });
 
-  it("converges changedOnly across rotated worker OAuth and hot reload", async () => {
+  it("settles changedOnly when worker auth differs from startup facts", async () => {
     const provider = "demo";
     const id = `${provider}:u@e.test`;
     const setOAuth = (tag: string, expires: number) => {
@@ -1026,9 +1026,5 @@ describe("prepared model runtime scoped refresh", () => {
     await owner.loadFullModelCatalog!({ changedOnly: true });
     expect(catalogWorker).toHaveBeenCalledTimes(afterInitial);
     expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
-    setOAuth("reloaded", 9_000);
-    await hotReload(proConfig);
-    await published(proConfig).loadFullModelCatalog!({ changedOnly: true });
-    expect(catalogWorker).toHaveBeenCalledTimes(afterInitial);
   });
 });
