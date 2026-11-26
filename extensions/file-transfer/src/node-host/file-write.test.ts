@@ -619,6 +619,39 @@ describe("handleDirList", () => {
     expect(r.entries.map((e) => e.name)).toEqual([entry]);
     expect(r.nextPageToken).toBe(nextPageToken);
   });
+
+  it("clamps fractional maxEntries below one to one so pagination advances to completion", async () => {
+    await seed(["a.txt", "b.txt", "c.txt"]);
+
+    const first = await list({ path: at(), maxEntries: 0.5 });
+    expect(first.entries.map((e) => e.name)).toEqual(["a.txt"]);
+    expect(first.truncated).toBe(true);
+    expect(first.nextPageToken).toBe("1");
+
+    const second = await list({ path: at(), maxEntries: 0.5, pageToken: first.nextPageToken });
+    expect(second.entries.map((e) => e.name)).toEqual(["b.txt"]);
+    expect(second.truncated).toBe(true);
+    expect(second.nextPageToken).toBe("2");
+
+    const third = await list({ path: at(), maxEntries: 0.5, pageToken: second.nextPageToken });
+    expect(third.entries.map((e) => e.name)).toEqual(["c.txt"]);
+    expect(third.truncated).toBe(false);
+    expect(third.nextPageToken).toBeUndefined();
+  });
+
+  it("keeps non-positive maxEntries on the default page size and floors fractions above one", async () => {
+    await seed(["a.txt", "b.txt", "c.txt"]);
+
+    const zero = await list({ path: at(), maxEntries: 0 });
+    expect(zero.entries.map((e) => e.name)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    expect(zero.truncated).toBe(false);
+    expect(zero.nextPageToken).toBeUndefined();
+
+    const fractional = await list({ path: at(), maxEntries: 1.5 });
+    expect(fractional.entries.map((e) => e.name)).toEqual(["a.txt"]);
+    expect(fractional.truncated).toBe(true);
+    expect(fractional.nextPageToken).toBe("1");
+  });
 });
 
 const digest = (data: Buffer) => crypto.createHash("sha256").update(data).digest("hex");
