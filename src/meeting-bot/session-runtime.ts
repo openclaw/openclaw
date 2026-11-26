@@ -673,6 +673,7 @@ export class MeetingSessionRuntime<
       if (cleanup.browserLeft === true && browser?.health) {
         this.options.setBrowserHealth(session, {
           ...browser.health,
+          ...releasedMeetingBrowserHealth,
           inCall: false,
           micMuted: undefined,
           manualAction: undefined,
