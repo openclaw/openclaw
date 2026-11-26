@@ -3,34 +3,45 @@ import { OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS } from "../bootstrap/node-startup-env
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 
 const AUTO_CA = OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS;
+const SYSTEM_CA = "/etc/ssl/certs/ca-certificates.crt";
+const CUSTOM_CA = "/session/private-ca.pem";
 
 describe("snapshotNodeWorkerEnv", () => {
-  it("omits an automatically injected host CA path", () => {
-    const path = "/etc/ssl/certs/ca-certificates.crt";
-
-    const snapshot = snapshotNodeWorkerEnv({
-      NODE_EXTRA_CA_CERTS: path,
-      [AUTO_CA]: path,
-    });
+  it("omits an automatically injected host CA for a container launch", () => {
+    const snapshot = snapshotNodeWorkerEnv(
+      { NODE_EXTRA_CA_CERTS: SYSTEM_CA, [AUTO_CA]: SYSTEM_CA },
+      undefined,
+      { excludeAutomaticCa: true },
+    );
 
     expect(snapshot.NODE_EXTRA_CA_CERTS).toBeUndefined();
     expect(snapshot[AUTO_CA]).toBeUndefined();
   });
 
-  it("preserves an explicit custom CA path", () => {
-    const path = "/session/private-ca.pem";
-
-    const snapshot = snapshotNodeWorkerEnv({ NODE_EXTRA_CA_CERTS: path });
-
-    expect(snapshot.NODE_EXTRA_CA_CERTS).toBe(path);
-  });
-
-  it("preserves a CA path when automatic provenance does not match", () => {
+  it("keeps an automatically injected host CA for a host-process worker", () => {
     const snapshot = snapshotNodeWorkerEnv({
-      NODE_EXTRA_CA_CERTS: "/session/private-ca.pem",
-      [AUTO_CA]: "/etc/ssl/certs/ca-certificates.crt",
+      NODE_EXTRA_CA_CERTS: SYSTEM_CA,
+      [AUTO_CA]: SYSTEM_CA,
     });
 
-    expect(snapshot.NODE_EXTRA_CA_CERTS).toBe("/session/private-ca.pem");
+    expect(snapshot.NODE_EXTRA_CA_CERTS).toBe(SYSTEM_CA);
+  });
+
+  it("preserves an explicit custom CA for a container launch", () => {
+    const snapshot = snapshotNodeWorkerEnv({ NODE_EXTRA_CA_CERTS: CUSTOM_CA }, undefined, {
+      excludeAutomaticCa: true,
+    });
+
+    expect(snapshot.NODE_EXTRA_CA_CERTS).toBe(CUSTOM_CA);
+  });
+
+  it("preserves a CA when automatic provenance does not match", () => {
+    const snapshot = snapshotNodeWorkerEnv(
+      { NODE_EXTRA_CA_CERTS: CUSTOM_CA, [AUTO_CA]: SYSTEM_CA },
+      undefined,
+      { excludeAutomaticCa: true },
+    );
+
+    expect(snapshot.NODE_EXTRA_CA_CERTS).toBe(CUSTOM_CA);
   });
 });

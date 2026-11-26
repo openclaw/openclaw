@@ -283,4 +283,25 @@ describe("automatic CA provenance", () => {
     expect(explicit[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBeUndefined();
     expect(explicit.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
   });
+
+  it("carries forward a matching inherited automatic marker", () => {
+    const inherited = serviceEnv(
+      {
+        NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+        [OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]: "/etc/ssl/certs/ca-certificates.crt",
+      },
+      { platform: "linux" },
+    );
+    expect(inherited[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(inherited.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+
+    const mismatched = serviceEnv(
+      {
+        NODE_EXTRA_CA_CERTS: "/custom/ca.pem",
+        [OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]: "/etc/ssl/certs/ca-certificates.crt",
+      },
+      { platform: "linux" },
+    );
+    expect(mismatched[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBeUndefined();
+  });
 });
