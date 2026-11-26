@@ -757,7 +757,7 @@ var External = [
     /(^provider$|^apiKey$|^agentId$)/u,
     /\S/u,
     /(^provider$|^profileId$|^warning$)/u,
-    /(^provider$|^profileIds$|^credentialType$|^agentId$)/u,
+    /(^provider$|^profileIds$|^credentialType$|^revoke$|^agentId$)/u,
     /(^provider$|^profileIds$|^agentId$)/u,
     /(^operation$|^agentId$)/u,
     /(^refresh$|^refreshUsage$|^agentId$)/u,
@@ -4508,6 +4508,7 @@ var External = [
     (value.credentialType === void 0 ||
       !("credentialType" in value) ||
       check_502(value.credentialType)) &&
+    (value.revoke === void 0 || !("revoke" in value) || check_331(value.revoke)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_277(value.agentId)),
   check_501 = (value) =>
     Array.isArray(value) &&
