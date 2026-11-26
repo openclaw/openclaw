@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatPendingInputView
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
@@ -710,6 +711,7 @@ class MainViewModel internal constructor(
     runtimeState(initial = ChatActiveRunPresentation()) { it.chat.selectedActiveRunPresentation }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chat.commands }
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chat.outboxItems }
+  internal val chatPendingInputs: StateFlow<ChatPendingInputView?> = runtimeState(initial = null) { it.chat.pendingInputs }
   val chatOutboxPresentationRestored: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.outboxPresentationRestored }
   internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
     runtimeState(initial = null) { it.messageSpeechState }

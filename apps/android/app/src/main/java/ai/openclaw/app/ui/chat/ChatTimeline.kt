@@ -318,6 +318,7 @@ internal fun outboxItemsForSession(
   mainSessionKey: String,
   ownerAgentId: String,
   messages: List<ChatMessage> = emptyList(),
+  serverInputRunIds: Set<String> = emptySet(),
 ): List<ChatOutboxItem> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = sessionKey.trim().let { if (it == "main") mainKey else it }
@@ -331,6 +332,7 @@ internal fun outboxItemsForSession(
     ownerMatches &&
       itemKey == current &&
       "${item.id}:user" !in visibleUserKeys &&
+      item.id !in serverInputRunIds &&
       !isRecoveryOutboxItem(item)
   }
 }
