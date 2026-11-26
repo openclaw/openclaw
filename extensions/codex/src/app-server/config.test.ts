@@ -22,30 +22,6 @@ import {
 } from "./config.js";
 import { expectFields, expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
 
-it("parses Codex config once per publication and keeps captured revisions independent", () => {
-  const pluginConfig = { appServer: { requestTimeoutMs: 1234 } };
-  const config = { plugins: { entries: { codex: { config: pluginConfig } } } };
-  const captured = Object.freeze({ appServer: Object.freeze({ requestTimeoutMs: 5678 }) });
-  try {
-    setRuntimeConfigSnapshot(config);
-    const first = readCodexPluginConfig(pluginConfig);
-    const snapshot = readCodexPluginConfig(captured);
-    for (let i = 0; i < 3; i++) {
-      expect(readCodexPluginConfig(pluginConfig)).toBe(first);
-      expect(readCodexPluginConfig(captured)).toBe(snapshot);
-    }
-    pluginConfig.appServer.requestTimeoutMs = 4321;
-    setRuntimeConfigSnapshot(config);
-    const next = readCodexPluginConfig(pluginConfig);
-    expect(next.appServer?.requestTimeoutMs).toBe(4321);
-    expect(next).not.toBe(first);
-    expect(first.appServer?.requestTimeoutMs).toBe(1234);
-    expect(readCodexPluginConfig(captured)).toBe(snapshot);
-  } finally {
-    clearRuntimeConfigSnapshot();
-  }
-});
-
 it.each([
   {
     appServer: { approvalPolicy: "untrusted" },

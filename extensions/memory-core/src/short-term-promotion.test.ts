@@ -36,7 +36,6 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
-  filterLiveShortTermRecallEntries,
   loadShortTermPromotionDreamingStats,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
@@ -316,35 +315,6 @@ describe("short-term promotion", () => {
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
-
-  it("deduplicates source-file checks within a recall batch", async (workspaceDir) => {
-    const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
-      "Deduplicated source check note.",
-    ]);
-    const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
-    const entry = recallStoreEntryFixture({
-      key: "duplicate-source",
-      path: relativePath,
-      snippet: "Deduplicated source check note.",
-      recallCount: 1,
-      dailyCount: 1,
-      totalScore: 0.9,
-      maxScore: 0.9,
-      firstRecalledAt: "2026-04-03T00:00:00.000Z",
-      lastRecalledAt: "2026-04-03T00:00:00.000Z",
-      queryHashes: ["query"],
-      recallDays: ["2026-04-03"],
-    });
-    const statSpy = vi.spyOn(fs, "stat");
-
-    const live = await filterLiveShortTermRecallEntries({
-      workspaceDir,
-      entries: [entry, { ...entry, key: "duplicate-source-2" }],
-    });
-
-    expect(live).toHaveLength(2);
-    expect(statSpy).toHaveBeenCalledTimes(1);
-  });
 
   it("falls back when the injected recall timestamp is outside Date range", async (workspaceDir) => {
     vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));

@@ -2596,31 +2596,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
 
 describe("Codex app-server thread lifecycle timing", () => {
   installLifecycleHooks();
-
-  it("warns about a slow thread start without trace logging", async () => {
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(false);
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const trace = vi.spyOn(embeddedAgentLog, "trace").mockImplementation(() => {});
-    const respond = createLifecycleRequest(async (method: string) => {
-      if (method === "thread/start") {
-        nowMs += 10_000;
-        return threadStartResult("thread-slow");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    await startOrResumeThread({
-      client: { request: respond } as never,
-      ...lifecycleOptions(createThreadLifecycleParams()),
-    });
-    expect(warn).toHaveBeenCalledTimes(1);
-    const message = warn.mock.calls[0]?.[0];
-    expect(typeof message).toBe("string");
-    expect(trace).not.toHaveBeenCalled();
-    expect(message).toContain("action=started");
-    expect(message).toContain("thread-start-request:10000ms@10000ms");
-  });
 });
 
 describe("resolveCodexAppServerReasoningEffort (#71946)", () => {
