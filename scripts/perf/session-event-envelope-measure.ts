@@ -75,6 +75,7 @@ import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import type { CompressionPeerReport } from "./ws-compression-peers.js";
 
 const { values } = parseArgs({
@@ -585,12 +586,7 @@ try {
   global.gc?.();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   if (values["cpu-profile"] && !values.allocations) {
     inspector.connect();

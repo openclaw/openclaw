@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { Type } from "typebox";
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
 import { setPluginToolMeta } from "../../src/plugins/tool-metadata.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -68,12 +69,7 @@ for (let index = 0; index < 100; index++) {
 global.gc?.();
 const session = new inspector.Session();
 if (values.allocations) {
-  session.connect();
-  await session.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(session, 4096);
 }
 const hostLoad = loadavg();
 const cpuStart = process.cpuUsage();
