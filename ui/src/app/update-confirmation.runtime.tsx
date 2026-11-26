@@ -284,7 +284,12 @@ export async function confirmAndStartUpdateRuntime(
                 <Show when={view.run}>
                   {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
                 </Show>
-                <Show when={view.reason === "external-supervisor-update-required"}>
+                <Show
+                  when={
+                    (view.failed || view.finished) &&
+                    view.reason === "external-supervisor-update-required"
+                  }
+                >
                   <ExternalSupervisorGuidance guidance={view.externalSupervisorGuidance} />
                 </Show>
               </div>

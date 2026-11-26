@@ -583,7 +583,9 @@ it("drops package guidance when the current status config disables its plugin du
     update: { channel: "stable" },
     plugins: { allow: ["deployment"], load: { paths: [root] } },
   };
-  const initial = await read("update.status", {}, () => config);
+  const legacy = await read("update.status", {}, () => config);
+  expect(legacy.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
+  const initial = await read("update.status", { includeSupervisorGuidance: true }, () => config);
   expect(initial.mock.calls[0]?.[1]).toMatchObject({
     externalSupervisorGuidance: { command: "deploy update gateway" },
   });
@@ -593,7 +595,11 @@ it("drops package guidance when the current status config disables its plugin du
     refreshing.resolve();
     await refreshed.promise;
   });
-  const pending = read("update.status", { refreshCheckout: true }, () => config);
+  const pending = read(
+    "update.status",
+    { refreshCheckout: true, includeSupervisorGuidance: true },
+    () => config,
+  );
   await refreshing.promise;
   config = {
     ...config,

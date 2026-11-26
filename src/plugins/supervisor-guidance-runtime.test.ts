@@ -147,3 +147,32 @@ describe("external supervisor guidance", () => {
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
   });
 });
+
+it("uses the selected workspace for offline deployment metadata", async () => {
+  const workspace = path.join(home.home, "workspace");
+  const extensions = path.join(workspace, ".openclaw", "extensions");
+  await fs.mkdir(extensions, { recursive: true });
+  await fs.rename(path.join(home.home, "deployment"), path.join(extensions, "deployment"));
+  config.agents = { defaults: { workspace } };
+  delete config.plugins!.load;
+  expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
+    command: guidance.actions.start,
+  });
+});
+
+it("reads offline display config without applying its environment or creating health state", async () => {
+  vi.stubEnv("SUPERVISOR_GUIDANCE_LOOKUP_PROBE", undefined);
+  const state = path.join(home.home, ".openclaw");
+  await fs.writeFile(
+    path.join(state, "openclaw.json"),
+    JSON.stringify({
+      ...config,
+      env: { vars: { SUPERVISOR_GUIDANCE_LOOKUP_PROBE: "from-config" } },
+    }),
+  );
+  expect(await resolveExternalSupervisorGuidance("start")).toMatchObject({
+    command: guidance.actions.start,
+  });
+  expect(process.env.SUPERVISOR_GUIDANCE_LOOKUP_PROBE).toBeUndefined();
+  expect(await fs.readdir(state)).toEqual(["openclaw.json"]);
+});

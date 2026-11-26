@@ -62,6 +62,7 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
 
 /** Request payload for cached status or an explicit checkout refresh. */
 export const UpdateStatusParamsSchema = closedObject({
+  includeSupervisorGuidance: Type.Optional(Type.Boolean()),
   refreshCheckout: Type.Optional(Type.Boolean()),
 });
 
@@ -258,6 +259,7 @@ export const UpdateHoldResultSchema = closedObject({
 
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
+  includeSupervisorGuidance: Type.Optional(Type.Boolean()),
   acceptCapabilities: Type.Optional(Type.Boolean()),
   checkout: Type.Optional(
     Type.Union([

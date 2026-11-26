@@ -27,8 +27,10 @@ export async function resolveExternalSupervisorGuidance<Action extends Superviso
     const { loadPluginManifestRegistryCore } = await import("./manifest-registry.js");
     const { withArtifactPreservingStateReads } =
       await import("../state/openclaw-state-db-readonly.js");
+    const { resolvePluginControlPlaneWorkspace } = await import("./control-plane-workspace.js");
+    const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config, env });
     const registry = withArtifactPreservingStateReads(() =>
-      loadPluginManifestRegistryCore({ config, env }),
+      loadPluginManifestRegistryCore({ config, env, workspaceDir }),
     );
     let guidance: SupervisorGuidanceV1 | undefined;
     for (const plugin of registry.plugins) {
@@ -72,8 +74,14 @@ export async function resolveExternalSupervisorGuidance<Action extends Superviso
 
 async function readGuidanceConfig(env: NodeJS.ProcessEnv): Promise<OpenClawConfig> {
   const { createConfigIO, getRuntimeConfigSnapshot } = await import("../config/config.js");
-  return (
-    (env === process.env ? getRuntimeConfigSnapshot() : null) ??
-    (await createConfigIO({ env }).readBestEffortConfig())
-  );
+  const current = env === process.env ? getRuntimeConfigSnapshot() : null;
+  if (current) {
+    return current;
+  }
+  const { cloneEnvWithPlatformSemantics } = await import("../config/config-env-vars.js");
+  return createConfigIO({
+    env: cloneEnvWithPlatformSemantics(env),
+    observe: false,
+    shellEnvFallback: "defer",
+  }).readBestEffortConfig();
 }

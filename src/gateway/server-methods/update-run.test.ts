@@ -296,7 +296,9 @@ it("returns literal package guidance through current external update admission w
     }),
   );
   runtimeConfig = { plugins: { allow: ["deployment"], load: { paths: [root] } } };
-  const { payload, broadcast } = await invoke({});
+  const legacy = await invoke({});
+  expect(legacy.payload).not.toHaveProperty("externalSupervisorGuidance");
+  const { payload, broadcast } = await invoke({ includeSupervisorGuidance: true });
   expect(payload).toMatchObject({
     runId: null,
     ok: false,

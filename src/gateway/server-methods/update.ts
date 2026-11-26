@@ -700,7 +700,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       {
         runId,
         ok: handoff?.status === "started",
-        ...(result.reason === EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON
+        ...(params.includeSupervisorGuidance &&
+        result.reason === EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON
           ? {
               externalSupervisorGuidance: await resolveExternalSupervisorGuidance("update", {
                 config,

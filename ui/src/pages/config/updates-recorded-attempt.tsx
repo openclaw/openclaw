@@ -86,6 +86,7 @@ export function RecordedAttempt(
         </Show>
         <Show
           when={
+            props.update.externalSupervisorGuidance &&
             (run()?.reason ??
               props.update.recordedUpdateAttempt?.reason ??
               props.update.updateStatusBanner?.reason) === "external-supervisor-update-required"

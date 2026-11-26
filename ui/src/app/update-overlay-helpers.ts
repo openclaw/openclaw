@@ -235,7 +235,7 @@ export function createUpdateStatusRefresher(params: {
     try {
       const pending = client.request<UpdateRestartStatusResponse>(
         "update.status",
-        refreshCheckout ? { refreshCheckout: true } : {},
+        { includeSupervisorGuidance: true, ...(refreshCheckout ? { refreshCheckout: true } : {}) },
         // Checkout discovery uses the Gateway's Git command budgets.
         { timeoutMs: refreshCheckout ? null : 5_000 },
       );

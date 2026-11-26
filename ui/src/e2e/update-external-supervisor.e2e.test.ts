@@ -114,9 +114,18 @@ suite.define(() => {
               .poll(() => page.evaluate(() => navigator.clipboard.readText()))
               .toBe(guidance.command);
           }
+          if (externalSupervisorGuidance) {
+            await dialog.getByRole("button", { name: "Retry update", exact: true }).click();
+            await expect
+              .poll(() => dialog.locator(".external-supervisor-guidance").count())
+              .toBe(0);
+          }
           await dialog
             .locator("openclaw-modal-actions")
-            .getByRole("button", { name: "Close", exact: true })
+            .getByRole("button", {
+              name: externalSupervisorGuidance ? "Cancel" : "Close",
+              exact: true,
+            })
             .click();
           await dialog.waitFor({ state: "detached" });
           const settings = page.locator("#config-section-update");
@@ -142,7 +151,14 @@ suite.define(() => {
             { animations: "disabled", scrollTo: attempt },
           );
           await writeFile(path.join(proofDir, "settings-clean.png"), settingsFrame.png);
-          expect(await gateway.getRequests("update.run")).toHaveLength(1);
+          expect(
+            await gateway.getRequests("update.run", { includeSupervisorGuidance: true }),
+          ).toHaveLength(1);
+          expect(
+            (await gateway.getRequests("update.status", { includeSupervisorGuidance: true }))
+              .length,
+          ).toBeGreaterThan(0);
+          expect(await settings.locator(".settings-row--stacked:empty").count()).toBe(0);
           expect(await gateway.getRequests("update.runs.get")).toHaveLength(0);
           expect(await gateway.getRequests("update.report")).toHaveLength(0);
         },

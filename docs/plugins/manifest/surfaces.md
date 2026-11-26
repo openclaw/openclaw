@@ -862,7 +862,9 @@ only one provides the requested action.
 
 The host reads the guidance through plugin metadata without importing plugin
 runtime code. The instructions belong to the plugin package; there is no guidance
-setting in `openclaw.json` or runtime registration callback.
+setting in `openclaw.json` or runtime registration callback. Gateway clients must
+request `includeSupervisorGuidance: true` with `update.status` or `update.run` to
+receive transient guidance. Omitting it preserves the released response shape.
 
 The guidance object accepts only:
 

@@ -1249,7 +1249,7 @@ var External = [
     /(^capabilityConsentCode$|^pluginId$|^reviewToken$|^widened$|^acceptedAt$)/u,
     /(^channels$|^providers$|^tools$|^contracts$|^hooks$|^mcpServers$|^cliCommands$|^cliBackends$|^skills$|^dangerousConfigFlags$)/u,
     /(^cursor$|^limit$|^maxBytes$)/u,
-    /(^refreshCheckout$)/u,
+    /(^includeSupervisorGuidance$|^refreshCheckout$)/u,
     /(^sentinel$|^updateAvailable$|^activeRun$|^lastRun$|^effectiveChannel$|^schedule$|^externalSupervisorGuidance$)/u,
     /(^currentVersion$|^latestVersion$|^channel$|^currentSha$|^upstreamRef$|^upstreamSha$|^repositoryUrl$|^commitsBehind$|^commits$)/u,
     /(^sha$|^subject$)/u,
@@ -1305,7 +1305,7 @@ var External = [
     /(^id$|^state$|^announcedAtMs$|^applyAtMs$|^holdUntilMs$|^forceAtMs$|^updatedAtMs$)/u,
     /(^version$|^action$|^name$|^runFrom$|^command$)/u,
     /(^ok$|^schedule$)/u,
-    /(^acceptCapabilities$|^checkout$|^requester$|^sessionKey$|^deliveryContext$|^note$|^continuationMessage$|^restartDelayMs$|^timeoutMs$|^target$)/u,
+    /(^includeSupervisorGuidance$|^acceptCapabilities$|^checkout$|^requester$|^sessionKey$|^deliveryContext$|^note$|^continuationMessage$|^restartDelayMs$|^timeoutMs$|^target$)/u,
     /(^gitCommonDir$)/u,
     /(^packageRoot$)/u,
     /(^channel$|^accountId$|^senderId$)/u,
@@ -12643,6 +12643,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1233, unique_1234) => External[626].test(unique_1233) || check_2(value[unique_1233]),
     ) &&
+    (value.includeSupervisorGuidance === void 0 ||
+      !("includeSupervisorGuidance" in value) ||
+      check_64(value.includeSupervisorGuidance)) &&
     (value.refreshCheckout === void 0 ||
       !("refreshCheckout" in value) ||
       check_64(value.refreshCheckout)),
@@ -13787,6 +13790,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1351, unique_1352) => External[682].test(unique_1351) || check_2(value[unique_1351]),
     ) &&
+    (value.includeSupervisorGuidance === void 0 ||
+      !("includeSupervisorGuidance" in value) ||
+      check_64(value.includeSupervisorGuidance)) &&
     (value.acceptCapabilities === void 0 ||
       !("acceptCapabilities" in value) ||
       check_64(value.acceptCapabilities)) &&

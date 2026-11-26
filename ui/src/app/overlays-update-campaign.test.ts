@@ -154,10 +154,14 @@ describe("application update campaign overlays", () => {
 
     expect(request).toHaveBeenCalledWith(
       "update.status",
-      { refreshCheckout: true },
+      { includeSupervisorGuidance: true, refreshCheckout: true },
       { timeoutMs: null },
     );
-    expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: 5_000 });
+    expect(request).toHaveBeenCalledWith(
+      "update.status",
+      { includeSupervisorGuidance: true },
+      { timeoutMs: 5_000 },
+    );
     expect(overlays.snapshot.updateSchedule?.install?.git).toEqual({
       status: "behind",
       commitsBehind: 12,

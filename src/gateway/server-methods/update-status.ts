@@ -149,9 +149,10 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : undefined
         : getUpdateSchedule();
       mark("response");
-      const externalSupervisorGuidance = await resolveExternalSupervisorGuidance("update", {
-        config: currentConfig,
-      });
+      // Released clients validate a closed response: extensions require an explicit opt-in.
+      const externalSupervisorGuidance = params.includeSupervisorGuidance
+        ? await resolveExternalSupervisorGuidance("update", { config: currentConfig })
+        : undefined;
       const result: UpdateStatusResult = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),

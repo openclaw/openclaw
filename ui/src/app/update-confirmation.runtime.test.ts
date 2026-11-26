@@ -882,6 +882,8 @@ it("shows a deployment command for a current external refusal with no durable ru
   expect(modal.querySelector(".external-supervisor-guidance")?.textContent).toContain(
     "deployctl update",
   );
-  findButton("Close").click();
+  findButton("Retry update").click();
+  await waitForSolid(() => expect(modal.querySelector(".external-supervisor-guidance")).toBeNull());
+  findButton("Cancel").click();
   await settled;
 });

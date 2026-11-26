@@ -47,9 +47,9 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     return;
   }
   if (isGatewayExternallySupervised()) {
-    const externalSupervisorGuidance = await resolveExternalSupervisorGuidance("update", {
-      config: context.getRuntimeConfig(),
-    });
+    const externalSupervisorGuidance = params.includeSupervisorGuidance
+      ? await resolveExternalSupervisorGuidance("update", { config: context.getRuntimeConfig() })
+      : undefined;
     respond(true, {
       ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
       runId: null,

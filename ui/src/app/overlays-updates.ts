@@ -607,7 +607,7 @@ export function createApplicationUpdateOverlays(
         }
         const response = await client.request<UpdateRunResponse>(
           "update.run",
-          sessionKey ? { sessionKey } : {},
+          { includeSupervisorGuidance: true, ...(sessionKey ? { sessionKey } : {}) },
           {
             onSent: () => {
               attempt.requestSent = true;

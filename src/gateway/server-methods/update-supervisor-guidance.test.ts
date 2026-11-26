@@ -23,7 +23,7 @@ vi.mock("../../plugins/supervisor-guidance-runtime.js", async (importOriginal) =
 it("returns guidance on an external update refusal without persisting or executing it", async () => {
   mockGlobalInstallSurface();
   const payload = await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
-    captureUpdateRunPayload(),
+    captureUpdateRunPayload({ includeSupervisorGuidance: true }),
   );
   expect(payload).toMatchObject({
     ok: false,
