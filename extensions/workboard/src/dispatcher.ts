@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   WorkboardCard,
@@ -91,6 +92,25 @@ const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
 function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   const claim = card.metadata?.claim;
   return Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
+}
+
+async function assertExistingWorkboardWorkspaceDir(dirPath: string): Promise<void> {
+  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stats = await fs.stat(dirPath);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new Error(`workspace directory does not exist: ${dirPath}`, { cause: error });
+    }
+    throw new Error(
+      `workspace directory is not accessible: ${dirPath} (${formatErrorMessage(error)})`,
+      { cause: error },
+    );
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`workspace path is not a directory: ${dirPath}`);
+  }
 }
 
 function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
@@ -402,6 +422,9 @@ async function runWorkboardDispatch(
         }
         if (workspace.kind === "dir" || !materializationAccess.unrestricted) {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, materializationAccess);
+          if (workspace.kind === "dir") {
+            await assertExistingWorkboardWorkspaceDir(canonicalSourcePath);
+          }
           return workspace.kind === "worktree"
             ? { cwd: canonicalSourcePath, workspace: { kind: "dir", path: canonicalSourcePath } }
             : { cwd: canonicalSourcePath };
