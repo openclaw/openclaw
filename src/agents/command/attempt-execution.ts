@@ -697,7 +697,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
     codeModeOverride: params.opts.codeModeOverride,
-    agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     modelRun: params.opts.modelRun,

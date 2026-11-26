@@ -47,6 +47,9 @@ it("selects the target session profile for internal command deliveries only", ()
       disableTools: false,
       bootstrapPromptWarningSignaturesSeen: [],
     });
+  // Both runtimes run in the agent dir the command resolved, so a CLI turn's steering join
+  // records the same agent dir as the incoming reply.
+  expect(run().agentDir).toBe("/synthetic/agent");
   // An unqualified turn in a session people talk to keeps the personal file out of the request.
   expect(run()).toMatchObject({
     bootstrapUserProfileId: undefined,

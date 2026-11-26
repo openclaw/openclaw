@@ -26,6 +26,7 @@ export function buildCommonCommandRunParams(
     trigger: "user",
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     cwd: params.cwd,
     config: params.cfg,
     toolOverrides: params.sessionEntry?.toolOverrides,

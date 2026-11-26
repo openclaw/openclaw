@@ -108,7 +108,7 @@ describe("CLI question creator binding", () => {
               ...params,
               ...workspace,
               cwd: params.cwd,
-              agentDir: params.agentDir ?? resolveAgentDir({}, workspace.agentId),
+              agentDir: params.agentDir,
             },
             legacyReads,
           ),
@@ -209,13 +209,14 @@ describe("CLI steering join observation", () => {
     const config: OpenClawConfig = {};
     const sessionEntry: SessionEntry = { sessionId: "agent:main:main", updatedAt: 1 };
     const observe = vi.spyOn(joinObservation, "captureReplyMessageJoinObservation");
-    // Agent-command dispatch (e.g. a helper-result turn) passes neither agentDir nor cwd;
-    // the runner derives both after this capture.
+    // Agent-command dispatch (e.g. a helper-result turn) passes its agent dir but no cwd;
+    // the runner derives its cwd after this capture.
     using authority = captureCliRunToolAuthority(
       {
         sessionId: "agent:main:main",
         sessionFile: "/workspace/session.jsonl",
         workspaceDir: "/workspace",
+        agentDir: resolveAgentDir(config, "main"),
         config,
         sessionEntry,
         provider: "fixture",
