@@ -43,25 +43,6 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(presentation.toolSearchDirectoryLean).toBe(false);
   });
 
-  it("enables Tool Search for the profile selected from a small size class", () => {
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config: autoConfig,
-      modelProvider: "llama-cpp",
-      modelId: "local-8b",
-      model: { modelSizeClass: "small" },
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(false);
-    expect(plan.toolSearchControlsEnabled).toBe(true);
-    expect(plan.toolSearchConfig).toMatchObject({
-      enabled: true,
-      mode: "tools",
-      searchDefaultLimit: 5,
-      maxSearchLimit: 10,
-    });
-  });
-
   it.each([
     { name: "a total parameter count", model: { parameterCount: 8_190_735_360 } },
     { name: "a trusted size class", model: { modelSizeClass: "small" as const } },
@@ -74,8 +55,14 @@ describe("resolveAgentToolSurfacePlan", () => {
       modelId: "unbound-model",
     });
 
+    expect(plan.codeModeControlsEnabled).toBe(false);
     expect(plan.toolSearchControlsEnabled).toBe(true);
-    expect(plan.toolSearchConfig).toMatchObject({ searchDefaultLimit: 5, maxSearchLimit: 10 });
+    expect(plan.toolSearchConfig).toMatchObject({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
   });
 
   it("presents the compact directory for a model that only reports a parameter count", () => {
