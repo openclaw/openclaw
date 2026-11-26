@@ -136,7 +136,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.input.adopt((detail) => this.failConnection(this.ws, detail));
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
-    this.outputQueue.open(this.session.audio.outputSampleRateHz);
+    this.outputQueue.open(
+      this.session.audio.outputSampleRateHz,
+      this.ctx.callbacks.onPlaybackLevel,
+    );
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
     ws.binaryType = "arraybuffer";

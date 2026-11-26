@@ -400,12 +400,6 @@ export function MediaDevicesSection(props: ConfigProps) {
       <div class="settings-group">
         <MediaDeviceField config={props} kind="microphone" />
         <MediaDeviceField config={props} kind="camera" />
-        <LocalToggleRow
-          config={props}
-          setting="composerHoldToRecord"
-          title={t("chat.composer.holdToRecordSetting")}
-          hint={t("chat.composer.holdToRecordSettingDescription")}
-        />
       </div>
     </section>
   );

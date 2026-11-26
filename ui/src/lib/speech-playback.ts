@@ -93,6 +93,7 @@ export class GatewaySpeechPlayback {
     method: "tts.speak" | "talk.speak" = "tts.speak",
     isCurrent: () => boolean = () => true,
     maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
+    observePlayback?: (audio: HTMLAudioElement) => (() => void) | undefined,
   ): Promise<void> {
     this.cancelPlayback();
     const audio = this.prepare(client);
@@ -119,7 +120,7 @@ export class GatewaySpeechPlayback {
         if (generation !== this.generation || !isCurrent()) {
           return;
         }
-        await this.play(audio, response.result);
+        await this.play(audio, response.result, observePlayback);
       }
     } finally {
       if (generation === this.generation) {
@@ -128,18 +129,24 @@ export class GatewaySpeechPlayback {
     }
   }
 
-  private async play(audio: HTMLAudioElement, result: TtsSpeakResult): Promise<void> {
+  private async play(
+    audio: HTMLAudioElement,
+    result: TtsSpeakResult,
+    observePlayback?: (audio: HTMLAudioElement) => (() => void) | undefined,
+  ): Promise<void> {
     const url = URL.createObjectURL(
       new Blob([base64ToBytes(result.audioBase64)], { type: result.mimeType }),
     );
     audio.src = url;
     audio.load();
     await new Promise<void>((resolve, reject) => {
+      let stopObserving: (() => void) | undefined;
       const finish = (error?: Error) => {
         if (this.finish !== cancel) {
           return;
         }
         this.finish = undefined;
+        stopObserving?.();
         stopEnded();
         stopError();
         audio.pause();
@@ -157,11 +164,17 @@ export class GatewaySpeechPlayback {
       this.finish = cancel;
       const stopEnded = listen(audio, "ended", cancel, { once: true });
       const stopError = listen(audio, "error", failed, { once: true });
-      void audio
-        .play()
-        .catch((error: unknown) =>
-          finish(error instanceof Error ? error : new Error(String(error))),
-        );
+      void audio.play().then(
+        () => {
+          if (this.finish === cancel) {
+            stopObserving = observePlayback?.(audio);
+            if (this.finish !== cancel) {
+              stopObserving?.();
+            }
+          }
+        },
+        (error: unknown) => finish(error instanceof Error ? error : new Error(String(error))),
+      );
     });
   }
 }

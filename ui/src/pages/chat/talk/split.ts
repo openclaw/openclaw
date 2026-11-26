@@ -5,6 +5,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import { isTerminalFailureChatSendAck, type ChatSendAck } from "../chat-send-ack.ts";
 import { ComposerDictationSession } from "../composer-dictation-session.ts";
+import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
 import {
   waitForChatResult,
   type RealtimeTalkCallbacks,
@@ -103,6 +104,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
             this.options.speechMethod,
             () => !this.closed,
             this.options.maxTextLength,
+            this.observePlayback,
           );
         }
       }
@@ -111,6 +113,39 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
       this.fail(error);
     }
   }
+
+  private readonly observePlayback = (audio: HTMLAudioElement): (() => void) | undefined => {
+    this.callbacks.onStatus?.("speaking");
+    const onLevel = this.callbacks.onPlaybackLevel;
+    if (!onLevel) {
+      return undefined;
+    }
+    // Tap the element's output without routing audible playback through Web Audio.
+    // Browsers without captureStream still play normally and meter the microphone.
+    try {
+      const capture =
+        "captureStream" in audio && typeof audio.captureStream === "function"
+          ? audio.captureStream
+          : "mozCaptureStream" in audio && typeof audio.mozCaptureStream === "function"
+            ? audio.mozCaptureStream
+            : undefined;
+      const stream: unknown = capture?.call(audio);
+      if (!(stream instanceof MediaStream)) {
+        return undefined;
+      }
+      const meter = new RealtimeTalkMediaStreamMeter(onLevel);
+      meter.start(stream);
+      return () => {
+        meter.stop();
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+      };
+    } catch {
+      // Decorative feedback must not interrupt speech playback.
+      return undefined;
+    }
+  };
 
   private async send(message: string): Promise<string> {
     const runId: string = crypto.randomUUID();

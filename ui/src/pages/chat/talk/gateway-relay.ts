@@ -131,7 +131,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return "cancelled";
     }
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
-    this.outputQueue.open(this.session.audio.outputSampleRateHz);
+    this.outputQueue.open(
+      this.session.audio.outputSampleRateHz,
+      this.ctx.callbacks.onPlaybackLevel,
+    );
     this.abortPendingAudioAppends();
     this.audioAppendAbortController = new AbortController();
     if (this.ctx.callbacks.onInputLevel) {

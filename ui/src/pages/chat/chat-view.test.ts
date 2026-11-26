@@ -1884,8 +1884,17 @@ describe("chat slash menu accessibility", () => {
       });
     };
     renderSession("replay-a");
+    const clickSend = () => {
+      const sendButton = requireElement(container, "button.chat-send-btn--send", "Send");
+      if (!(sendButton instanceof HTMLButtonElement)) {
+        throw new Error("Expected a Send button");
+      }
+      sendButton.click();
+    };
+
     inputDraft(container, "submitted message");
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    renderSession("replay-a");
+    clickSend();
     expect(getComposerTextarea(container).value).toBe("");
     const submittedTextarea = getComposerTextarea(container);
     replayInput(submittedTextarea, "submitted message");
@@ -1897,7 +1906,8 @@ describe("chat slash menu accessibility", () => {
     expect(submittedTextarea.value).toBe("submitted message");
     expect(drafts["replay-a"]).toBe("submitted message");
     // Re-arm the submitted-value marker before checking replay across sessions.
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    renderSession("replay-a");
+    clickSend();
     expect(getComposerTextarea(container).value).toBe("");
     expect(drafts["replay-a"]).toBe("");
     const sessionKey = "replay-b";

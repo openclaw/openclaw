@@ -116,7 +116,7 @@ suite.define(() => {
         sessionInfo: { key: "agent:main:main", sharingRole: "owner" },
       });
       await textarea.waitFor();
-      await button(page, "Start voice input", true).hover();
+      await button(page, "Dictation", true).hover();
       await button(page, "Microphone input", true).click();
       await captureComposer(page, "guest-dictation-ready.png");
       await captureFullPage(page, "guest-dictation-capabilities");
@@ -133,10 +133,8 @@ suite.define(() => {
           .locator(".agent-chat__composer-shell")
           .evaluate((shell) => shell.getBoundingClientRect().height);
       const idleHeight = await composerHeight();
-      await button(page, "Start voice input", true).hover();
-      await page.mouse.down();
+      await button(page, "Dictation", true).click();
       await gateway.waitForRequest("talk.session.create");
-      await page.mouse.up();
       await admit();
       await emit("Guest dictation stays in this draft.");
       await expectDraft(textarea, "Guest dictation stays in this draft.");
@@ -258,13 +256,13 @@ suite.define(() => {
             await expect.poll(() => stop.isVisible()).toBe(true);
             await expect.poll(() => send.isVisible()).toBe(true);
             await captureComposer(page, "dictation-status-actions.png");
-            await captureFullPage(page, "dictation-latched-after-release");
+            await captureFullPage(page, "dictation-active");
             // Observe controls in one frame while the dictation owner can republish.
             const layout = await composer.evaluate((element) => {
               const composerBox = element.getBoundingClientRect();
               const controls = [
                 ".agent-chat__dictation-status .agent-chat__voice-activity",
-                ".chat-mobile-dictation-action .chat-send-btn--dictating",
+                ".chat-talk-control .chat-send-btn--dictating",
                 ".chat-send-btn--dictation-commit",
               ].map((selector) => {
                 const control = element.querySelector(selector);
@@ -327,10 +325,8 @@ suite.define(() => {
           element.setSelectionRange(selection.start, selection.end),
         { start, end },
       );
-      await button(page, "Start voice input").hover();
-      await page.mouse.down();
+      await button(page, "Dictation", true).click();
       await admit();
-      await page.mouse.up();
       await emit("please");
       await expectDraft(textarea, expected);
       await page.mouse.move(0, 0);
@@ -387,10 +383,8 @@ suite.define(() => {
           await textarea.evaluate((element: HTMLTextAreaElement) =>
             element.setSelectionRange(5, 5),
           );
-          await button(page, "Start voice input").hover();
-          await page.mouse.down();
+          await button(page, "Dictation", true).click();
           await admit();
-          await page.mouse.up();
         }
         await button(page, "Stop and keep text").click();
         await gateway.waitForRequest("talk.session.close");
@@ -646,13 +640,14 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      // The enabled dictation microphone can be clicked before history/catalog admission.
       await gateway.waitForRequest("chat.startup");
       await gateway.waitForRequest("talk.catalog");
-      await button(page, "Start voice input").click();
       await gateway.resolveDeferred("talk.catalog");
       await gateway.resolveDeferred("chat.startup");
       await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
+      await button(page, "Dictation", true).click();
+      expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
+      expect(await button(page, "Tap to talk", true).count()).toBe(0);
       const unavailable = page.locator('[data-status="unavailable"]');
       await expect.poll(() => unavailable.count()).toBe(2);
       const picker = page.locator(".chat-talk-input-picker");

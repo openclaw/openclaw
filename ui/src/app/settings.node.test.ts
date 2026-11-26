@@ -530,11 +530,22 @@ describe("gateway settings and layout persistence", () => {
 
       persistSessionToken(first.gatewayUrl, "synthetic-rotated-credential");
       credentialReads.mockClear();
-      patchSettings({ composerHoldToRecord: false });
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...JSON.parse(localStorage.getItem(key) ?? "{}"),
+          composerHoldToRecord: false,
+        }),
+      );
+      expect(loadSettings()).not.toHaveProperty("composerHoldToRecord");
+      credentialReads.mockClear();
+      patchSettings({ chatSendShortcut: "enter" });
       expect(credentialReads.mock.calls.map(([readKey]) => readKey)).toEqual([
         `openclaw.control.token.v1:${first.gatewayUrl}`,
       ]);
-      expect(theme.settings.composerHoldToRecord).toBe(false);
+      expect(JSON.parse(localStorage.getItem(key) ?? "{}")).not.toHaveProperty(
+        "composerHoldToRecord",
+      );
       expect(JSON.parse(localStorage.getItem(key) ?? "{}")).not.toHaveProperty("token");
       expect(loadSettings().token).toBe("synthetic-rotated-credential");
     } finally {

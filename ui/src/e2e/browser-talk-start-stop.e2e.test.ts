@@ -228,7 +228,7 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await openTalk(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await completeGoogleSetup(page, gateway);
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
@@ -280,7 +280,7 @@ suite.define(() => {
 
       await openTalk(page);
 
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
         .poll(() =>
           page.evaluate(() =>
@@ -356,7 +356,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
         sessionKey: "agent:main:main",
@@ -405,7 +405,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
       await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
@@ -436,7 +436,7 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await openTalk(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await gateway.resolveDeferred("talk.client.create");
       await expect.poll(() => inputReady(page)).toBe(true);
@@ -510,7 +510,7 @@ suite.define(() => {
       for (let index = 0; index < 4; index += 1) {
         await gateway.deferNext("talk.session.appendAudio");
       }
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await expect.poll(() => inputReady(page)).toBe(true);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
@@ -547,12 +547,12 @@ suite.define(() => {
       await waitForTalkReady(page);
       await gateway.deferNext("talk.client.create");
 
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
         .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
         .toBe(1);
       await page.getByRole("button", { name: "Stop voice input" }).click();
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
         .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
         .toBe(2);

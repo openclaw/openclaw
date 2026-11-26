@@ -195,6 +195,8 @@ export async function startChatRealtimeSession(
     voiceController = controller;
     state.realtimeTalk.update({ realtimeTalkVoiceController: controller });
   }
+  let inputLevel = 0;
+  let playbackLevel = 0;
   let autoEnableCameraAttempted = false;
   const forCurrentSession =
     <Args extends unknown[]>(callback: (...args: Args) => void) =>
@@ -248,7 +250,12 @@ export async function startChatRealtimeSession(
         });
       }),
       onInputLevel: forCurrentSession((level) => {
-        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(level);
+        inputLevel = level;
+        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(Math.max(inputLevel, playbackLevel));
+      }),
+      onPlaybackLevel: forCurrentSession((level) => {
+        playbackLevel = level;
+        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(Math.max(inputLevel, playbackLevel));
       }),
       onTranscript: forCurrentSession((entry) => {
         state.realtimeTalk.update({

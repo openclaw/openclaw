@@ -129,7 +129,7 @@ suite.define(() => {
             labelEffort: composer.locator(".chat-controls__effort-trigger"),
             attach: composer.locator(".agent-chat__input-btn--attach"),
             permission: composer.locator(".chat-controls__permission-icon"),
-            microphone: composer.getByRole("button", { name: "Start voice input", exact: true }),
+            microphone: composer.getByRole("button", { name: "Dictation", exact: true }),
             disabled: send,
           });
           // Labels are text; glyphs are non-text controls. Every resting control must

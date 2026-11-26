@@ -4,7 +4,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
-import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
@@ -19,6 +18,15 @@ export function MicrophoneMenu(props: {
   const items = createMemo(
     () => {
       const keyed = props.picker.apiKeyProviders ?? {};
+      const splitMissing = props.picker.splitTalkMissing;
+      const talkUnavailableReason =
+        splitMissing === "both"
+          ? t("chat.composer.splitTalkProvidersUnavailable")
+          : splitMissing === "speech"
+            ? t("chat.composer.splitTalkSpeechUnavailable")
+            : splitMissing === "transcription"
+              ? t("chat.composer.dictationProviderUnavailableShort")
+              : t("chat.composer.realtimeTalkProviderUnavailable");
       const capabilityRow = (
         key: "realtime" | "dictation",
         status: MicrophonePickerProps["realtimeStatus"],
@@ -41,11 +49,16 @@ export function MicrophoneMenu(props: {
             }
           : { key, status, ...fallback, provider: undefined };
       let capabilities = [
-        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
-          label: t("chat.composer.realtimeTalkCapability"),
-          unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-          canConfigure: Boolean(props.picker.onOpenTalkSettings),
-        }),
+        capabilityRow(
+          "realtime",
+          props.picker.realtimeStatus,
+          splitMissing === "both" ? undefined : (keyed.talk ?? keyed.speech),
+          {
+            label: t("chat.composer.realtimeTalkCapability"),
+            unavailableReason: talkUnavailableReason,
+            canConfigure: Boolean(props.picker.onOpenTalkSettings),
+          },
+        ),
         capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
           unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
@@ -215,19 +228,6 @@ export function MicrophoneMenu(props: {
               <span>{t("chat.composer.configureCapability")}</span>
             </span>
           ) : undefined,
-        });
-      }
-      if (props.picker.onHoldToDictateChange) {
-        separator("preferences-separator");
-        entries.push({
-          id: "hold-to-dictate",
-          label: t("chat.composer.holdToDictate"),
-          type: "checkbox",
-          checked: props.picker.holdToDictate !== false,
-          class: "oc-menu-item--switch chat-talk-input-picker__preference",
-          attributes: { "data-chat-talk-preference": "hold-to-dictate" },
-          closeOnSelect: false,
-          details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
         });
       }
       return entries;

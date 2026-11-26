@@ -181,22 +181,28 @@ suite.define(() => {
                   ),
                 ]
                   .filter((node) => node.checkVisibility())
-                  .map((node) => node.getBoundingClientRect())
-                  .filter((rect) => rect.width > 0);
+                  .map((node) => ({
+                    name: node.getAttribute("aria-label") ?? node.className,
+                    rect: node.getBoundingClientRect(),
+                  }))
+                  .filter(({ rect }) => rect.width > 0);
                 const overlaps = (a: DOMRect, b: DOMRect) =>
                   Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
                   Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
                 return {
                   inside: controls.every(
-                    (rect) => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1,
+                    ({ rect }) => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1,
                   ),
-                  separate: !controls.some((a, index) =>
-                    controls.slice(index + 1).some((b) => overlaps(a, b)),
+                  overlaps: controls.flatMap((a, index) =>
+                    controls
+                      .slice(index + 1)
+                      .filter((b) => overlaps(a.rect, b.rect))
+                      .map((b) => [a.name, b.name]),
                   ),
                 };
               }),
             )
-            .toEqual({ inside: true, separate: true });
+            .toEqual({ inside: true, overlaps: [] });
           const layout = await composer.evaluate((node) => {
             const ring = node.querySelector<HTMLElement>(".context-ring")!;
             const ringBox = ring.getBoundingClientRect();

@@ -41,6 +41,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private channel: RTCDataChannel | null = null;
   private readonly input = this.ctx.input;
   private audio: HTMLAudioElement | null = null;
+  private playbackMeter: RealtimeTalkMediaStreamMeter | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseState: "idle" | "requested" | "active" = "idle";
@@ -89,6 +90,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       const stream = event.streams[0];
       if (this.audio && stream) {
         this.audio.srcObject = stream;
+        if (this.ctx.callbacks.onPlaybackLevel) {
+          this.playbackMeter ??= new RealtimeTalkMediaStreamMeter(
+            this.ctx.callbacks.onPlaybackLevel,
+          );
+          this.playbackMeter.start(stream);
+        }
         const audio = this.audio;
         const play = (reportError: boolean) => {
           if (this.audio !== audio || this.closed) {
@@ -222,6 +229,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.peer?.close();
       this.peer = null;
       this.camera.release();
+      this.playbackMeter?.stop();
+      this.playbackMeter = null;
       this.inputMeter?.stop();
       this.inputMeter = null;
       this.audio?.remove();
