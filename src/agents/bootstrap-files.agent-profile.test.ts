@@ -56,6 +56,26 @@ describe("resolveBootstrapContextForRun Agent Profile", () => {
     expect(totalChars(contextFiles)).toBeGreaterThan(11_500);
   });
 
+  it("caps a shared USER.md like a workspace USER.md", async () => {
+    const workspace = await makeWorkspace();
+    const sharedUserDir = await fs.realpath(tempDirs.make("openclaw-shared-user-"));
+    await fs.writeFile(path.join(sharedUserDir, "USER.md"), "u".repeat(12_000));
+    const { bootstrapFiles, contextFiles } = await resolve(workspace, {
+      ...MODEL,
+      config: {
+        agents: {
+          defaults: { workspace, agentProfileId: "openclaw/compact" },
+          entries: { main: { sharedUserDir } },
+        },
+      },
+    });
+    expect(bootstrapFiles.find((file) => file.name === "USER.md")?.content).toBe(
+      "u".repeat(12_000),
+    );
+    expect(contextFiles.some((file) => file.content.includes("u"))).toBe(true);
+    expect(totalChars(contextFiles)).toBeLessThanOrEqual(11_500);
+  });
+
   it("never widens a smaller operator budget", async () => {
     const workspace = await makeWorkspace();
     const { contextFiles } = await resolve(workspace, {
