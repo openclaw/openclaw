@@ -4,17 +4,17 @@ import type {
   ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
 import { i18n } from "../i18n/lib/translate.ts";
-import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { loadControlUiPluginAssets } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
+import type { ControlUiSettingsDistribution } from "./control-ui-settings-distribution.ts";
 
 // mock-isolation: synthetic packaged modules replace the real loader's DOM/network acquisition and host rendering imports.
 vi.mock("./control-ui-loader.ts", () => ({ loadControlUiPluginAssets: vi.fn() }));
-const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
+const packaged = vi.hoisted(() => [] as ControlUiSettingsDistribution[]);
 const runtimes: ControlUiPluginRuntime[] = [];
-vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./control-ui-distribution.ts")>()),
-  controlUiPluginDistributions: packaged,
+vi.mock("./control-ui-settings-distribution.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-settings-distribution.ts")>()),
+  controlUiSettingsDistributions: packaged,
 }));
 afterEach(() => {
   runtimes.splice(0).forEach((runtime) => runtime.dispose());
@@ -37,7 +37,6 @@ function fixture(views: SettingsView[] = [memoryView()]) {
     pluginId: "fixture",
     revision: "built-revision",
     bundledDistribution: { packageName: "fixture", packageVersion: "1.0.0" },
-    activation: "settings-only",
     settingsViews: views.map((view) => ({ ...view.placement, settings })),
     entry: "/packaged/index.js",
     styles: ["/packaged/index.css"],

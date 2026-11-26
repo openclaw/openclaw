@@ -8,6 +8,7 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
+import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 
 let root: string;
@@ -248,7 +249,9 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
       controlUi: {
         activation: "settings-only",
         entry: "dist/control-ui/source/index.js",
-        settingsViews: [{ ...placement, settings: {} }],
+        settingsViews: [
+          { ...placement, settings: { [`plugin.${id}.example`]: { label: "Example" } } },
+        ],
       },
     },
   }));
@@ -256,7 +259,15 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
     await sourcePlugin(id, manifest, `export default { pluginId: "${id}", settingsViews: [] };\n`);
   }
   await compile();
+  // The fixture entry consumes only delivery URLs, as Chat does before Settings opens.
+  const boot = await Promise.all(
+    extractControlUiStartupAssetPaths(await readText(at("ui-output/index.html"))).map((file) =>
+      readText(at("ui-output", file)),
+    ),
+  );
   for (const { id, manifest } of settings) {
+    expect(boot.join("\n")).toContain(`@openclaw/${id}`);
+    expect(boot.join("\n")).not.toContain(`plugin.${id}.example`);
     const packaged = JSON.parse(await readText(at("dist/extensions", id, "openclaw.plugin.json")));
     expect(packaged.controlUi.settingsViews).toEqual(manifest.controlUi.settingsViews);
     expect(packaged.controlUi.activation).toBe("settings-only");

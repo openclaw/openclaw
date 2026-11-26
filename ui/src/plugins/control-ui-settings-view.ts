@@ -3,7 +3,7 @@ import type { ControlUiSettingsPlacement } from "../../../src/plugin-sdk/control
 import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { controlUiPluginDistributions } from "./control-ui-distribution.ts";
+import { controlUiSettingsDistributions } from "./control-ui-settings-distribution.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
@@ -21,15 +21,15 @@ export async function loadPackagedSettingsView(
   lifetimes: Set<AbortController>,
 ) {
   signal.throwIfAborted();
-  const matches = controlUiPluginDistributions.filter((entry) =>
-    entry.settingsViews?.some((item) => sameSettingsPlacement(item, placement)),
+  const matches = controlUiSettingsDistributions.filter((entry) =>
+    entry.settingsViews.some((item) => sameSettingsPlacement(item, placement)),
   );
   if (matches.length !== 1) {
     throw new Error("Settings presentation requires one packaged owner.");
   }
   const distribution = matches[0]!;
   // The IDs this placement's view may draw, for the host rows to admit.
-  const settings = distribution.settingsViews!.find((item) =>
+  const settings = distribution.settingsViews.find((item) =>
     sameSettingsPlacement(item, placement),
   )!.settings;
   const abort = new AbortController();
@@ -70,14 +70,14 @@ export async function loadPackagedSettingsView(
     if (
       module.pluginId !== distribution.pluginId ||
       !Array.isArray(module.settingsViews) ||
-      module.settingsViews.length !== distribution.settingsViews?.length
+      module.settingsViews.length !== distribution.settingsViews.length
     ) {
       throw new Error("Settings presentation does not match its packaged owner and placements.");
     }
     const declared = module.settingsViews.every(
       (view) =>
         typeof view.mount === "function" &&
-        distribution.settingsViews?.some((item) => sameSettingsPlacement(item, view.placement)),
+        distribution.settingsViews.some((item) => sameSettingsPlacement(item, view.placement)),
     );
     const views = module.settingsViews.filter((view) =>
       sameSettingsPlacement(view.placement, placement),

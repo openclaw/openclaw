@@ -23,8 +23,8 @@ import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { getLocale, projectI18n } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
-import { controlUiPluginDistributions } from "../../plugins/control-ui-distribution.ts";
 import { createControlUiSettingsComponents } from "../../plugins/control-ui-settings-components.solid.tsx";
+import { controlUiSettingsDistributions } from "../../plugins/control-ui-settings-distribution.ts";
 import { ChannelConfig } from "./view.config.tsx";
 import type { ChannelSettingsPresentation, ChannelsProps } from "./view.types.ts";
 
@@ -69,8 +69,8 @@ export function createChannelSettingsPresentation(
   const [presented, setPresented] = createStore<Record<string, boolean>>({});
   let disposed = false;
   const has = (channelId: string) =>
-    controlUiPluginDistributions.some((distribution) =>
-      distribution.settingsViews?.some(
+    controlUiSettingsDistributions.some((distribution) =>
+      distribution.settingsViews.some(
         (view) => view.section === "channels" && view.channelId === channelId,
       ),
     );

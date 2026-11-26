@@ -20,10 +20,9 @@ import type { ControlUiPluginDistribution } from "../src/plugins/control-ui-dist
 
 /** Consume only the completed canonical distribution, never source manifests or live plugins. */
 export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set<string>): Plugin {
-  const inventoryModule = normalizePath(
-    path.join(repoRoot, "ui/src/plugins/control-ui-distribution.ts"),
-  );
+  const pluginsDir = normalizePath(path.join(repoRoot, "ui/src/plugins"));
   let source = "";
+  let settingsSource = "";
   let serving = false;
   let base = "/";
   const servedAssets = new Map<string, PluginControlUiAsset>();
@@ -98,6 +97,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         : [];
       const captured = new Set<string>();
       const modules: string[] = [];
+      const settingsModules: string[] = [];
       const consume = (file: string) => {
         this.addWatchFile(file);
         inputs.add(file);
@@ -180,8 +180,14 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
           revision,
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };
+        // Chat needs asset identities for delivery checks, not Settings placements or row IDs.
+        if (controlUi.settingsViews?.length) {
+          settingsModules.push(
+            `{...controlUiPluginDistributions[${modules.length}],settingsViews:${JSON.stringify(controlUi.settingsViews)}}`,
+          );
+        }
         modules.push(
-          `{...${JSON.stringify({ ...metadata, activation: controlUi.activation, settingsViews: controlUi.settingsViews })},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
+          `{...${JSON.stringify(metadata)},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
         );
         captured.add(id);
       }
@@ -193,11 +199,19 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
+      settingsSource = `import { controlUiPluginDistributions } from "./control-ui-distribution.ts"; export const controlUiSettingsDistributions = [${settingsModules.join(",")}];`;
     },
     transform: {
-      filter: { id: /\/ui\/src\/plugins\/control-ui-distribution\.ts(?:\?.*)?$/ },
+      filter: { id: /\/ui\/src\/plugins\/control-ui-(?:settings-)?distribution\.ts(?:\?.*)?$/ },
       handler(_code, id) {
-        return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+        switch (id.split("?")[0]) {
+          case `${pluginsDir}/control-ui-distribution.ts`:
+            return { code: source, map: null };
+          case `${pluginsDir}/control-ui-settings-distribution.ts`:
+            return { code: settingsSource, map: null };
+          default:
+            return null;
+        }
       },
     },
   };
