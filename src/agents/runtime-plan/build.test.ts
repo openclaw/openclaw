@@ -133,9 +133,13 @@ describe("AgentRuntimePlan", () => {
       const config = (accessPrograms?: Record<string, unknown>) => ({
         agents: { defaults: { params: accessPrograms === undefined ? {} : { accessPrograms } } },
       });
-      const build = (accessPrograms?: Record<string, unknown>) =>
+      const build = (
+        accessPrograms?: Record<string, unknown>,
+        cyberAccessPrograms?: Parameters<typeof buildAgentRuntimePlan>[0]["cyberAccessPrograms"],
+      ) =>
         buildPlan({
           config: config(accessPrograms),
+          cyberAccessPrograms,
           harnessId: runtime,
           harnessRuntime: runtime,
           model: apiModel,
@@ -149,6 +153,16 @@ describe("AgentRuntimePlan", () => {
           },
         });
       expect(build().transport.resolveExtraParams().accessPrograms).toEqual({ cyber: "standard" });
+      // A model that cannot run at Standard defaults to its one advertised program.
+      expect(build(undefined, ["daybreak_red"]).transport.extraParams.accessPrograms).toEqual({
+        cyber: "daybreak_red",
+      });
+      expect(
+        build(undefined, ["standard", "daybreak_blue"]).transport.extraParams.accessPrograms,
+      ).toEqual({ cyber: "standard" });
+      expect(
+        build({ cyber: "standard" }, ["daybreak_red"]).transport.extraParams.accessPrograms,
+      ).toEqual({ cyber: "standard" });
       const configured = build({ cyber: "daybreak_blue" });
       expect(configured.transport.resolveExtraParams().accessPrograms).toEqual({
         cyber: "daybreak_blue",

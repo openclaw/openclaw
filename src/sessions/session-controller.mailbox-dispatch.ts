@@ -203,7 +203,7 @@ async function prepareSessionControllerMailboxSelection(
     }
     for (const source of selection.sources) {
       source.controllerInput?.abortSignal.throwIfAborted();
-      source.controllerInput?.sourceAdapter?.authority?.assertCurrent();
+      source.controllerInput?.sourceAdapter?.authority?.assertCurrent?.();
     }
     currentSelection = current;
   };

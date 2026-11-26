@@ -1,4 +1,4 @@
-export { processLineMessage } from "./markdown-to-line.js";
+export { chunkLineText, processLineMessage } from "./markdown-to-line.js";
 export {
   pushFlexMessage,
   pushLocationMessage,

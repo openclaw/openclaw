@@ -44,6 +44,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const iterations = Number(process.argv[2] ?? 3000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
@@ -380,12 +381,7 @@ if (
       await read();
       fetches = 0;
       if (allocations) {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 32768,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 32768);
       }
       const resultDigest = createHash("sha256");
       const hostLoad = loadavg();
@@ -690,12 +686,7 @@ if (
       },
     });
     if (allocations) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     let loadMs = 0;
     let projectionMs = 0;

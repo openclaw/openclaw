@@ -1,4 +1,8 @@
-import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type {
+  ApiKeyCredential,
+  AuthProfileCredential,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type {
   ModelProviderConfig,
@@ -180,6 +184,15 @@ export type ProviderAppGuidedSetup = {
   ) => Promise<ProviderAuthResult | null>;
 };
 
+/** Context passed to an auth method's `revoke` hook for one saved sign-in. */
+type ProviderAuthRevokeContext = {
+  profileId: string;
+  credential: OAuthCredential;
+  config: OpenClawConfig;
+  /** Aborts when the Gateway's revoke deadline passes. */
+  signal: AbortSignal;
+};
+
 export type ProviderAuthMethod = {
   id: string;
   label: string;
@@ -223,6 +236,19 @@ export type ProviderAuthMethod = {
   ) => Promise<boolean>;
   /** Provider-owned local model discovery for the shared guided setup ladder. */
   appGuidedSetup?: ProviderAppGuidedSetup;
+  /**
+   * Revoke a saved OAuth sign-in's grant at the provider. Its presence enables the
+   * Disconnect action. Resolve when the grant is revoked or already invalid; OpenClaw
+   * then deletes the saved profile. Throw an Error with a user-facing message when the
+   * grant may still be active; OpenClaw keeps the profile and shows that message.
+   */
+  revoke?: (ctx: ProviderAuthRevokeContext) => Promise<void>;
+  /** Disconnect action label, for example "Disconnect Example Account". Defaults to "Disconnect account". */
+  disconnectLabel?: string;
+  /** HTTPS page where the person reviews or removes apps connected to their provider account. */
+  accountManagementUrl?: string;
+  /** Link text for `accountManagementUrl`. Defaults to "Manage connected apps". */
+  accountManagementLabel?: string;
 };
 
 export type ProviderPluginWizardSetup = {

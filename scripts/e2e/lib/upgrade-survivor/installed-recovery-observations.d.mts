@@ -1,4 +1,3 @@
-export function sha256(bytes: string | Uint8Array): string;
 export function fileDigest(file: string): string;
 export function fileIdentity(file: string): string;
 export function installedRecoveryEvidenceMode(directory: string, isDirectory?: boolean): number;

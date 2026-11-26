@@ -101,7 +101,9 @@ function renderMarkdownRichListSource(
       blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
       ...(item.task ? { has_checkbox: true as const } : {}),
       ...(item.checked ? { is_checked: true as const } : {}),
-      ...(item.value !== undefined ? { value: item.value } : {}),
+      // Bot API rich lists carry no ordered flag; Telegram draws a bullet unless
+      // the item names its label type, so a numbered item needs `type: "1"`.
+      ...(item.value !== undefined ? { value: item.value, type: "1" as const } : {}),
     };
   });
   return { type: "list", items };

@@ -241,7 +241,9 @@ describe("host-prepared embedded tool authority", () => {
               ).rejects.toThrow("Reply operation has no active tool authority snapshot");
             }
           } else {
-            await expect(pending).rejects.toThrow("admitted run authority is no longer active");
+            await expect(pending).rejects.toThrow(
+              "This agent run is no longer active. Start a new turn to retry.",
+            );
             expect(run).not.toHaveBeenCalled();
           }
         } finally {
@@ -251,7 +253,7 @@ describe("host-prepared embedded tool authority", () => {
         if (authority === "current") {
           await expect(
             observed?.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-test" }),
-          ).rejects.toThrow("Reply operation authority is no longer active");
+          ).rejects.toThrow("This agent run is no longer active. Start a new turn to retry.");
           expect(() => publish(createEmbeddedRunHandle({ runId: attempt.runId }))).toThrow(
             "host-admitted",
           );
@@ -390,7 +392,7 @@ describe("host-prepared embedded tool authority", () => {
                 publish(preparedHandle(previousFingerprint)),
               ),
             ),
-          ).rejects.toThrow("no longer active");
+          ).rejects.toThrow("The agent run ended. Start a new turn to retry.");
         },
       );
     });
@@ -435,7 +437,7 @@ describe("host-prepared embedded tool authority", () => {
       await withPreparedEmbeddedRunToolAuthority(internal, attempt, undefined, async (prepared) => {
         expect(prepared.toolAuthorityFingerprint).toBe(previousFingerprint);
         // Neither attempt attaches a backend: rejection must come from the selected policy owner.
-        await expect(previous?.prepare()).rejects.toThrow("no longer active");
+        await expect(previous?.prepare()).rejects.toThrow("reply target changed");
         await expect(capture()?.prepare()).resolves.toBeDefined();
       });
     });

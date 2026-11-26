@@ -26,6 +26,7 @@ async function inspectFixture(
   script: string,
   selectors: string[],
   result: Partial<UpdateRunResult> = {},
+  checkIds?: string[],
 ) {
   const root = tempDirs.make(label);
   await fs.mkdir(path.join(root, "dist"));
@@ -33,6 +34,7 @@ async function inspectFixture(
   return runPostActivationInspections({
     root,
     gatewayReady: true,
+    checkIds,
     nodeRunner: process.execPath,
     result: updateResult({
       durationMs: 0,
@@ -42,27 +44,44 @@ async function inspectFixture(
   });
 }
 
-it("includes nondefault inspections in the retry command after advisory findings", async () => {
-  const secret = "sk-doctorTargetSecret1234567890";
-  const target = `survivor/model token=${secret} ${"x".repeat(200)}`;
-  const observed = await inspectFixture(
-    "doctor-advisory-retry-",
-    `process.stdout.write(JSON.stringify({
-      ok: false, checksRun: 1,
-      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks.", target: ${JSON.stringify(target)} }]
-    })); process.exitCode = 1;`,
-    ["core/doctor/hooks-model"],
-  );
-  expect(observed.status).toBe("ok");
-  const retainedTarget = observed.steps.at(-1)?.doctorLintFindings?.[0]?.target;
-  expect(retainedTarget).toContain("survivor/model");
-  expect(retainedTarget).not.toContain(secret);
-  expect(retainedTarget?.length).toBeLessThanOrEqual(160);
-  expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toEqual([]);
-  expect(observed.steps.at(-1)?.advisory?.message).toContain(
-    "openclaw doctor --lint --all --severity-min info",
-  );
-});
+it.each(["none", "info", "warning"] as const)(
+  "surfaces only real %s findings as advice with explicit selectors",
+  async (severity) => {
+    const secret = "sk-doctorTargetSecret1234567890";
+    const target = `survivor/model token=${secret} ${"x".repeat(200)}`;
+    const observed = await inspectFixture(
+      "doctor-advisory-retry-",
+      `process.stdout.write(JSON.stringify({
+      ok: ${severity === "none"}, checksRun: 1,
+      findings: ${severity === "none" ? "[]" : `[{ checkId: "core/doctor/hooks-model", severity: ${JSON.stringify(severity)}, message: "Review hooks.", target: ${JSON.stringify(target)} }]`}
+    })); process.exitCode = ${severity === "none" ? 0 : 1};`,
+      ["core/doctor/hooks-model"],
+      { steps: [] },
+      ["core/doctor/hooks-model"],
+    );
+    expect(observed.status).toBe("ok");
+    if (severity !== "none") {
+      const retainedTarget = observed.steps.at(-1)?.doctorLintFindings?.[0]?.target;
+      expect(retainedTarget).toContain("survivor/model");
+      expect(retainedTarget).not.toContain(secret);
+      expect(retainedTarget?.length).toBeLessThanOrEqual(160);
+    }
+    expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toEqual([]);
+    if (severity === "warning") {
+      expect(observed.steps.at(-1)?.advisory?.message).toContain(
+        "openclaw doctor --lint --all --severity-min info",
+      );
+    } else {
+      expect(observed.steps.at(-1)?.warnings).toEqual([]);
+      const projected = updateRunReportInputFromResult(observed);
+      expect(projected.steps).not.toContainEqual(expect.objectContaining({ status: "failed" }));
+      expect(projected.steps).not.toContainEqual(
+        expect.objectContaining({ step: expect.stringMatching(/^warning:/) }),
+      );
+      expect(renderUpdateRunReport(projected).headline).not.toContain("attention");
+    }
+  },
+);
 
 it("passes selectors as literal arguments and reports checks the target did not run", async () => {
   const root = tempDirs.make("doctor-unrun-selectors-");

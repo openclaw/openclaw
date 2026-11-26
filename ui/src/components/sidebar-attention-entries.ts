@@ -12,7 +12,7 @@ import {
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
 type SidebarInboxEntryBase<
-  Category extends Exclude<IssueTab, "all"> | "automations",
+  Category extends Exclude<IssueTab, "all">,
   Severity extends "error" | "warning" | "neutral" = "error" | "warning",
 > = {
   category: Category;
@@ -21,7 +21,7 @@ type SidebarInboxEntryBase<
   severity: Severity;
 };
 
-export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
+export type SidebarAttentionItem = SidebarInboxEntryBase<"system"> & {
   type: "attention";
   kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
@@ -141,11 +141,7 @@ export function buildSidebarInboxEntries(params: {
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
-  return (
-    tab === "all" ||
-    entry.category === tab ||
-    (tab === "system" && entry.category === "automations")
-  );
+  return tab === "all" || entry.category === tab;
 }
 
 export function sidebarInboxTabCounts(

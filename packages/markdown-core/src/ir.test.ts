@@ -359,7 +359,7 @@ it("does not linkify URLs inside raw HTML tag attributes", () => {
 });
 
 const opening = '<b title="Example\nuser[Thu] note">';
-const imageLabel = "<b>diagram</b>";
+const [imageLabel, imageAlt] = ["<b>x</b> **b** _i_ ~~s~~ `c` \\*e\\*", "<b>x</b> b i s c *e*"];
 it.each<[string, MarkdownIR, Parameters<typeof markdownToIR>[1]?]>([
   [
     `${opening}**body**</b>`,
@@ -375,7 +375,12 @@ it.each<[string, MarkdownIR, Parameters<typeof markdownToIR>[1]?]>([
   ["<b[&#114;](https://example.com)>tail", plainIR("<br>tail", [], [makeLink(2, 3)])],
   [
     `before **![${imageLabel}](https://example.com/diagram.png)** after`,
-    plainIR(`before ${imageLabel} after`, [makeStyle(7, 7 + imageLabel.length, "bold")]),
+    plainIR(`before ${imageAlt} after`, [makeStyle(7, 7 + imageAlt.length, "bold")]),
+  ],
+  [
+    '<ins>lead</ins> ![<U title="Mark">**x**</U> ![<ins>y</ins>](inner)](outer)',
+    plainIR('lead <U title="Mark">x</U> <ins>y</ins>', [makeStyle(0, 4, "underline")]),
+    { enableHtmlUnderline: true },
   ],
   [
     "before <b>x</b> ||<i>y</i>|| after",

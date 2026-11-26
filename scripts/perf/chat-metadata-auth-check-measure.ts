@@ -19,6 +19,7 @@ import { noteCommittedSharedAuthStoreOwnership } from "../../src/agents/auth-pro
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../src/agents/auth-profiles/runtime-snapshots.js";
 import type { PreparedGenerationFacts } from "../../src/gateway/server-methods/chat-metadata-facts.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -127,12 +128,7 @@ async function measure(mode: "baseline" | "candidate", pair: number) {
   global.gc?.();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadStart = os.loadavg();
   const cpuStart = process.threadCpuUsage();

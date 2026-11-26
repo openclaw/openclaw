@@ -251,7 +251,7 @@ suite.define(() => {
   });
 
   it.each(["own", "child"] as const)(
-    "supersedes a pending %s question only after a new prompt sends",
+    "leaves a pending %s question with the Gateway after a composer reply",
     async (source) => {
       const childKey = "agent:main:dashboard:superseded-question";
       const { gateway, page } = await openQuestionPage(undefined, false, [
@@ -291,14 +291,24 @@ suite.define(() => {
         question: "Which replacement workflow should I use?",
       });
       await gateway.emitGatewayEvent("question.requested", next);
-      await gateway.setMethodResponse("question.resolve", { status: "cancelled" });
       await gateway.resolveDeferred("chat.send", { status: "started", runId: "replacement-run" });
-      await expectResolution(gateway, { id: request.id, cancel: true });
-      await expectCount(panel, 0);
-      await panelFor(page, next.questions[0]!.question).waitFor();
-      expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      await expectCount(
+        page
+          .locator(".chat-group.user")
+          .filter({ hasText: "Use the supported browser workflow instead." }),
+        1,
+      );
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await panel.waitFor();
       if (source === "own") {
-        await page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).waitFor();
+        await gateway.emitGatewayEvent("question.resolved", {
+          id: request.id,
+          status: "cancelled",
+          resolvedBy: "chat-composer-replacement",
+        });
+        await expectCount(panel, 0);
+        await panelFor(page, next.questions[0]!.question).waitFor();
+        await expectCount(page.locator(".chat-question-summary"), 0);
       }
     },
   );
@@ -475,6 +485,13 @@ suite.define(() => {
 
   it("opens an external question step without answering until completion is submitted", async () => {
     const { gateway, page } = await openQuestionPage();
+    const submissionCodeLoaded = () =>
+      page.evaluate(() =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("question-prompt-submission")),
+      );
+    expect(await submissionCodeLoaded()).toBe(false);
     const url = "https://chatgpt.com/apps/github/connector_question_proof";
     const prompt = "Sign in to GitHub on ChatGPT to use it in Codex.";
     await page.context().route(url, (route) =>
@@ -520,6 +537,7 @@ suite.define(() => {
     } satisfies QuestionResolveResult);
     await button(panel, "Submit").click();
     await expectResolution(gateway, { id: request.id, answers });
+    expect(await submissionCodeLoaded()).toBe(true);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
@@ -812,6 +830,17 @@ suite.define(() => {
     const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
     await outcomeHeading.waitFor();
     await expectFocused(outcomeHeading);
+    const promptLeft = await document
+      .locator(".chat-question-summary__prompt")
+      .evaluate((prompt) => {
+        const range = prompt.ownerDocument.createRange();
+        range.selectNodeContents(prompt);
+        return range.getBoundingClientRect().left;
+      });
+    const labelLeft = await document
+      .locator(".chat-question-summary__line strong")
+      .evaluate((label) => label.getBoundingClientRect().left);
+    expect(Math.abs(promptLeft - labelLeft)).toBeLessThan(1);
     expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");

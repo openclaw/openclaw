@@ -92,6 +92,7 @@ type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
+  allowSkipUnconfigured?: boolean;
   includeProviderPluginSetups?: boolean;
   loadCatalog?: boolean;
   browseCatalogOnDemand?: boolean;
@@ -456,19 +457,16 @@ export async function promptDefaultModel(
     }
     return literalPrefixProvidersCache;
   };
-  const resolveConfiguredDisplayLabel = async () => {
-    const providerId = resolved && normalizeProviderId(resolved.provider);
-    if (!resolved || !providerId) {
-      return configuredRaw || resolvedKey;
-    }
-    const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
-    return formatModelRefLabel({
-      provider: resolved.provider,
-      model: resolved.model,
-      key: configuredRaw || resolvedKey,
-      literalPrefixProviders,
-    });
-  };
+  // Use the same literal provider prefix as the catalog rows; do not alter config.
+  const formatConfiguredDisplayLabel = (literalPrefixProviders: Set<string>) =>
+    resolved
+      ? formatModelRefLabel({
+          provider: resolved.provider,
+          model: resolved.model,
+          key: configuredRaw || resolvedKey,
+          literalPrefixProviders,
+        })
+      : configuredRaw;
 
   const offerCatalogBrowse =
     loadCatalog &&
@@ -477,8 +475,12 @@ export async function promptDefaultModel(
     (!preferredProvider || normalizeProviderId(resolved?.provider ?? "") === preferredProvider);
 
   if (offerCatalogBrowse || !loadCatalog) {
-    const configuredLabel = await resolveConfiguredDisplayLabel();
+    const configuredLabel =
+      resolved && normalizeProviderId(resolved.provider)
+        ? formatConfiguredDisplayLabel(await resolveCachedLiteralPrefixProviders())
+        : configuredRaw || resolvedKey;
     const options: WizardSelectOption[] = [];
+    const canSkipUnconfigured = !resolved && params.allowSkipUnconfigured;
     if (allowKeep) {
       options.push({
         value: KEEP_VALUE,
@@ -488,6 +490,9 @@ export async function promptDefaultModel(
             ? t("wizard.model.resolvesTo", { value: resolvedKey })
             : undefined,
       });
+    } else if (canSkipUnconfigured) {
+      // Both choices leave config unchanged. Keep the wire value accepted by hosted wizard clients.
+      options.push({ value: KEEP_VALUE, label: t("common.skipForNow") });
     }
     options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
     if (offerCatalogBrowse) {
@@ -506,7 +511,7 @@ export async function promptDefaultModel(
     const selection = await params.prompter.select({
       message: t("wizard.model.defaultModel"),
       options,
-      initialValue: allowKeep ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
+      initialValue: allowKeep || canSkipUnconfigured ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
       searchable: false,
     });
     if (selection === KEEP_VALUE) {
@@ -619,17 +624,7 @@ export async function promptDefaultModel(
   }
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
-  // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
-  // for providers that set preserveLiteralProviderPrefix, so the user sees the
-  // same ref they'll pick from the catalog rows. Config itself stays canonical.
-  const configuredLabel = resolved
-    ? formatModelRefLabel({
-        provider: resolved.provider,
-        model: resolved.model,
-        key: configuredRaw || resolvedKey,
-        literalPrefixProviders,
-      })
-    : configuredRaw;
+  const configuredLabel = formatConfiguredDisplayLabel(literalPrefixProviders);
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {

@@ -21,7 +21,7 @@ suite.define(() => {
           const row = {
             key: sessionKey,
             sessionId: "compaction-history-session",
-            kind: "direct",
+            kind: scenario === "unheld tool result" ? "group" : "direct",
             label: "Deployment verification",
             updatedAt: now,
             status: "running",
@@ -111,7 +111,7 @@ suite.define(() => {
             stream: "compaction",
             data: { phase: "start" },
           });
-          await page.locator(".chat-compaction--active").waitFor();
+          await page.locator(".chat-thread").getByText("Compacting", { exact: true }).waitFor();
           await gateway.deferNext("chat.send");
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.fill("Run the final verification next.");
@@ -188,7 +188,62 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          // Wait for the authoritative tail, not merely the request that fetched it.
+          // Wait for the authoritative tail, then inspect savings through the activity row.
+          await thread.getByText("Compacted context", { exact: true }).waitFor();
+          expect(
+            await thread.evaluate((element) => element.classList.contains("chat-thread--direct")),
+          ).toBe(scenario === "overlapping tail");
+          const read = thread
+            .locator(".chat-tool-row")
+            .filter({ hasText: /README.md/ })
+            .first();
+          const compactRow = thread.locator(".chat-compaction-activity > summary");
+          const [readBox, compactBox] = await Promise.all([
+            read.boundingBox(),
+            compactRow.boundingBox(),
+          ]);
+          expect(readBox).not.toBeNull();
+          expect(compactBox).not.toBeNull();
+          const toolGap = await read.evaluate((element) =>
+            Number.parseFloat(
+              getComputedStyle(element.closest(".chat-activity-group__body")!).rowGap,
+            ),
+          );
+          const gap = compactBox!.y - readBox!.y - readBox!.height;
+          console.log("COMPACTION_ACTIVITY_GAP", { gap, toolGap });
+          expect(gap).toBeCloseTo(toolGap, 0);
+          const toolFrame = read
+            .locator("xpath=ancestor::*[@data-virtual-row-key]")
+            .locator(":scope > .chat-group");
+          const footer = toolFrame.locator(":scope > .chat-group-footer");
+          expect(await footer.count()).toBe(1);
+          const footerBox = await footer.boundingBox();
+          expect(footerBox).not.toBeNull();
+          expect(footerBox!.x).toBeGreaterThanOrEqual(readBox!.x + readBox!.width);
+          expect(footerBox!.y + footerBox!.height).toBeLessThanOrEqual(compactBox!.y);
+          if (scenario === "unheld tool result") {
+            expect(
+              await toolFrame.locator(":scope > .chat-avatar, :scope > .chat-avatar-slot").count(),
+            ).toBe(1);
+          }
+          expect(
+            await read
+              .locator("xpath=ancestor::*[@data-virtual-row-key]")
+              .getAttribute("data-virtual-row-key"),
+          ).not.toBe(
+            await compactRow
+              .locator("xpath=ancestor::*[@data-virtual-row-key]")
+              .getAttribute("data-virtual-row-key"),
+          );
+          expect(await thread.locator(".chat-divider").count()).toBe(0);
+          const collapsedFrame = await takeControlUiScreenshotFrame(page, thread, [goal, queue], {
+            animations: "disabled",
+          });
+          await writeFile(
+            join(suite.artifactDir, "compaction-history-collapsed.png"),
+            collapsedFrame.png,
+          );
+          await thread.locator(".chat-compaction-activity summary").click();
           await thread.getByText("saved 60k tokens (75%)", { exact: true }).waitFor();
           const frame = await takeControlUiScreenshotFrame(page, thread, [goal, queue], {
             animations: "disabled",

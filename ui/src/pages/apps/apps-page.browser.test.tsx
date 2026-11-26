@@ -22,7 +22,7 @@ it.each([false, true])(
   async (native) => {
     const { page } = await import("vitest/browser");
     const viewport = { width: innerWidth, height: innerHeight };
-    await page.viewport(820, 1180);
+    await page.viewport(native ? 820 : 836, 1180);
     if (native) {
       const snapshot = createNativeDeviceSettingsSnapshot();
       vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
@@ -56,8 +56,11 @@ it.each([false, true])(
         expect(plugins.getBoundingClientRect().height).toBe(pluginsHeight);
         expect(pluginsHeight).toBeLessThan(chromeHeight);
       } else {
-        expect(chromeLink.getBoundingClientRect().top).toBe(
-          pluginsButton.getBoundingClientRect().top,
+        // A wrapped CTA can start a row earlier; the card footers still align.
+        const chromeActions = chromeLink.closest(".apps-card__ctas")!;
+        const pluginActions = pluginsButton.closest(".apps-card__ctas")!;
+        expect(chromeActions.getBoundingClientRect().bottom).toBeCloseTo(
+          pluginActions.getBoundingClientRect().bottom,
         );
       }
     } finally {

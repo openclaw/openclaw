@@ -2,6 +2,7 @@ import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { isExplicitChatFork } from "../../../config/sessions/session-entry-lineage.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   selectBoundedModelRequests,
@@ -17,6 +18,7 @@ import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { isLocalBaseUrl } from "../../model-catalog-route.js";
+import { sessionManagerInheritedMessages } from "../../sessions/session-manager-current-turn.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { describePastProjectMoves } from "../project-move-replay.js";
@@ -24,6 +26,7 @@ import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.j
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import { projectCopiedForkMessages } from "./fork-working-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
@@ -84,6 +87,7 @@ export async function prepareEmbeddedAttemptHistory(
   const { effectiveWorkspace, sessionAgentId } = input.setup;
   const sandboxed = input.setup.sandbox?.enabled === true;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
+  let explicitChatFork = false;
   let systemPromptText = input.prepared.sessionRuntime.state.systemPromptText;
   const setSystemPrompt = (nextSystemPrompt: string) => {
     systemPromptText = nextSystemPrompt;
@@ -109,12 +113,32 @@ export async function prepareEmbeddedAttemptHistory(
       sessionId: attempt.sessionId,
       policy: transcriptPolicy,
     });
+    const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
+      agentId: sessionAgentId,
+    });
+    const sessionEntry =
+      attempt.sessionKey && attempt.sessionPersistence !== "detached" && !isSettledTurnFinalization
+        ? await loadAttemptSessionEntryAfterQuotaMaintenance(
+            { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
+            assertActive,
+          )
+        : undefined;
+    const inherited =
+      attempt.sessionKey &&
+      sessionEntry?.forkSource &&
+      sessionEntry.forkSource.entryId === undefined &&
+      isExplicitChatFork(attempt.sessionKey, sessionEntry.createdVia, sessionEntry.spawnDepth)
+        ? sessionManager[sessionManagerInheritedMessages]?.()
+        : undefined;
+    explicitChatFork = inherited !== undefined;
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
       messages: bindToolResultPromptProjectionKeys(
         isSettledTurnFinalization && attempt.settledTurnFinalizationMessages
           ? boundSettledFinalizationMessages(attempt)
-          : activeSession.messages,
+          : inherited
+            ? projectCopiedForkMessages(activeSession.messages, inherited)
+            : activeSession.messages,
         input.prepared.sessionRuntime.toolResultPromptProjectionState,
       ),
       allowedToolNames: replayAllowedToolNames,
@@ -136,13 +160,6 @@ export async function prepareEmbeddedAttemptHistory(
       attempt.sessionPersistence !== "detached" &&
       !isSettledTurnFinalization
     ) {
-      const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
-        agentId: sessionAgentId,
-      });
-      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance(
-        { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
-        assertActive,
-      );
       assertActive();
       if (
         sessionEntry?.priorWorkspace &&
@@ -301,5 +318,5 @@ export async function prepareEmbeddedAttemptHistory(
   if (systemPrompt !== systemPromptText) {
     setSystemPrompt(systemPrompt);
   }
-  return prepared;
+  return { ...prepared, ...(explicitChatFork ? { explicitChatFork: true as const } : {}) };
 }

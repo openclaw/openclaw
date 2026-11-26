@@ -3,10 +3,7 @@ import {
   errorShape,
   validateUpdateRunParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
-import { isRestartEnabled } from "../../config/commands.flags.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -22,7 +19,6 @@ import {
   UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
-import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
@@ -191,29 +187,6 @@ export async function reportImmutableGatewayUpdateRefusal(
     },
     restart: null,
   });
-}
-
-export function retainUpdateRequesterAuthority(
-  requester: UpdateRequester | undefined,
-  authority: PreparedCommandOwnerAuthority | undefined,
-  getConfig: () => OpenClawConfig,
-) {
-  return {
-    signal: authority?.signal,
-    assertCurrent: () => {
-      if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
-        return;
-      }
-      const config = getConfig();
-      if (
-        !requester.authorizationSource ||
-        !authority?.isCurrent(config) ||
-        !isRestartEnabled(config)
-      ) {
-        throw new Error("Update requester authority changed before parking.");
-      }
-    },
-  };
 }
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {

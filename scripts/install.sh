@@ -553,6 +553,7 @@ show_install_plan() {
     fi
     if [[ "$INSTALL_METHOD" == "git" ]]; then
         ui_kv "Git directory" "$GIT_DIR"
+        ui_info "Git installs compile OpenClaw locally. For a prebuilt installation on a small host, use --install-method npm."
         ui_kv "Git update" "$GIT_UPDATE"
     fi
     if [[ -n "$detected_checkout" ]]; then
@@ -3004,6 +3005,11 @@ install_openclaw_from_git() {
     fi
 
     ensure_node "$repo_dir" || return $?
+    # Older checkouts own different build budgets and may have no standalone check.
+    local memory_check="$repo_dir/scripts/lib/tsdown-memory-admission.mts"
+    if [[ -f "$memory_check" ]]; then
+        node "$memory_check" || return $?
+    fi
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag

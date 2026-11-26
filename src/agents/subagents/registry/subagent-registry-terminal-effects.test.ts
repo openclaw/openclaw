@@ -126,7 +126,6 @@ it.each(["keep", "delete", "quiet", "suppressed"] as const)(
             outcome: { status: "ok" },
             delivery: {
               status: "pending",
-              disposition: suppressed ? "intentional_non_delivery" : undefined,
               createdAt: 3_000,
               attemptCount: 2,
               nextAttemptAt: 5_000,
@@ -189,9 +188,7 @@ it.each(["keep", "delete", "quiet", "suppressed"] as const)(
         requesterSettleWake: { status: "pending" },
         browserCleanupDispatchedAt: expect.any(Number),
       });
-      expect(completed.requesterSettleWake?.retireAfterSettle).toBe(
-        mode === "delete" ? true : undefined,
-      );
+      expect(completed.retireAfterSettle).toBe(mode === "delete" ? true : undefined);
       expect(cleanupBrowser).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ sessionKeys: ["agent:worker:global"] }),
       );
@@ -208,7 +205,6 @@ it.each(["keep", "delete", "quiet", "suppressed"] as const)(
     ]);
     expect(completed.delivery).toEqual({
       status: "not_required",
-      ...(suppressed ? { disposition: "intentional_non_delivery" } : {}),
     });
     expect(controller.options.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   },

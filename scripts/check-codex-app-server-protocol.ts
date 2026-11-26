@@ -51,7 +51,7 @@ const checks: Record<string, string[]> = {
     '"decline"',
     '"cancel"',
   ],
-  "v2/Account.ts": ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
+  "v2/Account.ts": ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"', 'type: "gcp"'],
   "v2/AppSummary.ts": [
     "description: string | null",
     "installUrl: string | null",
@@ -229,6 +229,7 @@ import type {
   CodexTurnEnvironmentParams,
   v2,
 } from ${JSON.stringify(protocolImport)};
+import type { ServerNotification } from ${JSON.stringify(generatedImport("ServerNotification.ts"))};
 import type { AppSummary } from ${JSON.stringify(generatedImport("v2/AppSummary.ts"))};
 import type { AppsInstalledParams } from ${JSON.stringify(generatedImport("v2/AppsInstalledParams.ts"))};
 import type { AppsInstalledResponse } from ${JSON.stringify(generatedImport("v2/AppsInstalledResponse.ts"))};
@@ -379,7 +380,14 @@ declare const generatedDynamicToolCallParams: Omit<DynamicToolCallParams, "argum
 const openClawDynamicToolCallParams: Omit<CodexDynamicToolCallParams, "arguments"> =
   generatedDynamicToolCallParams;
 declare const generatedErrorNotification: ErrorNotification;
-const openClawErrorNotification: CodexErrorNotification = generatedErrorNotification;
+// Upstream uses an unknown-valued catch-all object; the JSON wire validator owns
+// codexErrorInfo while this probe checks the remaining error fields.
+const { codexErrorInfo: _generatedErrorInfo, ...generatedErrorFields } =
+  generatedErrorNotification.error;
+const openClawErrorNotification: CodexErrorNotification = {
+  ...generatedErrorNotification,
+  error: generatedErrorFields,
+};
 declare const generatedGetAccountResponse: GetAccountResponse;
 const openClawGetAccountResponse: CodexGetAccountResponse = generatedGetAccountResponse;
 declare const generatedModelListResponse: ModelListResponse;
@@ -388,14 +396,15 @@ declare const generatedMcpResourceReadResponse: McpResourceReadResponse;
 const openClawMcpResourceReadResponse: CodexAppServerRequestResult<"mcpServer/resource/read"> =
   generatedMcpResourceReadResponse;
 declare const generatedStrictReviewRequiredNotification: StrictReviewRequiredNotification;
-type OpenClawStrictReviewRequiredNotification = Extract<
-  CodexServerNotification,
+const generatedStrictReviewEnvelope: Extract<
+  ServerNotification,
   { method: "autoApprovalReview/strictReviewRequired" }
->;
-const openClawStrictReviewRequiredNotification: OpenClawStrictReviewRequiredNotification = {
+> = {
   method: "autoApprovalReview/strictReviewRequired",
   params: generatedStrictReviewRequiredNotification,
 };
+const openClawStrictReviewRequiredNotification: CodexServerNotification =
+  generatedStrictReviewEnvelope;
 declare const generatedThreadDeleteResponse: ThreadDeleteResponse;
 const openClawThreadDeleteResponse: CodexAppServerRequestResult<"thread/delete"> =
   generatedThreadDeleteResponse;

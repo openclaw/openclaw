@@ -26,6 +26,8 @@ const LONG_LANE_ORDER = [
   "update-first-hop-compat",
   "update-restart-auth",
   "plugin-update",
+  // Prioritize ACPX only at the hosted 64-job capacity; smaller matrices keep base order.
+  "acpx-openclaw-tools-bridge",
   "legacy-operator-state",
   "root-managed-vps-upgrade",
 ];
@@ -52,6 +54,7 @@ function sanitizeLabel(value) {
 /**
  * @param {{
  *   groupSize?: number | string;
+ *   maxParallel?: number | string;
  *   lanes?: string;
  *   upgradeSurvivorBaseline?: string;
  *   upgradeSurvivorBaselineScope?: "all-scenarios" | "legacy-operator-state";
@@ -68,6 +71,7 @@ function sanitizeLabel(value) {
  */
 export function planTargetedDockerLaneGroups({
   groupSize = 1,
+  maxParallel = 32,
   lanes,
   upgradeSurvivorBaseline,
   upgradeSurvivorBaselineScope = "all-scenarios",
@@ -81,6 +85,7 @@ export function planTargetedDockerLaneGroups({
   }
 
   const parsedGroupSize = parsePositiveInt(groupSize, "groupSize");
+  const capacity = parsePositiveInt(maxParallel, "maxParallel");
   if (!["all-scenarios", "legacy-operator-state"].includes(upgradeSurvivorBaselineScope)) {
     throw new Error("Unknown upgrade survivor baseline scope.");
   }
@@ -270,7 +275,10 @@ export function planTargetedDockerLaneGroups({
           const family = lane.startsWith("update-first-hop-compat-")
             ? "update-first-hop-compat"
             : lane;
-          const index = LONG_LANE_ORDER.indexOf(family);
+          const index =
+            family === "acpx-openclaw-tools-bridge" && capacity !== 64
+              ? -1
+              : LONG_LANE_ORDER.indexOf(family);
           return index < 0 ? LONG_LANE_ORDER.length : index;
         }),
       );
@@ -284,6 +292,7 @@ const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv
 if (isMain) {
   const options = {
     groupSize: process.env.GROUP_SIZE,
+    maxParallel: process.env.MAX_PARALLEL,
     lanes: process.env.LANES,
     upgradeSurvivorBaseline: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
     upgradeSurvivorBaselineScope: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE,

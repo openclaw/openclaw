@@ -66,6 +66,7 @@ it.each([
   "legacy-contract-ready",
   "legacy-contract-no-config",
   "legacy-contract-failure",
+  "artifact-free",
   "unchanged",
   "unchanged-ready",
   "include",
@@ -139,10 +140,12 @@ it.each([
       const ready = is(
         "unchanged-ready",
         "legacy-contract-no-config",
+        "artifact-free",
         "rules-only-ready",
         "rules-only-pending-ready",
       );
-      const settled = ready && !is("rules-only-pending-ready", "legacy-contract-no-config");
+      const settled =
+        ready && !is("rules-only-pending-ready", "legacy-contract-no-config", "artifact-free");
       const alreadyCurrent = scenario === "unchanged" || ready;
       const unselectedMarker = state.path("unselected-doctor-ran");
       const config = {
@@ -191,7 +194,7 @@ it.each([
           id: pluginId,
           channels: scenario === "non-channel-config-repair" ? [] : [pluginId],
           doctorContract:
-            old || scenario.startsWith("legacy-contract-")
+            old || scenario.startsWith("legacy-contract-") || scenario === "artifact-free"
               ? undefined
               : scenario === "declared-unrelated-surface"
                 ? { resolveSessionStoreAgentIds: true }
@@ -212,13 +215,15 @@ it.each([
       };
       const previousPath = writePlugin("1.0.0");
       const candidatePath = writePlugin("2.0.0");
-      fs.writeFileSync(
-        path.join(candidatePath, "doctor-contract-api.mjs"),
-        is("wrong-doctor-surface", "declared-unrelated-surface", "legacy-contract-no-config")
-          ? "export function resolveSessionStoreAgentIds() { return []; }"
-          : scenario === "missing-normalizer" || scenario.startsWith("rules-only-")
-            ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
-            : `
+      // An artifact-free package (like @openclaw/typesafe) has nothing for Doctor to inspect.
+      if (scenario !== "artifact-free") {
+        fs.writeFileSync(
+          path.join(candidatePath, "doctor-contract-api.mjs"),
+          is("wrong-doctor-surface", "declared-unrelated-surface", "legacy-contract-no-config")
+            ? "export function resolveSessionStoreAgentIds() { return []; }"
+            : scenario === "missing-normalizer" || scenario.startsWith("rules-only-")
+              ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];'
+              : `
         ${scenario === "constructor-failure" || scenario === "legacy-contract-failure" ? 'throw new Error("fixture constructor refused");' : ""}
         ${scenario === "unrelated-core-legacy" ? 'export const legacyConfigRules = [{ path: ["plugins", "entries", "listener-fixture", "config", "oldPort"], message: "Legacy listener requires repair." }];' : ""}
         export function normalizeCompatibilityConfig({ cfg }) {
@@ -232,7 +237,8 @@ it.each([
           delete settings.oldHost;
           return { config, changes: ["Moved the configured listener port."] };
         }`,
-      );
+        );
+      }
       if (included) {
         writeJson(state.statePath("plugins.json"), config.plugins);
         await state.writeConfig({ plugins: { $include: state.statePath("plugins.json") } });

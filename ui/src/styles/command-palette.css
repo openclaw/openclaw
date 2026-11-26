@@ -7,13 +7,15 @@
 }
 
 .cmd-palette__attachments {
-  --chat-composer-editor-inset-inline: 14px;
-  --chat-attachment-inset-block: 6px;
-  --chat-attachment-hit-slop: 12px;
+  --chat-composer-editor-inset-inline: var(--cmd-palette-inset);
   --chat-box-inset: 8px;
   flex: 0 0 auto;
   min-width: 0;
-  margin: 8px 8px 0;
+}
+
+/* The preview strip already leaves room below the files. */
+.cmd-palette__attachments + .cmd-palette__entry {
+  padding-block-start: 0;
 }
 
 .cmd-palette__search {
@@ -217,6 +219,14 @@
   overflow-wrap: anywhere;
 }
 
+.cmd-palette__item-title--archived {
+  color: var(--muted);
+}
+
+.cmd-palette__avatar--archived {
+  opacity: 0.55;
+}
+
 /* The time centers on the row, across the title and its metadata. */
 .cmd-palette__item-time {
   grid-column: 2;
@@ -272,11 +282,57 @@
   font-size: 12px;
 }
 
-/* On the dock below the panel, as the composer's status band sits below its surface. */
+/* Stay above the clipped panel without moving the field or the dock. */
 .cmd-palette-stack .cmd-palette__creation-error {
+  --cmd-palette-notice-row: calc(20px * var(--control-ui-text-scale));
+  position: fixed;
+  bottom: calc(100% - var(--cmd-palette-top) + 10px);
+  left: 50%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 32px));
+  /* Never past the top edge: a long message scrolls inside instead. */
+  max-height: calc(var(--cmd-palette-top) - 20px - var(--safe-area-top));
+  overflow-y: auto;
+  padding: 8px 14px 8px 10px;
+  border-radius: min(18px, calc(18px * var(--openclaw-corner-radius-scale)));
+  background: var(--popover);
+  color: var(--text-strong);
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--text-strong) 14%, transparent),
+    0 1px 2px rgb(30 24 18 / 5%),
+    0 10px 26px -8px rgb(30 24 18 / 18%);
+  font-size: var(--control-ui-text-sm);
+  line-height: var(--cmd-palette-notice-row);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  translate: -50% 0;
+  transition:
+    opacity 160ms ease,
+    translate 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .cmd-palette-stack .cmd-palette__creation-error {
+    opacity: 0;
+    translate: -50% 4px;
+  }
+}
+
+.cmd-palette__creation-error-icon {
   flex: 0 0 auto;
-  border: 0;
-  border-radius: 0;
+  width: 16px;
+  height: var(--cmd-palette-notice-row);
+  color: var(--muted-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd-palette-stack .cmd-palette__creation-error {
+    transition: none;
+  }
 }
 
 @media (max-width: 560px) {

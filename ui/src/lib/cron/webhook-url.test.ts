@@ -10,10 +10,11 @@ function userinfoUrl(field: "username" | "password") {
 }
 
 it.each([
-  [userinfoUrl("username"), "cron.errors.webhookUrlInvalid"],
-  [userinfoUrl("password"), "cron.errors.webhookUrlInvalid"],
+  [userinfoUrl("username"), "cron.errors.webhookUrlWithCredentials"],
+  [userinfoUrl("password"), "cron.errors.webhookUrlWithCredentials"],
   ["https://bad host.example.test/hook", "cron.errors.webhookUrlInvalid"],
-  ["https:example.test/hook", "cron.errors.webhookUrlInvalid"],
+  ["https:example.test/hook", "cron.errors.webhookUrlProtocol"],
+  ["ftp://example.test/hook", "cron.errors.webhookUrlProtocol"],
   ["  ", "cron.errors.webhookUrlRequired"],
   ["http://example.test/hook", undefined],
   ["https://example.test/hook", undefined],

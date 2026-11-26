@@ -655,7 +655,8 @@ export class TooltipOwner {
     if (this.#shouldRemainOpen(pointerExit)) {
       return;
     }
-    if (!this.#richContentText) {
+    // Only a visible rich card needs time for the pointer to cross into it.
+    if (this.#pending || !this.#richContentText) {
       this.#close();
       return;
     }

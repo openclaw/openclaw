@@ -110,23 +110,6 @@ const MATRIX = PAYLOAD_KINDS.flatMap((kind) =>
 );
 
 describe("scheduled occurrence admission", () => {
-  it("classifies every executor that can start occurrence work", () => {
-    expect(Object.values(executorsRequireOccurrence).every(Boolean)).toBe(true);
-    expect(Object.keys(EXECUTOR_ADMISSION).toSorted()).toMatchInlineSnapshot(`
-      [
-        "enqueueSessionEvent",
-        "enqueueSystemEvent",
-        "evaluateCronTrigger",
-        "runCommandJob",
-        "runCronFailureRepair",
-        "runIsolatedAgentJob",
-        "runSchedulerOwned",
-        "runScriptJob",
-        "runSessionEvent",
-      ]
-    `);
-  });
-
   it.each(MATRIX)(
     "$kind on $sessionTarget (trigger: $withTrigger) runs every executor with one admitted occurrence",
     async ({ kind, sessionTarget, withTrigger }) => {

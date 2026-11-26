@@ -167,7 +167,7 @@ export function convertMessages(
         }
         userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
-      if (hasRuntimeContextMarker(msg)) {
+      if (hasRuntimeContextMarker(msg) || msg.cacheCheckpoint === false) {
         options.cacheOptOutIndexes?.add(params.length);
       }
       params.push(userParam);

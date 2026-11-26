@@ -3,16 +3,19 @@ import path from "node:path";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
+import { LEGACY_ROLLBACK_SOURCE } from "./legacy-rollback-source.js";
 import { LINK_SOURCE } from "./link-source.js";
-import { ROLLBACK_SOURCE } from "./rollback-source.js";
+import { MANIFEST_RESTORE_SOURCE } from "./rollback-source.js";
 
-export const LAUNCHER_FORMAT = 2;
-// Boot migration timing is measured separately; both starts share this wall-clock budget.
+const LAUNCHER_FORMAT = 4;
+// Both starts share the wall-clock ceiling; migration keeps the full allowance.
 export const TRIAL_BUDGET_MS = 20 * 60 * 1000;
+// A reported healthy host needed 496 seconds for agent preparation before ready.
+const POST_UPGRADE_BUDGET_MS = 10 * 60 * 1000;
 
 // Frozen source: no release dependency can prevent recovery. The sole exception is the
 // best-effort Windows console binding, imported from the selected release with a timeout.
-export const LAUNCHER_SOURCE = String.raw`#!/usr/bin/env node
+const LAUNCHER_SOURCE = String.raw`#!/usr/bin/env node
 // OpenClaw launcher format: ${LAUNCHER_FORMAT}
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +28,7 @@ process.env.OPENCLAW_RELEASE_LAUNCHER_FORWARDED = "1";
 const slot = path.join(prefix, "openclaw");
 const trialFile = path.join(prefix, "releases", ".trial");
 const budget = ${TRIAL_BUDGET_MS};
+const postUpgradeBudget = ${POST_UPGRADE_BUDGET_MS};
 const valueFlags = new Set(${JSON.stringify([...ROOT_VALUE_FLAGS, ...GATEWAY_RUN_VALUE_FLAGS, "--task-supervisor-child"])});
 const args = process.argv.slice(2);
 const childArgs = [];
@@ -64,27 +68,37 @@ function writeTrial(record) {
     try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
   }
 }
-${ROLLBACK_SOURCE}
+${LEGACY_ROLLBACK_SOURCE}
+${MANIFEST_RESTORE_SOURCE}
 ${LINK_SOURCE}
 let stderrTail = Buffer.alloc(0);
 let stderrTarget;
 function rollback(trial, reason) {
-  if (trial.phase !== "restoring") {
+  const replay = trial.phase === "restoring";
+  const manifest = readRestoreManifest(trial, replay);
+  if (!replay) {
     trial.phase = "restoring";
     trial.outcome = { status: "rolled-back", reason, stderrTail: stderrTail.toString("utf8"), at: Date.now() };
-    trial.restoring = [];
-    const since = trial.createdAt - 1000;
-    for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) {
-      const suffix = ".pre-" + generation;
-      const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
-      if (trial.config && !files.includes(trial.config) && (fs.lstatSync(trial.config + suffix, { throwIfNoEntry: false })?.ctimeMs ?? 0) >= since) files.push(trial.config);
-      trial.restoring.push({ suffix, files });
+    if (manifest === null) {
+      trial.restoring = [];
+      const since = trial.createdAt - 1000;
+      for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) {
+        const suffix = ".pre-" + generation;
+        const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
+        if (trial.config && !files.includes(trial.config) && (fs.lstatSync(trial.config + suffix, { throwIfNoEntry: false })?.ctimeMs ?? 0) >= since) files.push(trial.config);
+        trial.restoring.push({ suffix, files });
+      }
     }
-    // Inventory and phase precede every mutation; a killed restore replays safely.
+    // The phase precedes every mutation; a killed restore replays its original record.
     writeTrial(trial);
   }
-  for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) retirePlans(path.dirname(prefix), generation);
-  for (const { suffix, files } of trial.restoring) restoreState(files, suffix);
+  if (manifest === null) {
+    if (!trial.restoring) throw new Error("Update restore manifest is missing. Preserve the release and run openclaw triage.");
+    for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) retirePlans(path.dirname(prefix), generation, trial.createdAt - 1000);
+    for (const { suffix, files } of trial.restoring) restoreState(files, suffix);
+  } else {
+    restoreManifestFiles(manifest);
+  }
   switchLink(trial.previous);
   trial.phase = "rolled-back";
   writeTrial(trial);
@@ -118,7 +132,6 @@ if (!gatewayRun) {
 } else {
   let child;
   let stopping = false;
-  let budgetExpired = false;
   let killTimer;
   let budgetTimer;
   let restartTimer;
@@ -172,7 +185,10 @@ if (!gatewayRun) {
     }
     if (stopping) return;
     const startedAt = Date.now();
-    budgetExpired = false;
+    let deadline = trial?.phase === "trial" ? trial.createdAt + budget : 0;
+    let budgetReason = "new build did not become ready in " + budget / 60000 + " min";
+    let budgetExpired = false;
+    const expireBudget = () => { budgetExpired = true; stopChild(); };
     child = fork(path.join(slot, "dist", "index.js"), childArgs, {
       stdio: ["inherit", "inherit", "pipe", "ipc"],
       env: { ...process.env, OPENCLAW_LAUNCHER_IPC: "1", OPENCLAW_RELEASE_LAUNCHER_FORWARDED: "1" },
@@ -185,11 +201,21 @@ if (!gatewayRun) {
         : Buffer.concat([stderrTail.subarray(Math.max(0, stderrTail.length + chunk.length - 8192)), chunk]);
     });
     child.on("message", (message) => {
-      if (message?.type !== "openclaw.ready" || stopping || budgetExpired) return;
+      if (stopping || budgetExpired) return;
+      if (message?.type !== "openclaw.ready" && message?.type !== "openclaw.trial") return;
       const current = readTrial();
-      if (current?.phase === "trial" && Date.now() >= current.createdAt + budget) {
-        budgetExpired = true;
-        stopChild();
+      if (current?.phase === "trial" && Date.now() >= deadline) {
+        expireBudget();
+        return;
+      }
+      if (message.type === "openclaw.trial") {
+        // One stage mark, not a heartbeat: later marks cannot extend this deadline.
+        if (message.phase === "trial" && current?.phase === "trial" && Date.now() + postUpgradeBudget < deadline) {
+          deadline = Date.now() + postUpgradeBudget;
+          budgetReason = "The new version did not finish starting within " + postUpgradeBudget / 60000 + " minutes";
+          clearTimeout(budgetTimer);
+          budgetTimer = setTimeout(expireBudget, Math.max(0, deadline - Date.now()));
+        }
         return;
       }
       if (current?.phase === "trial" && linked(current.target) === linked(fs.readlinkSync(slot)) && (!current.buildId || message.buildId === current.buildId)) {
@@ -211,7 +237,7 @@ if (!gatewayRun) {
       // 78 refuses the configuration: terminal for a serving release, a failed candidate in a trial.
       if (exitCode === 78 && current?.phase !== "trial") process.exit(78);
       if (exitCode === 78 && current?.phase === "trial") rollback(current, "new build refused the configuration (exit 78)");
-      if (budgetExpired && current?.phase === "trial") rollback(current, "new build did not become ready in " + budget / 60000 + " min");
+      if (budgetExpired && current?.phase === "trial") rollback(current, budgetReason);
       let delay = 0;
       if (exitCode !== 0 && current?.phase !== "trial" && !budgetExpired) {
         if (Date.now() - startedAt >= 5 * 60000) crashRestarts = 0;
@@ -220,7 +246,7 @@ if (!gatewayRun) {
       restartTimer = setTimeout(() => { start().catch(fatal); }, delay);
     });
     if (trial?.phase === "trial") {
-      budgetTimer = setTimeout(() => { budgetExpired = true; stopChild(); }, Math.max(0, trial.createdAt + budget - Date.now()));
+      budgetTimer = setTimeout(expireBudget, Math.max(0, deadline - Date.now()));
     }
   }
   function fatal(error) { console.error("openclaw: launcher failed: " + error.stack); process.exit(1); }

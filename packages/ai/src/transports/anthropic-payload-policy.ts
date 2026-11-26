@@ -21,6 +21,7 @@ import {
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
 } from "../providers/anthropic-server-fallback.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveCompactionThreshold } from "../utils/compaction-threshold.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundaryForWire,
@@ -82,7 +83,11 @@ function resolveAnthropicCompactThreshold(
     contextTokens && contextWindow
       ? Math.min(contextTokens, contextWindow)
       : (contextTokens ?? contextWindow ?? 0);
-  return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, Math.floor(effectiveBudget * 0.7));
+  return resolveCompactionThreshold({
+    contextWindowTokens: effectiveBudget,
+    reserveTokensFloor: 0,
+    minimumThresholdTokens: ANTHROPIC_COMPACT_THRESHOLD_MIN,
+  });
 }
 
 /** Resolve the server-compaction gate and effective threshold for an Anthropic route. */

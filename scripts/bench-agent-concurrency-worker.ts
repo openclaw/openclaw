@@ -523,7 +523,6 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     isTerminalTailActive: () => false,
     sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (entry) => entry.execution.suppressSessionEffects === true,
-    discardTerminalDelivery: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
     callGateway: async () => {

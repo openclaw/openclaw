@@ -3,6 +3,8 @@ const mocks = {
   check: vi.fn(),
   run: vi.fn(),
   list: vi.fn(async () => []),
+  migrations: vi.fn(async () => []),
+  sessionWarnings: vi.fn(() => [] as string[]),
   writeJson: vi.fn(),
   log: vi.fn(),
 };
@@ -36,11 +38,11 @@ const overrides = {
   },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
   "../../infra/deferred-plugin-migrations.js": {
-    readDeferredPluginMigrationsAsync: async () => [],
+    readDeferredPluginMigrationsAsync: mocks.migrations,
     formatDeferredPluginMigration: () => "",
   },
   "../../commands/doctor-session-sqlite-warnings.js": {
-    readSessionSqliteMigrationWarnings: () => [],
+    readSessionSqliteMigrationWarnings: mocks.sessionWarnings,
   },
   "../../gateway/call.js": { callGateway: async () => ({}) },
   "../../infra/device-identity-async.js": { loadDeviceIdentityIfPresentAsync: async () => null },
@@ -59,6 +61,8 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   mocks.list.mockResolvedValue([]);
+  mocks.migrations.mockResolvedValue([]);
+  mocks.sessionWarnings.mockReturnValue([]);
 });
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
@@ -107,17 +111,42 @@ it("retains completed history when owed-step enrichment exceeds the overall dead
     started.resolve();
     return new Promise(() => {});
   });
+  mocks.sessionWarnings.mockReturnValue(["Retained migration needs repair."]);
   vi.useFakeTimers();
   const pending = updateStatusCommand({ json: true });
   await started.promise;
   await vi.advanceTimersByTimeAsync(30_001);
   await pending;
   expect(mocks.writeJson).toHaveBeenCalledOnce();
-  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({
+    lastRun,
+    migrationWarnings: ["Retained migration needs repair."],
+  });
   expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
   expect(mocks.writeJson.mock.lastCall?.[0].inspectionErrors).toContainEqual({
     section: "update history",
     message: expect.stringMatching(/timed out.*30.*second/i),
+  });
+});
+
+it("retains history and settled warnings when another migration reader exceeds the deadline", async () => {
+  const started = Promise.withResolvers<void>();
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  mocks.migrations.mockImplementation(() => {
+    started.resolve();
+    return new Promise(() => {});
+  });
+  mocks.sessionWarnings.mockReturnValue(["Retained migration needs repair."]);
+  vi.useFakeTimers();
+  const pending = updateStatusCommand({ json: true });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(30_001);
+  await pending;
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({
+    lastRun,
+    migrationWarnings: ["Retained migration needs repair."],
+    migrationWarningsError: expect.stringMatching(/timed out.*30.*second/i),
   });
 });
 

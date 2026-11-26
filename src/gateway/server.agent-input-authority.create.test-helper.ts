@@ -396,7 +396,7 @@ export async function runIndependentCreationInputCase(
     }
     const persist = () => {
       input.abortSignal.throwIfAborted();
-      expectDefined(input.sourceAdapter?.authority, "accepted source authority").assertCurrent();
+      expectDefined(input.sourceAdapter?.authority, "accepted source authority").assertCurrent?.();
       return recorder.persistApproved();
     };
     if (

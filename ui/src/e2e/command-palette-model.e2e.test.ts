@@ -10,6 +10,58 @@ import { installMockGateway } from "./new-session-page.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "command palette model memory" });
 
 suite.define(() => {
+  it("sends an unchanged palette draft after switching models", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        const modelId = "openai/gpt-5.5-mini";
+        const message = "Summarize the planning notes.";
+        const fixture = scenario({
+          "projects.list": { projects: [] },
+          "sessions.create": { key: "agent:main:dashboard:palette-model", runStarted: true },
+        });
+        const gateway = await installMockGateway(page, {
+          ...fixture,
+          models: [
+            { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+            { provider: "openai", id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
+          ],
+          presenceUsers: [{ self: true, id: "palette-user", name: "Sample User" }],
+          featureMethods: [
+            ...(fixture.featureMethods ?? []),
+            "projects.list",
+            "users.prefs.get",
+            "users.prefs.set",
+          ],
+          bootstrapPreferences: {
+            profileId: "palette-user",
+            entries: { "new-session.migration.v1": true },
+          },
+        });
+        const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+        await palette.getByRole("tab", { name: "Compose", exact: true }).click();
+        await input.fill(message);
+        const send = palette.getByRole("button", { name: "Start new session in background" });
+        await expect.poll(() => send.isEnabled()).toBe(true);
+        await gateway.deferNext("users.prefs.set");
+        await openChatModelPicker(palette);
+        await (await revealChatModelOption(palette, modelId)).click();
+        await gateway.waitForRequest("users.prefs.set");
+        await gateway.resolveDeferred("users.prefs.set");
+        expect(await input.inputValue()).toBe(message);
+        await expect
+          .poll(() => send.isEnabled(), {
+            timeout: 3000,
+            message: "Send re-enables after the model preference is saved",
+          })
+          .toBe(true);
+        await send.click();
+        const created = await gateway.waitForRequest("sessions.create");
+        expect(created.params).toMatchObject({ message, model: modelId });
+      },
+    );
+  });
+
   it.each(["session", "palette"])(
     "prefers recommended models in %s picker search",
     async (surface) => {

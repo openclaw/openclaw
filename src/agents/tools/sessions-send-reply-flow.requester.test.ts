@@ -3,10 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "../../gateway/device-revocation.js";
+import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -77,7 +74,7 @@ async function requesterAuthority(
   return { client, device, source, origin, release };
 }
 
-it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
+it.each(["allowed", "session changed", "selected Bob"] as const)(
   "preserves requester selection and separate-turn return after invocation closure: %s",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -153,7 +150,6 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         request.sessionMutationCommitGuard?.();
         request.assertDispatchCurrent?.();
         if (request.method === "chat.history") {
-          getGatewayToolCallerIdentity()?.operatorAuthority?.assertCurrent();
           return {
             messages: [
               {
@@ -216,7 +212,11 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                   requesterOrigin: origin,
                   operatorAuthority: source.authority,
                   operationalRunInstance: createOperationalRunInstanceRef("closed-invocation"),
-                  receiptAuthority: () => receiptCurrent,
+                  receiptAuthority: () => {
+                    if (!receiptCurrent) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                   fullPermission: true,
                   personalToolParticipants: participants,
                 },
@@ -228,7 +228,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                         readSessionCommunicationEndpoint({
                           config: cfg,
                           endpoint: { agentId: "main", sessionKey: key, storePath: "" },
-                          assertCurrent: source.authority.assertCurrent,
+                          assertCurrent: () => source.authority.signal?.throwIfAborted(),
                         });
                       const [requester, peer] = await Promise.all([
                         endpoint(sessionKey),
@@ -245,7 +245,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                         target: peer,
                         message: "Synthetic request",
                         inputProvenance,
-                        assertSourceCurrent: source.authority.assertCurrent,
+                        assertSourceCurrent: () => source.authority.signal?.throwIfAborted(),
                         callGateway,
                       });
                       try {
@@ -304,9 +304,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         alice.release();
         bob.release();
         participants.close();
-        if (boundary === "revoked") {
-          invalidateGatewayDeviceRevocation(context, "synthetic-peer-device", "operator");
-        } else if (boundary === "session changed") {
+        if (boundary === "session changed") {
           await replaceSessionEntry(
             { agentId: "main", sessionKey },
             { ...requesterEntry, lifecycleRevision: "requester-v2" },

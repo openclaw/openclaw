@@ -47,6 +47,8 @@ export type AgentRunContext = {
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
+  /** Server-verified identity used only by personal MCP. */
+  mcpRequesterProfileId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
@@ -297,7 +299,7 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
-  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
+  /** @deprecated Ignored; the host decides owner from `runContext.senderId`. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;

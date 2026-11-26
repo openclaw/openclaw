@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -11,6 +12,7 @@ import { participantRecordsBySessionKey } from "./session-accessor.sqlite-partic
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { readSessionMemberAccess } from "./session-member-access-facts.js";
 import type {
   SessionMembershipFact,
   SessionMembershipFacts,
@@ -51,7 +53,7 @@ function readSessionMembershipRowsInDatabase(
         .orderBy("session_key");
       let members = getSessionKysely(database.db)
         .selectFrom("session_members")
-        .select(["session_key", "identity_id"])
+        .select(["session_key", "identity_id", "access"])
         .orderBy("session_key")
         .orderBy("identity_id");
       if (sessionKeys) {
@@ -81,10 +83,18 @@ function readSessionMembershipRowsInDatabase(
         ]);
       }
       const memberships = new Map<string, string[]>();
+      const levels = new Map<string, Record<string, SessionMemberPermissionLevel>>();
       for (const row of executeSqliteQuerySync(database.db, members).rows) {
         const values = memberships.get(row.session_key) ?? [];
         values.push(row.identity_id);
         memberships.set(row.session_key, values);
+        if (row.access !== null) {
+          const access = levels.get(row.session_key) ?? {};
+          levels.set(row.session_key, {
+            ...access,
+            [row.identity_id]: readSessionMemberAccess(row.access)!,
+          });
+        }
       }
       for (const [sessionKey, values] of memberships) {
         const current = facts.get(sessionKey);
@@ -94,6 +104,7 @@ function readSessionMembershipRowsInDatabase(
           values,
           current?.[3] ?? noParticipants,
           current?.[4] ?? null,
+          ...(levels.has(sessionKey) ? ([levels.get(sessionKey)!] as const) : ([] as const)),
         ]);
       }
       // Sharing survives worker transport; the Gateway freezes these snapshots before use.
@@ -119,6 +130,7 @@ function readSessionMembershipRowsInDatabase(
           current?.[2] ?? noMembership,
           projection,
           current?.[4] ?? null,
+          ...(levels.has(sessionKey) ? ([levels.get(sessionKey)!] as const) : ([] as const)),
         ]);
       }
       return [...facts.values()];

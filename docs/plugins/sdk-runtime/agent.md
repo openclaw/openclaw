@@ -587,7 +587,7 @@ Each `SessionTranscriptMessageEntry` contains:
 
     Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `deleteSessionEntry({ ..., backupDir })` to complete a recovery snapshot before deletion. When repairing several entries in one store, pass `backupDir` on the first deletion only. The backup uses the verified SQLite snapshot owner, embeds retained cold transcripts, and publishes a standalone database without WAL or SHM sidecars alongside any legacy session index. Use a fresh backup directory; existing target files are never overwritten. `resolveSessionStoreBackupPaths(...)` remains an artifact inventory, not a safe file-copy protocol. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
-    For person-filtered disclosure, use `api.runtime.agent.session.withSessionEntriesAsync({ stores: [{ agentId, storePath, sessionKeys }], involvingProfileId, env }, consume)`. The optional `involvingProfileId` selects an exact source-local profile ID or merge alias, matching canonical effective human owners or direct profile participants; a trusted creator is the effective owner only when no owner is assigned. Mentions alone do not match. This filter is distinct from Activity filters. Personal hide/show state does not change this selection. Missing profiles, names, logins, and shortened display references match nothing. Identity resolution respects the optional `env` scope. Omit `involvingProfileId` for an unfiltered selection; an empty value matches nothing.
+    For person-filtered disclosure, use `api.runtime.agent.session.withSessionEntriesAsync({ stores: [{ agentId, storePath, sessionKeys }], involvingProfileId, profileRelation, env }, consume)`. The optional `involvingProfileId` selects an exact source-local profile ID or merge alias, matching canonical effective human owners or direct profile participants; a trusted creator is the effective owner only when no owner is assigned. Mentions alone do not match `involvingProfileId`. The optional `profileRelation` takes a numeric GitHub account target and an `owned` or `involving` relationship; the latter also matches recorded mentions. Both selectors intersect when supplied together. These filters are distinct from Activity filters. Personal hide/show state does not change this selection. Missing profiles, names, logins, and shortened display references match nothing. Identity resolution respects the optional `env` scope. Omit `involvingProfileId` for an unfiltered selection; an empty value matches nothing.
 
     The host prepares selected stores off-thread and retains their physical sources through the synchronous `consume(entries)` callback. After the selected stores are prepared, the shared-state worker reads a fresh canonical profile snapshot without reusing resident catalogs or inherited inspection snapshots. Local identity changes invalidate that prepared selection. Final native reads select current session metadata after the last await. Profile and session reads are separate snapshots; an external profile commit after the profile snapshot is not covered by the local identity guard. After awaited preparation, revalidate current configuration, selected groups, exact session IDs, source/currentness checks, and other caller-owned policy inside that callback, then serialize without awaiting. Returning a Promise is rejected; returned metadata carries no authority after the callback. Person selection does not grant viewer access or replace the publishing plugin's explicit filters and safety exclusions. Neither the deprecated `listSessionEntries` nor the metadata-only `listSessionEntriesAsync` provides this person-filtered disclosure contract. See [session store entrypoints](/plugins/sdk-entrypoints#session-persistence).
 
@@ -717,3 +717,16 @@ Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ plugi
 
   </Accordion>
 </AccordionGroup>
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

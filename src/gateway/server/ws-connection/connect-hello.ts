@@ -63,6 +63,7 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
+import { supportsSessionArchiveUndo } from "../../session-pin-compatibility.js";
 import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
@@ -267,6 +268,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
@@ -282,7 +284,12 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
         GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
+        GATEWAY_SERVER_CAPS.SESSION_APPROVAL_RECIPIENTS,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
+        GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS,
+        ...(supportsSessionArchiveUndo(activityClient, context.configSnapshot)
+          ? [GATEWAY_SERVER_CAPS.SESSION_ARCHIVE_UNDO]
+          : []),
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
