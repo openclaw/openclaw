@@ -1,7 +1,6 @@
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
@@ -11,12 +10,10 @@ import {
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   ensureOpenClawAgentDatabaseSchemaSteps,
   ensureOpenClawAgentSchema,
 } from "../state/openclaw-agent-db-schema.js";
-import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -161,23 +158,6 @@ export async function prepareDoctorDatabaseMigrations(
               // Version-only preparation has no asynchronous integrity steps.
               await runUpdateSqliteMigrationAsync(database, target.path, () => {
                 lease.assertOwned();
-                if (params.check === "full") {
-                  // Version-only preparation skips yielded integrity checks. The snapshot is
-                  // durable now, so repair only canonical derived indexes under this lease.
-                  result.changes.push(
-                    ...repairDoctorSqliteIndexCorruption(database, target.path, {
-                      ftsSchemas: AGENT_FTS_SCHEMAS,
-                      label: `agent ${target.agentId}`,
-                      assertCurrent: () => {
-                        lease.assertOwned();
-                        assertOpenClawAgentDatabaseOwner(database, {
-                          agentId: target.agentId,
-                          pathname: target.path,
-                        });
-                      },
-                    }),
-                  );
-                }
                 return runSqliteIntegrityOperationSync(
                   ensureOpenClawAgentDatabaseSchemaSteps(database, {
                     agentId: target.agentId,

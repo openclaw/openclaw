@@ -43,12 +43,7 @@ export type SqliteIntegrityWorkerInput = {
 };
 
 export type SqliteIntegrityWorkerResult =
-  | {
-      ok: true;
-      checkElapsedMs?: number;
-      fullIntegrityVerified?: boolean;
-      toleratedFts?: boolean;
-    }
+  | { ok: true; checkElapsedMs?: number; staleFts?: true }
   | {
       ok: false;
       checkElapsedMs?: number;
@@ -63,10 +58,6 @@ export type SqliteIntegrityWorkerResult =
     };
 
 export type SqliteIntegrityWorkerPhase = "opening" | "checking" | "closing";
-export type SqliteIntegrityWorkerCheckOutcome = {
-  fullIntegrityVerified: boolean;
-  toleratedFts: boolean;
-};
 
 export type SqliteIntegrityWorkerMessage =
   | SqliteIntegrityWorkerResult
@@ -140,7 +131,7 @@ export function runSqliteIntegrityCheckInWorkerSync(check: SqliteIntegrityCheck)
     }
     throw error;
   }
-  if (result.ok && result.fullIntegrityVerified === true) {
+  if (check.check !== "quick" && !result.staleFts) {
     recordSqliteDatabaseIntegrity(check.database);
   }
 }
@@ -229,8 +220,8 @@ export function assertSqliteIntegrityInWorker(
     priority?: "background";
     expectedIdentity?: DatabaseFileIdentity;
     preparedIdentity?: FileIdentityStat & { size: bigint };
+    onToleratedFts?: () => void;
   },
-  onSuccess?: (outcome: SqliteIntegrityWorkerCheckOutcome) => void,
 ): Promise<void> {
   const scope = integrityScope.getStore();
   const run = async (heldScope?: IntegrityScope) => {
@@ -390,10 +381,9 @@ export function assertSqliteIntegrityInWorker(
             }
             throw error;
           }
-          onSuccess?.({
-            fullIntegrityVerified: result.fullIntegrityVerified === true,
-            toleratedFts: result.toleratedFts === true,
-          });
+          if (result.staleFts) {
+            scheduling?.onToleratedFts?.();
+          }
           resolve();
         } catch (error) {
           if (heldScope && !reader.retired) {

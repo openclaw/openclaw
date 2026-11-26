@@ -16,8 +16,7 @@ export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
-  fullIntegrityVerified: boolean;
-  toleratedFts: boolean;
+  staleFts?: true;
 };
 
 export type SqliteIntegrityCheckTiming = {
@@ -236,7 +235,7 @@ export function assertSqliteIntegrity(
   if (options.check === "quick" && options.schemaOnly) {
     // Schema-only migrations leave existing payloads and FKs unchanged.
     runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
-    return { integrityCheck: "ok", fullIntegrityVerified: false, toleratedFts: false };
+    return { integrityCheck: "ok" };
   }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
   let staleFts = false;
@@ -258,6 +257,13 @@ export function assertSqliteIntegrity(
     ) {
       throw error;
     }
+    if (check === "quick_check") {
+      // QUICK skips ordinary index consistency. Only excuse stale FTS after ruling out mixed damage.
+      return assertSqliteIntegrity(database, databaseLabel, {
+        check: "full",
+        ftsSchemas: options.ftsSchemas,
+      });
+    }
     staleFts = true;
   }
   if (check === "quick_check" && options.tables?.length) {
@@ -273,11 +279,10 @@ export function assertSqliteIntegrity(
     }
   }
   runSqliteForeignKeyCheck(database, databaseLabel);
-  const fullIntegrityVerified = check === "integrity_check" && !staleFts;
-  if (fullIntegrityVerified) {
+  if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck: "ok", fullIntegrityVerified, toleratedFts: staleFts };
+  return staleFts ? { integrityCheck: "ok", staleFts: true } : { integrityCheck: "ok" };
 }
 
 /** Only exact, owned FTS definitions may treat their inverted index as derived data. */
