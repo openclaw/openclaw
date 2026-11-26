@@ -63,7 +63,11 @@ describe("dictation semantic formatting", () => {
     const result = prepareDictationFormatting(
       "Shopping list bullet milk next item eggs next item rice",
       "explicit",
-      { sourceId: "mic-9", sourceRevision: 2 },
+      {
+        sourceId: "mic-9",
+        sourceRevision: 2,
+        confirmedMarkers: [range(14, 20), range(26, 35), range(41, 50)],
+      },
     );
     expect(result.status).toBe("formatted");
     expect(result.plainText).toBe("Shopping list\n\n- milk\n- eggs\n- rice");
@@ -84,6 +88,7 @@ describe("dictation semantic formatting", () => {
     const result = prepareDictationFormatting(
       "Do not renew 2.5 licenses. new paragraph. Opening line. new line. Closing line",
       "explicit",
+      { confirmedMarkers: [range(27, 41), range(56, 65)] },
     );
     expect(result.plainText).toBe("Do not renew 2.5 licenses.\n\nOpening line.\nClosing line");
     expect(parsedText(result.markdown)).toEqual([
@@ -105,6 +110,7 @@ describe("dictation semantic formatting", () => {
     const result = prepareDictationFormatting(
       "step three check power step seven restart step seven verify step twelve finish",
       "explicit",
+      { confirmedMarkers: [range(0, 10), range(23, 33), range(42, 52), range(60, 71)] },
     );
     expect(result.status).toBe("formatted");
     expect(result.plainText).toBe("3. check power\n7. restart\n7. verify\n12. finish");
@@ -124,7 +130,21 @@ describe("dictation semantic formatting", () => {
   it("retains nested order and line breaks within the declared depth", () => {
     const input =
       "start list bullet parent nested list bullet child nested list step three leaf. new line. detail end list end list next item sibling end list";
-    const result = prepareDictationFormatting(input, "explicit");
+    const result = prepareDictationFormatting(input, "explicit", {
+      confirmedMarkers: [
+        range(0, 10),
+        range(11, 17),
+        range(25, 36),
+        range(37, 43),
+        range(50, 61),
+        range(62, 72),
+        range(79, 88),
+        range(96, 104),
+        range(105, 113),
+        range(114, 123),
+        range(132, 140),
+      ],
+    });
     expect(result.status).toBe("formatted");
     expect(result.counts).toEqual({ blocks: 3, items: 4, depth: 3 });
     expect(parsedText(result.markdown)).toEqual(["parent", "child", "leaf.\ndetail", "sibling"]);
@@ -189,6 +209,11 @@ describe("dictation semantic formatting", () => {
     expect(validateDictationDocument({ ...result.document!, confirmedMarkers: [] }).ok).toBe(false);
     expect(
       prepareDictationFormatting("Opening\nnew paragraph\nclosing", "explicit").plainText,
+    ).toBe("Opening\nnew paragraph\nclosing");
+    expect(
+      prepareDictationFormatting("Opening\nnew paragraph\nclosing", "explicit", {
+        confirmedMarkers: [range(8, 21)],
+      }).plainText,
     ).toBe("Opening\n\nclosing");
   });
 
@@ -216,7 +241,7 @@ describe("dictation semantic formatting", () => {
     ).toBe("raw-fallback");
     expect(
       prepareDictationFormatting("The phrase new paragraph appears", "explicit").candidates,
-    ).toEqual([]);
+    ).toEqual([{ source: range(11, 24), reason: "paragraph-break" }]);
     expect(
       prepareDictationFormatting("Opening new paragraph closing ".repeat(21), "explicit"),
     ).toMatchObject({
@@ -226,10 +251,109 @@ describe("dictation semantic formatting", () => {
     });
   });
 
+  it("confirms the reported bullet-points phrase without keyword intent guesses", () => {
+    const input = "Shopping list bullet points to discuss next item budget";
+    const review = prepareDictationFormatting(input, "explicit");
+    expect(review).toMatchObject({ status: "needs-review", plainText: input });
+    expect(review.candidates).toEqual([
+      { source: range(14, 20), reason: "bullet" },
+      { source: range(39, 48), reason: "next-item" },
+    ]);
+    const result = prepareDictationFormatting(input, "explicit", {
+      confirmedMarkers: [range(14, 20), range(39, 48)],
+    });
+    expect(result.status).toBe("formatted");
+    expect(result.plainText).toBe("Shopping list\n\n- points to discuss\n- budget");
+    expect(parsedText(result.markdown)).toEqual(["Shopping list", "points to discuss", "budget"]);
+    expect(result.candidates).toEqual([]);
+    expect(validateDictationDocument({ ...result.document!, confirmedMarkers: [] })).toMatchObject({
+      ok: false,
+      reason: "ambiguous-marker-consumption",
+    });
+    expect(
+      validateDictationDocument({ ...result.document!, consumedMarkers: [] }),
+    ).toMatchObject({ ok: false, reason: "unused-marker-confirmation" });
+  });
+
+  it("keeps unselected list words literal and rejects an orphan continuation", () => {
+    const input = "Shopping list bullet points to discuss next item budget";
+    const partial = prepareDictationFormatting(input, "explicit", {
+      confirmedMarkers: [range(14, 20)],
+    });
+    expect(partial.status).toBe("formatted");
+    expect(partial.plainText).toBe("Shopping list\n\n- points to discuss next item budget");
+    expect(partial.candidates).toEqual([{ source: range(39, 48), reason: "next-item" }]);
+    expect(
+      prepareDictationFormatting(input, "explicit", { confirmedMarkers: [range(39, 48)] }),
+    ).toMatchObject({ status: "needs-review", reason: "ambiguous-structure", plainText: input });
+  });
+
+  it("offers every recognized marker while leaving its intent undecided", () => {
+    const input =
+      "new paragraph new line bullet next item start list nested list end list step twenty";
+    const result = prepareDictationFormatting(input, "explicit");
+    expect(result).toMatchObject({ status: "needs-review", plainText: input });
+    expect(result.candidates).toEqual([
+      { source: range(0, 13), reason: "paragraph-break" },
+      { source: range(14, 22), reason: "line-break" },
+      { source: range(23, 29), reason: "bullet" },
+      { source: range(30, 39), reason: "next-item" },
+      { source: range(40, 50), reason: "list-start" },
+      { source: range(51, 62), reason: "nested-list" },
+      { source: range(63, 71), reason: "list-end" },
+      { source: range(72, 83), reason: "numbered-item", ordinal: 20 },
+    ]);
+  });
+
+  it.each([
+    ['"bullet milk"', range(1, 7)],
+    ["`bullet milk`", range(1, 7)],
+    ["https://example.com/bullet", range(20, 26)],
+  ] as const)("does not offer or consume a protected list marker: %s", (input, source) => {
+    expect(prepareDictationFormatting(input, "explicit").candidates).toEqual([]);
+    expect(
+      prepareDictationFormatting(input, "explicit", { confirmedMarkers: [source] }),
+    ).toMatchObject({
+      status: "raw-fallback",
+      reason: "invalid-marker-confirmation",
+      plainText: input,
+    });
+  });
+
+  it("preserves the complete original on overflow even with a selected prefix", () => {
+    const input = "bullet item ".repeat(21);
+    expect(
+      prepareDictationFormatting(input, "explicit", { confirmedMarkers: [range(0, 6)] }),
+    ).toMatchObject({
+      status: "needs-review",
+      reason: "too-many-ambiguous-commands",
+      plainText: input,
+      originalText: input,
+      candidates: [],
+    });
+  });
+
+  it.each(["\n\n", "\r\n\r\n", "\r\r"])(
+    "retains original paragraph structure around confirmed commands: %j",
+    (separator) => {
+      const input = `First${separator}Second new line third${separator}Fourth`;
+      const start = 12 + separator.length;
+      const result = prepareDictationFormatting(input, "explicit", {
+        confirmedMarkers: [range(start, start + 8)],
+      });
+      expect(result.status).toBe("formatted");
+      expect(result.plainText).toBe("First\n\nSecond\nthird\n\nFourth");
+      expect(parsedText(result.markdown)).toEqual(["First", "Second\nthird", "Fourth"]);
+      expect(result.counts).toEqual({ blocks: 3, items: 0, depth: 0 });
+    },
+  );
+
   it("produces only allowlisted nodes and numeric list attributes", () => {
     const input =
       'bullet <script>alert(1)</script> next item <img src="https://example.test" onerror="x"> next item [x](javascript:evil)';
-    const result = prepareDictationFormatting(input, "explicit");
+    const result = prepareDictationFormatting(input, "explicit", {
+      confirmedMarkers: [range(0, 6), range(33, 42), range(88, 97)],
+    });
     expect(result.status).toBe("formatted");
     const fragment = parseFragment(result.html);
     const queue = [...fragment.childNodes];
@@ -287,21 +411,23 @@ describe("dictation document trust boundary", () => {
     expect(validateDictationDocument(omitted).ok).toBe(false);
     const code = "```\n  a\n\n  b  \n```";
     expect(parsedText(prepareDictationFormatting(code).markdown)).toEqual([code]);
-    const listed = prepareDictationFormatting("bullet `a\nb` next item c", "explicit");
+    const listed = prepareDictationFormatting("bullet `a\nb` next item c", "explicit", {
+      confirmedMarkers: [range(0, 6), range(13, 22)],
+    });
     expect(listed.plainText).toBe("- `a\nb`\n- c");
     expect(parsedText(listed.markdown)).toEqual(["`a\nb`", "c"]);
     const nested = prepareDictationFormatting(
       "bullet parent nested list bullet `a\nb` end list end list",
       "explicit",
+      {
+        confirmedMarkers: [range(0, 6), range(14, 25), range(26, 32), range(39, 47), range(48, 56)],
+      },
     );
     expect(nested.plainText).toBe("- parent\n  - `a\nb`");
     const protectedDraft = "  customer_id  new paragraph closing";
-    const candidate = prepareDictationFormatting(protectedDraft, "explicit", {
-      protectedRanges: [range(0, 15)],
-    });
     const confirmed = prepareDictationFormatting(protectedDraft, "explicit", {
       protectedRanges: [range(0, 15)],
-      confirmedMarkers: candidate.candidates.map((item) => item.source),
+      confirmedMarkers: [range(15, 28)],
     });
     expect(parsedText(confirmed.markdown)).toEqual(["  customer_id  ", "closing"]);
   });
@@ -321,6 +447,23 @@ describe("dictation document trust boundary", () => {
         sourceDocument("one\n\ntwo", [blocks[0], { type: "paragraph", runs: [textRun(5, 8)] }]),
       ).ok,
     ).toBe(true);
+  });
+
+  it("rejects merged paragraphs across adjacent runs and retains protected spans", () => {
+    const value = (runs: unknown[]) => ({
+      ...sourceDocument("one\n\ntwo", [{ type: "paragraph", runs }]),
+      mode: "explicit",
+    });
+    for (const runs of [[textRun(0, 8)], [textRun(0, 4), textRun(4, 8)]]) {
+      expect(validateDictationDocument(value(runs))).toMatchObject({
+        ok: false,
+        reason: "merged-source-paragraphs",
+      });
+    }
+    expect(
+      validateDictationDocument({ ...value([textRun(0, 8)]), protectedRanges: [range(0, 8)] }).ok,
+    ).toBe(true);
+    expect(prepareDictationFormatting("one\r\ntwo").counts.blocks).toBe(1);
   });
 
   it("rejects forged marker reasons, unknown nodes and unowned markers", () => {
@@ -343,7 +486,9 @@ describe("dictation document trust boundary", () => {
       validateDictationDocument(sourceDocument("milk", [{ type: "script", runs: [textRun(0, 4)] }]))
         .ok,
     ).toBe(false);
-    const valid = prepareDictationFormatting("bullet milk", "explicit").document!;
+    const valid = prepareDictationFormatting("bullet milk", "explicit", {
+      confirmedMarkers: [range(0, 6)],
+    }).document!;
     expect(validateDictationDocument({ ...valid, version: 2 }).ok).toBe(false);
     expect(
       validateDictationDocument({
@@ -379,7 +524,9 @@ describe("dictation document trust boundary", () => {
   });
 
   it("rejects cycles, oversized collections and depth beyond the declared bound", () => {
-    const valid = prepareDictationFormatting("bullet milk", "explicit").document!;
+    const valid = prepareDictationFormatting("bullet milk", "explicit", {
+      confirmedMarkers: [range(0, 6)],
+    }).document!;
     const item = { marker: range(0, 6), runs: [textRun(7, 11)], children: [] as unknown[] };
     const cycle = { type: "list", ordered: false, items: [item] };
     item.children.push(cycle);
@@ -391,8 +538,19 @@ describe("dictation document trust boundary", () => {
       prepareDictationFormatting(
         "bullet a nested list bullet b nested list bullet c nested list bullet d",
         "explicit",
-      ).status,
-    ).toBe("needs-review");
+        {
+          confirmedMarkers: [
+            range(0, 6),
+            range(9, 20),
+            range(21, 27),
+            range(30, 41),
+            range(42, 48),
+            range(51, 62),
+            range(63, 69),
+          ],
+        },
+      ),
+    ).toMatchObject({ status: "needs-review", reason: "document-limit" });
     expect(prepareDictationFormatting("é".repeat(16_385), "explicit")).toMatchObject({
       status: "raw-fallback",
       reason: "text-limit",

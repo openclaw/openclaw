@@ -75,7 +75,11 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         capabilities: {
           version: 1,
           revision: 1,
-          formats: canReplaceComposerInputWithHistory(target) ? ["text/plain"] : [],
+          // Side chat and New Session render submitted messages as Markdown.
+          formats: canReplaceComposerInputWithHistory(target)
+            ? ["text/plain", "text/markdown"]
+            : [],
+          markdownProfile: "commonmark-0.31.2-lists",
           safeMultiline: true,
           ...(target.maxLength >= 0 ? { maxLength: target.maxLength } : {}),
         },
@@ -135,6 +139,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
           target,
           insertion.value,
           () => reviewed.isCurrent?.() === true,
+          reviewed.target,
         );
         if (receipt === false) {
           return null;

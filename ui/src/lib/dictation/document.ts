@@ -1,8 +1,8 @@
 import {
-  ambiguousDictationMarker,
   dictationLiteralRanges,
   dictationMarkerCandidates,
-  ordinaryDictationMarker,
+  dictationParagraphBreaks,
+  readDictationMarker,
 } from "./grammar.ts";
 import {
   DICTATION_FORMATTING_LIMITS as LIMITS,
@@ -15,63 +15,6 @@ import {
   type DictationRange,
   type DictationRun,
 } from "./types.ts";
-
-const numberWords = [
-  "zero",
-  "one",
-  "two",
-  "three",
-  "four",
-  "five",
-  "six",
-  "seven",
-  "eight",
-  "nine",
-  "ten",
-  "eleven",
-  "twelve",
-  "thirteen",
-  "fourteen",
-  "fifteen",
-  "sixteen",
-  "seventeen",
-  "eighteen",
-  "nineteen",
-  "twenty",
-];
-const markerReasons: Readonly<Record<string, DictationMarkerReason>> = {
-  "new paragraph": "paragraph-break",
-  "new line": "line-break",
-  bullet: "bullet",
-  "next item": "next-item",
-  "start list": "list-start",
-  "nested list": "nested-list",
-  "end list": "list-end",
-};
-
-/** Independent validation of a marker claim: arbitrary text cannot claim a reason. */
-export function readDictationMarker(text: string):
-  | {
-      reason: DictationMarkerReason;
-      ordinal?: number;
-    }
-  | undefined {
-  const phrase = text
-    .toLowerCase()
-    .replace(/[,:.]$/, "")
-    .replace(/[ \t]+/g, " ");
-  if (Object.hasOwn(markerReasons, phrase)) {
-    return { reason: markerReasons[phrase]! };
-  }
-  if (!phrase.startsWith("step ")) {
-    return undefined;
-  }
-  const number = phrase.slice(5);
-  const ordinal = /^(?:0|[1-9]\d{0,8})$/.test(number)
-    ? Number(number)
-    : numberWords.indexOf(number);
-  return ordinal >= 0 ? { reason: "numbered-item", ordinal } : undefined;
-}
 
 export function isBoundedDictationText(text: string): boolean {
   return (
@@ -233,11 +176,9 @@ export function validateDictationDocument(value: unknown): DictationValidationRe
       return { ok: false, reason: "invalid-marker-reason" };
     }
     if (
-      ordinaryDictationMarker(text, source) ||
-      (ambiguousDictationMarker(text, source) &&
-        !confirmedMarkers.some(
-          (confirmed) => confirmed.start === source.start && confirmed.end === source.end,
-        ))
+      !confirmedMarkers.some(
+        (confirmed) => confirmed.start === source.start && confirmed.end === source.end,
+      )
     ) {
       return { ok: false, reason: "ambiguous-marker-consumption" };
     }
@@ -369,9 +310,22 @@ export function validateDictationDocument(value: unknown): DictationValidationRe
         return undefined;
       }
       const content = runs(raw.runs);
-      return content
-        ? { type: "paragraph", runs: content, ...(marker ? { marker } : {}) }
-        : undefined;
+      if (!content) {
+        return undefined;
+      }
+      if (mode === "explicit") {
+        const start = content[0]!.source.start;
+        const end = content.at(-1)!.source.end;
+        for (const boundary of dictationParagraphBreaks(text.slice(start, end))) {
+          const first = start + boundary.index;
+          const last = first + boundary[0].length;
+          if (!protectedRanges.some((range) => range.start < last && range.end > first)) {
+            failure = "merged-source-paragraphs";
+            return undefined;
+          }
+        }
+      }
+      return { type: "paragraph", runs: content, ...(marker ? { marker } : {}) };
     }
     if (
       raw.type !== "list" ||

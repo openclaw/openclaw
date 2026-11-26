@@ -23,7 +23,8 @@ preferences also use Preserve.
 
 **Interpret explicit structure (English)** is an opt-in command grammar. After
 Stop, the microphone releases and the final transcript is prepared for review.
-Formatting does not send the message. Review the semantic or plain preview, then
+Formatting does not send the message. Confirm the phrases intended as commands,
+review the semantic or plain preview, then
 choose **Use formatted text** or **Keep original** when the captured target is
 still eligible. Sending remains a separate action.
 
@@ -52,22 +53,30 @@ spoken as an instruction or discussed as ordinary prose.
 
 | Form                                                                                         | Behavior                                                                            |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `Shopping list bullet milk next item eggs next item rice`                                    | Keeps the introduction and prepares three items in that order.                      |
-| `bullet milk next item eggs`                                                                 | Starts an unordered list and adds a second item.                                    |
-| `step three check power step seven restart`                                                  | Keeps the explicit item numbers 3 and 7; it does not renumber the second item to 4. |
-| `start list bullet parent nested list bullet child end list next item sibling end list`      | Creates a nested list with the child under its original parent.                     |
-| A standalone `new paragraph` line, or `Opening paragraph. new paragraph. Closing paragraph.` | Creates a paragraph boundary when the marker is clearly delimited.                  |
-| A standalone or punctuation-delimited `new line`                                             | Creates a line break inside the current paragraph or item.                          |
-| `Our new paragraph starts with a date`                                                       | Retains ordinary discussion as text.                                                |
+| `Shopping list bullet milk next item eggs next item rice`                                    | After confirmation of `bullet` and both `next item` phrases, keeps the introduction and prepares three items in order. |
+| `bullet milk next item eggs`                                                                 | After confirmation, starts an unordered list and adds a second item. |
+| `step three check power step seven restart`                                                  | After confirmation, keeps the explicit item numbers 3 and 7. |
+| `start list bullet parent nested list bullet child end list next item sibling end list`      | After confirmation of each command, creates a nested list with the child under its original parent. |
+| `new paragraph`, including a standalone or punctuation-delimited occurrence                  | Creates a paragraph boundary only after confirmation of that occurrence. |
+| `new line`, including a standalone or punctuation-delimited occurrence                       | Creates a line break inside the current paragraph or item only after confirmation. |
+| `Our new paragraph starts with a date`                                                       | Keeps the phrase literal unless that occurrence is explicitly selected as a command. |
 | Quotes, backtick/fenced code, URLs, or caller-protected literal spans                        | Keeps marker-looking words literal.                                                 |
 
-Undelimited paragraph speech such as
-`Opening paragraph new paragraph closing paragraph` needs an explicit intent
-confirmation. In the review's marker checklist, check the exact marker occurrence
-and choose **Interpret selected commands**. The reviewed preparation records that choice
-against the original transcript revision. This action cannot consume arbitrary
-words or override quoted/code protection. Inspect the resulting paragraphs before
-applying them. Unconfirmed words remain available unchanged.
+Every recognized command needs explicit intent confirmation, including list,
+numbered-item, paragraph, and line commands. In the review's marker checklist,
+check each exact occurrence you intended as a command and choose **Interpret
+selected commands**. The choice is tied to the original transcript revision.
+Punctuation or words such as "points" do not establish intent. For example,
+`Shopping list bullet points to discuss next item budget` can become two items
+after confirming `bullet` and `next item`; leaving them unchecked preserves the
+original words.
+
+Confirmation cannot consume arbitrary words or override quoted/code protection.
+Inspect the resulting structure before applying it. Unselected phrases remain
+literal. Outside list items and protected literal spans, existing paragraph
+separators remain paragraph boundaries. A list opener must be followed by an
+item command such as `bullet`; unsupported or incomplete
+structures retain the original instead of guessing missing content.
 
 Numbers, quantities, names, negation, item order, and protected content remain
 source-backed. Unsupported or empty structures retain a readable original
@@ -80,8 +89,8 @@ and successfully inserting it are separate outcomes.
 
 | Representation              | Contract                                                                                                       | Current delivery boundary                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Plain text                  | Paragraph spacing, line breaks, and readable list markers                                                      | An unchanged, editable direct-dictation field with safe multiline and an available undoable text adapter; otherwise review/copy. |
-| Markdown                    | `commonmark-0.31.2-lists`: escaped text, paragraphs, hard breaks, and ordered/unordered lists                  | The built-in Markdown composer only when the captured draft is empty or the entire draft is selected.                            |
+| Plain text                  | Paragraph spacing, line breaks, and readable list markers                                                      | Plain preview/copy and original-text recovery through an eligible captured target. |
+| Markdown                    | `commonmark-0.31.2-lists`: escaped text, paragraphs, hard breaks, and ordered/unordered lists                  | Chat, New Session, and Side chat only when the captured draft is empty or the entire draft is selected and the target supports an undoable edit. |
 | Rich text                   | `safe-blocks-v1`: deterministic `p`, `br`, `ul`, `ol`, and `li` nodes; numeric list `start`/`value` attributes | Semantic preview and preparation only. Native/external rich insertion is not qualified.                                          |
 | Unknown or stale capability | Readable plain candidate                                                                                       | Explicit review/copy; no automatic insertion into another target.                                                                |
 
@@ -90,6 +99,13 @@ syntax from changing the meaning of a prepared result. For a partial selection
 inside an existing Markdown draft, use the recovery controls or explicitly select
 the whole intended draft before starting a new recording. The formatter does not
 infer support from an application name, browser title, or current foreground app.
+
+**Keep original** replaces only the captured range. The rich composer uses its
+existing editor transaction to retain unaffected recipient records and include
+mention invalidation in the same Undo step. Native textarea history and actual
+recipient retention still require the execution described in the acceptance
+ledger. Intentional whole-draft proposals keep their existing whole-draft Undo
+contract.
 
 Explicit step numbers can be repeated or skipped. The Markdown serializer starts
 a new ordered-list segment when necessary because CommonMark otherwise derives
@@ -159,16 +175,21 @@ to own text after an accepted edit.
 
 The private prototype currently bounds a transcript at 32 KiB of UTF-8, with at
 most 100 blocks, 100 total list items, depth 3, 1,000 runs, 500 consumed markers,
-512 protected ranges, and 20 unresolved marker-confirmation candidates. These ceilings require corpus, UI, and maintainer
-qualification. Oversize or invalid input keeps an original-text fallback; it is
-not silently truncated.
+512 protected ranges, and 20 recognized, unprotected command candidates per
+transcript. If that last limit is exceeded, review keeps the complete original
+and offers no partial command checklist. These ceilings require corpus, UI, and
+maintainer qualification. Oversize or invalid input keeps an original-text
+fallback; it is not silently truncated.
 
 The proposed private finishing deadline is 2,500 ms from Stop for Explicit
 preparation. A deadline cannot authorize a late publication or turn a partial
 caption into a complete result. Provider, validation/rendering, and total latency
-must be reported separately. The proposed 50 ms p95 validation-plus-rendering
-goal for 10,000 characters/100 blocks passed the recorded warm benchmark;
-first-call and long-tail results remain separate in the acceptance ledger.
+must be reported separately. The proposed validation-plus-rendering goal is
+50 ms p95 for a 10,000-character workload. The current benchmark fixtures stay
+within the confirmation limit: paragraph workloads have 20 commands and 21
+blocks; the nested workload has 18 commands, seven blocks, and depth three.
+They have not been executed on this repair revision. Earlier measurements do
+not qualify the changed parser, validator, or workloads.
 
 The required rich-editor insertion/undo proof, real microphone-to-list journey,
 current-build accessibility evidence, and final-head CI remain separate release

@@ -1,5 +1,6 @@
-import { flush } from "solid-js";
 /* @vitest-environment jsdom */
+import MarkdownIt from "markdown-it";
+import { flush } from "solid-js";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { registerComposerEditor } from "../../lib/composer-input.ts";
@@ -79,7 +80,11 @@ function fixture(mode: "preserve" | "explicit" = "explicit") {
     requestSync: vi.fn(),
     focus: (options) => target.focus(options),
     select: (start, end) => target.setSelectionRange(start, end),
-    replace: vi.fn(),
+    replace: (text, start, end) => {
+      target.value = target.value.slice(0, start) + text + target.value.slice(end);
+      target.setSelectionRange(start + text.length, start + text.length);
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    },
     replaceAll: (text) => {
       target.value = text;
       target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -99,6 +104,16 @@ function fixture(mode: "preserve" | "explicit" = "explicit") {
     target,
     onMessage,
     onSubmit,
+    confirmListCommands() {
+      const commands = view.getAllByRole("checkbox");
+      expect(commands).toHaveLength(3);
+      for (const command of commands) {
+        command.click();
+      }
+      flush();
+      view.getByRole("button", { name: "Interpret selected commands", exact: true }).click();
+      flush();
+    },
     async start() {
       await vi.dynamicImportSettled();
       flush();
@@ -117,8 +132,11 @@ function fixture(mode: "preserve" | "explicit" = "explicit") {
       expect(owner.connecting).toBe(false);
       return owner;
     },
-    async finalize(finishing: Promise<boolean>) {
-      transcript("Shopping list bullet milk next item eggs");
+    async finalize(
+      finishing: Promise<boolean>,
+      text = "bullet milk next item eggs end list",
+    ) {
+      transcript(text);
       emit({ type: "close", reason: "completed" });
       await finishing;
       flush();
@@ -141,15 +159,70 @@ it("retains target focus when the focused Finish control is removed before final
   expect(button.isConnected).toBe(false);
   await view.finalize(finishing.value);
   expect(document.activeElement).toBe(view.target);
+  view.confirmListCommands();
   expect(owner.formattingReview?.canApply).toBe(true);
-  const plainText = owner.formattingReview?.result.plainText;
+  const markdown = owner.formattingReview?.result.markdown;
   const apply = view.getByRole("button", { name: "Use formatted text", exact: true });
   apply.focus();
   apply.click();
   flush();
-  expect(view.target.value).toBe(plainText);
-  expect(view.onMessage).toHaveBeenCalledExactlyOnceWith(plainText);
+  expect(view.target.value).toBe(markdown);
+  expect(view.onMessage).toHaveBeenCalledExactlyOnceWith(markdown);
   expect(owner.formattingReceipt).toBe("committed");
+  expect(view.onSubmit).not.toHaveBeenCalled();
+});
+
+it("preserves literal Markdown when reviewed dictation replaces the whole direct-composer draft", async () => {
+  const view = fixture();
+  view.target.value = "Previous draft";
+  view.target.setSelectionRange(0, view.target.value.length);
+  const owner = await view.start();
+  view.target.focus();
+  await view.finalize(
+    owner.finishActive(),
+    "bullet *literal* next item _also literal_ end list",
+  );
+  view.confirmListCommands();
+  expect(owner.formattingReview?.canApply).toBe(true);
+
+  const apply = view.getByRole("button", { name: "Use formatted text", exact: true });
+  apply.focus();
+  apply.click();
+  flush();
+
+  const expected = "- \\*literal\\*\n- \\_also literal\\_";
+  expect(view.target.value).toBe(expected);
+  expect(view.onMessage).toHaveBeenCalledExactlyOnceWith(expected);
+  const rendered = document.createElement("div");
+  rendered.innerHTML = new MarkdownIt("commonmark").render(view.target.value);
+  expect([...rendered.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
+    "*literal*",
+    "_also literal_",
+  ]);
+  expect(rendered.querySelector("em, strong")).toBeNull();
+  expect(view.onSubmit).not.toHaveBeenCalled();
+});
+
+it("refuses formatted insertion into an existing Markdown fence in a direct composer", async () => {
+  const view = fixture();
+  const existing = "```\nexisting\n```";
+  view.target.value = existing;
+  view.target.setSelectionRange(4, 12);
+  const owner = await view.start();
+  view.target.focus();
+  await view.finalize(owner.finishActive());
+  view.confirmListCommands();
+
+  expect(owner.formattingReview?.result.status).toBe("formatted");
+  expect(owner.formattingReview?.canApplyOriginal).toBe(true);
+  expect(owner.formattingReview?.canApply).toBe(false);
+  expect(view.getByRole("button", { name: "Use formatted text", exact: true })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(owner.acceptFormatting("formatted")).toBe(false);
+  expect(view.target.value).toBe(existing);
+  expect(view.onMessage).not.toHaveBeenCalled();
   expect(view.onSubmit).not.toHaveBeenCalled();
 });
 
@@ -222,6 +295,6 @@ it("retains Preserve recording locks and its original direct insertion", async (
   await view.finalize(finishing);
   expect(owner.formattingReview).toBeUndefined();
   expect(view.onMessage).toHaveBeenCalledExactlyOnceWith(
-    "Shopping list bullet milk next item eggs",
+    "bullet milk next item eggs end list",
   );
 });

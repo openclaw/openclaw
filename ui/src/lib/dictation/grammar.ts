@@ -1,8 +1,71 @@
 import {
   DICTATION_FORMATTING_LIMITS,
   type DictationMarkerCandidate,
+  type DictationMarkerReason,
   type DictationRange,
 } from "./types.ts";
+
+const numberWords = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "thirteen",
+  "fourteen",
+  "fifteen",
+  "sixteen",
+  "seventeen",
+  "eighteen",
+  "nineteen",
+  "twenty",
+];
+const markerReasons: Readonly<Record<string, DictationMarkerReason>> = {
+  "new paragraph": "paragraph-break",
+  "new line": "line-break",
+  bullet: "bullet",
+  "next item": "next-item",
+  "start list": "list-start",
+  "nested list": "nested-list",
+  "end list": "list-end",
+};
+
+/** Shared lexical reader: recognized syntax does not establish command intent. */
+export function readDictationMarker(text: string):
+  | {
+      reason: DictationMarkerReason;
+      ordinal?: number;
+    }
+  | undefined {
+  const phrase = text
+    .toLowerCase()
+    .replace(/[,:.]$/, "")
+    .replace(/[ \t]+/g, " ");
+  if (Object.hasOwn(markerReasons, phrase)) {
+    return { reason: markerReasons[phrase]! };
+  }
+  if (!phrase.startsWith("step ")) {
+    return undefined;
+  }
+  const number = phrase.slice(5);
+  const ordinal = /^(?:0|[1-9]\d{0,8})$/.test(number)
+    ? Number(number)
+    : numberWords.indexOf(number);
+  return ordinal >= 0 ? { reason: "numbered-item", ordinal } : undefined;
+}
+
+/** A CRLF is one line boundary, including when a match backtracks. */
+export function dictationParagraphBreaks(text: string) {
+  return text.matchAll(/(?:\r\n|\r(?!\n)|\n)[ \t]*(?:\r\n|\r(?!\n)|\n)+/g);
+}
 
 /** Quotes, code and URLs remain inert even when a caller omits literal metadata. */
 export function dictationLiteralRanges(text: string): DictationRange[] {
@@ -38,89 +101,27 @@ export function dictationLiteralRanges(text: string): DictationRange[] {
   return result;
 }
 
-/** Ordinary discussion cannot become a formatting operation, even via confirmation. */
-export function ordinaryDictationMarker(text: string, source: DictationRange): boolean {
-  const before = text.slice(0, source.start);
-  const after = text.slice(source.end);
-  const phrase = text.slice(source.start, source.end).toLowerCase();
-  const nominalPhrase = /^(?:new[ \t]+(?:paragraph|line)|bullet|step[ \t])/.test(phrase);
-  if (
-    /\b(?:the|these|those|a|an)\s+(?:words?|phrase|term|literal|examples?|markers?|commands?)\b[^.!?\n]{0,80}$/i.test(
-      before,
-    ) ||
-    /\b(?:words?|phrase|term|literal|named|called|saying|mention(?:ed|ing)?|markers?|commands?)\s*$/i.test(
-      before,
-    ) ||
-    (nominalPhrase &&
-      /\b(?:the|a|an|our|my|your|their|his|her|its|this|that|these|those|each|every|another|any|some|about|in|of|say|type|write|read|use|need|want|create|insert|discuss|discussed|delete)\s*$/i.test(
-        before,
-      )) ||
-    /^\s*(?:is|are|means|appears|phrase|word|command|marker|symbol|character|syntax|spacing)\b/i.test(
-      after,
-    )
-  ) {
-    return true;
-  }
-  if (phrase.startsWith("bullet")) {
-    if (
-      /^\s*(?:trains?|proof|holes?|wounds?|journals?|points?|lists?|items?|formatting|shells?|casings?)\b/i.test(
-        after,
-      )
-    ) {
-      return true;
-    }
-    // A mid-sentence lone "bullet" has insufficient command intent. Explicit
-    // list continuation or a list introduction makes the supported form clear.
-    return (
-      Boolean(before.trim()) && !/\bnext item\b/i.test(after) && !/\blist\s*[:.]?\s*$/i.test(before)
-    );
-  }
-  return (
-    phrase.startsWith("step ") &&
-    /^\s*(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|point|decimal)\b/i.test(
-      after,
-    )
-  );
-}
-
-/** Recognizer text does not carry acoustic pause or command-intent metadata. */
-export function ambiguousDictationMarker(text: string, source: DictationRange): boolean {
-  if (ordinaryDictationMarker(text, source)) {
-    return true;
-  }
-  const phrase = text.slice(source.start, source.end).toLowerCase();
-  if (!/^new[ \t]+(?:paragraph|line)/.test(phrase)) {
-    return false;
-  }
-  const before = text.slice(0, source.start);
-  const left = !before.trim() || /(?:\n|[.!?;:,])[ \t]*$/.test(before);
-  const right = /[,:.]$/.test(phrase) || /^[ \t]*(?:\r?\n|$)/.test(text.slice(source.end));
-  return !left || !right;
-}
-
-/** A bounded review proposal; an omitted/unchecked range remains literal text. */
+/** Every unprotected command is reviewable; only exact confirmation supplies intent. */
 export function dictationMarkerCandidates(
   text: string,
   protectedRanges: readonly DictationRange[],
 ): DictationMarkerCandidate[] | undefined {
   const candidates: DictationMarkerCandidate[] = [];
-  const pattern = /(?<![\p{L}\p{N}_])new[ \t]+(?:paragraph|line)(?:[,:.])?(?=$|\s)/giu;
+  const pattern =
+    /(?<![\p{L}\p{N}_])(?:new[ \t]+paragraph|new[ \t]+line|next[ \t]+item|start[ \t]+list|nested[ \t]+list|end[ \t]+list|bullet|step[ \t]+(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty))(?:[,:.])?(?=$|\s)/giu;
   for (const match of text.matchAll(pattern)) {
     const source = { start: match.index, end: match.index + match[0].length };
-    if (
-      protectedRanges.some((range) => range.start < source.end && range.end > source.start) ||
-      ordinaryDictationMarker(text, source) ||
-      !ambiguousDictationMarker(text, source)
-    ) {
+    if (protectedRanges.some((range) => range.start < source.end && range.end > source.start)) {
+      continue;
+    }
+    const marker = readDictationMarker(match[0]);
+    if (!marker) {
       continue;
     }
     if (candidates.length >= DICTATION_FORMATTING_LIMITS.confirmationCandidates) {
       return undefined;
     }
-    candidates.push({
-      source,
-      reason: /paragraph/i.test(match[0]) ? "paragraph-break" : "line-break",
-    });
+    candidates.push({ source, ...marker });
   }
   return candidates;
 }

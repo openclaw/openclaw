@@ -3,7 +3,8 @@
  * node --import ./scripts/tsx.mjs ui/src/lib/dictation/formatting.bench.ts
  *
  * Acceptance hypothesis: validation + all three renderings p95 <= 50 ms for
- * each 10,000-character / 100-block workload. This measures deterministic
+ * each 10,000-character workload within the 20-command confirmation cap.
+ * This measures deterministic
  * preparation only, never acoustic, provider, screen-reader or native delivery.
  */
 import { execFileSync } from "node:child_process";
@@ -15,60 +16,83 @@ import {
   prepareDictationFormatting,
   renderDictationDocument,
   validateDictationDocument,
+  type DictationRange,
 } from "./formatting.ts";
 
 const samples = 100;
 const warmupSamples = 10;
-function fillSlots(parts: (string | null)[], alphabet: string): string {
+type WorkloadPart = { command: string } | null;
+function fillSlots(parts: WorkloadPart[], alphabet: string) {
   const slots = parts.filter((part) => part === null).length;
-  const available = 10_000 - parts.reduce<number>((sum, part) => sum + (part?.length ?? 0), 0);
+  const available =
+    10_000 - (parts.length - 1) - parts.reduce((sum, part) => sum + (part?.command.length ?? 0), 0);
+  const confirmedMarkers: DictationRange[] = [];
+  let text = "";
   let index = 0;
-  return parts
-    .map((part) => {
-      if (part !== null) {
-        return part;
-      }
-      const length = Math.floor(available / slots) + (index++ < available % slots ? 1 : 0);
-      if (length < 2) {
-        throw new Error("Benchmark fixture has no content budget");
-      }
-      return alphabet.repeat(Math.ceil(length / alphabet.length)).slice(0, length - 1) + ".";
-    })
-    .join("");
-}
-const paragraphParts: (string | null)[] = [];
-for (let index = 0; index < 100; index++) {
-  if (index) {
-    paragraphParts.push(" new paragraph. ");
+  for (const part of parts) {
+    if (text) {
+      text += " ";
+    }
+    if (part) {
+      // Fixture construction authors each range independently of the formatter.
+      const start = text.length;
+      text += part.command;
+      confirmedMarkers.push({ start, end: text.length });
+      continue;
+    }
+    const length = Math.floor(available / slots) + (index++ < available % slots ? 1 : 0);
+    if (length < 2) {
+      throw new Error("Benchmark fixture has no content budget");
+    }
+    text += alphabet.repeat(Math.ceil(length / alphabet.length)).slice(0, length - 1) + ".";
   }
-  paragraphParts.push(null);
+  return { text, confirmedMarkers };
 }
-const nestedParts: (string | null)[] = [];
-for (let index = 0; index < 33; index++) {
+const paragraphParts: WorkloadPart[] = [null];
+for (let index = 0; index < 20; index++) {
+  paragraphParts.push({ command: "new paragraph." }, null);
+}
+const nestedParts: WorkloadPart[] = [];
+for (let index = 0; index < 2; index++) {
   nestedParts.push(
-    "start list bullet ",
+    { command: "start list" },
+    { command: "bullet" },
     null,
-    " nested list bullet ",
+    { command: "nested list" },
+    { command: "bullet" },
     null,
-    " nested list step three ",
+    { command: "nested list" },
+    { command: "step three" },
     null,
-    " end list end list end list ",
+    { command: "end list" },
+    { command: "end list" },
+    { command: "end list" },
   );
 }
 nestedParts.push(null);
 const fixtures = [
   {
     name: "paragraphs",
-    text: fillSlots(paragraphParts, "abcdefghijklmnopqrstuvwxyz0123456789 "),
+    ...fillSlots(paragraphParts, "abcdefghijklmnopqrstuvwxyz0123456789 "),
+    blocks: 21,
     depth: 0,
+    markers: 20,
   },
   // Ampersands expand every source character to five HTML characters. Other
   // Markdown/HTML punctuation combinations are checked by the parser tests.
-  { name: "escaped-paragraphs", text: fillSlots(paragraphParts, "&"), depth: 0 },
+  {
+    name: "escaped-paragraphs",
+    ...fillSlots(paragraphParts, "&"),
+    blocks: 21,
+    depth: 0,
+    markers: 20,
+  },
   {
     name: "nested-lists",
-    text: fillSlots(nestedParts, "abcdefghijklmnopqrstuvwxyz0123456789 "),
+    ...fillSlots(nestedParts, "abcdefghijklmnopqrstuvwxyz0123456789 "),
+    blocks: 7,
     depth: 3,
+    markers: 18,
   },
 ];
 function summarize(values: number[]) {
@@ -88,12 +112,14 @@ for (const fixture of fixtures) {
   const firstStart = performance.now();
   const first = prepareDictationFormatting(fixture.text, "explicit", {
     sourceId: `benchmark-${fixture.name}`,
+    confirmedMarkers: fixture.confirmedMarkers,
   });
   const firstCallMs = performance.now() - firstStart;
   if (
     fixture.text.length !== 10_000 ||
     first.status !== "formatted" ||
-    first.counts.blocks !== 100 ||
+    first.counts.blocks !== fixture.blocks ||
+    fixture.confirmedMarkers.length !== fixture.markers ||
     first.counts.depth !== fixture.depth ||
     !first.document
   ) {
@@ -110,9 +136,10 @@ for (const fixture of fixtures) {
     const start = performance.now();
     const prepared = prepareDictationFormatting(fixture.text, "explicit", {
       sourceId: `benchmark-${fixture.name}`,
+      confirmedMarkers: fixture.confirmedMarkers,
     });
     const elapsed = performance.now() - start;
-    if (prepared.status !== "formatted" || prepared.counts.blocks !== 100) {
+    if (prepared.status !== "formatted" || prepared.counts.blocks !== fixture.blocks) {
       throw new Error("A fallback is not a successful formatting timing");
     }
     if (index >= 0) {
@@ -136,6 +163,7 @@ for (const fixture of fixtures) {
     workload: fixture.name,
     sourceUtf16Characters: fixture.text.length,
     sourceUtf8Bytes: Buffer.byteLength(fixture.text),
+    confirmedMarkerCount: fixture.confirmedMarkers.length,
     counts: first.counts,
     firstCall: {
       samples: 1,

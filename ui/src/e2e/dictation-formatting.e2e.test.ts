@@ -305,10 +305,17 @@ suite.define(() => {
         await mode.press("Escape");
         await fixture.textarea.focus();
         await fixture.start();
-        await fixture.textarea.press("Enter");
+        await fixture.finish(speech, true, true, true);
         await fixture.noSend();
-        await fixture.finish(speech);
         const panel = review(page);
+        const commands = panel.getByRole("checkbox");
+        expect(await commands.count()).toBe(3);
+        for (let index = 0; index < 3; index++) {
+          await commands.nth(index).focus();
+          await page.keyboard.press("Space");
+        }
+        await button(panel, "Interpret selected commands").focus();
+        await page.keyboard.press("Enter");
         const semantic = panel.getByRole("region", { name: "Semantic preview" });
         expect(await semantic.locator("ul > li").allTextContents()).toEqual([
           "milk",
@@ -346,16 +353,15 @@ suite.define(() => {
       },
     ));
 
-  it("confirms exact paragraph words in the native plain-text New Session editor", () =>
+  it("confirms exact paragraph words in the native New Session editor", () =>
     suite.withPage(
       { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         const fixture = await open(page, { route: "new", explicit: true });
         await fixture.start();
-        await fixture.textarea.press("Enter");
-        await fixture.noSend();
         const text = "Opening paragraph new paragraph closing paragraph";
-        await fixture.finish(text);
+        await fixture.finish(text, true, true, true);
+        await fixture.noSend();
         const panel = review(page);
         expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
           text,

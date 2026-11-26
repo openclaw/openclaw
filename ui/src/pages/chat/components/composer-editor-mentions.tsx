@@ -29,6 +29,7 @@ import {
   HUMAN_MENTION_CLIPBOARD_TYPE,
   MAX_HUMAN_MENTIONS,
   readHumanMentions,
+  updateHumanMentions,
   withHumanMentionEdit,
 } from "../../../lib/chat/human-mentions.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
@@ -66,6 +67,7 @@ class MentionChip extends WidgetType {
     readonly label: string,
     readonly application: ApplicationContext | undefined,
     readonly avatarUrl?: string,
+    readonly access?: HumanMention["access"],
   ) {
     super();
   }
@@ -73,7 +75,8 @@ class MentionChip extends WidgetType {
     return (
       other.profileId === this.profileId &&
       other.label === this.label &&
-      other.avatarUrl === this.avatarUrl
+      other.avatarUrl === this.avatarUrl &&
+      other.access === this.access
     );
   }
   toDOM() {
@@ -240,6 +243,7 @@ function createMentionDecorations(
                 label,
                 context?.application,
                 context?.avatarUrls?.get(mention.profileId),
+                mention.access,
               ),
             }).range(mention.start, mention.end),
           ]
@@ -312,7 +316,12 @@ function readEditorMentions(state: EditorState, changes?: ChangeDesc) {
   mapped.between(0, changes?.newLength ?? state.doc.length, (start, end, value) => {
     const widget = value.spec.widget;
     if (widget instanceof MentionChip) {
-      mentions.push({ profileId: widget.profileId, start, end });
+      mentions.push({
+        profileId: widget.profileId,
+        start,
+        end,
+        ...(widget.access ? { access: widget.access } : {}),
+      });
     }
   });
   return mentions;
@@ -566,6 +575,32 @@ export function mountMentionComposerEditor(
         return changes.length ? [transaction, { changes, sequential: true }] : transaction;
       }),
       EditorState.transactionExtender.of((transaction) => {
+        if (
+          transaction.docChanged &&
+          transaction.isUserEvent("input.complete") &&
+          transaction.annotation(isolateHistory) === "full"
+        ) {
+          // A raw replacement may invalidate an adjacent recipient without
+          // deleting its range. Reconcile identity before history records this
+          // isolated edit, so the owner's echo cannot create a second undo step.
+          const previous = transaction.startState.doc.toString();
+          let start = previous.length;
+          let end = 0;
+          transaction.changes.iterChanges((from, to) => {
+            start = Math.min(start, from);
+            end = Math.max(end, to);
+          });
+          return {
+            effects: restoreMentions.of(
+              updateHumanMentions(
+                previous,
+                transaction.newDoc.toString(),
+                readHumanMentions(previous, mentions()) ?? [],
+                { value: previous, start, end, inputType: "insertText" },
+              ),
+            ),
+          };
+        }
         const pasted = transferredMentions(transaction);
         if (!pasted) {
           return null;
@@ -639,7 +674,7 @@ export function mountMentionComposerEditor(
       // CM already maps chips through edits. Compare that state, not a stale
       // offset signature that rebuilds decorations after every owner echo.
       const cursor = chips.iter();
-      let avatarsChanged = false;
+      let metadataChanged = false;
       for (const mention of nextMentions) {
         const chip = cursor.value?.spec.widget;
         if (
@@ -650,10 +685,12 @@ export function mountMentionComposerEditor(
         ) {
           return [restoreMentions.of(nextMentions)];
         }
-        avatarsChanged ||= chip.avatarUrl !== avatarUrls?.get(mention.profileId);
+        metadataChanged ||=
+          chip.avatarUrl !== avatarUrls?.get(mention.profileId) || chip.access !== mention.access;
         cursor.next();
       }
-      return avatarsChanged
+      // Metadata-only synchronization must not create a separate Undo step.
+      return metadataChanged
         ? [setMentionDecorations.of(createMentionDecorations(view.state, nextMentions, next))]
         : [];
     },

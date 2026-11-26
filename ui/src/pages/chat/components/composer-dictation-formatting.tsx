@@ -150,6 +150,9 @@ export function DictationFormattingReview(props: FormattingProps) {
     if (!current || (!current.canApply && !current.canApplyOriginal)) {
       return t("chat.dictationFormatting.stale");
     }
+    if (current.result.reason === "too-many-ambiguous-commands") {
+      return t("chat.dictationFormatting.commandsLimit");
+    }
     if (current.result.status === "raw-fallback") {
       return t("chat.dictationFormatting.fallback");
     }

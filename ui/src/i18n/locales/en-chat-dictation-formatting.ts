@@ -10,7 +10,7 @@ const catalog = {
       preserve: "Preserve recognized text",
       explicit: "Interpret explicit structure (English)",
       modeHint:
-        "Preserve inserts recognized text directly. Explicit structure opens a preview for commands such as “Shopping list bullet milk next item eggs”.",
+        "Preserve inserts recognized text directly. Explicit structure lets you confirm spoken paragraph, line, and list commands before applying them.",
       reprocessHint: "Mode changes apply to future recordings. Reprocess to update this preview.",
       preview: "Preview format",
       semantic: "Semantic preview",
@@ -19,7 +19,10 @@ const catalog = {
       ready: "Review the preview before adding it to your message.",
       structure: "Preview: {paragraphs} paragraphs and {items} list items.",
       preserved: "Recognized text has been preserved. Review it before adding it to your message.",
-      needsReview: "Some structure was ambiguous. Recognized words were preserved for review.",
+      needsReview:
+        "Confirm the phrases you intended as structure commands. Unselected words stay unchanged.",
+      commandsLimit:
+        "Command review is limited to 20 phrases. Keep the original text or make a shorter recording.",
       fallback: "Formatting was unavailable. The original recognized text is available below.",
       stale:
         "The insertion target changed or cannot accept this text. Copy it to use in your message.",
@@ -36,7 +39,7 @@ const catalog = {
       reprocess: "Reprocess",
       commands: "Choose phrases to interpret as commands",
       commandsHint:
-        "Only select a phrase if you intended it to change paragraph or line structure.",
+        "Only select a phrase if you intended it to change paragraphs, lines, or lists.",
       interpret: "Interpret selected commands",
       dismiss: "Dismiss",
     },

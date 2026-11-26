@@ -109,6 +109,7 @@ export function createComposerDictationOptions(
             target,
             insertion.value,
             () => reviewed.isCurrent?.() === true,
+            reviewed.target,
           );
           if (receipt !== true) {
             return receipt;

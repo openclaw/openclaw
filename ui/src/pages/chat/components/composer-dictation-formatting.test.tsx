@@ -101,7 +101,12 @@ it.each([true, false])(
 
 it("previews real list semantics and escaped literal content with explicit insertion controls", () => {
   const original = "Shopping list bullet milk next item <img src=x onerror=alert(1)>";
-  const result = prepareDictationFormatting(original, "explicit");
+  const result = prepareDictationFormatting(original, "explicit", {
+    confirmedMarkers: [
+      { start: 14, end: 20 },
+      { start: 26, end: 35 },
+    ],
+  });
   const view = mountReview({
     result,
     canApply: true,
@@ -213,6 +218,28 @@ it("shows complete original text when resource limits prevent a semantic preview
   }
 });
 
+it("explains command overflow while retaining the complete original without automatic insertion", () => {
+  const original = Array.from({ length: 21 }, (_, index) => `bullet item ${index}`).join(" ");
+  const result = prepareDictationFormatting(original, "explicit");
+  expect(result.reason).toBe("too-many-ambiguous-commands");
+  const view = mountReview({
+    result,
+    canApply: true,
+    canApplyOriginal: true,
+    receipt: "not-committed",
+  });
+  try {
+    expect(view.getByRole("status").textContent).toContain("Command review is limited to 20 phrases");
+    expect(view.queryByRole("checkbox")).toBeNull();
+    expect(view.queryByRole("button", { name: "Interpret selected commands" })).toBeNull();
+    expect(view.getByRole("textbox", { name: "Recognized text" })).toHaveProperty("value", original);
+    expect(view.actions.acceptFormatting).not.toHaveBeenCalled();
+    expect(view.actions.confirmFormattingMarkers).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+  }
+});
+
 it("confirms only selected source commands and resets selection for a replacement preparation", () => {
   const original = "Opening paragraph new paragraph closing paragraph";
   const result = prepareDictationFormatting(original, "explicit");
@@ -243,12 +270,12 @@ it("confirms only selected source commands and resets selection for a replacemen
     flush();
     interpret().click();
     expect(view.actions.confirmFormattingMarkers).toHaveBeenCalledExactlyOnceWith(
-      replacement.candidates.map((candidate) => candidate.source),
+      [{ start: 18, end: 31 }],
     );
     expect(view.actions.acceptFormatting).not.toHaveBeenCalled();
     const confirmed = prepareDictationFormatting(original, "explicit", {
       sourceRevision: 2,
-      confirmedMarkers: replacement.candidates.map((candidate) => candidate.source),
+      confirmedMarkers: [{ start: 18, end: 31 }],
     });
     view.update({
       result: confirmed,

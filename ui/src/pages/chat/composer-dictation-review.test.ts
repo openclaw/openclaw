@@ -78,6 +78,12 @@ describe("reviewed dictation lifecycle", () => {
     expect(fixture.controller.transcribing).toBe(true);
     emit({ type: "close", reason: "completed" });
     await finishing;
+    expect(fixture.controller.formattingReview?.result.status).toBe("needs-review");
+    expect(fixture.onCommit).not.toHaveBeenCalled();
+    fixture.controller.confirmFormattingMarkers([
+      { start: 14, end: 20 },
+      { start: 26, end: 35 },
+    ]);
     expect(fixture.controller.formattingReview).toMatchObject({
       canApply: true,
       result: { status: "formatted", counts: { items: 2 } },
@@ -355,23 +361,40 @@ describe("reviewed dictation lifecycle", () => {
     expect(fixture.controller.formattingDiagnostics?.isFinal).toBe(false);
   });
 
-  it("reprocesses confirmed exact paragraph markers without changing source identity or contacting a provider", async () => {
-    const fixture = reviewFixture();
-    await prepareReview(fixture, "Opening paragraph new paragraph closing paragraph");
-    const initial = fixture.controller.formattingReview!.result;
-    expect(initial.status).toBe("needs-review");
-    const source = initial.document!.source;
-    fixture.controller.confirmFormattingMarkers(
-      initial.candidates.map((candidate) => candidate.source),
-    );
-    const accepted = fixture.controller.formattingReview!.result;
-    expect(accepted.plainText).toBe("Opening paragraph\n\nclosing paragraph");
-    expect(accepted.document?.source).toEqual(source);
-    expect(fixture.onCommit).not.toHaveBeenCalled();
-    expect(request.mock.calls.filter(([method]) => method === "talk.session.create")).toHaveLength(
-      1,
-    );
-  });
+  it.each([
+    {
+      label: "paragraph",
+      text: "Opening paragraph new paragraph closing paragraph",
+      markers: [{ start: 18, end: 31 }],
+      plain: "Opening paragraph\n\nclosing paragraph",
+    },
+    {
+      label: "ambiguous list",
+      text: "Shopping list bullet points to discuss next item budget",
+      markers: [
+        { start: 14, end: 20 },
+        { start: 39, end: 48 },
+      ],
+      plain: "Shopping list\n\n- points to discuss\n- budget",
+    },
+  ])(
+    "confirms exact $label markers without changing source identity or contacting a provider",
+    async ({ text, markers, plain }) => {
+      const fixture = reviewFixture();
+      await prepareReview(fixture, text);
+      const initial = fixture.controller.formattingReview!.result;
+      expect(initial.status).toBe("needs-review");
+      const source = initial.document!.source;
+      fixture.controller.confirmFormattingMarkers(markers);
+      const accepted = fixture.controller.formattingReview!.result;
+      expect(accepted.plainText).toBe(plain);
+      expect(accepted.document?.source).toEqual(source);
+      expect(fixture.onCommit).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([method]) => method === "talk.session.create")).toHaveLength(
+        1,
+      );
+    },
+  );
 
   it.each(["throw", "missing receipt", "cancel inside write"])(
     "never retries after %s",

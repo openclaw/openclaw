@@ -1,14 +1,9 @@
 import {
   isBoundedDictationText,
-  readDictationMarker,
   renderDictationDocument,
   validateDictationDocument,
 } from "./document.ts";
-import {
-  ambiguousDictationMarker,
-  dictationMarkerCandidates,
-  ordinaryDictationMarker,
-} from "./grammar.ts";
+import { dictationMarkerCandidates, dictationParagraphBreaks } from "./grammar.ts";
 import {
   DICTATION_FORMATTING_LIMITS as LIMITS,
   type DictationBlock,
@@ -67,7 +62,7 @@ function preservedBlocks(
 ): DictationBlock[] {
   const blocks: DictationBlock[] = [];
   let start = 0;
-  for (const boundary of text.matchAll(/(?:\r?\n)[ \t]*(?:\r?\n)+/g)) {
+  for (const boundary of dictationParagraphBreaks(text)) {
     if (
       protectedRanges.some(
         (range) => range.start < boundary.index + boundary[0].length && range.end > boundary.index,
@@ -94,32 +89,9 @@ function preservedBlocks(
 
 function explicitDocument(
   base: DictationDocument,
-  confirmedMarkers: readonly DictationRange[],
+  commands: readonly DictationConsumedMarker[],
 ): DictationDocument | string {
   const text = base.source.text;
-  const pattern =
-    /(?<![\p{L}\p{N}_])(?:new[ \t]+paragraph|new[ \t]+line|next[ \t]+item|start[ \t]+list|nested[ \t]+list|end[ \t]+list|bullet|step[ \t]+(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty))(?:[,:.])?(?=$|\s)/giu;
-  const commands: DictationConsumedMarker[] = [];
-  for (const match of text.matchAll(pattern)) {
-    const source = { start: match.index, end: match.index + match[0].length };
-    if (
-      base.protectedRanges.some((range) => range.start < source.end && range.end > source.start)
-    ) {
-      continue;
-    }
-    if (
-      ordinaryDictationMarker(text, source) ||
-      (ambiguousDictationMarker(text, source) &&
-        !confirmedMarkers.some((range) => range.start === source.start && range.end === source.end))
-    ) {
-      continue;
-    }
-    const marker = readDictationMarker(match[0]);
-    if (!marker || commands.length >= LIMITS.markers) {
-      return "unsupported-marker-or-limit";
-    }
-    commands.push({ source, ...marker });
-  }
   if (!commands.length) {
     return base;
   }
@@ -130,32 +102,52 @@ function explicitDocument(
   let pendingList: DictationConsumedMarker | undefined;
   let cursor = 0;
   const currentItem = () => stack.at(-1)?.items.at(-1);
-  function append(end: number): boolean {
-    const run = textRun(text, cursor, end, base.protectedRanges);
+  function appendParagraph(start: number, end: number): void {
+    const run = textRun(text, start, end, base.protectedRanges);
     if (!run) {
-      return true;
+      return;
     }
+    if (!paragraph) {
+      paragraph = {
+        type: "paragraph",
+        runs: [],
+        ...(pendingParagraph ? { marker: pendingParagraph } : {}),
+      };
+      blocks.push(paragraph);
+      pendingParagraph = undefined;
+    }
+    paragraph.runs.push(run);
+  }
+  function append(end: number): boolean {
     if (pendingList) {
-      return false;
+      return textRun(text, cursor, end, base.protectedRanges) === undefined;
     }
     const item = currentItem();
     if (item) {
+      const run = textRun(text, cursor, end, base.protectedRanges);
+      if (!run) {
+        return true;
+      }
       if (item.children.length) {
         return false;
       }
       item.runs.push(run);
-    } else {
-      if (!paragraph) {
-        paragraph = {
-          type: "paragraph",
-          runs: [],
-          ...(pendingParagraph ? { marker: pendingParagraph } : {}),
-        };
-        blocks.push(paragraph);
-        pendingParagraph = undefined;
-      }
-      paragraph.runs.push(run);
+      return true;
     }
+    let start = cursor;
+    for (const boundary of dictationParagraphBreaks(text.slice(cursor, end))) {
+      const boundaryStart = cursor + boundary.index;
+      const boundaryEnd = boundaryStart + boundary[0].length;
+      if (
+        base.protectedRanges.some((range) => range.start < boundaryEnd && range.end > boundaryStart)
+      ) {
+        continue;
+      }
+      appendParagraph(start, boundaryStart);
+      paragraph = undefined;
+      start = boundaryEnd;
+    }
+    appendParagraph(start, end);
     return true;
   }
   for (const command of commands) {
@@ -252,7 +244,13 @@ function explicitDocument(
   if (!append(text.length) || pendingParagraph || pendingList) {
     return "empty-structure";
   }
-  return { ...base, mode: "explicit", blocks, consumedMarkers: commands, confirmedMarkers };
+  return {
+    ...base,
+    mode: "explicit",
+    blocks,
+    consumedMarkers: commands,
+    confirmedMarkers: commands.map((command) => command.source),
+  };
 }
 
 /** Pure, synchronous final-transcript preparation. The caller owns lifecycle and eligibility. */
@@ -342,7 +340,15 @@ export function prepareDictationFormatting(
     return fallback("invalid-marker-confirmation");
   }
   const confirmedMarkers = confirmation.toSorted((left, right) => left.start - right.start);
-  const candidate = explicitDocument(base, confirmedMarkers);
+  const candidate = explicitDocument(
+    base,
+    candidates.filter((command) =>
+      confirmedMarkers.some(
+        (confirmed) =>
+          confirmed.start === command.source.start && confirmed.end === command.source.end,
+      ),
+    ),
+  );
   if (typeof candidate === "string") {
     return { ...preserved, status: "needs-review", reason: candidate, candidates };
   }

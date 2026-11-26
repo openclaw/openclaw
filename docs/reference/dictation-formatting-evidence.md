@@ -1,288 +1,257 @@
 ---
 doc-schema-version: 1
-summary: "M04 acceptance ledger, reproduction procedures, and outstanding qualification for dictation formatting"
+summary: "M04 repair scope, reproduction procedures, and outstanding dictation formatting qualification"
 read_when:
   - You are reviewing the dictation formatting implementation
   - You are collecting semantic, lifecycle, accessibility, or target evidence
 title: "Dictation formatting evidence"
 ---
 
-This is the acceptance ledger for
-[issue #205634](https://github.com/openclaw/openclaw/issues/205634). M04 and M11 are
-local planning identifiers, not additional GitHub issue numbers. The
-[user guide](/web/control-ui-dictation-formatting) describes the supported grammar
-and delivery boundaries.
+This ledger accompanies [issue #205634](https://github.com/openclaw/openclaw/issues/205634)
+and [draft PR #205791](https://github.com/openclaw/openclaw/pull/205791).
+The [user guide](/web/control-ui-dictation-formatting) describes the proposed
+grammar and delivery boundaries. M04 and M11 are planning identifiers.
 
-**Evidence state: review draft with partial verification.** All 295 focused cases
-have passed across 13 suites, including the actual dictation owner, session,
-adapters, and review components. The final combined run passed 294 cases; after
-correcting an obsolete capture-state trigger in one test, its complete 34-case
-suite passed on rerun. Required full-UI types, production build, browser, real
-microphone, native rich-editor, and assistive-technology proof remains blocked or
-NOT RUN. A passing synthetic test does not qualify those external boundaries.
+**Current repair qualification: source inspection only; product checks NOT RUN.**
+The follow-up repairs captured-range replacement, the built-in direct composers'
+Markdown contract, and explicit command confirmation. Authored regressions are
+test source, not passing results. Earlier test, build-attempt, and benchmark
+records belong to earlier source revisions and do not qualify this repair.
+No current browser, microphone, provider, native editor, screen-reader, upgrade,
+or performance result is asserted here.
 
 ## Revision and environment record
 
-| Field                                            | Recorded value                                                                                                                                                                             |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Implementation branch                            | `feat/dictation-semantic-formatting`                                                                                                                                                       |
-| Checkout base                                    | `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                                                 |
-| Final tested head                                | The companion evidence manifest records the final commit, tree, and source hashes; the PR must repeat the exact pushed head. Checks below identify any earlier inputs.                     |
-| Published PR and pushed head                     | NOT RECORDED in this source document. Publication requires authenticated access to the contributor's fork; the PR and companion manifest are the external head binding.                    |
-| OS, browser/app build, Node/Bun, CPU/RAM         | Linux 6.18.57; Node 24.22.3; Intel Xeon Platinum 8573C; 9 logical CPUs; 10,451,423,232 bytes RAM. No browser launched: pinned Chromium revision 1248 was unavailable.                      |
-| Microphone, STT provider/model, locale and route | NOT RECORDED — a synthetic transcript does not fill this row.                                                                                                                              |
-| Build, CI run, and artifact URLs                 | Production build BLOCKED by exit 137 at chunk rendering after 5,711 modules transformed. CI NOT RUN before publication. Local artifact names are listed below; upload URLs remain pending. |
-| Maintainer design acceptance                     | Pending in the linked issue for the private contract, browser preference, initial grammar/formats, and resource limits.                                                                    |
+| Field | Recorded value |
+| --- | --- |
+| Contribution | `CompleteDotTech/openclaw:feat/dictation-semantic-formatting`; existing draft PR #205791 |
+| Reviewed parent | `75070f7628a8651907294c60ce33037e08be1c85` |
+| Historical feature merge base | `04b854b239cd8ab8a14beae4914ed9c54d791e62` |
+| Source revision for this ledger | The commit containing this repair; future execution must record its actual head and tree |
+| ClawSweeper feedback | [Durable PR review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255), reviewed parent above, completed `2026-11-26T06:50:17.055Z` |
+| Current execution environment | No policy-approved secretless execution environment established; repository code was not run |
+| Build, CI, browser, hardware, provider and AT | NOT RUN on the repair revision; no artifact URLs or named device results are supplied |
+| Maintainer decisions | Private shared owner, preferences, grammar, formats, limits and required fork workflow approval remain open |
 
-Bind every result to its tested commit. After integration, rebasing, or review
-fixes, identify which proofs remain valid and rerun affected boundaries. Do not
-replace a failed or blocked observation with the existence of a test file.
+Bind each later result to the actual tested head, base, tree, dependency versions,
+command and exit status. A source commit does not approve a fork workflow, make a
+draft ready, or supply product acceptance. Changed sources require fresh checks
+of the affected boundaries.
 
 ## Acceptance ledger
 
-| Criterion                                     | Implementing boundary                                                          | Required proof                                                                                                                                                       | Observed outcome / remaining proof                                                                                                                                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M04-AC01: policy and baseline                 | `settings-contract.ts`, `settings.ts`, `ComposerDictationOwner`, mode controls | Preserve before/after upgrade; Explicit opt-in; unsupported policy; reprocess without changing prior drafts                                                          | PASS: 14 settings cases, including prior-record read, same-state opt-in/rollback, unsupported policy and retained draft bytes. Production upgrade/downgrade journey NOT RUN.                                                                                     |
-| M04-AC02: lexical and structural invariants   | `ui/src/lib/dictation/{types,grammar,document,formatting}.ts`                  | Shopping list; paragraphs and hard breaks; nested lists; repeated/skipped numbers; negation, quantities, names, RTL and protected bytes; compare all representations | PASS: relevant cases in 33-test semantic suite; independent Markdown parser compares order, explicit labels and literal text. Real recognition fidelity NOT RUN.                                                                                                 |
-| M04-AC03: literal markers and reviewed intent | Grammar, source-backed marker validation, confirmation checklist               | Ordinary discussion and quoted/code markers stay literal; bare paragraph fixture needs exact reviewed marker confirmation; changed source retires confirmation       | PASS: semantic and review-component suites, including plural “bullet points,” quoted/code protection, exact-range confirmation and replacement-preparation reset.                                                                                                |
-| M04-AC04: bounded validation                  | `validateDictationDocument`, preparation fallback                              | Unknown versions/nodes; cycles; duplicate/lost/reordered text; invalid grapheme offsets; protected whitespace; excessive counts/depth; bounded malformed mutations   | PASS: malformed structure/source-map and bounded mutation tests. Proposed ceilings still require maintainer acceptance and broader corpus qualification.                                                                                                         |
-| M04-AC05: deterministic safe rendering        | `renderDictationDocument`, semantic preview                                    | Independent CommonMark parsing; allowlisted HTML parsing; delimiters, hostile markup, URLs and zero external resource loads                                          | PASS: independent markdown-it and parse5 checks; all output comes from one validated value. Browser resource-request observation BLOCKED by unavailable Chromium.                                                                                                |
-| M04-AC06: capability-selected representation  | `composer-dictation-formatting.ts`, main/direct adapters                       | Real plain field and declared Markdown composer; full-draft selection guard; changed/unknown capability; rich preparation distinguished from delivery                | PASS: capability, owner, and actual direct-adapter/component tests, including readonly, focus loss, edit-then-restore, and unknown targets. Actual browser plain/Markdown proof BLOCKED. Native rich insertion/undo BLOCKED: no qualified M10 adapter or editor. |
-| M04-AC07: lifecycle and at-most-once recovery | `composer-dictation.ts`, `composer-dictation-session.ts`, adapters             | Finalization deadline; duplicate/late events; edits; focus and A→B→A scope/policy changes; cancel/reprocess; unknown effect without retry                            | PASS: final 47-case baseline owner and 34-case review suites, including synchronous stop reentrancy and incomplete-result reprocessing; four history cases cover post-focus revocation and unknown effect without retry.                                         |
-| M04-AC08: inert text delivery                 | Reviewed placement, editor history bridge, Send controls                       | Accepting text creates one undoable edit and no send, command, attachment, action-key event, or fallback write                                                       | PASS: one-attempt/no-retry history contract and main/Side chat/New Session submission regressions. Actual browser Undo and complete browser no-Send journey BLOCKED; native execution/attachment claims are limited to the implemented inert adapters.           |
-| M04-AC09: accessible review                   | `components/composer-dictation-formatting.tsx`, status and control integration | Real keyboard journey, stable screen-reader status/list semantics, focus return, high contrast, 400% zoom and large text                                             | PASS: eight review-component cases and seven actual owner/adapter/Solid view cases, including focused Finish removal and eligible focus return. Browser layout/keyboard proof BLOCKED. Actual screen reader and browser-chrome 400% zoom NOT RUN.                |
-| M04-AC10: upgrade, privacy and resources      | Existing browser settings owner; transient review; bounded formatter           | Same-state upgrade/rollback; unrelated preference/draft preservation; provider routing/egress evidence; named-hardware latency and memory                            | PASS: settings fixtures and measured validation/render p95 (21.880/14.926/34.074 ms). Full preparation, first-call, memory and external-latency limits are reported separately below.                                                                            |
+All execution outcomes in this table are **NOT RUN on this repair revision**.
+The original issue remains open, including native/rich delivery and accessibility
+requirements that the bounded Control UI implementation cannot yet qualify.
 
-Required initial scope includes paragraphs, line breaks, unordered/ordered lists,
-the accepted nested depth, and plain/Markdown/rich preparation with truthful
-delivery qualification. Headings, tables, and inferred Suggest structure remain
-optional. The required rich-editor demonstration is still open when no qualified
-adapter/device is available; it must not disappear from the completion ledger.
+| Criterion | Source boundary and authored coverage | Remaining proof or decision |
+| --- | --- | --- |
+| M04-AC01: policy and baseline | Existing browser settings and dictation owner; Preserve default, opt-in and unknown-version fixtures | Real stored-data upgrade and rollback; acceptance of the shared preference owner |
+| M04-AC02: lexical and structural invariants | Source spans, paragraphs, lists, numbering, protected bytes and independent Markdown parsing | Run semantic tests; qualify actual recognition and destination fidelity |
+| M04-AC03: literal markers and reviewed intent | Every unprotected lexical command requires exact confirmation; unselected words stay literal; quotes/code/URLs stay protected | Run core, owner and review UI cases; exercise the real checklist and source invalidation |
+| M04-AC04: bounded validation | Source coverage, grapheme offsets, node/version/count/depth checks, complete fallback at more than 20 command candidates | Run malformed-input and boundary tests; maintainer acceptance and corpus qualification of limits |
+| M04-AC05: deterministic safe rendering | One validated document; independent Markdown/HTML parser fixtures | Run parser checks and observe zero unintended browser resource loads; qualify the accepted rich format |
+| M04-AC06: capability-selected representation | Chat, New Session and Side chat declare Markdown; escaped literals and whole-draft context guard | Built destination journeys and received/rendered message evidence; external rich adapter still unqualified |
+| M04-AC07: lifecycle and at-most-once recovery | Existing capture/final-drain owner, immutable source/target guards, cancellation and unknown-effect receipts | Run owner/session suites and real focus, edit, connection and late-event journeys |
+| M04-AC08: inert text delivery | Captured-range editor replacement, isolated history, recipient identity/access fixtures, preserved whole-draft proposals | Actual selected-range and caret insertion, one Undo/Redo, recipient records, native fallback and no automatic Send |
+| M04-AC09: accessible review | Native controls, status and focus paths; synthetic browser fixture uses one Finish action before review | Built keyboard and named screen-reader session, before/after visuals, 400% zoom, contrast and enlarged text |
+| M04-AC10: upgrade, privacy and resources | Existing settings owner, transient review, bounded benchmark source | Latest-stable upgrade/required rollback, actual egress/provider observation and fresh timing/memory measurements |
+
+Headings, tables and inferred Suggest structure remain outside the proposed first
+slice. Deferring universal native insertion does not silently complete the
+original issue's broader acceptance criteria.
 
 ## Minimal neutral lifecycle prerequisite
 
-The implementation extends the existing composer dictation owner and transcription
-session. It must not introduce a second provider, capture owner, transcript store,
-or public RPC merely to imitate the M11 proposal. Its private generation contract
-must retain capture identity, original transcript revision and finality, immutable
-policy, source ranges, target/selection/capability facts, and cancellation/deadline
-eligibility through preparation and reprocessing.
+Capture, final drain, ordered commits, insertion, recipient state and history stay
+with their existing owners. There is no new public plugin/RPC/storage framework.
+The proposed shared preparation/preference boundary with M01/M11 still needs a
+maintainer decision; this repair does not rename the experimental
+`dictationFormatting` field or implement a future shared schema.
 
-The deterministic formatter is the only enabled refinement stage. Optional
-cleanup, correction, context, vocabulary, and model-assisted processors are not
-implemented by this contribution. No assertion is made that their wider M11
-acceptance criteria are already satisfied. Future integrations must preserve the
-same source map and currently valid provenance rather than adding renderer-local
-rewrites or publishing a revoked context-derived fallback.
+Feature-level preparation does not replace transport authorization. Preserve
+current-generation checks, credential-dispatch authority, provider-frame and
+transcript-publication guards, and authorized Stop/final-transcript handling.
+Retained transcript identity/finality, exact source ranges, target selection,
+policy and capability facts remain separate from a successful delivery receipt.
 
-Delivery retains a separate `not-committed`, `committed`, or `outcome-unknown`
-receipt. Cancellation after an attempted indivisible effect cannot reset that
-receipt or authorize a retry. Finalized transcript evidence, preparation success,
-and insertion evidence are three different observations.
+Delivery distinguishes `not-committed`, `committed` and `outcome-unknown`.
+Cancellation after an attempted indivisible effect cannot reset the receipt or
+authorize an automatic retry.
 
 ## Focused automated procedures
 
-Use the checkout's routed test runner with one worker. Executed focused results
-are recorded here; the remaining commands are procedures, not implied passes:
-
-| Check                                                                          | Observed result                                                                                                                                                                      | Artifact                                                                                      |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| Final focused behavior batch                                                   | 294 PASS / one test-trigger failure across 13 suites, 16.44 s Vitest / 20.05 s wrapper. The failing test used the old read-only state to detect idle; its assertions were unchanged. | `m04-final-tests.log`                                                                         |
-| Corrected review lifecycle suite                                               | 34/34 PASS after changing that trigger to recording activity, 3.07 s Vitest / 5.71 s wrapper. Together with the unchanged other 12 suites, all 295 distinct cases pass.              | `m04-review-final-tests.log`                                                                  |
-| Final editor history guard                                                     | Four cases PASS after the final API-capability guard edit, 2.05 s Vitest / 4.65 s wrapper; independently reviewed.                                                                   | `m04-history-final-tests.log`                                                                 |
-| Direct owner/adapter/Solid view regression                                     | Two actual focus/readonly integration regressions reproduced before the fix; all seven final integration cases PASS and are included in the combined batch.                          | `m04-direct-formatting-red.log`, `m04-direct-formatting-final.log`                            |
-| Final pure formatter TypeScript check                                          | PASS for the four production core modules; it does not cover the UI integration graph.                                                                                               | `m04-core-final-types.log`                                                                    |
-| Full UI TypeScript and changed integration graph                               | BLOCKED: checker processes killed with exit 137 under the available memory limit                                                                                                     | `m04-types.log`, `m04-types-go.log`, `m04-changed-types.log`                                  |
-| Production UI build, including bounded-memory retry                            | BLOCKED: transformed 5,711 modules, then killed with exit 137 at chunk rendering                                                                                                     | `m04-ui-build-bounded.log`                                                                    |
-| Scoped type-aware lint                                                         | PASS across 45 changed TypeScript/TSX files; five Solid reactivity warnings occur at unchanged baseline call sites. No baseline or suppression was raised.                           | `m04-final-lint-clean.log`                                                                    |
-| Control UI controller guard, English catalog baseline/verification, review CSS | PASS; existing owner/effect/listener/import ratchets retained.                                                                                                                       | `m04-solid-final-guard.log`, `m04-i18n-final.log`, `m04-i18n-verify.log`, `m04-stylelint.log` |
-| Changed documentation MDX                                                      | PASS for all three changed Markdown documents.                                                                                                                                       | `m04-docs-mdx-final.log`                                                                      |
-| Full documentation links with anchors                                          | Eight failures; reproduced the identical eight at the checkout base, with zero new broken links across 20,259 checked links. The optional ClawHub mirror was unavailable.            | `m04-docs-links.log`, `m04-docs-links-baseline.log`                                           |
-| Test-line and maximum-line ratchets                                            | PASS: +2,269 LF lines, default allowance 400 plus requested allocation 1,869; no raised suppression baseline.                                                                        | `m04-test-lines-final.log`, `m04-max-lines-final.log`                                         |
-| Changed-file formatting                                                        | PASS for code, configuration, styles, and all three changed Markdown documents.                                                                                                      | `m04-final-format.log`, `m04-docs-format-final.log`                                           |
-| Standalone benchmark audit                                                     | Production unused-file scan PASS with zero entries; full-tree scan BLOCKED by 1 GiB JavaScript heap exhaustion. The exact benchmark entry is modeled, with no broad ignore.          | `m04-deadcode-final.log`                                                                      |
-| Benchmark audit configuration lint                                             | Direct syntax lint PASS. Canonical root type-aware lint BLOCKED during SDK boundary declaration preparation (exit 13); it did not reach lint.                                        | `m04-knip-config-syntax-lint.log`, `m04-knip-config-lint.log`                                 |
-| Canonical browser proof source attempt                                         | BLOCKED in browser setup: one failed suite, all ten scenarios skipped. No product assertions or screenshots ran. Installing the pinned browser failed with HTTP 403.                 | `m04-source-e2e-attempt1.log`, `m04-playwright-install.log`                                   |
-
-```text
-All results above use this worktree's own physical dependency installation.
-The frozen lockfile is unchanged. Install ownership validation passed.
-```
-
-Focused commands:
+These are procedures for an approved isolated execution checkout. No installer,
+repository script, test, typechecker, formatter, generator, build, server or
+benchmark was executed for this repair. First inspect that checkout's actual
+scripts and run `pnpm changed:lanes --json`; then select the owning test paths
+through the supported runner. Serialize checks or use the documented separate
+module-cache ownership.
 
 ```bash
 pnpm test ui/src/lib/dictation/formatting.node.test.ts --maxWorkers=1
-pnpm test ui/src/app/settings-formatting.test.ts --maxWorkers=1
 pnpm test ui/src/lib/composer-input.test.ts --maxWorkers=1
 pnpm test ui/src/pages/chat/composer-dictation-formatting.test.ts --maxWorkers=1
-pnpm test ui/src/pages/chat/components/composer-dictation-formatting.test.tsx --maxWorkers=1
-pnpm test ui/src/pages/chat/composer-dictation.test.ts --maxWorkers=1
 pnpm test ui/src/pages/chat/composer-dictation-review.test.ts --maxWorkers=1
-pnpm test ui/src/pages/chat/composer-direct-dictation.test.tsx --maxWorkers=1
 pnpm test ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx --maxWorkers=1
-pnpm test ui/src/pages/chat/chat-session-rail.test.ts --maxWorkers=1
-pnpm test ui/src/pages/chat/chat-composer-actions.test.ts --maxWorkers=1
-pnpm test ui/src/pages/new-session/draft-dictation-session.test.ts --maxWorkers=1
+pnpm test ui/src/pages/chat/components/composer-dictation-formatting.test.tsx --maxWorkers=1
+pnpm test ui/src/pages/chat/composer-direct-dictation.test.tsx --maxWorkers=1
 pnpm test ui/src/pages/new-session/composer.test.tsx --maxWorkers=1
+pnpm test ui/src/pages/new-session/draft-dictation-session.test.ts --maxWorkers=1
+pnpm test ui/src/app/settings-formatting.test.ts --maxWorkers=1
 pnpm tsgo:ui
 pnpm tsgo:test:ui
+pnpm ui:i18n:baseline
+pnpm ui:i18n:verify
 pnpm check:changed
 pnpm ui:build
 pnpm docs:check-links:anchors
 pnpm format:docs:check
 ```
 
-The 13 test paths above were combined into the final focused command with one
-worker. The companion evidence manifest records the remaining targeted commands,
-exit statuses, durations, and artifacts. Type/lint/format/build failures attributable to this change must be
-fixed. An unrelated baseline failure needs its own baseline evidence; an
-installation failure is a proof blocker, not a product test failure.
+The English confirmation/overflow copy changed. Run the canonical keyless i18n
+baseline generator in that allowed environment and commit any generated raw-copy
+baseline delta before considering the check complete; no generated baseline was
+hand-edited here. Types, lint, formatting, test-line/max-line ratchets, docs checks
+and the exact installed Solid contract also remain unverified. The restored
+source did not contain the installed Solid rc.18 `CHEATSHEET.md`.
 
-The semantic suite must use an independent Markdown parser, not just compare
-the serializer with its own output. Parse the entire resulting Markdown draft,
-including the delivery boundary, when proving structural fidelity. HTML tests
-must reject every node/attribute outside the declared profile and observe zero
-resource requests in the real preview.
+The semantic tests author expected source ranges independently of the formatter,
+parse Markdown with an independent parser, and inspect an allowlisted HTML tree.
+The editor regressions instantiate the real editor path in their test harness;
+that source still needs execution. A fake history bridge or a passing DOM test
+would not by itself qualify native browser Undo or assistive technology.
+
+Use the checkout's documented browser route for
+`ui/src/e2e/dictation-formatting.e2e.test.ts`. Its default lane requires the
+production bundle. Its optional source-server route remains diagnostic. Both
+use synthetic media, STT and Gateway fixtures and cannot replace the real journey
+below. The fixture's main and New Session flows now emit text before a single
+keyboard Finish; list commands are explicitly checked before formatted Apply.
 
 ## Live target and microphone procedures
 
-1. Record OS/app versions, build/head, target capability descriptor, starting
-   selection and draft, speech provider/model, locale, and microphone source.
-2. On the actual microphone, speak the shopping-list fixture. Record recognized
-   text independently from the structure result. Stop must release capture while
-   the finishing state remains visible, with no automatic Send.
-3. In an eligible direct plain field, review and apply once. Confirm exact text,
-   unchanged surrounding content, selection/caret, and one-step Undo. Repeat with
-   a field that lacks safe multiline/history support and confirm review/copy.
-4. In the declared Markdown composer, use an empty draft and a whole-draft
-   selection. Parse/render the inserted source and verify item count/order and
-   numbering. A partial selection inside a code fence or existing list must be
-   refused for formatted Apply.
-5. Change focus, selection, draft, account, mode, policy, capability revision, and
-   connection while capturing, finalizing, and reviewing. Include A→B→A changes.
-   Confirm the old generation cannot acquire a new insertion target.
-6. Cancel before preparation, before Apply, and from inside an attempted edit.
-   Inject a result with an uncertain effect. Confirm no retry, automatic plain
-   insertion, form submission, attachment, or execution occurs.
-7. For the required rich editor, identify a qualified M10 adapter and test actual
-   list nodes, selection replacement, focus refusal, Undo, and unknown-effect
-   recovery on named OS/editor versions. A semantic preview or fake adapter
-   cannot satisfy this step.
+1. Record the candidate head/tree, served `dist/control-ui` asset hash, OS/browser,
+   actual Gateway and provider/model, locale, physical microphone, destination
+   capability and starting draft/selection. Build the assets actually served.
+2. Speak a controlled fictional shopping list. Record recognition independently
+   from formatting. Finish must release capture, retain finalization feedback
+   and avoid automatic Send. Confirm the intended command occurrences in review.
+3. In Chat, start with distinct recipient IDs sharing a display name, mentions
+   before and after the selected range, and each supported access value. Use
+   **Keep original** for a partial replacement and for caret insertion. Inspect
+   actual recipient records, offsets and access metadata. One Undo must restore
+   the prior text and records; one Redo must restore the accepted state. Include
+   insertion adjacent to a mention that invalidates its boundary.
+4. In Chat, New Session and Side chat, apply confirmed structure to an empty
+   draft and a whole-draft selection. Independently parse/render the entire
+   result, including literal asterisks/underscores and repeated/skipped numbers.
+   A partial selection inside a code fence or existing list must refuse formatted
+   Apply while eligible original/copy recovery remains available.
+5. Exercise an intentional whole-draft proposal and its receipt Undo. Then edit
+   the accepted text and confirm that the old receipt cannot undo newer work.
+6. Change focus, selection, draft, account, policy, capability and connection
+   during capture, finalization and review, including change-and-restore cases.
+   Cancel at each boundary. An uncertain edit result must prevent retry and must
+   not submit, attach, execute, or insert automatically elsewhere.
+7. Qualify each native/plain/rich adapter separately on named OS/editor versions.
+   Require actual selection replacement, recipient metadata where relevant,
+   focus refusal, one Undo and unknown-effect recovery. The semantic preview
+   does not establish external insertion support.
 
-**Observed external outcome:** NOT RUN. Real microphone/STT access and a qualified native
-rich adapter/device have not been established by this ledger. Record each missing
-resource and the concrete recovery procedure; keep the PR draft while required
-proof is unavailable.
+**Observed outcome: NOT COLLECTED.** A safe real Gateway/provider, physical
+microphone, required native adapter and assistive-technology session were not
+available for this continuation. No screenshots or recordings are supplied as
+formatting proof. Keep the draft and the broader issue open.
 
 ## Accessibility and visual procedures
 
-Use the actual built Control UI with synthetic content. Complete record, Stop,
-review, marker confirmation, format selection, Apply/Keep original, Copy,
-Reprocess, and Escape using the keyboard. Verify visible focus and focus return.
-With a named screen reader/browser combination, confirm actual paragraph/list
-navigation and one stable status announcement per meaningful change.
+Use the actual built UI with controlled fictional content. Complete record,
+Finish, marker confirmation, format selection, Apply/Keep original, Copy,
+Reprocess, Dismiss and Escape by keyboard. Inspect visible focus and focus
+return. With a named screen-reader/browser pair, verify paragraph/list navigation
+and a stable status announcement for each meaningful change.
 
-Capture clean and annotated before/after screenshots in light/dark themes at
-narrow and desktop widths. Repeat at 400% zoom and with enlarged text, high
-contrast, and reduced motion. No review or recovery control may become hidden or
-unreachable. Record actual browser/OS/screen-reader versions and artifacts.
+Capture real before/after views in light/dark themes at narrow and desktop
+widths, 400% browser zoom, enlarged text, high contrast and reduced motion.
+Review and recovery controls must stay reachable. Redact sensitive content before
+saving any capture. No adjacent capture/recovery screenshot is evidence of this
+formatting behavior.
 
-**Observed outcome:** eight review-component tests and seven actual
-owner/adapter/Solid view tests PASS. The canonical ten-scenario browser fixture
-was attempted through its source-proof option because the production build was
-blocked. Setup could not launch pinned Chromium revision 1248; the supported
-installer received HTTP 403 from `cdn.playwright.dev`. All ten scenarios were
-skipped. No screenshots, native Undo, browser keyboard, or resource-load evidence
-were produced. The baseline screenshot attempt also ran out of disk during its
-separate dependency installation; only that task-owned incomplete installation
-was removed, preserving the base Git metadata.
-
-The fixture includes narrow/high-contrast, RTL, enlarged-text, and a 200%-equivalent
-CSS/DPR layout. These are not browser-chrome 400% zoom or screen-reader evidence.
-Recovery requires the pinned browser download, a completed production build, and
-the named hardware/assistive-technology procedure above. DOM assertions do not
-certify those boundaries.
+**Observed outcome: NOT COLLECTED.** The authored synthetic browser fixture
+includes narrow, RTL, high-contrast, enlarged-text and 200%-equivalent geometry;
+none was run on this repair, and those scenarios do not establish 400% browser
+zoom or screen-reader behavior. The earlier browser attempt failed in setup
+before product assertions or screenshots.
 
 ## Performance, privacy, and rollback procedures
 
-Measure validation plus all renderings for 10,000 characters/100 blocks, escaped
-worst cases, and depth-three nesting. Record named CPU/RAM/OS/runtime, source
-length/UTF-8 size, cold and warm runs, sample count, p50/p95/p99, peak memory, and
-failure/fallback counts. The proposed goal is p95 at most 50 ms. Keep
-provider/STT time, private 2,500 ms finishing
-deadline behavior, total Stop-to-preview time, and user review time separate.
+Resolve the actual latest stable release when executing compatibility proof.
+In a new isolated installation, create and exercise valid stable settings,
+drafts and recipient metadata, then upgrade to the exact candidate and compare
+the stored data and behavior. Check Preserve/default-off behavior, Explicit
+opt-in, unrelated preferences, unsupported versions and the required rollback
+scope. Distinguish a released schema from the experimental branch field and the
+unaccepted shared-policy proposal. Normalization fixtures and release metadata
+alone are not an upgrade result.
 
-Observe existing transcription requests and connection attempts through success,
-failure, timeout, cancellation, and fallback. Confirm formatting adds zero
-provider calls and never switches a selected route. Any local-only claim needs
-evidence for the selected speech data plane; local formatting alone does not
-prove local speech recognition or whole-device offline behavior.
+Observe provider requests and connection attempts through success, failure,
+timeout, cancellation and fallback. Deterministic formatting source adds no
+provider invocation, but that does not prove offline speech recognition or
+whole-device privacy. Record the actual selected route and egress. Do not add
+transcript history or content-bearing diagnostics. Use synthetic content or
+bounded status/count/timing data in artifacts; redact before saving.
 
-Load a prior supported browser settings record and existing draft state, toggle
-Explicit/Preserve, reload, use an unsupported policy version, and return to the
-older client. Compare unrelated preferences and draft bytes. Confirm there is no
-new transcript history, content log, clipboard manager, or history rewrite.
-Diagnostic artifacts must contain synthetic content or only bounded phase/status,
-reason, revision, count, and duration data.
+**Upgrade, rollback and actual privacy/egress outcome: NOT COLLECTED.** No stable
+version, successful migration or hardware observation is invented in this ledger.
 
 ### Measured local benchmark
 
-`ui/src/lib/dictation/formatting.bench.ts` ran on the hardware recorded above.
-Reproduce it with
-`node --import ./scripts/tsx.mjs ui/src/lib/dictation/formatting.bench.ts`.
-Each workload contains exactly 10,000 characters and 100 blocks; the nested
-fixture has 99 items and depth 3. The escaping fixture uses ampersands for
-fivefold HTML text expansion. There are 10 warmups and 100 measured warm samples
-per workload. `m04-evidence/benchmark.json` records source hashes, measurements,
-revision metadata and environment; publication must attach it to the final head.
-After this measurement, `formatting.ts` had an identifier-only rename for the
-repository's shadowing lint rule. The measured source hashes remain intact in
-the benchmark artifact; the companion manifest records the final source hashes
-and this delta. The other measured modules and benchmark harness are unchanged.
+No measurement exists for this repair. The heading is retained for existing
+links; historical numbers are not carried forward as current results.
 
-| Workload           | Validation + render p50 / p95 / max (ms) | Full preparation p95 (ms) | First call (ms) |
-| ------------------ | ---------------------------------------- | ------------------------- | --------------- |
-| Paragraphs         | 11.588 / 21.880 / 30.903                 | 59.576                    | 69.272          |
-| Escaped paragraphs | 9.823 / 14.926 / 38.760                  | 36.211                    | 15.240          |
-| Nested lists       | 18.170 / 34.074 / 95.481                 | 70.478                    | 35.917          |
+The revised `ui/src/lib/dictation/formatting.bench.ts` authors exactly
+10,000 UTF-16-character workloads within the 20-command confirmation cap:
 
-All three validation-plus-rendering warm p95 values met the proposed 50 ms
-budget. Full preparation includes parsing/planning and did not meet 50 ms on
-all workloads. Only the first workload's first call was process-first; the
-harness does not reset the JIT between workloads. These are not repeated cold
-start distributions. Tail latency remains visible in the table. The harness
-did not record p99; no p99 claim is made.
+| Workload | Commands | Blocks | Maximum list depth | Measurement status |
+| --- | --- | --- | --- | --- |
+| Paragraphs | 20 | 21 | 0 | NOT RUN |
+| Escaped paragraphs | 20 | 21 | 0 | NOT RUN |
+| Nested lists | 18 | 7 | 3 | NOT RUN |
 
-Peak **observed between iterations** was 199,987,200 bytes RSS and 72,333,120
-bytes heap used across the process. This is not continuous peak-allocation
-profiling. The harness makes zero provider requests. Provider/STT time, actual
-microphone-to-preview time and user review time are **NOT RUN**; zero benchmark
-network calls must not be reported as zero speech-provider latency.
+The harness specifies 10 warmups and 100 measured samples per workload, separates
+preparation from validation plus all renderings, and rejects fallback timings.
+It records source hashes, head, hardware/runtime, first call, p50/p95/max and
+between-iteration memory observations. The proposed validation/rendering target
+is p95 at most 50 ms. No first-call distribution, p99 or continuous memory peak
+is implied. Provider time, the private 2,500 ms finishing deadline, total
+microphone-to-preview latency and user review time require separate measurements.
 
-Prior-record/unsupported-policy/rollback fixtures and unrelated preference/draft
-retention passed the settings suite. A production install downgrade and actual
-speech-route privacy/egress capture remain **NOT RUN**.
+After execution is authorized, reproduce the harness through the checkout's
+documented command:
+
+```bash
+node --import ./scripts/tsx.mjs ui/src/lib/dictation/formatting.bench.ts
+```
 
 ## Independent review and publication gates
 
-An independent read-only source review identified source-gap concatenation,
-protected whitespace loss, ordinary marker discussion, start/stop selection
-mismatch, focus restoration races, incomplete-result reprocessing, and Markdown
-context insertion as actionable risks. Those findings were fixed and
-independently rechecked. Final review also covered the stateless owner extraction,
-actual readonly/disabled capability facts, editable Explicit capture, main and
-direct no-Send guards, owner-keyed Finish control cleanup, and captured focus
-callbacks. It found no remaining actionable production findings. One obsolete
-test trigger was corrected without changing its assertions; the affected 34-case
-suite passed. Settings received review from a contributor other than their author.
-The final settings and history-capability guard received an additional independent
-review with no actionable findings. The four history-transaction cases passed
-again after the final guard edit. The companion manifest records the reviewed
-source hashes and commit binding.
+The [ClawSweeper review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255)
+applies to the reviewed parent, not automatically to this follow-up. Source
+inspection by a separate reviewer is also distinct from executing ClawSweeper
+or obtaining maintainer acceptance.
 
-Before publication, fill in the final head/base, actual checks and artifact URLs,
-maintainer acceptance/dependency status, and all blocked criteria. Recheck the
-current contributor PR limit and the author's open PR count including drafts.
-Use the repository's required PR headings and do not close the umbrella issue or
-mark the PR ready while mandatory behavior or evidence remains incomplete.
+The repair keeps the original whole-draft contract from
+[PR #201695](https://github.com/openclaw/openclaw/pull/201695), merged as
+[`a3d7e40f2957d8efe05d87491e82177c5a01fe9f`](https://github.com/openclaw/openclaw/commit/a3d7e40f2957d8efe05d87491e82177c5a01fe9f).
+Pinned source inspection traces proposal acceptance through `replaceDraft` to
+`editor.replaceAll`, one isolated whole-document history transaction, and receipt
+Undo through `editor.undo()`. A later differing draft retires that receipt.
+Captured-range dictation now uses `editor.replace` with the existing isolated
+history option; it does not replace the whole-proposal owner.
+
+Before readiness or merge, complete current-head checks and generated baseline
+work, built-product behavior, recipient/history and all destination qualification,
+real stored-data compatibility, and the required maintainer decisions. Fork
+workflow approval remains maintainer-owned. A commit alone does not resolve any
+uncollected proof, request a new review, close the issue or mark the PR ready.

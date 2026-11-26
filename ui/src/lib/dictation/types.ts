@@ -39,10 +39,7 @@ export type DictationConsumedMarker = Readonly<{
   reason: DictationMarkerReason;
   ordinal?: number;
 }>;
-export type DictationMarkerCandidate = Readonly<{
-  source: DictationRange;
-  reason: "paragraph-break" | "line-break";
-}>;
+export type DictationMarkerCandidate = DictationConsumedMarker;
 export type DictationDocument = Readonly<{
   version: 1;
   mode: DictationFormattingMode;

@@ -10,7 +10,12 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (
+    text: string,
+    start: number,
+    end: number,
+    options?: { isolateHistory?: boolean },
+  ) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */
@@ -35,11 +40,13 @@ export function canReplaceComposerInputWithHistory(input: HTMLTextAreaElement): 
   );
 }
 
-/** One attempted edit; undefined means the effect cannot be confirmed. Never retries. */
+/** Replace the captured range once; `text` is the complete resulting draft.
+ * Undefined means the effect cannot be confirmed. Never retries. */
 export function replaceComposerInputWithHistory(
   input: HTMLTextAreaElement,
   text: string,
   isCurrent: () => boolean,
+  range: { start: number; end: number },
 ): boolean | undefined {
   if (!canReplaceComposerInputWithHistory(input)) {
     return false;
@@ -49,14 +56,15 @@ export function replaceComposerInputWithHistory(
   if (!isCurrent()) {
     return false;
   }
+  const previous = input.value;
+  const replacement = text.slice(range.start, text.length - (previous.length - range.end));
   const editor = editors.get(input);
   if (editor) {
-    editor.replaceAll(text);
+    editor.replace(replacement, range.start, range.end, { isolateHistory: true });
     return input.value === text ? true : undefined;
   }
-  const previous = input.value;
-  input.setSelectionRange(0, previous.length);
-  const reported = input.ownerDocument.execCommand("insertText", false, text);
+  input.setSelectionRange(range.start, range.end);
+  const reported = input.ownerDocument.execCommand("insertText", false, replacement);
   return reported && input.value === text
     ? true
     : !reported && input.value === previous
