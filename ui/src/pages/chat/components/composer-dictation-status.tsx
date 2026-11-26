@@ -3,6 +3,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import { MicrophoneActivity } from "./chat-voice-activity.tsx";
+import { DictationRefinementView } from "./composer-dictation-refinement-view.tsx";
 
 // Dictation feedback starts on the click itself: pulsing bars while the microphone
 // opens, then the live input level while listening. The permission hint only
@@ -27,6 +28,9 @@ export function ActiveDictationStatus(props: {
 }) {
   const phase = createMemo((): MicrophoneMeterStatus | null => {
     const dictation = props.readDictation();
+    if (dictation?.refinementEnabled && !dictation.active) {
+      return null;
+    }
     if (!dictation?.active && !dictation?.transcribing) {
       return null;
     }
@@ -37,38 +41,41 @@ export function ActiveDictationStatus(props: {
         : "listening";
   });
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div
-          class="agent-chat__dictation-status"
-          data-transcribing={current === "thinking" ? "" : undefined}
-          role={current === "listening" ? undefined : "status"}
-          aria-live={current === "listening" ? undefined : "polite"}
-          aria-atomic={current === "listening" ? undefined : "true"}
-        >
-          <span
-            class={[
-              "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
-            ]}
-            // Listening can last a while, so its shimmer sweeps slower than running work.
-            // Set here rather than in CSS: the shared stylesheet is at its size ceiling.
-            style={{ "--text-shimmer-duration": "4s" }}
+    <>
+      <Show when={phase()} keyed>
+        {(current) => (
+          <div
+            class="agent-chat__dictation-status"
+            data-transcribing={current === "thinking" ? "" : undefined}
+            role={current === "listening" ? undefined : "status"}
+            aria-live={current === "listening" ? undefined : "polite"}
+            aria-atomic={current === "listening" ? undefined : "true"}
           >
-            {current === "connecting" ? (
-              <DictationStartingLabel />
-            ) : current === "thinking" ? (
-              t("chat.composer.dictationFinalizing")
-            ) : (
-              t("chat.composer.dictationListening")
-            )}
-          </span>
-          <MicrophoneActivity
-            status={current}
-            inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
-          />
-        </div>
-      )}
-    </Show>
+            <span
+              class={[
+                "agent-chat__dictation-phase",
+                { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
+              ]}
+              // Listening can last a while, so its shimmer sweeps slower than running work.
+              // Set here rather than in CSS: the shared stylesheet is at its size ceiling.
+              style={{ "--text-shimmer-duration": "4s" }}
+            >
+              {current === "connecting" ? (
+                <DictationStartingLabel />
+              ) : current === "thinking" ? (
+                t("chat.composer.dictationFinalizing")
+              ) : (
+                t("chat.composer.dictationListening")
+              )}
+            </span>
+            <MicrophoneActivity
+              status={current}
+              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
+            />
+          </div>
+        )}
+      </Show>
+      <DictationRefinementView readDictation={() => props.readDictation()} />
+    </>
   );
 }

@@ -171,7 +171,11 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
     props.readDictation !== undefined && props.onToggleVoice === undefined;
   const label = () =>
     active()
-      ? t("chat.composer.dictationStopAndKeep")
+      ? t(
+          props.readDictation?.()?.refinementEnabled
+            ? "chat.composer.dictationFinishReview"
+            : "chat.composer.dictationStopAndKeep",
+        )
       : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip = () =>
     props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
@@ -248,6 +252,17 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         </button>
       </openclaw-tooltip>
       <ComposerContent>{props.microphonePicker}</ComposerContent>
+      <Show when={props.readDictation?.()?.refinementAvailable}>
+        <button
+          type="button"
+          class="chat-talk-input-picker__trigger"
+          aria-label={t("chat.composer.dictationTextOptions")}
+          aria-expanded={props.readDictation?.().refinementOptionsOpen ? "true" : "false"}
+          onClick={() => props.readDictation?.().toggleRefinementOptions()}
+        >
+          <Icon name="settings" />
+        </button>
+      </Show>
     </span>
   );
 }
@@ -262,13 +277,23 @@ export function ComposerDictationSendAction(props: {
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
+  const label = () =>
+    t(
+      props.readDictation().refinementEnabled
+        ? "chat.composer.dictationFinishReview"
+        : "chat.runControls.send",
+    );
   const finishAndSend = async (event: MouseEvent) => {
     const dictation = props.readDictation();
     const send = props.onSend;
     if (dictation.finalizing) {
       return;
     }
+    const reviewRequired = dictation.refinementEnabled;
     await dictation.finishActive();
+    if (reviewRequired) {
+      return;
+    }
     // Keep the initiating input action when asynchronous dictation finishes.
     send(event);
   };
@@ -281,14 +306,14 @@ export function ComposerDictationSendAction(props: {
             : t("chat.composer.dictationListening")}
         </span>
       )}
-      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
+      <openclaw-tooltip prop:content={label()}>
         <button
           class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
           type="button"
           ref={primaryPointerDownRef(() => props.onPointerDown)}
           onClick={(event: MouseEvent) => void finishAndSend(event)}
           aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-          aria-label={t("chat.runControls.send")}
+          aria-label={label()}
         >
           <Icon name="arrowUp" />
         </button>

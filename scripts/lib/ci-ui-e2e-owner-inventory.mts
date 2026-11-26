@@ -333,6 +333,17 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/tooltip.ts"],
   ),
   pageWatch(
+    "ui/src/e2e/browser-dictation-refinement.e2e.test.ts",
+    ["chat"],
+    [
+      "ui/src/components/tooltip.ts",
+      "src/shared/dictation-refinement/types.ts",
+      "src/shared/dictation-refinement/validation.ts",
+      "src/shared/dictation-refinement/plan.ts",
+      "src/shared/dictation-refinement/coordinator.ts",
+    ],
+  ),
+  pageWatch(
     "ui/src/e2e/browser-panel-width.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
