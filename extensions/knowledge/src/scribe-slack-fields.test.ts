@@ -2,6 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
+import { openSettingsDialog } from "./scribe-settings-dialog.js";
 import { defaultOptions, runPrompt, scribeById, scribeSetup } from "./scribes-catalog.js";
 import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
 
@@ -91,4 +92,20 @@ it("blocks starting until the Slack account runs, and connects it on the Channel
   pluginButton("/ui", slack.plugin!, "needs-sign-in").click();
   pluginButton("/ui", slack.plugin!, "missing").click();
   expect(assign.mock.calls).toEqual([["/ui/settings/channels"], ["/ui/plugins/openclaw/slack"]]);
+});
+
+it("lets a saved user-token opt-in be turned off after the user token is gone", () => {
+  const dialog = openSettingsDialog({
+    scribe: slack,
+    detection: { plugins: { slack: "ready" }, tokens: { slack: { bot: true, user: false } } },
+    options: { since: "7d", userToken: true, dms: false },
+    save: async () => {},
+  })!;
+  const userToken = box(dialog, "scribe-slack-user-token");
+  const save = [...dialog.querySelectorAll("button")].find(
+    (b) => b.textContent === "Save settings",
+  )!;
+  expect([userToken.checked, userToken.disabled, save.disabled]).toEqual([true, false, true]);
+  userToken.click();
+  expect(save.disabled).toBe(false);
 });

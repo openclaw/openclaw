@@ -289,6 +289,48 @@ extension ChatViewModelOutboxTests {
         #expect(Data(rebuilt.input.utf8) == Data(replacement.utf8))
     }
 
+    @Test(arguments: [
+        ("é", "e\u{301}", true),
+        ("e\u{301}", "é", true),
+        ("é", "é", false),
+        ("é", "x", true),
+    ])
+    @MainActor
+    func editingRecalledSpellingSurvivesSessionSwitch(spellings: (String, String, Bool)) async throws {
+        let (recalled, typed, leavesRecall) = spellings
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = "agent:main:main"
+        let vm = await composerDraftModel(store)
+        await settleComposerDraft(vm)
+        vm.recordSuccessfulInput(recalled, sessionKey: vm.visibleComposerKey)
+        vm.input = "working draft"
+        await vm.persistComposerDraft()
+        try #require(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(Data(vm.input.utf8) == Data(recalled.utf8))
+
+        vm.input = typed
+        await vm.persistComposerDraft()
+        let expected = Data((leavesRecall ? typed : "working draft").utf8)
+        let saved = try #require(await store.loadComposerDraft(key: key))
+        #expect(Data(saved.text.utf8) == expected)
+        vm.switchSession(to: "agent:main:other")
+        await settleComposerDraft(vm)
+        vm.switchSession(to: key)
+        await settleComposerDraft(vm)
+        #expect(Data(vm.input.utf8) == expected)
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let restored = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { restored.detachTransport() }
+        await settleComposerDraft(restored)
+        #expect(Data(restored.input.utf8) == expected)
+    }
+
     @Test @MainActor func `cold launch waits for the agent and routing before touching the draft`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

@@ -126,13 +126,13 @@ fun ChatMarkdown(
       baseCallout = bodyStyle,
     )
 
-  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars)
+  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars, if (LocalChatCodeReaderHandoff.current != null) "" else null)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    for (block in blocks) {
+    for ((index, block) in blocks.withIndex()) {
       when (block) {
         is ChatMarkdownSourceBlock.Markdown -> {
           val documentBlocks = remember(block.source) { parseChatMarkdownBlocks(block.source) }
-          rendering.RenderMarkdownBlocks(documentBlocks)
+          rendering.at(index).RenderMarkdownBlocks(documentBlocks)
         }
 
         is ChatMarkdownSourceBlock.Math -> {
@@ -152,14 +152,17 @@ private data class MarkdownRendering(
   val inlineStyles: InlineStyles,
   val isStreaming: Boolean,
   val progressBars: Boolean,
-)
+  val fencePath: String?,
+) {
+  fun at(index: Int): MarkdownRendering = if (fencePath == null) this else copy(fencePath = "$fencePath/$index")
+}
 
 @Composable
 private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRenderBlock>) {
-  for (block in blocks) {
+  for ((index, block) in blocks.withIndex()) {
     when (block) {
       is ChatMarkdownRenderBlock.CommonMark -> {
-        RenderCommonMarkBlock(block.node)
+        at(index).RenderCommonMarkBlock(block.node)
       }
 
       is ChatMarkdownRenderBlock.LiteralHtml -> {
@@ -167,7 +170,7 @@ private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRend
       }
 
       is ChatMarkdownRenderBlock.Disclosure -> {
-        RenderMarkdownDisclosure(block)
+        at(index).RenderMarkdownDisclosure(block)
       }
     }
   }
@@ -209,6 +212,7 @@ private fun MarkdownRendering.RenderCommonMarkBlock(current: Node) {
           // Streaming fences remain plain until closed. Finalized messages may validly
           // end at EOF without a closing fence under CommonMark.
           isComplete = !isStreaming || current.closingFenceLength != null,
+          readerState = { rememberFenceScroll(fencePath, current.literal.orEmpty(), current.info, isStreaming) },
         )
       }
     }
@@ -403,7 +407,7 @@ private fun MarkdownRendering.RenderList(list: Node) {
   // Nested lists already sit inside their parent's content column.
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     items.forEachIndexed { index, item ->
-      RenderListItem(item, markers[index], markerStyle, markerWidth)
+      at(index).RenderListItem(item, markers[index], markerStyle, markerWidth)
     }
   }
 }

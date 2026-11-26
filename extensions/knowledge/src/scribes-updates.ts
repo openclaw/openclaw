@@ -94,6 +94,22 @@ export function replacementButton(
   return control;
 }
 
+/** The lines a new run message changes, removed and added, for a confirmation. */
+export function messageDiff(before: string, after: string) {
+  const diff = el("pre", undefined, "scribe-prompt-text scribe-update-message");
+  for (const line of changedLines(before, after)) {
+    const removed = line.kind === "removed";
+    diff.append(
+      el(
+        removed ? "del" : "ins",
+        `${removed ? "−" : "+"} ${line.text}\n`,
+        removed ? "scribe-diff-removed" : "scribe-diff-added",
+      ),
+    );
+  }
+  return diff;
+}
+
 /**
  * The notice for a run message that differs from what this version generates and still carries
  * replaced wording: it is kept until the owner replaces it with the new one.
@@ -113,17 +129,7 @@ export function updateNotice(
       `New run instructions available. The saved run message for ${scribe.title} differs from what this version of Knowledge generates, so it was kept.`,
     ),
   );
-  const diff = el("pre", undefined, "scribe-prompt-text scribe-update-message");
-  for (const line of changedLines(job.payload?.message ?? "", next)) {
-    const removed = line.kind === "removed";
-    diff.append(
-      el(
-        removed ? "del" : "ins",
-        `${removed ? "−" : "+"} ${line.text}\n`,
-        removed ? "scribe-diff-removed" : "scribe-diff-added",
-      ),
-    );
-  }
+  const diff = messageDiff(job.payload?.message ?? "", next);
   const replace = button(
     "Replace with new…",
     () => {

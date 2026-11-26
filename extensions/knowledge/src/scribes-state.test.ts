@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
@@ -121,7 +122,10 @@ describe("scribes catalog", () => {
     expect(runMessage).toContain(
       'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill',
     );
-    expect(checkRunMessage("slack", runMessage)).toEqual({ state: "current" });
+    expect(checkRunMessage("slack", runMessage)).toEqual({
+      state: "current",
+      options: { since: "7d", userToken: false, dms: false },
+    });
     const opted = { since: "30d", userToken: true, dms: true } as const;
     const once = setupPrompt(scribeSetup("slack", "once", opted, "UTC"));
     expect(once).toContain("Runs once, now, in this turn.");
@@ -130,8 +134,52 @@ describe("scribes catalog", () => {
     expect(once).not.toContain("Each run:");
     // Every choice the dialog offers is recognized, and an edited one keeps its settings.
     const optedRun = runPrompt(scribeSetup("slack", "ongoing", opted, "UTC"));
-    expect(checkRunMessage("slack", optedRun)).toEqual({ state: "current" });
+    expect(checkRunMessage("slack", optedRun)).toEqual({ state: "current", options: opted });
     expect(checkRunMessage("slack", `${optedRun}\nSkip #random.`)).toEqual({ state: "custom" });
+  });
+
+  // Every choice of each scribe with editable settings, as the start dialog offers them.
+  const editableChoices = [
+    ...(["active", "all"] as const).flatMap((scope) =>
+      (["30d", "90d", "all", "today"] as const).map((since) => ({
+        id: "conversations" as const,
+        options: { scope, since },
+      })),
+    ),
+    ...(["mine", "all"] as const).flatMap((meetings) =>
+      (["7d", "30d", "today"] as const).map((since) => ({
+        id: "granola" as const,
+        options: { meetings, since },
+      })),
+    ),
+    ...(["7d", "30d", "today"] as const).flatMap((since) =>
+      [false, true].flatMap((userToken) =>
+        [false, true].map((dms) => ({ id: "slack" as const, options: { since, userToken, dms } })),
+      ),
+    ),
+  ];
+
+  it("reads back the settings of every run message it generates", () => {
+    for (const { id, options } of editableChoices) {
+      const message = runPrompt(scribeSetup(id, "ongoing", options as never, "America/New_York"));
+      expect(checkRunMessage(id, message)).toEqual({ state: "current", options });
+    }
+  });
+
+  it("changes generated run messages only together with RUN_WORDINGS", () => {
+    const messages = [
+      ...editableChoices.map(({ id, options }) =>
+        runPrompt(scribeSetup(id, "ongoing", options as never, "UTC")),
+      ),
+      ...([REVIEW_WEEKLY_SCHEDULE, REVIEW_NIGHTLY_SCHEDULE] as const).map((schedule) =>
+        runPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC")),
+      ),
+    ];
+    const digest = createHash("sha256").update(messages.join("\n\u0000\n")).digest("hex");
+    // A changed digest means existing scribes' run messages no longer read as generated, so the
+    // Scribes page can't read or change their settings. Add the replaced wording to RUN_WORDINGS
+    // in scribes-catalog.ts (unless only new choices were added), then update this digest.
+    expect(digest).toBe("ecad3dcede50e762d8af051d8d11df744dc742c535b8cb0aaf809f27f185ae59");
   });
 
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {
@@ -166,39 +214,44 @@ describe("scribes catalog", () => {
     const beforeAmounts = withoutAmounts(current);
     expect(beforeAmounts).not.toContain("Each run:");
     const earlier = claimsOnly(earlierOf(beforeAmounts));
-    expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
-    expect(checkRunMessage("claim-consolidation", nightly, cron(REVIEW_NIGHTLY_SCHEDULE))).toEqual({
+    expect(checkRunMessage("claim-consolidation", current)).toEqual({
+      state: "current",
+      options: { schedule: REVIEW_WEEKLY_SCHEDULE },
+    });
+    expect(
+      checkRunMessage("claim-consolidation", nightly, cron(REVIEW_NIGHTLY_SCHEDULE)),
+    ).toMatchObject({
       state: "current",
     });
     // An unedited message from before the amounts takes those of the schedule it runs on.
     expect(
       checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_NIGHTLY_SCHEDULE)),
-    ).toEqual({
+    ).toMatchObject({
       state: "outdated",
       current: nightly,
     });
     expect(
       checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_WEEKLY_SCHEDULE)),
-    ).toEqual({
+    ).toMatchObject({
       state: "outdated",
       current,
     });
     // A custom schedule gets no amounts: its message without them is already current.
-    expect(checkRunMessage("claim-consolidation", beforeAmounts, { kind: "every" })).toEqual({
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, { kind: "every" })).toMatchObject({
       state: "current",
     });
-    expect(checkRunMessage("claim-consolidation", beforeAmounts, cron("5 1 * * 2"))).toEqual({
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, cron("5 1 * * 2"))).toMatchObject({
       state: "current",
     });
     expect(
       checkRunMessage("claim-consolidation", claimsOnly(beforeAmounts), cron("5 1 * * 2")),
-    ).toEqual({
+    ).toMatchObject({
       state: "outdated",
       current: beforeAmounts,
     });
     for (const message of [earlier, claimsOnly(beforeAmounts), beforeAmounts]) {
       expect(message).not.toBe(current);
-      expect(checkRunMessage("claim-consolidation", message)).toEqual({
+      expect(checkRunMessage("claim-consolidation", message)).toMatchObject({
         state: "outdated",
         current,
       });
@@ -242,6 +295,7 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("granola", granolaBeforeAmounts)).toEqual({
       state: "outdated",
       current: granola,
+      options: { meetings: "all", since: "today" },
     });
     const edited = earlierOf(granolaBeforeAmounts).replace(
       "left pending",
@@ -261,6 +315,7 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("granola", beforeAttention)).toEqual({
       state: "outdated",
       current: granola,
+      options: { meetings: "all", since: "today" },
     });
     expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
       state: "custom",

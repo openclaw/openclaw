@@ -1049,6 +1049,7 @@ const configs: UserConfig[] = [
     const bundleFsSafe = Object.keys(entry).some((name) =>
       [
         "infra/sqlite-readonly-location.worker",
+        "plugins/plugin-generation-preparation.worker",
         "state/openclaw-state-read.worker",
         // Hosts the state reader and must load fs-safe the same way.
         "infra/shared-worker-host.worker",
