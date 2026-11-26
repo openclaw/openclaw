@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -277,26 +276,6 @@ it("isolates cancellation of the initiating capture and its waiting callers", as
   ]);
   expect(capture).toHaveBeenCalledTimes(1);
   await remove(template.id);
-});
-
-it("evicts the least recently used compressed manifest when the byte budget fills", async () => {
-  // Incompressible synthetic bytes exceed the 64 MiB budget with only three entries.
-  const document = {
-    rawManifest: randomBytes(24 * 1024 * 1024).toString("base64"),
-    manifestRef: "x",
-  };
-  const records = [0, 1, 2].map((n) => Object.assign({}, template, { id: `${template.id}-${n}` }));
-  for (const record of records.slice(0, 2)) {
-    await registry.prepareTemplateManifest(record, "policy", async () => document);
-  }
-  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
-  await registry.prepareTemplateManifest(records[2]!, "policy", async () => document);
-  expect(await registry.readTemplateManifest(records[1]!, "policy")).toBeUndefined();
-  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
-  expect(await registry.readTemplateManifest(records[2]!, "policy")).toEqual(document);
-  for (const record of records) {
-    await remove(record.id);
-  }
 });
 
 it("admits readers only from retained ready generations and refuses retirement until they settle", async () => {

@@ -28,6 +28,9 @@ it("preserves legacy JSON bytes, including literal prototype keys and escaped de
   expect(codexLegacyDynamicToolsFingerprint(tools)).toBe(
     '[{"description":"Send a message.","inputSchema":{"properties":{"__proto__":{"type":"string"},"text":{"description":"Line one\\n\\\"Line two\\\"","type":"string"}},"required":["text","__proto__"],"type":"object"},"name":"message","type":"function"}]',
   );
+  expect(codexDynamicToolsFingerprint(tools)).toBe(
+    "sha256:1d39edb06e0651f5e117e5e654ff7506969781c69dc2d91e430bfd2fe9a0cc02",
+  );
   expect(codexLegacyDynamicToolsFingerprint([])).toBe("[]");
 });
 

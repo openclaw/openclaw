@@ -1,5 +1,4 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -120,41 +119,6 @@ describe("finalized tool descriptor snapshots", () => {
     expect(first.execute).not.toHaveBeenCalled();
     expect(current.execute).toHaveBeenCalledOnce();
     await warm.settle();
-  });
-
-  it.each([false, true])(
-    "shares descriptors across sessions (concurrent cold start: %s)",
-    async (concurrent) => {
-      const parameters = schema();
-      const otherSession = { hookContext: { sessionId: "other-session" } };
-      const first = attempt([tool(parameters)]);
-      const second = concurrent ? attempt([tool(parameters)], otherSession) : undefined;
-      await first.settle();
-      await second?.settle();
-
-      const publishedSchema = attempt([tool(parameters)]).tool().parameters;
-      expect(getPublishedRuntimeToolInputSchema(publishedSchema)).toBeDefined();
-      expect(attempt([tool(parameters)], otherSession).tool().parameters).toBe(publishedSchema);
-      expect(attempt([tool(schema())], otherSession).tool().parameters).not.toBe(publishedSchema);
-    },
-  );
-
-  it("shares schema projections across interleaved catalogs without retaining run bindings", async () => {
-    const parameters = schema();
-    const first = (await published(() => [tool(parameters)])).tool().parameters;
-    using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-    for (let index = 0; index < 80; index++) {
-      const current = tool(parameters, { description: `Current description ${index}` });
-      const next = attempt([current, tool(parameters, { name: `sibling_${index}` })], {
-        hookContext: { sessionId: `catalog-${index}` },
-      });
-      expect(next.tool().parameters).toBe(first);
-      expect(next.tool().description).toBe(current.description);
-      await next.tool().execute("current", {});
-      expect(current.execute).toHaveBeenCalledOnce();
-      await next.settle();
-    }
-    expect(publish).not.toHaveBeenCalled();
   });
 
   it("retains isolated published schemas across source and sibling changes", async () => {

@@ -3,7 +3,7 @@ import { MemoryIndexDatabase } from "./manager-database-context.js";
 
 /**
  * Cases that read generated vectors back from the cache as a probe keep the rows a
- * publication already serves; manager.cache-duplicate-retirement.test.ts owns retirement.
+ * publication already serves; manager-embedding-cache-retire.test.ts covers retirement.
  */
 export function keepPublishedCacheDuplicates() {
   const spy = vi

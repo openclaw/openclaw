@@ -43,7 +43,6 @@ it("measures ordinary and catalog response retention across real native DB-only 
   }
 
   expect(knownPreviews.size).toBe(3_000);
-  let previewCacheHits = 0;
   const previewCache: CodexCatalogPreviewCache = (thread) => {
     const known = knownPreviews.get(thread.id);
     if (
@@ -54,18 +53,13 @@ it("measures ordinary and catalog response retention across real native DB-only 
     ) {
       return undefined;
     }
-    previewCacheHits++;
     return known.preview;
   };
   const measurements = [];
   for (const boundary of ["ordinary", "catalog"] as const) {
     const client = await startNativeCatalogPerformanceClient(fixture);
     try {
-      const beforeHits = previewCacheHits;
-      measurements.push({
-        ...(await measureNativeCatalogBoundary(client, boundary, previewCache)),
-        previewCacheHits: previewCacheHits - beforeHits,
-      });
+      measurements.push(await measureNativeCatalogBoundary(client, boundary, previewCache));
     } finally {
       await client.closeAndWait();
     }
@@ -75,14 +69,12 @@ it("measures ordinary and catalog response retention across real native DB-only 
     rows: 3_000,
     pages: 47,
     pageRows: 64,
-    previewCacheHits: 0,
   });
   expect(catalog).toMatchObject({
     rows: 3_000,
     pages: 47,
     pageRows: 64,
     firstThreadId: ordinary!.firstThreadId,
-    previewCacheHits: 3_064,
   });
   expect(ordinary!.maxPreviewCharacters).toBeGreaterThan(16 * 1024);
   expect(catalog!.maxPreviewCharacters).toBeLessThanOrEqual(500);

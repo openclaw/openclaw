@@ -236,7 +236,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/send.qa-reply-ambiguity.integration.test.ts",
   "src/gateway/server-methods/send.scheduled-reads.integration.test.ts",
   "src/gateway/server-methods/server-methods.test.ts",
-  "src/gateway/server-methods/session-catalog.performance.test.ts",
   "src/gateway/server-methods/session-creator-preparation.test.ts",
   "src/gateway/server-methods/sessions-create-category.test.ts",
   "src/gateway/server-methods/sessions-create-thinking-claim.test.ts",

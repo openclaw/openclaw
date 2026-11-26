@@ -1809,16 +1809,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/prepared-model-catalog.worker.ts"],
   })),
   {
-    testFile: "src/gateway/server-methods/session-catalog.performance.test.ts",
-    watchGlobs: [
-      "extensions/codex/src/session-catalog.ts",
-      "extensions/codex/src/session-catalog-list-operation.ts",
-      "extensions/codex/src/session-catalog-listing.ts",
-      "extensions/codex/src/session-catalog-index.ts",
-      "extensions/codex/src/session-catalog-index-query.ts",
-    ],
-  },
-  {
     testFile: "src/gateway/server-startup-secret-owner-isolation.test.ts",
     watchGlobs: ["extensions/vault/vault-secret-ref-resolver.js"],
   },

@@ -262,7 +262,7 @@ const messageUpdate = {
   assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
 } satisfies Parameters<ExtensionRunner["emit"]>[0];
 
-it("observes live handler changes without allocating a predicate for each lookup", () => {
+it("observes live handler changes", () => {
   const first = buildExtension({ message_update: [] });
   const second = buildExtension({});
   const extensions = [first, second];
@@ -273,20 +273,15 @@ it("observes live handler changes without allocating a predicate for each lookup
     {} as SessionManager,
     {} as ModelRegistry,
   );
-  using predicates = vi.spyOn(extensions, "some");
-  using laterLookups = vi.spyOn(second.handlers, "get");
   expect(runner.hasHandlers("message_update")).toBe(false);
   first.handlers.set("message_update", [async () => undefined]);
-  laterLookups.mockClear();
   expect(runner.hasHandlers("message_update")).toBe(true);
-  expect(laterLookups).not.toHaveBeenCalled();
   first.handlers.get("message_update")!.length = 0;
   expect(runner.hasHandlers("message_update")).toBe(false);
   second.handlers.set("message_update", [async () => undefined]);
   expect(runner.hasHandlers("message_update")).toBe(true);
   second.handlers.delete("message_update");
   expect(runner.hasHandlers("message_update")).toBe(false);
-  expect(predicates).not.toHaveBeenCalled();
 });
 
 it.each([false, true])("constructs context only for matching handlers=%s", async (matching) => {

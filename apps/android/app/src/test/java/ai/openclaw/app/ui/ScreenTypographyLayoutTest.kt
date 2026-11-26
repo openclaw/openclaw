@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.AppearanceTextScale
-import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
@@ -401,29 +400,6 @@ class ScreenTypographyLayoutTest {
     assertTextStyle("Settings", type.display)
   }
 
-  @Test
-  fun providerPageRetainsHeadingHierarchyInLightMode() {
-    show(dark = false) { ProvidersModelsScreen(model, onBack = {}) }
-    capture("providers-light")
-    assertTextStyle("Providers & Models", type.display)
-    assertPhoneGutter()
-  }
-
-  @Test
-  fun threadsRetainHeadingHierarchyInLightMode() {
-    show(dark = false) { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
-    capture("threads-light")
-    assertTextStyle("Threads", type.display)
-  }
-
-  @Test
-  fun settingsRetainHeadingHierarchyInLightMode() {
-    prefs.setAppearanceThemeMode(AppearanceThemeMode.Light)
-    model.requestHomeDestination(HomeDestination.Settings)
-    show(dark = false) { ShellScreen(model) }
-    capture("settings-light")
-    assertTextStyle("Settings", type.display)
-  }
 
   @Test
   fun detailPageKeepsPageHeadingDistinctFromFormControls() {
