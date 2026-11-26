@@ -90,7 +90,7 @@ it("repairs card orphans only when no unrelated FK violations exist", async () =
   await expect(repair.migrateLegacyState(input(true))).rejects.toThrow(/unrelated/u);
   expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(2);
   db.exec("DROP TABLE unrelated");
-  expect((await repair.migrateLegacyState(input(true))).changes.join()).toContain("backup:");
+  expect((await repair.migrateLegacyState(input(true))).changes[0]).toContain("backup:");
   expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   expect(db.prepare("SELECT card_id FROM workboard_card_labels").get()).toEqual({
     card_id: "keep",

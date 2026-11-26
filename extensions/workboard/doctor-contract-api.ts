@@ -10,7 +10,7 @@ const cardChildren =
 async function checkCardOrphans(stateDir: string, repair: boolean) {
   const file = databasePath(stateDir);
   if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) {
-    return;
+    return null;
   }
   const sqlite = await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   const location = repair ? sqlite.resolveExistingSqliteFileUri(file) : file;
@@ -26,7 +26,7 @@ async function checkCardOrphans(stateDir: string, repair: boolean) {
     throw new Error("Workboard orphan repair refused unrelated foreign-key violations.");
   });
   if (!tables.length || !repair) {
-    return tables.length ? "Workboard has orphaned card rows." : undefined;
+    return tables.length ? "Workboard has orphaned card rows." : null;
   }
   const { backupDoctorSqliteRepair } = await import("openclaw/plugin-sdk/doctor-repair-runtime");
   const backup = await backupDoctorSqliteRepair(file, "workboard-card-orphans");
