@@ -271,7 +271,7 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
   return exceptionRegistry.isHandled(error);
 }
 
-export function installUnhandledRejectionHandler(): void {
+function createUnhandledRejectionListener() {
   const exitWithTerminalRestore = (
     reason: string,
     error: unknown,
@@ -285,7 +285,7 @@ export function installUnhandledRejectionHandler(): void {
     exitAfterSignalExitBarriers(exitCode, reason);
   };
 
-  process.on("unhandledRejection", (reason, _promise) => {
+  return (reason: unknown) => {
     if (rejectionRegistry.isHandled(reason)) {
       return;
     }
@@ -320,5 +320,15 @@ export function installUnhandledRejectionHandler(): void {
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
     exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
-  });
+  };
+}
+
+export function installUnhandledRejectionHandler(): void {
+  const listener = resolveGlobalSingleton(
+    Symbol.for("openclaw.unhandledRejection.listener"),
+    createUnhandledRejectionListener,
+  );
+  if (!process.listeners("unhandledRejection").includes(listener)) {
+    process.on("unhandledRejection", listener);
+  }
 }

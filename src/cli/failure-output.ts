@@ -13,6 +13,7 @@ import {
   isUncaughtExceptionHandled,
 } from "../infra/unhandled-rejections.js";
 import { defaultRuntime, restoreRuntimeTerminalState } from "../runtime.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
@@ -20,6 +21,7 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
+import { getCliFailureContext } from "./failure-context.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -39,7 +41,25 @@ export class ReportedCliCommandError extends ExpectedCliError {
   }
 }
 
-export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+export function installCliUncaughtExceptionHandler(argv?: string[]): void {
+  const context = getCliFailureContext();
+  if (context && argv) {
+    context.argv = argv;
+  }
+  // Both executable entrypoints and embedded calls share one process policy.
+  const listener = resolveGlobalSingleton(
+    Symbol.for("openclaw.cliUncaughtExceptionListener"),
+    () => (error: Error) => handleCliUncaughtException(error),
+  );
+  if (!process.listeners("uncaughtException").includes(listener)) {
+    process.on("uncaughtException", listener);
+  }
+}
+
+export function handleCliUncaughtException(
+  error: unknown,
+  argv = getCliFailureContext()?.argv ?? process.argv,
+): void {
   if (isUncaughtExceptionHandled(error)) {
     return;
   }
@@ -50,13 +70,13 @@ export function handleCliUncaughtException(error: unknown, argv?: string[]): voi
     );
     return;
   }
-  if (isJsonOutputModeActive(argv ?? process.argv)) {
+  if (isJsonOutputModeActive(argv)) {
     defaultRuntime.writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "OpenClaw hit an unexpected runtime error.",
     error,
-    argv: argv ?? process.argv,
+    argv,
   })) {
     console.error(line);
   }
