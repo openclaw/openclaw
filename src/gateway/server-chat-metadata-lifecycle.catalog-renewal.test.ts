@@ -273,3 +273,150 @@ it.for(["usage", "removed", "failed"] as const)(
     }
   },
 );
+
+it.each(["oauth-refresh", "external-overlay"] as const)(
+  "does not re-broadcast modelCatalogStatusChanged after changedOnly settles (%s)",
+  async (scenario) => {
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    mocks.configuredAgentIds = ["main"];
+    const profileId = "custom:user@example.test";
+    const isOAuth = scenario === "oauth-refresh";
+    const startupOAuth = {
+      type: "oauth" as const,
+      provider: "custom",
+      access: "startup-access",
+      refresh: "startup-refresh",
+      expires: 1_000,
+      email: "user@example.test",
+    };
+    const workerOAuth = {
+      ...startupOAuth,
+      access: "worker-access",
+      refresh: "worker-refresh",
+      expires: 5_000,
+    };
+    mocks.preparedAuthStore = isOAuth
+      ? { version: 1, profiles: { [profileId]: startupOAuth } }
+      : { version: 1, profiles: {} };
+    mocks.authStorage.getAll.mockReturnValue(
+      isOAuth
+        ? {
+            custom: {
+              type: "oauth",
+              access: startupOAuth.access,
+              refresh: startupOAuth.refresh,
+              expires: startupOAuth.expires,
+            },
+          }
+        : { custom: { type: "api_key", key: "startup-synthetic" } },
+    );
+    const inventory: ModelCatalogSnapshot = {
+      entries: [{ provider: "custom", id: "first", name: "First" }],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "custom", status: "ready", profileId }],
+    };
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+      const reply = structuredClone(inventory);
+      setPreparedModelFullCatalogAuth(reply, {
+        authStore: isOAuth
+          ? { version: 1, profiles: { [profileId]: workerOAuth } }
+          : {
+              version: 1,
+              profiles: {
+                "custom:default": { type: "api_key", provider: "custom", key: "external-cli-key" },
+              },
+            },
+        credentials: isOAuth
+          ? {
+              custom: {
+                type: "oauth",
+                access: workerOAuth.access,
+                refresh: workerOAuth.refresh,
+                expires: workerOAuth.expires,
+              },
+            }
+          : { custom: { type: "api_key", key: "external-cli-key" } },
+        authModes: { custom: isOAuth ? "oauth" : "api_key" },
+        providerAuthLabels: new Map(),
+      });
+      return reply;
+    });
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+    });
+    owner = getPreparedModelRuntimeSnapshot({
+      config,
+      agentId: "main",
+      agentDir: state.agentDir("main"),
+    })!;
+    await owner.loadFullModelCatalog!({ refresh: true });
+    const broadcast = vi.fn();
+    const lifecycle = await createGatewayChatMetadataLifecycle({
+      getConfig: () => config,
+      log: { warn: mocks.warn } as never,
+    });
+    const sidecars = createGatewaySidecarStopOwner();
+    stop = () => sidecars.stop();
+    await lifecycle.attachContext(
+      { broadcast } as unknown as GatewayRequestContext,
+      sidecars.publish,
+    );
+    await lifecycle.read({ agentId: "main" });
+    broadcast.mockClear();
+
+    const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    await owner.loadFullModelCatalog!({ changedOnly: true });
+    await nextEventLoopTurn();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions);
+    expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
+    expect(broadcast).not.toHaveBeenCalled();
+  },
+);
+
+it("backs off consecutive expiry renewal failures instead of spinning at 0ms", async () => {
+  const harness = await createRenewalLifecycle();
+  const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+  const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  mocks.runPreparedModelCatalogWorker.mockRejectedValue(new Error("synthetic expiry failure"));
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    vi.setSystemTime(1_000_000);
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 999_999;
+
+    owner.refreshExpiredModelCatalog!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + 1);
+    expect(inventoryOwner.catalogInventory!.providers.get("custom")).toMatchObject({
+      discoveryFailures: 1,
+      expiresAt: 1_030_000,
+    });
+    expect(harness.broadcast).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + 1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + 2);
+    expect(inventoryOwner.catalogInventory!.providers.get("custom")).toMatchObject({
+      discoveryFailures: 2,
+      expiresAt: 1_090_000,
+    });
+    expect(harness.broadcast).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + 2);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + 3);
+    expect(inventoryOwner.catalogInventory!.providers.get("custom")).toMatchObject({
+      discoveryFailures: 3,
+      expiresAt: 1_210_000,
+    });
+    expect(harness.broadcast).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
