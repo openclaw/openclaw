@@ -3,6 +3,8 @@
  * project-memory-bootstrap-measure.ts. Run serial A/A and A/B fresh processes:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/project-memory-storage-measure.ts
  *   --root <fixture> --iterations 20 [--allocation]
+ * Add --edit-record <relative private record> to change an unselected record
+ * before each warm sample and measure invalidation of the prepared vault.
  * This runs the real storage owner locally to measure worker-side allocations
  * and scan/SQLite phases; it does not measure transport or caller admission.
  * Acceptance: identical candidate bytes, fewer filesystem operations, improved
@@ -23,6 +25,7 @@ const { values } = parseArgs({
     root: { type: "string" },
     iterations: { type: "string", default: "20" },
     allocation: { type: "boolean", default: false },
+    "edit-record": { type: "string" },
   },
 });
 assert(values.root);
@@ -116,6 +119,11 @@ if (values.allocation) {
 }
 const warm = [];
 for (let i = 0; i < iterations; i++) {
+  if (values["edit-record"]) {
+    const file = path.join(root, "vault", "private", values["edit-record"]);
+    const raw = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, `${raw.trimEnd().replace(/ [AB]$/, "")} ${i % 2 ? "A" : "B"}\n`);
+  }
   warm.push(await run());
 }
 let allocatedBytes: number | undefined;

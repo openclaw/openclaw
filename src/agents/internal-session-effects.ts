@@ -5,6 +5,7 @@ import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   forkSessionFromParentTranscript,
+  type SessionEntryCreateWithTranscriptOptions,
 } from "../config/sessions/session-accessor.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
@@ -69,6 +70,7 @@ export async function prepareInternalSessionEffectsSession(params: {
   runId: string;
   source?: InternalSessionEffectsSource;
   commitGuard?: () => void;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   storePath: string;
 }): Promise<InternalSessionEffectsTarget> {
   params.commitGuard?.();
@@ -117,7 +119,11 @@ export async function prepareInternalSessionEffectsSession(params: {
           updatedAt: now,
         },
       }),
-      { cwd: params.cwd, commitGuard: params.commitGuard },
+      {
+        cwd: params.cwd,
+        commitGuard: params.commitGuard,
+        followRegistration: params.followRegistration,
+      },
     );
     if (!created.ok) {
       throw new Error(`Failed to create internal session for run ${params.runId}`);

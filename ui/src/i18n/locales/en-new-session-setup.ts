@@ -7,6 +7,8 @@ const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    incognitoPermissionDenied: "You don’t have permission to start an Incognito session.",
+    fullAccessPermissionDenied: "You don’t have permission to turn on Full access.",
     openClawWorker: "Cloud device",
     deviceFolder: "Existing folder",
     deviceFolderOn: "Existing folder on {device}",
@@ -28,7 +30,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",
@@ -194,13 +195,15 @@ const enNewSessionSetup = {
     localProjects: "Local projects",
     noLocalProjects: "No local projects registered",
     noLocalProjectMatches: "No local projects match",
+    noSharedProjects: "No projects are shared with your role. Ask an admin to share one.",
+    manageProjects: "Manage projects",
     noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
-      "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+      "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",
     recentFolders: "Recent",
     what: "What",

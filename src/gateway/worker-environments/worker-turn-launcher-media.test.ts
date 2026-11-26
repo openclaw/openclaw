@@ -20,10 +20,10 @@ import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import * as mediaReferences from "../../media/media-reference.js";
 import { cleanOldMedia, getMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -247,7 +247,8 @@ describe("cloud turn media boundary", () => {
     expect(path.dirname(mediaUrl!)).toBe(path.join(getMediaDir(), "outbound"));
     await expect(fs.readFile(mediaUrl!)).resolves.toEqual(bytes);
     await expect(fs.stat(remotePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await openSessionManager()).getLeafEntry()).toMatchObject({
+    const branch = (await openSessionManager()).getBranch();
+    expect(branch.findLast((entry) => entry.type === "message")).toMatchObject({
       type: "message",
       message: { role: "assistant", content: [{ type: "text", text }] },
     });

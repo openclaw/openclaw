@@ -29,7 +29,6 @@ import {
   readToolStringParam,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
@@ -73,6 +72,7 @@ const SessionsListToolSchema = Type.Object({
   workspaceDir: SessionsListParamsSchema.properties.workspaceDir,
   group: SessionsListParamsSchema.properties.group,
   pinned: SessionsListParamsSchema.properties.pinned,
+  hasBoard: SessionsListParamsSchema.properties.hasBoard,
   messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
@@ -93,7 +93,7 @@ const SessionsListOutputSchema = Type.Object(
     enrichmentOmitted: Type.Optional(
       Type.Boolean({
         description:
-          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+          "Inline messages and chat previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
     sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
@@ -128,24 +128,26 @@ export function createSessionsListTool(opts?: {
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
   requesterProfileId?: string;
-  supportsActiveOnly?: boolean;
+  gatewayBacked?: boolean;
   requireSessionReadOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
+    description: describeSessionsListTool({
+      sessionLinkBase: opts?.sessionLinkBase,
+      gatewayBacked: opts?.gatewayBacked,
+    }),
     parameters:
-      opts?.supportsActiveOnly === false
-        ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
+      opts?.gatewayBacked === false
+        ? Type.Omit(SessionsListToolSchema, ["activeOnly", "pinned"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
-      if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
+      if (params.activeOnly === true && opts?.gatewayBacked === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
       const {
@@ -271,6 +273,7 @@ export function createSessionsListTool(opts?: {
             workspaceDir,
             group: typeof params.group === "string" ? params.group : undefined,
             pinned: typeof params.pinned === "boolean" ? params.pinned : undefined,
+            hasBoard: typeof params.hasBoard === "boolean" ? params.hasBoard : undefined,
             includeDerivedTitles: false,
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
@@ -444,8 +447,9 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           archived: entry.archived === true,
-          pinned: entry.pinned === true,
+          ...(typeof entry.pinned === "boolean" ? { pinned: entry.pinned } : {}),
           sidebarRoot: entry.sidebarRoot === true,
+          ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }
@@ -602,7 +606,6 @@ export function createSessionsListTool(opts?: {
 
       const finalize = (visible: readonly boolean[]) => {
         signal?.throwIfAborted();
-        assertCallerCurrent?.("sessions.list");
         if (gatewayContext && getInProcessGatewayToolContext() !== gatewayContext) {
           throw new Error("Gateway instance unavailable for sessions.list");
         }

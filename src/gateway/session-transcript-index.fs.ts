@@ -14,7 +14,7 @@ import {
   createTranscriptDisplaySource,
   type TranscriptDisplayActivity,
 } from "../sessions/transcript-display-position.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-record-visibility.js";
 import {
   parseTranscriptRecord,
   type TranscriptRecord,

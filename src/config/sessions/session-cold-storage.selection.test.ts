@@ -19,13 +19,18 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   currentId,
   historicalId,
   maintenanceConfig,
+  setTranscriptActivity,
 } from "./session-cold-storage.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "./session-compaction-prepared.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -57,6 +62,31 @@ afterEach(async () => {
 });
 afterAll(async () => {
   await state.cleanup();
+});
+
+it("archives by default after 30 days, respects opt-out, and restores history", async () => {
+  const defaultFixture = await createSessionColdStorageFixture(state.statePath("default.sqlite"));
+  const config = {
+    agents: { entries: { main: {} } },
+    session: { store: defaultFixture.scope.storePath },
+  };
+  const run = () => runSessionColdStorageMaintenance({ config });
+  setTranscriptActivity(defaultFixture.options, historicalId, Date.now() - 15 * 86_400_000);
+  const recent = defaultFixture.snapshot();
+  await expect(run()).resolves.toMatchObject({ archivedTranscripts: 0 });
+  expect(defaultFixture.snapshot()).toEqual(recent);
+  setTranscriptActivity(defaultFixture.options, historicalId, Date.now() - 31 * 86_400_000);
+  const old = defaultFixture.snapshot();
+  await expect(
+    maintain(maintenanceConfig(defaultFixture.scope.storePath, false)),
+  ).resolves.toMatchObject({
+    archivedTranscripts: 0,
+  });
+  expect(defaultFixture.snapshot()).toEqual(old);
+  await expect(run()).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(readSessionColdTranscript(defaultFixture.database(), historicalId)).toBeDefined();
+  await restoreSessionColdTranscript(defaultFixture.scope);
+  expect(defaultFixture.snapshot()).toEqual(old);
 });
 
 function delayPreparation() {
@@ -181,7 +211,7 @@ it.each(["registry", "resume-marker"] as const)(
       replaceSessionEntrySync(fixture.scope, {
         sessionId: currentId,
         updatedAt: 1,
-        resumeAfterRestart: { queuedInputIds: [] },
+        resumeAfterRestart: {},
       });
     }
     const before = fixture.snapshot();
@@ -350,4 +380,22 @@ it("retains an embedded archive when its window gains an admitted owner after pr
     admission?.release();
     await admission?.released;
   }
+});
+
+it("restores the captured cold source for native compaction preflight", async () => {
+  await expect(maintain()).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+  const prepared = await readPreparedSessionCompactionInWorker(fixture.scope, {
+    kind: "preflight",
+  });
+  expect(prepared.status).toBe("preflight");
+  if (prepared.status !== "preflight") {
+    throw new Error("Expected restored preflight");
+  }
+  expect(prepared.source.entries.map((entry) => entry.id)).toEqual([
+    "history-user",
+    "history-assistant",
+  ]);
+  expect(prepared.reads.extractedRows).toBe(3);
+  expectHistoryUnchanged();
 });

@@ -5,6 +5,7 @@ import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -405,7 +406,7 @@ export function mergeAuthProfileStores(
       }),
     );
   }
-  return result;
+  return omitUndefinedFields(result);
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */

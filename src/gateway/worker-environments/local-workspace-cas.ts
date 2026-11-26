@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { deflateRawSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import {
+  updateLocalWorkspaceManifestTree,
+  type LocalWorkspaceManifestChange,
+  type LocalWorkspaceManifestRecord,
+} from "./local-workspace-manifest-tree.js";
 
 /** A directory's sibling treap is one immutable content-addressed pack. */
 type LocalWorkspaceTreePack = {
   treeRef: string;
+  /** Transport-only predecessor; the writer persists the complete resulting pack. */
+  baseTreeRef?: string;
   records: LocalWorkspaceManifestRecord[];
   children: string[];
 };
@@ -41,13 +47,46 @@ export function localWorkspaceDigestReference(bytes: Uint8Array): string {
   return `sha256:${Buffer.from(bytes).toString("hex")}`;
 }
 
+/** Advance a scan's tree and send only records absent from its persisted predecessor packs. */
+export function prepareLocalWorkspaceTreeUpdate(
+  records: Map<string, LocalWorkspaceManifestRecord>,
+  changes: readonly LocalWorkspaceManifestChange[],
+  paths: Iterable<string>,
+  previousTreeRoot: string | null,
+): Uint8Array[] {
+  const basePacks = new Map<string | null, string>();
+  if (previousTreeRoot) {
+    // The accepted root retains these immutable packs through checkpoint acceptance.
+    basePacks.set(null, previousTreeRoot);
+    for (const entryPath of ["", ...paths]) {
+      const children = records.get(entryPath)?.children;
+      if (children != null) {
+        basePacks.set(entryPath, records.get(children)!.treeRef);
+      }
+    }
+  }
+  const delta = updateLocalWorkspaceManifestTree(records, changes);
+  return records.get("")!.treeRef === previousTreeRoot
+    ? []
+    : prepareLocalWorkspaceTreePacks(
+        records,
+        previousTreeRoot
+          ? [...delta.records.map(({ node }) => node.path), ...delta.removed]
+          : undefined,
+        undefined,
+        basePacks,
+      );
+}
+
 function encodeLocalWorkspaceTreePacks(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
   selectedPaths?: Iterable<string>,
   knownPacks?: ReadonlySet<string>,
+  basePacks?: ReadonlyMap<string | null, string>,
 ): LocalWorkspaceTreePack[] {
+  const selected = selectedPaths && new Set(selectedPaths);
   const roots = new Set<string>([""]);
-  if (selectedPaths === undefined) {
+  if (selected === undefined) {
     for (const record of records.values()) {
       if (record.children !== null) {
         roots.add(record.children);
@@ -55,7 +94,7 @@ function encodeLocalWorkspaceTreePacks(
     }
   } else {
     // Removed records can promote an unchanged child to the containing pack root.
-    for (const entryPath of selectedPaths) {
+    for (const entryPath of selected) {
       if (entryPath === "") {
         continue;
       }
@@ -73,14 +112,19 @@ function encodeLocalWorkspaceTreePacks(
     if (knownPacks?.has(root.treeRef)) {
       continue;
     }
+    const parent =
+      entryPath === "" ? null : entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")));
+    const baseTreeRef = selected && basePacks?.get(parent);
     const packed: LocalWorkspaceManifestRecord[] = [];
     const children: string[] = [];
     const pending = [root];
     while (pending.length) {
       const record = pending.pop()!;
-      packed.push(record);
-      if (record.children !== null) {
-        children.push(records.get(record.children)!.treeRef);
+      if (!baseTreeRef || record === root || selected!.has(record.node.path)) {
+        packed.push(record);
+        if (record.children !== null) {
+          children.push(records.get(record.children)!.treeRef);
+        }
       }
       for (const path of [record.left, record.right]) {
         if (path !== null) {
@@ -88,8 +132,7 @@ function encodeLocalWorkspaceTreePacks(
         }
       }
     }
-    // A very large flat directory rewrites its whole pack on every edit.
-    packs.push({ treeRef: root.treeRef, records: packed, children });
+    packs.push({ treeRef: root.treeRef, baseTreeRef, records: packed, children });
   }
   return packs;
 }
@@ -98,8 +141,9 @@ export function prepareLocalWorkspaceTreePacks(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
   selectedPaths?: Iterable<string>,
   knownPacks?: ReadonlySet<string>,
+  basePacks?: ReadonlyMap<string | null, string>,
 ): Uint8Array[] {
-  const packs = encodeLocalWorkspaceTreePacks(records, selectedPaths, knownPacks);
+  const packs = encodeLocalWorkspaceTreePacks(records, selectedPaths, knownPacks, basePacks);
   const batches: Uint8Array[] = [];
   for (let offset = 0; offset < packs.length; offset += LOCAL_WORKSPACE_CONTENT_BATCH) {
     batches.push(

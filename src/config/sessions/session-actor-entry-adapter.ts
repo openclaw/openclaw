@@ -25,6 +25,8 @@ import { mergeSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { SqliteSessionEntrySnapshotPatchParams } from "./session-entry-patch-source.js";
 import {
   acceptSessionSourceValidation,
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceValidation,
@@ -91,7 +93,6 @@ async function patchSessionActorEntry(
       prepareIf: options.prepareIf,
       guards: {
         shouldCommitIf: options.workerGuard?.shouldCommitIf,
-        cliHistory: options.workerGuard?.cliHistory,
         conversation: options.workerGuard?.conversation,
         sources: source.checks.map(({ predicate }) => predicate),
       },
@@ -146,6 +147,11 @@ async function patchSessionActorEntry(
       },
       {
         ...authority,
+        workspaceEvidence: [
+          ...(authority.workspaceEvidence ?? []),
+          ...(source.workspaceEvidence ?? []),
+        ],
+        readCustody: [...(authority.readCustody ?? []), ...(source.readCustody ?? [])],
         authorize(stage, facts, publication) {
           authority.authorize(stage, facts, publication);
           if (options.shouldCommit?.() === false) {
@@ -285,6 +291,10 @@ async function createSessionActorEntryWithTranscript<TError>(
       }
       const commit = async (assertSourceCurrent?: () => void) => {
         options.onPhase?.("commit");
+        const source = await prepareSessionSourceEffect(
+          composeSessionSourceAssertion([options.commitGuard, assertSourceCurrent]),
+        );
+        await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
         const outcome = await actor.storage!.mutate(
           {
             type: "session.entry.create",
@@ -299,10 +309,14 @@ async function createSessionActorEntryWithTranscript<TError>(
           },
           {
             ...authority,
+            workspaceEvidence: [
+              ...(authority.workspaceEvidence ?? []),
+              ...(source.workspaceEvidence ?? []),
+            ],
+            readCustody: [...(authority.readCustody ?? []), ...(source.readCustody ?? [])],
             assertCurrent() {
               authority.assertCurrent();
-              options.commitGuard?.();
-              assertSourceCurrent?.();
+              source.assertCurrent();
             },
           },
           { committed: ({ value }) => options.onLifecycleCommitted?.(value) },

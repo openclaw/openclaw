@@ -57,7 +57,6 @@ export function idempotentSessionCreate(
     }
     // Hosted tools retain a live operator source without impersonating a human connection.
     const operatorAuthority = request.client?.internal?.operatorRunAuthority;
-    operatorAuthority?.assertCurrent();
     const principal =
       request.client?.authenticatedUserProfile?.profileId ??
       request.client?.authenticatedUserId ??

@@ -43,6 +43,8 @@ const UNSUPPORTED_SHAPE_KEYWORDS = [
 type SchemaHint = {
   text: string;
   complete: boolean;
+  /** Some object in this hint exceeded its budget and was reduced to required keys. */
+  overflowed?: boolean;
 };
 
 type CompactSchemaLimits = {
@@ -52,6 +54,8 @@ type CompactSchemaLimits = {
   numericInputConstraints: boolean;
   declaration?: boolean;
   remainingNodes?: { value: number };
+  /** Render only required object keys; set once a hint overflows its budget. */
+  requiredOnly?: boolean;
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
@@ -197,11 +201,26 @@ function compactSchemaUnion(
   if (variants.length > (limits.declaration ? 256 : MAX_COMPACT_UNION_TYPES)) {
     return UNKNOWN_HINT;
   }
-  const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
-  if (rendered.some((hint) => !hint.complete)) {
-    return UNKNOWN_HINT;
+  return joinVariantHints(
+    variants.map((variant) => compactSchemaType(variant, depth + 1, limits)),
+    limits,
+  );
+}
+
+function joinVariantHints(rendered: SchemaHint[], limits: CompactSchemaLimits): SchemaHint {
+  const overflowed = rendered.some((hint) => hint.overflowed);
+  // Required-only variants are incomplete by design; still name their required keys.
+  if (
+    rendered.some((hint) => !hint.complete && (!limits.requiredOnly || hint.text === "unknown"))
+  ) {
+    // An overflowing variant lets the caller retry with required keys only.
+    return overflowed ? { ...UNKNOWN_HINT, overflowed } : UNKNOWN_HINT;
   }
-  return completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | "));
+  return {
+    text: [...new Set(rendered.map((hint) => hint.text))].join(" | "),
+    complete: rendered.every((hint) => hint.complete),
+    overflowed,
+  };
 }
 
 function insertLexicallyBounded(values: string[], value: string, limit: number): void {
@@ -316,41 +335,100 @@ function compactObjectHint(
     insertLexicallyBounded(optionalKeys, key, optionalLimit);
   }
 
-  const keys = [...requiredKeys, ...optionalKeys];
+  const requiredOnly = limits.requiredOnly === true;
+  const keys = requiredOnly ? requiredKeys : [...requiredKeys, ...optionalKeys];
   const structurallyIncomplete =
     requiredValues.length > limits.maxProperties ||
     invalidRequired ||
     missingRequired ||
     oversizedOptionalKey ||
     optionalCount > optionalLimit;
+  const droppedOptional = requiredOnly && optionalCount > 0;
   let omitted =
     structurallyIncomplete ||
+    droppedOptional ||
     schema.additionalProperties === true ||
     isRecord(schema.additionalProperties);
-  let complete = !structurallyIncomplete && schema.additionalProperties === false;
-  let body = "";
-  for (const key of keys) {
-    const name = IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
-    const propertyHint = compactSchemaType(properties[key], depth, limits);
-    complete &&= propertyHint.complete;
-    const part = `${name}${required.has(key) ? "" : "?"}: ${propertyHint.text}`;
-    const next = body ? `${body}; ${part}` : part;
-    // The budget includes both braces and their inner spaces.
-    if (next.length + 4 > limits.maxChars) {
-      omitted = true;
-      complete = false;
-      break;
+  let complete =
+    !structurallyIncomplete && !droppedOptional && schema.additionalProperties === false;
+  const prefixes = keys.map(
+    (key) =>
+      `${IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)}${required.has(key) ? "" : "?"}: `,
+  );
+  const hints = keys.map((key) => compactSchemaType(properties[key], depth, limits));
+  let body = keys.map((_key, index) => prefixes[index] + hints[index]!.text).join("; ");
+  // The budget includes both braces, their inner spaces and any trailing "; ...".
+  const overflowed =
+    hints.some((hint) => hint.overflowed) || body.length + 4 + (omitted ? 5 : 0) > limits.maxChars;
+  if (!overflowed) {
+    complete &&= hints.every((hint) => hint.complete);
+  } else {
+    // An overflowing hint keeps only required keys, at every level. Each keeps
+    // its full type when it fits, else a type shortened to the remaining
+    // budget, else a shallow type.
+    omitted ||= optionalCount > 0;
+    complete = false;
+    const requiredLimits = { ...limits, requiredOnly: true };
+    const requiredHints = requiredOnly
+      ? hints
+      : requiredKeys.map((key) => compactSchemaType(properties[key], depth, requiredLimits));
+    const parts = requiredKeys.map((_key, index) => prefixes[index] + requiredHints[index]!.text);
+    const budget = limits.maxChars - 4 - (omitted ? 5 : 0);
+    body = parts.join("; ");
+    if (body.length > budget) {
+      const shallow = (index: number) => {
+        const property = properties[requiredKeys[index]!];
+        const type = isRecord(property) ? property.type : undefined;
+        const shallowType =
+          type === "array"
+            ? "Array<...>"
+            : type === "object"
+              ? "{ ... }"
+              : type === "integer"
+                ? "number"
+                : typeof type === "string" && ["string", "number", "boolean", "null"].includes(type)
+                  ? type
+                  : "unknown";
+        const elided = prefixes[index] + shallowType;
+        return parts[index]!.length <= elided.length ? parts[index]! : elided;
+      };
+      let reserve = 0;
+      for (let index = 0; index < requiredKeys.length; index += 1) {
+        reserve += shallow(index).length + 2;
+      }
+      // A partial required list would read as the whole contract.
+      if (reserve - 2 > budget) {
+        return { text: "{ ... }", complete: false, overflowed: true };
+      }
+      body = "";
+      for (const [index, key] of requiredKeys.entries()) {
+        reserve -= shallow(index).length + 2;
+        const room = budget - (body ? body.length + 2 : 0) - reserve;
+        let part = parts[index]!;
+        if (part.length > room) {
+          // Leave room for an Array<...> wrapper around a shortened object.
+          const typeRoom = room - prefixes[index]!.length - "Array<>".length;
+          const shortened =
+            typeRoom > 0
+              ? prefixes[index] +
+                compactSchemaType(properties[key], depth, { ...requiredLimits, maxChars: typeRoom })
+                  .text
+              : undefined;
+          part = shortened && shortened.length <= room ? shortened : shallow(index);
+        }
+        body = body ? `${body}; ${part}` : part;
+      }
     }
-    body = next;
   }
   if (!body) {
     return keys.length === 0 && !omitted
       ? { text: "{}", complete }
-      : { text: "{ ... }", complete: false };
+      : { text: "{ ... }", complete: false, overflowed };
   }
   return {
     text: `{ ${body}${omitted ? "; ..." : ""} }`,
     complete,
+    overflowed,
   };
 }
 
@@ -408,13 +486,12 @@ function compactSchemaType(
     ) {
       return UNKNOWN_HINT;
     }
-    const rendered = type.map((value) =>
-      compactSchemaType({ ...schema, type: value }, depth + 1, limits),
+    return finish(
+      joinVariantHints(
+        type.map((value) => compactSchemaType({ ...schema, type: value }, depth + 1, limits)),
+        limits,
+      ),
     );
-    if (rendered.some((hint) => !hint.complete)) {
-      return UNKNOWN_HINT;
-    }
-    return finish(completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | ")));
   }
   if (type === "integer" || type === "number") {
     if (!limits.numericInputConstraints) {
@@ -438,7 +515,11 @@ function compactSchemaType(
   }
   if (type === "array") {
     const itemHint = compactSchemaType(schema.items, depth + 1, limits);
-    return finish({ text: `Array<${itemHint.text}>`, complete: itemHint.complete });
+    return finish({
+      text: `Array<${itemHint.text}>`,
+      complete: itemHint.complete,
+      overflowed: itemHint.overflowed,
+    });
   }
   if (type === "object") {
     return finish(compactObjectHint(schema, depth + 1, limits));
@@ -470,10 +551,15 @@ export function compactToolInputHint(schema: unknown): string {
   if (!isRecord(schema)) {
     return "unknown";
   }
-  const hint =
-    schema.type === "object"
-      ? compactObjectHint(schema, 0, INPUT_LIMITS)
-      : compactSchemaType(schema, 0, INPUT_LIMITS);
+  if (schema.type === "object") {
+    const hint = compactObjectHint(schema, 0, INPUT_LIMITS);
+    return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
+  }
+  let hint = compactSchemaType(schema, 0, INPUT_LIMITS);
+  // A root union has no enclosing object to retry with required keys only.
+  if (hint.overflowed || hint.text.length > INPUT_LIMITS.maxChars) {
+    hint = compactSchemaType(schema, 0, { ...INPUT_LIMITS, requiredOnly: true });
+  }
   return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
 }
 

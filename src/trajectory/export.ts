@@ -2,8 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
-import type { AgentMessage } from "../agents/runtime/index.js";
+import { sanitizeTrajectoryExportPayload } from "../agents/payload-redaction.js";
 import {
   isSessionFileEntry,
   parseSessionFileEntriesWithWarnings,
@@ -45,6 +44,7 @@ import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/sessi
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { transcriptMessageEvents } from "./transcript-message-events.js";
 import type {
   TrajectoryBundleManifest,
   TrajectoryBundleWarning,
@@ -340,53 +340,6 @@ function normalizeTimestamp(value: unknown): string {
   return new Date(0).toISOString();
 }
 
-function resolveMessageEventType(message: AgentMessage): string {
-  if (message.role === "user") {
-    return "user.message";
-  }
-  if (message.role === "assistant") {
-    return "assistant.message";
-  }
-  if (message.role === "toolResult") {
-    return "tool.result";
-  }
-  return `message.${message.role}`;
-}
-
-function extractAssistantToolCalls(
-  message: AgentMessage,
-): Array<{ id?: string; name?: string; arguments?: unknown; index: number }> {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block, index) => {
-    if (!block || typeof block !== "object") {
-      return [];
-    }
-    const typedBlock = block as {
-      type?: unknown;
-      id?: unknown;
-      name?: unknown;
-      arguments?: unknown;
-      input?: unknown;
-      parameters?: unknown;
-    };
-    const blockType =
-      typeof typedBlock.type === "string" ? typedBlock.type.trim().toLowerCase() : "";
-    if (blockType !== "toolcall" && blockType !== "tooluse" && blockType !== "functioncall") {
-      return [];
-    }
-    return [
-      {
-        id: typeof typedBlock.id === "string" ? typedBlock.id : undefined,
-        name: typeof typedBlock.name === "string" ? typedBlock.name : undefined,
-        arguments: typedBlock.arguments ?? typedBlock.input ?? typedBlock.parameters,
-        index,
-      },
-    ];
-  });
-}
-
 function assertCanonicalTrajectoryInputs(
   entries: readonly SessionEntry[],
   runtimeEvents: readonly TrajectoryEvent[],
@@ -546,7 +499,7 @@ function redactTrajectoryExportValue(
   redaction: TrajectoryExportRedaction,
 ): unknown {
   const redactedValue = redactSecrets(
-    sanitizeDiagnosticPayload(redactLocalPathValues(value, redaction)),
+    sanitizeTrajectoryExportPayload(redactLocalPathValues(value, redaction)),
   );
   return redactTrajectoryExportObjectKeys(redactedValue, redaction);
 }
@@ -660,6 +613,8 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const transcriptEvents = ((): TrajectoryEvent[] => {
     const events: TrajectoryEvent[] = [];
     let seq = 0;
+    // Nested Code Mode calls belong to the assistant entry that issued their outer call.
+    const assistantEntryByCallId = new Map<string, string>();
     for (const entry of branchEntries) {
       const push = (type: string, data?: Record<string, unknown>) => {
         events.push({
@@ -681,27 +636,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       };
 
       switch (entry.type) {
-        case "message": {
-          push(resolveMessageEventType(entry.message), {
-            message: sanitizeDiagnosticPayload(entry.message),
-          });
-          for (const toolCall of extractAssistantToolCalls(entry.message)) {
-            push("tool.call", {
-              toolCallId: toolCall.id,
-              name: toolCall.name,
-              arguments: sanitizeDiagnosticPayload(toolCall.arguments),
-              assistantEntryId: entry.id,
-              blockIndex: toolCall.index,
-            });
+        case "message":
+          for (const [type, data] of transcriptMessageEvents(
+            entry.id,
+            entry.message,
+            assistantEntryByCallId,
+          )) {
+            push(type, data);
           }
           break;
-        }
         case "compaction":
           push("session.compaction", {
             summary: entry.summary,
             firstKeptEntryId: entry.firstKeptEntryId,
             tokensBefore: entry.tokensBefore,
-            details: sanitizeDiagnosticPayload(entry.details),
+            details: entry.details,
             fromHook: entry.fromHook ?? false,
           });
           break;
@@ -715,21 +664,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
           push("session.branch_summary", {
             fromId: entry.fromId,
             summary: entry.summary,
-            details: sanitizeDiagnosticPayload(entry.details),
+            details: entry.details,
             fromHook: entry.fromHook ?? false,
           });
           break;
         case "custom":
           push("session.custom", {
             customType: entry.customType,
-            data: sanitizeDiagnosticPayload(entry.data),
+            data: entry.data,
           });
           break;
         case "custom_message":
           push("session.custom_message", {
             customType: entry.customType,
-            content: sanitizeDiagnosticPayload(entry.content),
-            details: sanitizeDiagnosticPayload(entry.details),
+            content: entry.content,
+            details: entry.details,
             display: entry.display,
           });
           break;

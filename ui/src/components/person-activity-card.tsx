@@ -56,9 +56,12 @@ export type PersonCardInput = {
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
-function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
+function loadedPresenceSessions(
+  rows: readonly GatewaySessionRow[],
+  input: PersonCardInput,
+): Map<string, ScopedSession> {
   const sessions = new Map<string, ScopedSession>();
-  for (const row of input.sessionData?.sessionsResult?.sessions ?? []) {
+  for (const row of rows) {
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? input.watchAgentId;
     const key = sessionIdentity(row.key, agentId, input);
     if (!sessions.has(key)) {
@@ -149,6 +152,7 @@ function Sessions(props: {
   input: PersonCardInput;
   recent: boolean;
 }) {
+  const recentStatus = () => props.input.sessionData?.sessions.status;
   return (
     <Show when={props.recent || props.sessions.length > 0}>
       <section class="person-activity-card__section">
@@ -156,7 +160,22 @@ function Sessions(props: {
         <Show
           when={props.sessions.length > 0}
           fallback={
-            <p class="person-activity-card__muted">{t("presence.card.noRecentSessions")}</p>
+            <p class="person-activity-card__muted" role="status">
+              <Show
+                when={recentStatus() === "loading"}
+                fallback={t(
+                  recentStatus() === "ready"
+                    ? "presence.card.noRecentSessions"
+                    : "presence.card.recentSessionsUnavailable",
+                )}
+              >
+                <span class="sr-only">{t("common.loading")}</span>
+                <span
+                  class="skeleton skeleton-line--medium person-activity-card__skeleton"
+                  aria-hidden="true"
+                />
+              </Show>
+            </p>
           }
         >
           <div class="person-activity-card__sessions">
@@ -230,17 +249,20 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
   let recentSessionKeys: string[] | undefined;
   const sessions = createMemo(() => {
     const input = props.input;
+    const preview = input.sessionData?.sessions;
+    if (preview?.status !== "ready") {
+      return { viewing: [], recent: [] };
+    }
     const watched = new Set(
       input.user.watchedSessions.map((key) => sessionIdentity(key, input.watchAgentId, input)),
     );
-    const unique = loadedPresenceSessions(input);
+    const unique = loadedPresenceSessions(preview.result.sessions, input);
     const newestFirst = (a: ScopedSession, b: ScopedSession) =>
       (b.row.updatedAt ?? 0) - (a.row.updatedAt ?? 0) ||
       sessionIdentity(a.row.key, a.agentId, input).localeCompare(
         sessionIdentity(b.row.key, b.agentId, input),
       );
     const viewing = [...watched].flatMap((key) => unique.get(key) ?? []).toSorted(newestFirst);
-    const { sessionData } = input;
     const recent = (
       recentSessionKeys?.flatMap((key) => unique.get(key) ?? []) ?? [...unique.values()]
     ).filter(
@@ -255,12 +277,10 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
       recent.sort(newestFirst);
     }
     // Capture once a roster exists; thereafter retire ineligible identities without backfilling.
-    if (recentSessionKeys || sessionData?.sessionsResult) {
-      recentSessionKeys = recent
-        .slice(0, 3)
-        .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));
-    }
-    return { viewing, recent: recentSessionKeys ? recent : [] };
+    recentSessionKeys = recent
+      .slice(0, 3)
+      .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));
+    return { viewing, recent };
   });
   return (
     <div class="person-activity-card">

@@ -49,6 +49,12 @@ function fixture(t, fault = "", sourceState = 17, targetState = sourceState, sou
   f.manifest = join(f.candidate, "deployment.json");
   f.digest = hash(readFileSync(f.manifest));
   f.args = ["--continue-frozen-release", target, f.digest, f.sha, String(f.pid), f.start];
+  if (fault.startsWith("config-")) {
+    const config = JSON.parse(readFileSync(f.config));
+    config.plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay = false;
+    if (fault === "config-invalid") config.syntheticInvalid = true;
+    writeFileSync(f.config, JSON.stringify(config));
+  }
   f.before = {
     config: readFileSync(f.config), database: readFileSync(f.databasePath),
     agent: readFileSync(f.agentDatabasePath), manifest: readFileSync(f.manifest),
@@ -63,7 +69,11 @@ case "\${2:-}" in
       is-active) printf 'inactive\\n'; exit 3 ;;
     esac ;;
 esac
-if [[ ${quote(fault)} == activation-failed && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
+if [[ ${quote(fault)} == config-* && "$1" == stop && "$2" == openclaw-gateway.service ]]; then
+  ${quote(process.execPath)} -e ${quote(`const fs=require('node:fs');const cfg=JSON.parse(fs.readFileSync(${JSON.stringify(f.config)}));if(!Object.hasOwn(cfg.plugins.entries.codex.config.appServer,'loopDetectionPreToolUseRelay'))throw Error('config published before managed stop');`)}
+  printf 'fixture.config-retained-before-stop\\n' >>${quote(f.eventlog)}
+fi
+if [[ (${quote(fault)} == activation-failed || ${quote(fault)} == config-activation-failed) && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
   [[ -f ${quote(f.permit)} ]] || { printf 'candidate start lacked its published permit\\n' >&2; exit 73; }
   : >${quote(join(f.state, "candidate-start-failed"))}
   printf 'service.system.start\\nfixture.candidate-start-failed\\n' >>${quote(f.eventlog)}
@@ -318,6 +328,44 @@ test("continues the original same-schema sealed cut through ordinary activation 
   assert.doesNotMatch(log, /native\.update\.|gateway doctor|service\.system\.restart/);
   for (const [name, file] of [["config", f.config], ["database", f.databasePath], ["agent", f.agentDatabasePath], ["manifest", f.manifest]])
     assert.deepEqual(readFileSync(file), f.before[name], name);
+});
+
+for (const fault of ["config-retired", "config-activation-failed"]) test(`same-schema ${fault} applies config contracts only after managed stop`, t => {
+  const f = fixture(t, fault, 19, 19);
+  f.ownerTimeoutMs = 180_000;
+  const result = runOwner(f, f.args), log = events(f);
+  assert.ifError(result.error);
+  if (fault === "config-retired") assert.equal(result.status, 0, result.stderr);
+  assert.match(log, /config\.project[\s\S]*fixture\.config-retained-before-stop[\s\S]*service\.system\.stop/);
+  assert.doesNotMatch(log, /native\.update\.|gateway doctor/);
+  assert.deepEqual(readFileSync(f.databasePath), f.before.database);
+  assert.deepEqual(readFileSync(f.agentDatabasePath), f.before.agent);
+  if (fault === "config-retired") {
+    assert.match(result.stdout, /SUCCESS sha=/);
+    assert.equal(readlinkSync(join(f.serving, "current")), f.candidate);
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(f.config)).plugins.entries.codex.config.appServer, "loopDetectionPreToolUseRelay"), false);
+  } else {
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /ROLLED_BACK/);
+    assert.equal(readlinkSync(join(f.serving, "current")), f.initial);
+    assert.deepEqual(readFileSync(f.config), f.before.config);
+    assert.match(log, /fixture\.candidate-start-failed[\s\S]*service\.system\.restart/);
+  }
+  assert.equal(existsSync(f.journal), false);
+  const plans = readdirSync(join(f.serving, "journal")).filter(name => /^config-contract-[a-f\d-]{36}\.json$/.test(name));
+  assert.equal(plans.length, 1);
+  const receipt = JSON.parse(readFileSync(join(f.serving, "journal", plans[0])));
+  assert.deepEqual(receipt.changedPaths, ["plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay"]);
+  assert.equal(receipt.originalBytes, f.before.config.toString("utf8"));
+  const applied = JSON.parse(readFileSync(join(f.serving, "journal", plans[0].replace(/\.json$/, ".applied.json"))));
+  assert.equal(applied.kind, "candidate-config-contract-applied");
+  assert.deepEqual(applied.changedPaths, receipt.changedPaths);
+});
+
+test("same-schema config contract admission refuses a genuinely invalid config without stopping", t => {
+  const f = fixture(t, "config-invalid", 19, 19);
+  unchanged(f, runOwner(f, f.args), /fixture config invalid/);
+  assert.match(events(f), /config\.project/);
 });
 
 for (const fault of ["instance-before-preparation", "manifest-at-compatibility", "manifest-after-journal"]) test(`same-schema continuation refuses late ${fault} drift without stopping`, t => {

@@ -3,11 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeSkillsWatchers, prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -21,6 +19,7 @@ const run = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: run }));
 const roots = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => run.mockReset());
+afterEach(() => closeSkillsWatchers(true));
 const protectedRoots = { autoreview: "/guest/repo/skills/autoreview" };
 const preferred = { model: "fixture/preferred", explicit: false };
 
@@ -86,8 +85,7 @@ function sandboxFixture(source = "openclaw-managed") {
 
 function modelExecution(
   models: string[],
-  options: Pick<AdmittedRunOperatorAuthority, "onModelPolicyChanged"> & {
-    allows?: () => boolean;
+  options: {
     allow?: string[];
   } = {},
 ) {
@@ -98,22 +96,20 @@ function modelExecution(
   return preparePluginToolExecutionCapabilities({
     agentId: "caller",
     config: { agents: { entries: { caller } } },
-    authority: createAdmittedRunOperatorAuthority({
+    authority: createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
-      onModelPolicyChanged: options.onModelPolicyChanged,
       modelPolicy: {
         models: models.map((model) => ({ provider: "fixture", model })),
-        allows: (ref) =>
-          ref.provider === "fixture" && models.includes(ref.model) && (options.allows?.() ?? true),
+        allows: (ref) => ref.provider === "fixture" && models.includes(ref.model),
       },
     }),
   })(() => {}).modelExecution!;
 }
 
-it("retains selected installation identity after sandbox prompt remapping and budgeting", () => {
+it("retains selected installation identity after sandbox prompt remapping and budgeting without synchronous filesystem work", async () => {
   const { sandbox, snapshot, installedRoots, capabilities } = sandboxFixture();
+  sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
   expect(capabilities().sandbox?.workspaceDir).toBe("/guest/repo");
   snapshot.discoverySkills = snapshot.resolvedSkills;
   snapshot.resolvedSkills = [];
@@ -125,7 +121,33 @@ it("retains selected installation identity after sandbox prompt remapping and bu
   expect(prepared.skillsSnapshot?.discoverySkills?.[0]?.filePath).toBe(
     "/guest/repo/skills/autoreview/SKILL.md",
   );
-  expect(installedRoots(prepared.skillsSnapshot)).toEqual(protectedRoots);
+  const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+  const probes = (
+    [
+      "accessSync",
+      "existsSync",
+      "statSync",
+      "lstatSync",
+      "realpathSync",
+      "readdirSync",
+      "openSync",
+      "readFileSync",
+    ] as const
+  ).map((name) => vi.spyOn(fs, name));
+  try {
+    sandbox.fsBridge = createSandboxFsBridge({
+      sandbox: { ...sandbox, backend: sandbox.backend! },
+    });
+    expect(installedRoots(prepared.skillsSnapshot)).toEqual(protectedRoots);
+    for (const probe of [...probes, nativeRealpath]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  } finally {
+    for (const probe of probes) {
+      probe.mockRestore();
+    }
+    nativeRealpath.mockRestore();
+  }
   snapshot.skills[0]!.source!.fileHost = "workspace";
   expect(installedRoots(prepared.skillsSnapshot)).toEqual({});
 });
@@ -158,9 +180,10 @@ it.each([
   ["tmpfs", "/guest/repo/skills:rw"],
   ["tmpfs", "/guest/repo/skills/autoreview/scripts:rw"],
   ["binds", "/untrusted:/guest/repo/skills/autoreview/scripts:rw"],
-] as const)("withholds a protected installation hidden by %s at %s", (kind, overlay) => {
+] as const)("withholds a protected installation hidden by %s at %s", async (kind, overlay) => {
   const fixture = sandboxFixture();
   fixture.sandbox.docker[kind] = [overlay];
+  fixture.sandbox.fsPreparation = await prepareSandboxFsContext(fixture.sandbox);
   expect(fixture.installedRoots()).toEqual({});
 });
 
@@ -264,18 +287,8 @@ it("releases managed workspace admission while the helper waits for exchange com
   expect(retained).toBe(0);
 });
 
-it("selects the permitted default before execution and holds its current authority", async () => {
-  let allowed = true;
-  let changed: (() => void) | undefined;
-  const execution = modelExecution(["default"], {
-    allows: () => allowed,
-    onModelPolicyChanged: (callback) => {
-      changed = callback;
-      return () => {
-        changed = undefined;
-      };
-    },
-  });
+it("selects the permitted default before execution", async () => {
+  const execution = modelExecution(["default"]);
   expect(execution.cliEntryPath).toBe(path.resolve(import.meta.dirname, "../../openclaw.mjs"));
   const action = vi.fn(async ({ model, agentId }: { model: string; agentId: string }) => ({
     model,
@@ -289,17 +302,6 @@ it("selects the permitted default before execution and holds its current authori
     model: "fixture/default",
     agentId: "caller",
   });
-  await expect(
-    execution.run({ model: null, explicit: false }, async ({ signal, model }) => {
-      expect(model).toBe("fixture/default");
-      allowed = false;
-      changed?.();
-      expect(signal.aborted).toBe(true);
-      return "discarded";
-    }),
-  ).rejects.toThrow("cannot use this model");
-  expect(changed).toBeUndefined();
-  await expect(execution.run(preferred, action)).rejects.toThrow("cannot use this model");
 });
 
 it("keeps an allowed canonical model and refuses an empty permitted selection", async () => {

@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
@@ -32,8 +31,6 @@ type RequestAuth = NonNullable<Awaited<ReturnType<typeof authorize>>>;
 const authorizedRequest = (overrides: Partial<RequestAuth> = {}): RequestAuth => ({
   trustDeclaredOperatorScopes: true,
   hasCurrentClientAuthority: () => true,
-  assertCurrent: () => {},
-  revalidate: async () => {},
   ...overrides,
 });
 
@@ -60,33 +57,6 @@ const handleEndpoint = (
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(scopes).mockReturnValue(["operator.write"]);
-});
-
-it("does not admit a parsed body after its authority was revoked while reading", async () => {
-  const body = createDeferred<unknown>();
-  const reading = createDeferred();
-  const res = Object.assign({} as ServerResponse, { writableEnded: false });
-  let current = true;
-  vi.mocked(authorize).mockResolvedValueOnce(
-    authorizedRequest({
-      hasCurrentClientAuthority: () => current,
-      revalidate: async () => {
-        if (!current) {
-          Object.assign(res, { writableEnded: true });
-          throw new Error("Unauthorized");
-        }
-      },
-    }),
-  );
-  vi.mocked(readBody).mockImplementationOnce(() => {
-    reading.resolve();
-    return body.promise;
-  });
-  const pending = handleEndpoint({}, res);
-  await reading.promise;
-  current = false;
-  body.resolve({ message: "must not execute" });
-  await expect(pending).resolves.toBeUndefined();
 });
 
 it("returns false when path does not match", async () => {

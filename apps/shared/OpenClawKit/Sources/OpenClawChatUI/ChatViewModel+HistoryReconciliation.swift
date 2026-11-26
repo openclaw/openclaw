@@ -358,22 +358,22 @@ extension OpenClawChatViewModel {
         return start..<end
     }
 
-    func hasCanonicalFinalMessageMatching(
+    func canonicalFinalMessageIndex(
         _ message: OpenClawChatMessage,
-        scope: RunMessageScope) -> Bool
+        scope: RunMessageScope) -> Int?
     {
-        guard let key = Self.finalMessageReconciliationKey(for: message) else { return false }
-        guard self.isCurrentSession(scope.session) else { return false }
+        guard let key = Self.finalMessageReconciliationKey(for: message) else { return nil }
+        guard self.isCurrentSession(scope.session) else { return nil }
         if let runId = Self.finalMessageRunID(for: message) {
-            return self.messages.contains { existing in
+            return self.messages.firstIndex { existing in
                 self.provisionalFinalMessagesByID[existing.id] == nil &&
                     Self.finalMessageRunID(for: existing) == runId
             }
         }
         let searchRange = Self.messageRange(after: scope.latestUserTurn, in: self.messages)
-        guard !searchRange.isEmpty else { return false }
+        guard !searchRange.isEmpty else { return nil }
 
-        return self.messages[searchRange].contains { existing in
+        return self.messages[searchRange].firstIndex { existing in
             self.provisionalFinalMessagesByID[existing.id] == nil &&
                 ChatPayloadDecoding.trimmedNonEmptyString(existing.transcriptRunID) == nil &&
                 Self.finalMessageReconciliationKey(for: existing) == key
@@ -741,15 +741,18 @@ extension OpenClawChatViewModel {
 
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let key = correlatedMessageIdentityKey(for: message, role: message.role) { return key }
+        // Retained history can have only a sequence. Scope the content key to its source
+        // so equal rows survive and results projected from one carrier stay distinct.
+        let sourcePrefix = Self.historySourceIdentity(for: message).map { "\($0)|" } ?? ""
         if message.isToolResult, ChatPayloadDecoding.trimmedNonEmptyString(message.toolCallId) != nil {
             // Parallel calls can return identical output at the carrier's timestamp.
-            return Self.messageIdentityKey(for: message).map { "\($0)|\(message.workRunID ?? "")" }
+            return Self.messageIdentityKey(for: message).map { "\(sourcePrefix)\($0)|\(message.workRunID ?? "")" }
         }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        return "\(message.role)|\(timestamp)|\(text)"
+        return "\(sourcePrefix)\(message.role)|\(timestamp)|\(text)"
     }
 }
 
@@ -868,6 +871,8 @@ extension OpenClawChatViewModel {
         decodedMessages: [OpenClawChatMessage]?) -> Bool
     {
         guard self.canApplyHistory(request) else { return false }
+        // A retained/cache-painted transcript is display, not evidence against a fresh empty page.
+        let preservingOptimisticLocalMessages = preservingOptimisticLocalMessages && !self.isShowingCachedTranscript
         self.applyHistoryReasoningLevel(payload.sessionInfo?.reasoningLevel)
         let replacingCanonicalHistory = replacingCanonicalHistory || request.replacingCanonicalHistory
         let isDelta = payload.kind == "delta"
@@ -942,6 +947,12 @@ extension OpenClawChatViewModel {
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
         })
         nextMessages = Self.dedupeMessages(nextMessages)
+        self.applyOlderHistoryBoundary(
+            payload,
+            page: canonical,
+            isDelta: isDelta,
+            replacingCanonicalHistory: replacingCanonicalHistory,
+            to: &nextMessages)
         self.historyRouteLocalUserEchoIDs.formIntersection(nextMessages.map(\.id))
         // An unchanged cursor is not a newer transcript projection. Incomplete reads must not fence
         // an older request that still owns a durable reply for the unanswered turn.
@@ -996,6 +1007,7 @@ extension OpenClawChatViewModel {
         // is written through so the next cold open pre-paints current rows.
         self.hasAppliedLiveHistory = true
         self.isShowingCachedTranscript = false
+        self.recordTranscriptPresentationTarget(from: payload, isDelta: isDelta)
         self.syncSessionReactions()
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.

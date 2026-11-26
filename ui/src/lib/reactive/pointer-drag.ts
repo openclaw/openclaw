@@ -15,7 +15,7 @@ type PointerDragSession = {
 };
 
 /** Own one pointer's capture and listeners; callers own admission, geometry, and commit policy. */
-export function createPointerDrag() {
+export function createPointerDrag(options?: { cancelOnEscape: boolean }) {
   let active: PointerDragSession | undefined;
   let disposed = false;
 
@@ -72,6 +72,23 @@ export function createPointerDrag() {
         listen(target, "lostpointercapture", (next) => owns(next) && finish()),
         listen(view, "blur", () => finish()),
       ];
+      if (options?.cancelOnEscape) {
+        // A sortable gesture handles Escape before the Settings shell's back shortcut.
+        current.stops.push(
+          listen(
+            target.ownerDocument,
+            "keydown",
+            (key) => {
+              if (key.key === "Escape") {
+                key.preventDefault();
+                key.stopPropagation();
+                finish();
+              }
+            },
+            true,
+          ),
+        );
+      }
       return true;
     },
   };

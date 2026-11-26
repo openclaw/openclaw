@@ -4,6 +4,8 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 export type FollowupReply = AgentWaitResult & { replyText?: string };
 type FollowupCustody = {
   run<T>(work: () => T): T;
+  /** Re-enters the sending turn's requester, when one was retained, for that person's next turn. */
+  runWithRequester<T>(work: () => Promise<T>): Promise<T>;
   assertCurrent(): void;
   signal: AbortSignal;
   release(): void;

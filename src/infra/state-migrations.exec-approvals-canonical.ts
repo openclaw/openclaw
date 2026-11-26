@@ -21,7 +21,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 function readRow(db: EngineConnection) {
   return executeSqliteQueryTakeFirstSync(

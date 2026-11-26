@@ -1,7 +1,7 @@
 ---
 summary: "Get OpenClaw installed and run your first chat in minutes."
 read_when:
-  - First time setup from zero
+  - First-time setup from zero
   - You want the fastest path to a working chat
 title: "Getting started"
 ---
@@ -164,6 +164,18 @@ openclaw dashboard
 
 </Accordion>
 
+## Pair your iPhone or iPad
+
+If you opened this guide from the iOS app, complete [Quick setup](#quick-setup)
+on your computer first. Then:
+
+1. [Set up secure access for your phone](/platforms/ios#quick-start-pair-+-connect).
+   A default Gateway listens only on its own computer, so it cannot create a
+   mobile setup code until your phone has a route to it.
+2. Once the Gateway is running and the Dashboard is connected, open **Nodes**.
+   On the **Devices** page, choose **Connect a device**, then **Create setup code**.
+3. Return to the OpenClaw app on your iPhone or iPad and tap **Scan QR**.
+
 ## If setup does not work
 
 One command turns the current state of your install into a diagnosis you can act on:
@@ -211,6 +223,7 @@ Full reference: [Environment variables](/help/environment).
 - [Channels overview](/channels)
 - [Setup](/start/setup)
 - [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
+- [Agents and Templates](/concepts/agents-and-templates) - when to give a job its own agent and how to share that agent as a Template
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)
 - [Get support](/help/support) - official OpenClaw support and reporting routes

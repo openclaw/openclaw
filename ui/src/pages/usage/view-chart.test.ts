@@ -295,6 +295,10 @@ describe("DailyChartCompact", () => {
         item.textContent?.trim(),
       ),
     ).toEqual(["Other83%", "OpenAI17%"]);
+    // Day two has only unattributed usage, not a provider's assigned hue.
+    expect(bars[1]?.querySelector<HTMLElement>(".cost-segment")?.style.background).toBe(
+      "var(--muted-strong)",
+    );
   });
 
   it("renders a range without cost as zero", () => {
@@ -324,8 +328,7 @@ describe("DailyChartCompact", () => {
       preset.click();
       flush();
       expect(onDatesChange.mock.calls.map(([patch]) => patch)).toEqual([
-        { startDate: "2026-05-08" },
-        { endDate: "2026-05-14" },
+        { startDate: "2026-05-08", endDate: "2026-05-14" },
       ]);
       expect([...container.querySelectorAll(".usage-presets button")]).toContain(preset);
       expect(document.activeElement).toBe(preset);

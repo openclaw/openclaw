@@ -1,8 +1,13 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
   name: string;
@@ -56,6 +61,75 @@ const parentEnv = {
   EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
 };
 const receiptOutput = "${{ steps.receipt.outputs.parent_approval }}";
+
+it("validates core parent authority with trusted tooling, never candidate code", () => {
+  const job = requireJob(core, coreValidation);
+  const root = tempDirs.make("release-trusted-approval-");
+  const sha = "a".repeat(40);
+  const branch = `release-publish/${sha.slice(0, 12)}-123`;
+  mkdirSync(join(root, "scripts"));
+  // Candidate code must not execute while admitting a release.
+  writeFileSync(
+    join(root, "scripts/validate-release-publish-approval.mjs"),
+    'throw new Error("candidate approval validator executed");\n',
+  );
+  writeFileSync(
+    join(root, "gh"),
+    `#!${process.execPath}\nconsole.log(process.env.PARENT_RUN_JSON);\n`,
+    { mode: 0o755 },
+  );
+  const env = {
+    ...process.env,
+    PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
+    GITHUB_ACTOR: "github-actions[bot]",
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    RELEASE_PUBLISH_RUN_ID: "123",
+    EXPECTED_RUN_ATTEMPT: "1",
+    EXPECTED_WORKFLOW_SHA: sha,
+    EXPECTED_WORKFLOW_BRANCH: branch,
+    APPROVAL_PATH: "",
+    ALLOW_COMPLETED_SUCCESSFUL_PARENT: "",
+  };
+  const parent = {
+    workflowName: "OpenClaw Release Publish [v2026.10.33]",
+    headBranch: branch,
+    headSha: sha,
+    event: "workflow_dispatch",
+    status: "in_progress",
+    conclusion: null,
+    runAttempt: 1,
+    repository: "openclaw/openclaw",
+    path: `.github/workflows/openclaw-release-publish.yml@refs/tags/${branch}`,
+  };
+  for (const step of job.steps) {
+    if (step.name === "Checkout trusted approval verifier") {
+      expect(step.with).toMatchObject({
+        ref: "${{ github.workflow_sha }}",
+        path: "trusted-workflow",
+        "sparse-checkout": "scripts",
+      });
+      symlinkSync(resolve("."), join(root, "trusted-workflow"), "junction");
+    }
+    if (step.name !== "Validate release publish approval run") {
+      continue;
+    }
+    const script = expectDefined(step.run, "parent approval script");
+    const run = (headSha: string) =>
+      spawnSync("bash", ["-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...env, PARENT_RUN_JSON: JSON.stringify({ ...parent, headSha }) },
+      });
+    const accepted = run(sha);
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(accepted.stdout).toContain("Using release publish approval run 123");
+    const rejected = run("b".repeat(40));
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain(`must use tooling SHA ${sha}`);
+    return;
+  }
+  throw new Error("Core workflow omitted parent approval validation");
+});
 
 it("attests and uploads the gated parent receipt before dispatching children", () => {
   const publish = requireJob("openclaw-release-publish", "publish");

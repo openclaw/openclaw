@@ -15,7 +15,6 @@ import { createMediaGenerateProviderListActionResult } from "./media-generate-to
 import {
   hasGenerationToolAvailability,
   hasGenerationToolAvailabilityAsync,
-  isCapabilityProviderConfigured,
   loadMediaToolReferences,
   resolveGenerateAction,
   resolveCapabilityModelConfigForTool,
@@ -264,7 +263,6 @@ describe("hasGenerationToolAvailability", () => {
       await hasGenerationToolAvailabilityAsync(params),
     ]).toEqual([expected, expected]);
     if (cfg && isConfigured) {
-      expect(isCapabilityProviderConfigured({ ...params, provider })).toBe(false);
       expect(await resolveCapabilityModelConfigForTool(params)).toBeNull();
     }
   });

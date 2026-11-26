@@ -1,6 +1,7 @@
 // The browser owns D and all request signatures; the Gateway only relays exact wire bytes.
 import {
   bytesToBase64url,
+  DEVICE_MAIL_REQUEST_TIMEOUT_MS,
   deviceMailRoute,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
@@ -29,9 +30,15 @@ export function readOwnerApprovalContext(client: GatewayBrowserClient) {
   });
 }
 
-/** Binds the original browser D for device mail without enrolling its transport-only W. */
-export async function createDeviceMail(client: GatewayBrowserClient, signal: AbortSignal) {
-  const context = await readOwnerApprovalContext(client);
+/**
+ * Binds the original browser D for device mail without enrolling its transport-only W.
+ * Each call goes through the reader's current client, so a reconnect keeps the binding.
+ */
+export async function createDeviceMail(
+  currentClient: () => GatewayBrowserClient,
+  signal: AbortSignal,
+) {
+  const context = await readOwnerApprovalContext(currentClient());
   const clawId = context.link.clawId;
   const signer = clawId ? await loadOwnerDeviceSigner(clawId) : undefined;
   const pub = signer ? formatEd25519PublicKey(signer.publicKey) : null;
@@ -39,7 +46,7 @@ export async function createDeviceMail(client: GatewayBrowserClient, signal: Abo
   if (!clawId || !signer || !own?.cert.body.caps.includes("approve_device")) {
     throw new Error("This browser does not hold an active owner device key.");
   }
-  const mail = signedDeviceMail(client, clawId, signer, own.cert, signal);
+  const mail = signedDeviceMail(currentClient, clawId, signer, own.cert, signal);
   const account = openClawIdAccount();
   if (!account) {
     throw new Error("Sign in with OpenClaw ID to approve another device.");
@@ -64,7 +71,7 @@ export async function createDeviceMail(client: GatewayBrowserClient, signal: Abo
 
 // Signs with D, keeping account credentials and exact body bytes out of Gateway persistence.
 function signedDeviceMail(
-  client: GatewayBrowserClient,
+  currentClient: () => GatewayBrowserClient,
   clawId: string,
   signer: StatementSigner,
   certificate: SignedStatement<"OwnerDeviceCert">,
@@ -84,7 +91,7 @@ function signedDeviceMail(
         signer,
       );
       signal.throwIfAborted();
-      const response = await client.request<{ status: number; body: string }>(
+      const response = await currentClient().request<{ status: number; body: string }>(
         "openclawId.authority",
         {
           action: "device_mail",
@@ -95,7 +102,7 @@ function signedDeviceMail(
           idToken: account.idToken,
           certificate,
         },
-        { timeoutMs: 30_000, signal },
+        { timeoutMs: DEVICE_MAIL_REQUEST_TIMEOUT_MS, signal },
       );
       signal.throwIfAborted();
       if (response.status < 200 || response.status >= 300) {

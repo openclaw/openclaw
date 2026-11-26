@@ -3,6 +3,13 @@ import Foundation
 import OpenClawKit
 import Speech
 
+struct TalkSpeechLanguageSelection: Equatable {
+    /// Provider synthesis accepts a two-letter language, while the system
+    /// voice accepts a BCP 47 locale. Keep both forms so fallback stays correct.
+    let provider: String?
+    let systemVoice: String?
+}
+
 enum TalkSpeechLocale {
     static let fallbackLocaleID = "en-US"
 
@@ -19,6 +26,20 @@ enum TalkSpeechLocale {
             ],
             fallbackLocaleID: fallbackLocaleID,
             supportedLocaleIDs: supportedLocaleIDs)
+    }
+
+    static func resolvedLanguages(
+        directiveLanguage: String?,
+        gatewaySelection: String?,
+        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
+        -> TalkSpeechLanguageSelection
+    {
+        TalkSpeechLanguageSelection(
+            provider: ElevenLabsTTSClient.validatedLanguage(directiveLanguage),
+            systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
+                directiveLanguage: directiveLanguage,
+                gatewaySelection: gatewaySelection,
+                isVoiceAvailable: isSystemVoiceAvailable))
     }
 
     static func resolvedSynthesisLocaleID(

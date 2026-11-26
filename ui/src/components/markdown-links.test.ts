@@ -5,6 +5,7 @@ import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   navigateMarkdownSession,
+  parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -636,6 +637,29 @@ describe("session navigation", () => {
       search: "?__openclawSessionFacePreference=1",
     });
   });
+  it("keeps the mounted public dashboard route, query and fragment from an older link", () => {
+    const options = { basePath: "/control", publicOrigin: "https://chat.example" };
+    const href =
+      "https://chat.example/control/chat?session=agent%3Aroboclaw%3Athread%3Aresearch&face=dashboard&view=full#latest";
+    const path = parseLocalMarkdownSessionUrl(href, options);
+    expect(path?.url.href).toBe(
+      "https://chat.example/control/dashboard/roboclaw/thread/research?view=full#latest",
+    );
+    expect(
+      parseLocalMarkdownSessionUrl(href.replace("chat.example", "other.example"), options),
+    ).toBeNull();
+  });
+  it("only claims a released link for an explicit session owner on this mount", () => {
+    const options = { basePath: "/control", mainKey: "home" };
+    const href = "/control/chat/?session=";
+    for (const key of ["", "home", "agent:research:"]) {
+      expect(parseLocalMarkdownSessionUrl(href + key, options)).toBeNull();
+    }
+    expect(parseLocalMarkdownSessionUrl("/chat?session=agent:research:home", options)).toBeNull();
+    expect(parseLocalMarkdownSessionUrl(href + "agent:research:home", options)?.url.pathname).toBe(
+      "/control/chat/research",
+    );
+  });
   it.each([
     ["click", "a"],
     [" ", "a"],
@@ -643,6 +667,7 @@ describe("session navigation", () => {
   ])("routes public-origin %s on %s before hovercard init", (action, tag) => {
     const runtimeConfig = { gateway: { publicOrigin: "https://CHAT.example:443/" } };
     const context = {
+      ...makeContext(),
       basePath: "/control",
       runtimeConfig: { state: { configSnapshot: { runtimeConfig } } },
     };

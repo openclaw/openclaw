@@ -31,7 +31,7 @@ it("projects retained SQLite facts and unknowns without reading stores or the fi
   const missingAgentDir = path.join(directory, "missing");
   using agent = openNodeSqliteDatabase(agentFile);
   agent.exec(`
-    CREATE TABLE schema_meta (version INTEGER);
+    CREATE TABLE schema_meta (version INTEGER, meta_key TEXT, role TEXT, schema_version INTEGER, agent_id TEXT);
     CREATE TABLE session_nodes (id TEXT);
     CREATE TABLE transcript_events (id TEXT);
     PRAGMA user_version = 28;

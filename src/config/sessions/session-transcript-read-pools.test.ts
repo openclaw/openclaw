@@ -176,7 +176,7 @@ it("captures renewed physical validation after queued read admission", async () 
         }),
       ]);
       // A preceding writer can renew the same file's proof while this reader is queued.
-      invalidateOpenClawAgentDatabaseValidation(database.path);
+      invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
       setOpenClawAgentDatabaseValidation(database);
       release.resolve();
       await expect(pending).resolves.toBe(true);

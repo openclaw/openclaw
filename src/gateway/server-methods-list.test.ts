@@ -12,7 +12,11 @@ const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 const descriptor = (name: string) => descriptors.find((entry) => entry.name === name);
 
 it.each([
+  ["skills.categories", "operator.read", { since: "2026.11" }],
+  ["projects.rename", "operator.admin", { since: "2026.11" }],
+  ["session.members.setAccess", "operator.write", { since: "2026.11" }],
   ["toolUsage.status", "operator.admin", { since: "2026.11" }],
+  ["openclaw.setup.options", "operator.admin", { since: "2026.11" }],
   [
     "toolUsage.import toolUsage.reset",
     "operator.admin",
@@ -71,14 +75,16 @@ it("keeps read-only methods outside the control-plane write budget", () => {
   }
 });
 
-it("preserves the legacy advertised prefix and appends the MCP catalog", () => {
+it("preserves the legacy advertised prefix and appends new methods", () => {
   const methods = listGatewayMethods();
   expect(methods.slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
     LEGACY_ADVERTISED_GATEWAY_METHODS,
   );
-  expect(methods.indexOf("mcp.events.list")).toBeGreaterThanOrEqual(
-    LEGACY_ADVERTISED_GATEWAY_METHODS.length,
-  );
+  for (const method of ["mcp.events.list", "session.members.setAccess"]) {
+    expect(methods.indexOf(method)).toBeGreaterThanOrEqual(
+      LEGACY_ADVERTISED_GATEWAY_METHODS.length,
+    );
+  }
 });
 
 it.each([

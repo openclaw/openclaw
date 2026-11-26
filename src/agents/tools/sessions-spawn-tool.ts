@@ -16,7 +16,6 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -27,6 +26,7 @@ import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js"
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import type { SpawnSubagentParams } from "../subagents/spawn/subagent-spawn-contract.js";
+import { resolveParticipationSpawnError } from "../subagents/spawn/subagent-spawn-participation.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -192,24 +192,14 @@ export function createSessionsSpawnTool(
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
-        // A retained owner bit is rechecked per call: a requester who stopped being an
-        // owner spawns as a non-owner, and one revoked mid-call refuses the commit.
-        let senderIsOwner = opts?.senderIsOwner;
-        let assertSenderOwner: (() => void) | undefined;
-        if (senderIsOwner === true && opts?.assertSenderOwnerCurrent) {
-          try {
-            opts.assertSenderOwnerCurrent();
-            assertSenderOwner = opts.assertSenderOwnerCurrent;
-          } catch {
-            senderIsOwner = false;
-          }
-        }
-        const assertSourceActive = composeSessionSourceAssertion([
-          assertSourceExecution,
-          operatorSelection.assertCurrent,
-          assertSenderOwner,
-        ]);
+        const senderIsOwner = opts?.senderIsOwner;
+        const assertSourceActive = composeSessionSourceAssertion(
+          [operatorSelection.assertCurrent, opts?.assertActive],
+          (assertSource) => {
+            executionSignal?.throwIfAborted();
+            assertSource();
+          },
+        );
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -230,6 +220,10 @@ export function createSessionsSpawnTool(
           ? captureCollectorSpawnGuard(tool, _toolCallId, assertSourceActive)
           : assertSourceActive;
         assertActive();
+        const participationError = resolveParticipationSpawnError(params, opts, requesterAgentId);
+        if (participationError) {
+          return jsonResult({ status: "forbidden", error: participationError });
+        }
         if (params.outputSchema !== undefined && !collect) {
           throw new ToolInputError('sessions_spawn "outputSchema" requires collect=true.');
         }

@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as jitiFactory from "./jiti-factory.js";
 import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
@@ -76,6 +77,7 @@ it.each([
       () =>
         withPluginCache(cache, async () => {
           const visit = vi.spyOn(sourceReferences, "visitPluginSourceReferences");
+          const createResolver = vi.spyOn(jitiFactory, "createJiti");
           const options = {
             activate: false,
             config: {
@@ -94,6 +96,7 @@ it.each([
           expect(record).toMatchObject({ origin: "bundled", status: "loaded" });
           if (mode === "async") {
             expect(visit).not.toHaveBeenCalled();
+            expect(createResolver).not.toHaveBeenCalled();
           } else {
             expect(visit).toHaveBeenCalled();
           }

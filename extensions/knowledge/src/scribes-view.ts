@@ -8,6 +8,7 @@ import {
   pluginStateText,
   scribeTile,
 } from "./scribe-dialog.js";
+import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import { runScribeNow, setScribePaused, startScribe, turnOffScribe } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./scribes-state.js";
 import {
   repair,
+  reschedule,
   settleUpdates,
   update,
   updateNotice,
@@ -39,7 +41,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
   attention: ["Needs attention", "scribe-chip-warn"],
-  paused: ["Paused", ""],
+  paused: ["Disabled", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
   missing: ["Conversation not found", "scribe-chip-warn"],
@@ -73,8 +75,7 @@ const listText = (items: string[]) =>
 const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? "" : "s"}`;
 
 /** Human schedule for a scribe automation; daily cron expressions read as a time of day. */
-function scheduleText(job: ScribeJob) {
-  const { schedule } = job;
+function scheduleText(schedule: ScribeJob["schedule"]) {
   if (schedule.kind === "cron" && schedule.expr) {
     // Daily ("M H * * *") and weekly ("M H * * D", one day 0-7) read as a time of day.
     const fields = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-7])$/.exec(schedule.expr.trim());
@@ -137,12 +138,12 @@ function activeMeta(snapshot: ScribeSnapshot) {
         : "Its conversation was deleted. Repair starts a new one.",
     );
   } else if (status === "paused") {
-    parts.push("Paused");
+    parts.push("Disabled");
   } else if (firstRunPending(snapshot)) {
-    parts.push("First run in progress");
+    parts.push(job?.state.runningAtMs ? "First run in progress" : "First run requested");
   }
   if (job && status !== "missing") {
-    parts.push(scheduleText(job));
+    parts.push(scheduleText(job.schedule));
     if (job.state.lastRunAtMs) {
       parts.push(`Last run ${when(job.state.lastRunAtMs)}`);
     }
@@ -216,14 +217,22 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     );
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
-  const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
+  let runs: ScribeRun[] = [];
+  let runError: string | undefined;
+  if (snapshot?.job) {
+    try {
+      runs = await loadRuns(host, snapshot.job, agentId);
+    } catch (error) {
+      runError = ui.errorText(error);
+    }
+  }
   if (!live(n)) {
     return;
   }
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
   s.scribesCountAgent = agentId;
   target.replaceChildren(
-    snapshot ? detail(ui, snapshot, runs, detection) : list(ui, snapshots, detection),
+    snapshot ? detail(ui, snapshot, runs, detection, runError) : list(ui, snapshots, detection),
   );
 }
 
@@ -239,7 +248,7 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
   firstRuns.add(job.id);
   try {
     await runScribeNow(ui.s.context.host, job);
-    ui.announce(`${snapshot.scribe.title}: first run started.`);
+    ui.announce(`${snapshot.scribe.title}: first run requested.`);
   } catch (error) {
     // Not started: forget it so the next load tries again and nothing shows it as running.
     firstRuns.delete(job.id);
@@ -283,13 +292,12 @@ function pageNames(ui: Page) {
 
 // Open the start dialog; a successful start shows the scribe's detail.
 function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
-  const { agentId, agentName, storeName } = pageNames(ui);
+  const { agentId, agentName } = pageNames(ui);
   const host = ui.s.context.host;
   const attempt = crypto.randomUUID();
   openStartDialog({
     scribe: snapshot.scribe,
     agentName,
-    storeName,
     detection,
     canWrite: host.connection.canWrite,
     basePath: host.basePath,
@@ -314,7 +322,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      `Scribes keep ${storeName} up to date on their own. Each one is a conversation you own that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
+      `Scribes keep ${storeName} up to date on their own. Each one uses a conversation that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
       "scribes-intro",
     ),
   );
@@ -341,7 +349,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      "Scribes run as you, with your private access, and use your agent’s default model. Ongoing scribes also appear on the Automations page.",
+      "Ongoing scribes also appear on the Automations page.",
       "knowledge-muted scribes-footnote",
     ),
   );
@@ -449,7 +457,13 @@ function runText(run: ScribeRun) {
   return run.summary ? statusFromText(run.summary)?.summary || run.summary : "Finished";
 }
 
-function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection: ScribeDetection) {
+function detail(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  runs: ScribeRun[],
+  detection: ScribeDetection,
+  runError?: string,
+) {
   const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
@@ -500,7 +514,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   };
   if (job && status !== "missing") {
     actions.append(
-      control("Run now", () => runScribeNow(host, job), `${scribe.title} is running.`),
+      control("Run now", () => runScribeNow(host, job), `Run requested for ${scribe.title}.`),
     );
   }
   if (session && !session.archived) {
@@ -528,23 +542,25 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     const paused = !job.enabled;
     actions.append(
       control(
-        paused ? "Resume" : "Pause",
+        paused ? "Enable" : job.state.runningAtMs ? "Stop and disable" : "Disable",
         () => setScribePaused(host, job, !paused),
-        paused ? `${scribe.title} resumed.` : `${scribe.title} paused.`,
+        paused
+          ? `Automation enabled for ${scribe.title}.`
+          : `Automation disabled for ${scribe.title}.`,
       ),
     );
   }
   if (job) {
     const turnOff = button(
-      "Turn off…",
+      "Remove automation…",
       () =>
         openConfirmDialog(
-          `Turn off ${scribe.title}?`,
-          `Its automation is removed and it stops running. The conversation ${scribeLabel(scribe)} is kept, so you can still read what it did.`,
-          "Turn off",
+          `Remove the automation for ${scribe.title}?`,
+          `Its automation is removed and any active run is asked to stop. The conversation ${scribeLabel(scribe)} is kept, so you can still read what it did.`,
+          "Remove automation",
           async () => {
             await turnOffScribe(host, job);
-            ui.announce(`${scribe.title} turned off.`);
+            ui.announce(`Automation removed for ${scribe.title}.`);
             void ui.load();
           },
         ),
@@ -573,14 +589,35 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   const lastRun = runs[0];
   const facts: [string, string | Node][] = [["Status", statusValue]];
   if (job) {
+    const scheduleValue = el("span", scheduleText(job.schedule), "scribe-status");
+    if (status !== "missing") {
+      const change = button(
+        "Change…",
+        () =>
+          openScheduleDialog({
+            scribe,
+            schedule: job.schedule,
+            describe: scheduleText,
+            save: async (next) => {
+              await reschedule(ui, snapshot, job, agentId, next);
+              void ui.load();
+            },
+          }),
+        "knowledge-quiet knowledge-small",
+      );
+      change.setAttribute("aria-label", "Change schedule");
+      // One turn changes the automation at a time.
+      change.disabled = !canWrite || Boolean(updateState(ui, job));
+      scheduleValue.append(change);
+    }
     facts.push(
-      ["Schedule", scheduleText(job)],
+      ["Schedule", scheduleValue],
       [
         "Next run",
         job.state.runningAtMs
           ? "Running now"
           : !job.enabled
-            ? "Paused"
+            ? "Disabled"
             : job.state.nextRunAtMs
               ? when(job.state.nextRunAtMs)
               : "Not scheduled",
@@ -619,7 +656,12 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   const readiness = neededPluginState(scribe, detection);
   if (scribe.plugin && readiness) {
     const value = el("span", undefined, "scribe-status");
-    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
+    const tokens = scribe.plugin.channel && detection.tokens?.[scribe.plugin.id];
+    const tokenText = [
+      tokens?.bot === false ? "no bot token" : "",
+      tokens?.user === undefined ? "" : tokens.user ? "user token configured" : "no user token",
+    ].filter(Boolean);
+    value.append(el("span", [pluginStateText(scribe.plugin, readiness), ...tokenText].join(" · ")));
     if (readiness !== "ready") {
       value.append(
         pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),
@@ -667,9 +709,21 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     line.append(el("time", when(run.runAtMs ?? run.ts)), el("span", runText(run)), end);
     rows.append(line);
   }
-  if (!runs.length && firstRunPending(snapshot)) {
+  if (runError !== undefined) {
+    const failure = el(
+      "p",
+      `Could not load recent runs. Reopen this scribe to try again. ${runError}`,
+      "scribe-empty knowledge-error",
+    );
+    failure.setAttribute("role", "alert");
+    rows.append(failure);
+  } else if (!runs.length && firstRunPending(snapshot)) {
     const line = el("div", undefined, "scribe-run");
-    line.append(el("time", "First run"), el("span", "Running now"), el("span"));
+    line.append(
+      el("time", "First run"),
+      el("span", job?.state.runningAtMs ? "Running now" : "Run requested"),
+      el("span"),
+    );
     rows.append(line);
   } else if (!runs.length && snapshot.result) {
     const line = el("div", undefined, "scribe-run");
@@ -680,7 +734,9 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     rows.append(
       el(
         "p",
-        job ? "No runs yet." : "No result yet. Open the conversation to follow along.",
+        job
+          ? "No recent run history available."
+          : "No result yet. Open the conversation to follow along.",
         "scribe-empty knowledge-muted",
       ),
     );

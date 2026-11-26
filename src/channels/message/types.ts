@@ -339,8 +339,8 @@ export type ChannelMessageDurableFinalAdapter = {
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
   automaticUnknownSendReconciliation?: boolean;
   /**
-   * Resend an ordinary agent final text once after an ambiguous transport failure,
-   * accepting a rare duplicate over a lost reply.
+   * @deprecated Ignored. Core resends an ordinary agent final text once after an unconfirmed
+   * send on every channel whose adapter cannot reconcile it.
    */
   replayAmbiguousFinalText?: boolean;
   /** Recognize inert channel metadata without admitting controls or side effects. */

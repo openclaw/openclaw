@@ -87,3 +87,5 @@ export { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";
+
+export { observeConnection as observeSqliteConnection } from "../infra/database-engine/observation.js";

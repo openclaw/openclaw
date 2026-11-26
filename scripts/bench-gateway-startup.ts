@@ -1603,7 +1603,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
                 visibility: "shared",
                 ...(benchCase.restartSessions && agentId === STARTUP_RESUME_AGENT
                   ? index < benchCase.restartSessions
-                    ? { resumeAfterRestart: { queuedInputIds: [] } }
+                    ? { resumeAfterRestart: {} }
                     : index < benchCase.restartSessions + STARTUP_RESUME_SKIPPED
                       ? { lifecycleRunId: `synthetic-stale-${index}`, startedAt: now - 86_400_000 }
                       : {}

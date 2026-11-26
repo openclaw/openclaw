@@ -26,7 +26,12 @@ export type OwnerDeviceLookup = (devicePub: Ed25519PublicKey) => OwnerCapability
 /** A listed member's account and peer key, looked up by its signing key D. */
 export type MemberDeviceLookup = (
   devicePub: Ed25519PublicKey,
-) => { account_id: string; peer_key: IrohEndpointKey } | undefined;
+) =>
+  | (
+      | { account_id: string; peer_key: IrohEndpointKey; recovery_only?: false }
+      | { account_id: string; recovery_only: true }
+    )
+  | undefined;
 
 /** Verifier inputs that are not part of the statement. */
 export type VerifyOptions = {
@@ -49,6 +54,7 @@ export type Authority =
       device_pub: Ed25519PublicKey;
       peer_key: IrohEndpointKey;
     }
+  | { kind: "member_recovery_kit"; account_id: string; device_pub: Ed25519PublicKey }
   | { kind: "gateway" }
   | { kind: "self" };
 
@@ -152,7 +158,22 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
       // SAFETY: the statement type fixes its validated body.
       const op = (statement as SignedStatement<"MembershipChange">).body.target.op;
       const member = options.members?.(statement.signer);
-      if (member && (op === "add_member_device" || op === "revoke_device")) {
+      if (member?.recovery_only && op === "add_member_device") {
+        return {
+          ok: true,
+          statement,
+          authority: {
+            kind: "member_recovery_kit",
+            account_id: member.account_id,
+            device_pub: statement.signer,
+          },
+        };
+      }
+      if (
+        member &&
+        !member.recovery_only &&
+        (op === "add_member_device" || op === "revoke_device" || op === "set_member_recovery_kit")
+      ) {
         return {
           ok: true,
           statement,

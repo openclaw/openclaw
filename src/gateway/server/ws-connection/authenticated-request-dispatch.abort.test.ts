@@ -223,6 +223,32 @@ describe("authenticated WebSocket request cancellation", () => {
     },
   );
 
+  it.each([
+    ["after the connection closed", true],
+    ["while the connection is open", false],
+  ] as const)("logs a handler failure %s at the matching level", async (_state, disconnect) => {
+    const { client, dispatcher, logGateway, awaitResponseFrame } = createDispatcher(controlUi);
+    const connection = new AbortController();
+    client.connectionSignal = connection.signal;
+    const gate = createRequestGate();
+    handleGatewayRequest.mockImplementation(async () => {
+      await gate.wait();
+      throw new Error("Gateway requester profile changed");
+    });
+    const dispatch = dispatcher.dispatch(requestFrame("catalog", "models.list"), client);
+    await gate.during(dispatch, () => {
+      if (disconnect) {
+        connection.abort();
+      }
+    });
+    expect(logGateway.error).toHaveBeenCalledTimes(disconnect ? 0 : 1);
+    expect(logGateway.debug).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+    expect(await awaitResponseFrame("catalog")).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "Error: Gateway requester profile changed" },
+    });
+  });
+
   it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
     const { registry, frames, waitForFrameCount, complete } = createPairedNode();
     const guest = createDispatcher(controlUi);

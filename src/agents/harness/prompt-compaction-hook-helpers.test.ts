@@ -13,7 +13,7 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { enqueuePluginNextTurnInjection } from "../../plugins/host-hook-state.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { withAgentPromptProjects } from "../prompt-projects.js";

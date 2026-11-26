@@ -23,17 +23,10 @@ extension OpenClawChatViewModel {
             return nil
         }
         switch evt {
+        case .personalPinsChanged:
+            break // The Mac sidebar owner refreshes in handleSidebarEvent.
         case let .health(ok):
-            let reconnected = ok && !self.healthOK
-            applyTransportHealth(ok)
-            if reconnected {
-                self.refreshAfterHealthRecovery()
-            } else if !ok {
-                self.sourcePreviewState.invalidate()
-                self.invalidateAgentCatalog()
-                self.modelAvailabilityIsSessionScoped = false
-                self.invalidateComposerCapabilities()
-            }
+            self.handleTransportHealth(ok)
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
@@ -105,6 +98,19 @@ extension OpenClawChatViewModel {
             }
         }
         return nil
+    }
+
+    private func handleTransportHealth(_ ok: Bool) {
+        let reconnected = ok && !self.healthOK
+        applyTransportHealth(ok)
+        if reconnected {
+            self.refreshAfterHealthRecovery()
+        } else if !ok {
+            self.sourcePreviewState.invalidate()
+            self.invalidateAgentCatalog()
+            self.modelAvailabilityIsSessionScoped = false
+            self.invalidateComposerCapabilities()
+        }
     }
 
     /// Transcript recovery gets the first round trip. A newer reconnect replaces
@@ -345,9 +351,14 @@ extension OpenClawChatViewModel {
         }
         var updated = self.sessions
         updated[index] = merged
-        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData != nil {
+            self.sessions = updated // Preserve live membership order across this field-only write.
+            updated = self.sessions // Only cache rows accepted by the roster owner.
+        }
+        let organized = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData == nil { self.sessions = organized }
         self.persistSessionsToCache(
-            self.sessions,
+            organized,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
         return true
     }
@@ -640,7 +651,7 @@ extension OpenClawChatViewModel {
         let decoded = chat.message.flatMap {
             try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)
         }
-        let message = if let decoded,
+        var message = if let decoded,
                          Self.isAssistantMessage(decoded)
         {
             Self.messageWithTimestampIfNeeded(decoded)
@@ -664,13 +675,23 @@ extension OpenClawChatViewModel {
             return
         }
 
-        if hasCanonicalFinalMessageMatching(message, scope: scope) {
+        if let index = canonicalFinalMessageIndex(message, scope: scope) {
             if let runId {
+                // Correlate only after the canonical match, preserving its durable row identity.
+                // The final row must share the live run's reading-position key regardless of arrival order.
+                if self.messages[index].workRunID == nil {
+                    var updated = self.messages
+                    updated[index].transcriptRunID = runId
+                    replaceMessages(updated)
+                }
                 self.runMessageScopesByRunID.removeValue(forKey: runId)
             }
             return
         }
 
+        // Only the provisional row joins its live run (reading position and grouping). Stamping before
+        // the canonical checks made a run-less canonical session message look foreign: duplicate reply.
+        if message.workRunID == nil { message.transcriptRunID = runId }
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])
         replaceMessages(Self.dedupeMessages(reconciled))
         if self.messages.contains(where: { $0.id == message.id }) {
@@ -795,7 +816,7 @@ extension OpenClawChatViewModel {
             if let text = evt.data["text"]?.value as? String {
                 self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                self.updateStreamingAssistantText(text)
+                self.updateStreamingAssistantText(text, runID: evt.runId)
             }
         case "plan":
             // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".

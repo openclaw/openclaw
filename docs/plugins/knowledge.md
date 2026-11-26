@@ -1,5 +1,5 @@
 ---
-summary: "Knowledge: an evidence-backed knowledge vault, memory provider, and Control UI explorer for OpenClaw agents"
+summary: "Knowledge: an evidence-backed Markdown vault, memory provider, Scribes, and Control UI explorer for OpenClaw agents"
 read_when:
   - You want agents to remember decisions, preferences, people, and projects with retained source evidence
   - You are choosing between memory-core, memory-wiki, and Knowledge
@@ -8,14 +8,101 @@ read_when:
 title: "Knowledge"
 ---
 
-`knowledge` is a bundled plugin that gives each agent an evidence-backed knowledge
-vault. Agents save pages, claims, and typed relationships as Markdown files with
-retained source evidence. The Control UI has a read-only explorer for them. Knowledge
-is also a memory provider: when it owns the memory slot, the agent's memory prompt,
-recall, and pre-compaction flush use the vault.
+Knowledge is a bundled memory provider that gives your agents a linked,
+evidence-backed Markdown vault for people, organizations, projects, decisions,
+commitments, and source documents. Unlike flat notes, every saved claim and
+relationship keeps its supporting source excerpt, every change is journaled with
+automatic local Git checkpoints, and you can inspect everything in a read-only
+**Knowledge** explorer and project **Timeline** inside the Control UI.
 
-Knowledge ships with OpenClaw but stays off until you select it as the memory
-provider.
+Knowledge ships with OpenClaw and stays off until you select it as the memory
+provider. Switching takes one config line, hot-reloads without a Gateway
+restart, and leaves your existing `memory-core` files untouched.
+
+## What Knowledge does
+
+When Knowledge owns the memory slot, it replaces flat memory files with a
+structured vault that your agent reads, updates, and cites automatically:
+
+- **Typed Markdown records with retained evidence:** Pages (people, companies,
+  projects, concepts, sources), claims (facts, preferences, decisions,
+  commitments, events, beliefs), and typed relationships are stored as plain
+  YAML-frontmatter Markdown files with hash-verified source excerpts.
+- **Control UI explorer and project Timelines:** Browse and search your vault
+  from the **Knowledge** sidebar page, inspect entity **Timelines** (one dated
+  row per source with claim counts), follow backlinks, and open the chat side
+  panel to see which records the agent read or updated in the current
+  conversation.
+- **Scribes for ongoing capture:** Start built-in [Scribes](/plugins/knowledge/scribes)
+  from the **Scribes** tab to learn from conversations, ingest Granola meetings
+  or Slack channels, import existing `memory-core` notes and Dreams (`DREAMS.md`),
+  or run scheduled claim consolidation.
+- **Automatic recall and optional recall gate:** Agents get a compact standing
+  index of active pages and recent unfiled claims, can inject owner-approved
+  summaries (`knowledge_recall`), and can optionally enable a Decision-model
+  [recall gate](/plugins/knowledge/memory-provider#recall-gate) (starting in
+  `shadow` mode so you can inspect scores before going `live`; note that the
+  chosen Decision provider receives the user message and shortlisted page
+  excerpts or labels).
+- **History-preserving corrections and local Git checkpoints:** Revise,
+  supersede, withdraw, or merge duplicate records without erasing history, and
+  rely on automatic local Git commits inside each vault whenever `git` is
+  available.
+
+## Turn it on in one minute
+
+Select Knowledge for the memory slot in your OpenClaw configuration:
+
+```json5
+{
+  plugins: {
+    slots: {
+      memory: "knowledge",
+    },
+  },
+}
+```
+
+That single change is enough:
+
+- **Hot reload, no restart required:** Slot changes reload the plugin runtime
+  without restarting the Gateway, and active turns hand over cleanly at their
+  next model step.
+- **Zero data loss:** Selecting Knowledge does not migrate, modify, or delete
+  your existing `memory-core` data. Switching back later leaves your Knowledge
+  vault intact.
+- **Immediate UI access:** Open **Knowledge** in the Control UI sidebar right
+  away (no **Custom plugin UI** Labs flag needed). To import your old notes,
+  open **Knowledge → Scribes** and run **Learn from Memory** once.
+
+## Everyday workflows
+
+Once enabled, you mostly interact with Knowledge through ordinary conversation
+and the **Knowledge** page in the Control UI:
+
+- **Capture decisions and preferences as you work:** Tell your agent _"Remember
+  that we chose Postgres over SQLite for the billing service"_ or let it save
+  final decisions, commitments, and preferences automatically before its final
+  reply and before session compaction.
+- **Keep your vault current with Scribes:** Open **Knowledge → Scribes** to
+  turn on **Learn from conversations** (once or daily), **Learn from Granola**
+  (meetings and transcripts), **Learn from Slack** (channels and threads),
+  **Learn from Memory** (one-time import of `MEMORY.md`, daily notes, and
+  `DREAMS.md`), or **Knowledge Consolidation** (weekly or nightly linking and
+  page cleanup).
+- **Explore projects and timelines:** Open **Knowledge** in the sidebar to
+  search by keyword, view entity pages with linked claims and dated
+  **Timelines**, download retained original files, or click **Ask** on any
+  record to start a chat with the exact record ID and revision attached.
+- **Correct the record without losing history:** When a decision changes or two
+  people pages turn out to be duplicates, ask the agent to correct, supersede,
+  withdraw, or merge them. Originals and prior revisions stay inspectable in
+  revision history and local Git.
+- **Share a vault across agents (optional):** Each agent gets its own isolated
+  store by default. Add a named entry under
+  `plugins.entries.knowledge.config.stores` (or use **Settings → Stores &
+  sharing** in the Control UI) to let multiple agents share one vault while
+  preserving per-agent authorship.
 
 ## How it relates to other memory plugins
 
@@ -257,6 +344,28 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 `true`. It uses the plugin service scheduler, not OpenClaw automations.
 
 See [Maintenance](/plugins/knowledge/maintenance).
+
+## Lean resource policy
+
+With the Gateway's `lean` resource profile, Knowledge starts its registry,
+storage and maintenance initialization on first use rather than service startup.
+Use includes a tool call, a provider/readiness request, or a prompt hook that
+needs store facts; it is not limited to explicit human tool calls. Provisioning
+and access rules are unchanged.
+
+Watched storage stays resident so external edits keep notifying viewers across
+idle periods. Unwatched storage retires after 60 seconds with its whole operation
+lane settled, not between chunks of an upload. The registry retires after 60
+seconds with no pending RPCs. Later demand waits for retirement to finish and
+reopens the worker; the first call is slower than a warm call.
+
+Stop/restart joins maintenance initialization, active passes and schedule
+persistence. On the next first use, maintenance loads its saved schedule and
+catches up a missed pass. After activation, maintenance may visit every ready
+configured store, including stores not otherwise used during that lifetime.
+An unused lean service therefore does not run maintenance until first use.
+`standard` retains eager maintenance initialization and resident worker lifetimes.
+Knowledge does not share the core worker host.
 
 ## Scribes
 

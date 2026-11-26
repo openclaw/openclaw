@@ -257,11 +257,11 @@ uses each model's `vendor`. This does not infer a family for opaque deployments 
 other compatible hosts. The family appears on `models.list` rows and in the
 [requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
 
-Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `runtime` when OpenClaw must load provider runtime to know the list; manifest rows then only seed the picker until the listing publishes. `refreshable` is accepted and behaves exactly like `runtime`.
+Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `runtime` when OpenClaw must load provider runtime to know the list; the account listing is then the only source of which models exist, and manifest rows (with hosted catalog rows) only describe the models it lists. `refreshable` is accepted and behaves exactly like `runtime`.
 
 The Gateway saves each accepted runtime listing in the agent database. After a restart or plugin reload, those rows are available before discovery runs again. A failed listing, including an ended sign-in, keeps them, and the picker marks them unavailable with the reason; a successful listing replaces them.
 
-After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
+After a provider gains credentials, list and picker surfaces show its declared manifest rows at once only when the manifest is its list (`static` or no declaration). A `runtime` or `refreshable` provider lists its saved listing, or no models while its first listing is pending (`pendingProviders`) or after it fails; a model the listing omits is never listed, including on the Gateway's first read after start. Typed references to an unlisted model still resolve and run.
 
 Default picker views honor that replacement rather than re-adding static fallback
 rows. Explicitly configured rows and retained current selections remain listed.

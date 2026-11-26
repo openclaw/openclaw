@@ -1,13 +1,21 @@
 import ConcurrencyExtras
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 struct MacNodeConnectionStatusTests {
     @Test
     func `unchanged provider retains route and changed options retire connected identity`() async throws {
+        let stateDirectory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            try await self.runConnectionScenario()
+        }
+    }
+
+    private func runConnectionScenario() async throws {
         let entered = AsyncTestGate()
         let release = AsyncTestGate()
         let count = LockIsolated(0)

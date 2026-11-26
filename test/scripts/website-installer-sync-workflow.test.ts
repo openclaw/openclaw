@@ -8,8 +8,16 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
-type Step = { id?: string; name?: string; if?: string; run?: string; with?: { script?: string } };
+type Step = {
+  id?: string;
+  name?: string;
+  if?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: { script?: string };
+};
 const config = parse(workflow) as {
+  concurrency: { "cancel-in-progress": string };
   jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
 };
 const scopedJobs = Object.keys(config.jobs).filter(
@@ -29,6 +37,38 @@ function shell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: { PATH: process.env.PATH, HOME: root, BASH_ENV: "", ENV: "", ...env },
   });
+}
+
+function publicationFixture() {
+  const root = tempDirs.make("installer-publication-");
+  const work = path.join(root, "work");
+  mkdirSync(work);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: work,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    }).trim();
+  const write = (file: string, content: string) => {
+    mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+    writeFileSync(path.join(work, file), content);
+  };
+  git("init", "--bare", "--quiet", path.join(root, "remote.git"));
+  git("init", "--quiet", "--initial-branch=main");
+  git("remote", "add", "origin", path.join(root, "remote.git"));
+  write("scripts/install.sh", "old source\n");
+  write("public/install.sh", "old installer\n");
+  write("README.md", "website\n");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "base");
+  git("push", "--quiet", "origin", "HEAD:main");
+  return { root: work, git, write, base: git("rev-parse", "HEAD") };
 }
 
 describe("website installer sync workflow", () => {
@@ -126,6 +166,112 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
     expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
     expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
   });
+
+  it("authenticates the website build's GitHub release lookup", () => {
+    const build = config.jobs["sync-website"]?.steps.find(
+      (step) => step.name === "Verify website with synced installers",
+    );
+    expect(build?.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
+  });
+});
+
+describe("installer PR publication", () => {
+  it.each(["push", "workflow_dispatch", "pull_request"])(
+    "keeps in-flight publication alive for %s events",
+    (eventName) => {
+      const expression = config.concurrency["cancel-in-progress"].replace(
+        /^\$\{\{\s*|\s*\}\}$/gu,
+        "",
+      );
+      const cancel = compileFunction(`return (${expression});`, ["github"])({
+        event_name: eventName,
+      });
+      expect(cancel).toBe(eventName === "pull_request");
+    },
+  );
+
+  it.each([
+    { file: "scripts/install.sh", allowed: false },
+    { file: "README.md", allowed: true },
+  ])(
+    "admits delayed source only when installer inputs stayed current: $file",
+    ({ file, allowed }) => {
+      const fixture = publicationFixture();
+      fixture.write(file, "new source\n");
+      fixture.git("add", file);
+      fixture.git("commit", "--quiet", "-m", "new main");
+      fixture.git("push", "--quiet", "origin", "HEAD:main");
+      const result = shell(
+        fixture.root,
+        stepRun("sync-website", "Admit current installer source"),
+        {
+          GITHUB_SHA: fixture.base,
+        },
+      );
+      expect(result.status === 0, result.stderr).toBe(allowed);
+    },
+  );
+
+  it.each(["merged", "uncertain merge", "pending", "moved", "wrong payload"])(
+    "requires the validated tree and an actual merged PR: %s",
+    (scenario) => {
+      const fixture = publicationFixture();
+      fixture.git("checkout", "--quiet", "-b", "automation/installer-sync");
+      fixture.write("public/install.sh", "validated installer\n");
+      fixture.git("add", ".");
+      fixture.git("commit", "--quiet", "-m", "installer update");
+      const validatedTree = fixture.git("rev-parse", "HEAD^{tree}");
+      if (scenario === "wrong payload") {
+        fixture.write("public/install.sh", "unvalidated installer\n");
+        fixture.git("add", ".");
+        fixture.git("commit", "--quiet", "-m", "changed payload");
+      }
+      const head = fixture.git("rev-parse", "HEAD");
+      fixture.git("push", "--quiet", "origin", "HEAD:automation/installer-sync");
+      const result = shell(
+        fixture.root,
+        `sleep() { :; }
+gh() {
+  if [[ "$1 $2" == "pr merge" ]]; then
+    [[ "$*" == *"--squash --match-head-commit $PR_HEAD" ]] || return 64
+    git checkout --quiet main
+    git merge --squash "$PR_HEAD"
+    git -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit --quiet -m "squash fixture"
+    git push --quiet origin HEAD:main
+    if [[ "$SCENARIO" == "uncertain merge" ]]; then return 1; fi
+  elif [[ "$*" == *"headRefOid,mergeStateStatus,state"* ]]; then
+    if [[ "$SCENARIO" == moved ]]; then
+      printf 'moved-head\\tCLEAN\\tOPEN\\n'
+    elif [[ "$SCENARIO" == pending ]]; then
+      printf '%s\\tBLOCKED\\tOPEN\\n' "$PR_HEAD"
+    else
+      printf '%s\\tCLEAN\\tOPEN\\n' "$PR_HEAD"
+    fi
+  elif [[ "$*" == *"headRefOid,state,mergeCommit"* ]]; then
+    remote=$(git rev-parse origin/main)
+    if [[ "$(git rev-parse "$remote^{tree}")" == "$VALIDATED_TREE" ]]; then
+      printf '%s\\tMERGED\\t%s\\n' "$PR_HEAD" "$remote"
+    else
+      printf '%s\\tOPEN\\t\\n' "$PR_HEAD"
+    fi
+  else
+    return 65
+  fi
+}
+${stepRun("sync-website", "Merge and verify installer sync")}`,
+        { PR_NUMBER: "1", PR_HEAD: head, VALIDATED_TREE: validatedTree, SCENARIO: scenario },
+      );
+      const merged = scenario === "merged" || scenario === "uncertain merge";
+      expect(result.status === 0, result.stderr).toBe(merged);
+      if (merged) {
+        expect(fixture.git("rev-parse", "origin/main")).not.toBe(head);
+        expect(fixture.git("rev-parse", "origin/main^{tree}")).toBe(validatedTree);
+        expect(result.stdout).toContain("Verified installer sync:");
+      } else {
+        expect(fixture.git("rev-parse", "origin/main")).toBe(fixture.base);
+      }
+    },
+  );
 });
 
 describe("installer platform admission", () => {

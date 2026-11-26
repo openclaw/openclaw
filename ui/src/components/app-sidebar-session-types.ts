@@ -94,8 +94,6 @@ export type SidebarToolActivity = {
 
 export type SidebarRecentSession = Readonly<{
   key: string;
-  /** Visible occurrence for range selection; never a Gateway/session identity. */
-  selectionKey?: string;
   agentId?: string;
   sessionId?: string;
   displayName?: string;
@@ -121,6 +119,7 @@ export type SidebarRecentSession = Readonly<{
   visuallyActive: boolean;
   hasActiveRun: boolean;
   backgroundProcessCount?: number;
+  subagentRunState?: GatewaySessionRow["subagentRunState"];
   /** Defaults to logical activity for rows without a live activity projection. */
   isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
@@ -200,8 +199,6 @@ export type SidebarRecentSession = Readonly<{
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
-  runtimeMs?: number;
-  runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
   /** Detail queries retain their original parents when hidden runs are skipped. */
   childLoadParentKeys?: readonly string[];
@@ -239,6 +236,23 @@ export type SidebarSessionHovercardRow = Pick<
   | "workContext"
 > &
   Partial<Pick<SidebarRecentSession, "attention">>;
+
+/**
+ * A child shows its parent as working while its own run is visible, or while it is a
+ * yielded subagent waiting on its own command. Processes left by an ended or idle child
+ * stay on that child's row.
+ */
+export function childShowsParentWorking(
+  child: Pick<
+    SidebarRecentSession,
+    "isRunVisuallyActive" | "hasActiveRun" | "backgroundProcessCount" | "subagentRunState"
+  >,
+): boolean {
+  return (
+    (child.isRunVisuallyActive ?? child.hasActiveRun) ||
+    (child.subagentRunState === "paused" && (child.backgroundProcessCount ?? 0) > 0)
+  );
+}
 
 export const enum RowVisibilityReason {
   Any = 0,
@@ -586,15 +600,39 @@ export function sessionCatalogHostKey(catalogId: string, hostId: string): string
   return `${catalogId}\u0000${hostId}`;
 }
 
-/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
+export type SidebarSavedPinTime = (
+  row: Pick<GatewaySessionRow, "key" | "snoozedUntil">,
+) => number | undefined;
+
+function isVisibleSavedPin(row: SidebarRecentSession, now: number): boolean {
+  // Snapshots preserve display eligibility but never restore mutation authority.
+  const pinnable = row.snapshot ? row.snapshot.pinnable !== false : row.pinnable;
+  return pinnable && row.archived !== true && !isSessionSnoozed(row, now);
+}
+
+/** Suppress the ordinary row only while its saved pin is visible. */
 export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
+  row: SidebarRecentSession,
   pinnedKeys: ReadonlySet<string>,
+  now: number,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
+  return pinnedKeys.has(row.key) && isVisibleSavedPin(row, now);
 }
 
 export type SidebarPinZone = {
   entries: readonly SidebarZoneEntry[];
   sessionRows: ReadonlyMap<string, SidebarRecentSession>;
 };
+
+/** Rendering and selection share visibility for saved personal references. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  now = Date.now(),
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && isVisibleSavedPin(row, now) && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}

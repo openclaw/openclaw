@@ -33,6 +33,10 @@ Open **Knowledge** from the Control UI sidebar.
 - An agent selector chooses whose effective store to view. It changes only what
   you see; it does not change membership or create a store.
 
+**Original file** downloads a retained source. When the browser offers a save
+picker, the completion message waits for the file write to finish. Otherwise,
+OpenClaw hands the file to browser downloads; check there to confirm it was saved.
+
 **Settings** has four sections:
 
 | Section          | Shows                                                                                                                                                   |
@@ -90,8 +94,10 @@ bodies keep using portable wikilinks.
 The **Knowledge** chat side panel lists records the agent found, read, or changed
 in the current conversation. Open it from the host's side-panel controls. Each
 card shows the title, action, and time. Filter All, Reads, or Writes, switch the
-order, load earlier entries, and select a card for a read-only preview. **Open
-full page** opens the record on the Knowledge page.
+order, load earlier entries, and select a card for a read-only preview. **Back
+to activity** returns to the event you selected, even while the preview is
+loading or after you follow a link to another record. **Open full page** opens
+the displayed record on the Knowledge page.
 
 - Provenance comes only from host tool context: agent, session key, session
   incarnation, and tool-call ID. Tool inputs cannot set it.

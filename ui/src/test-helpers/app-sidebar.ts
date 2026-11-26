@@ -342,6 +342,13 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
       return scopedSessions!.refreshList(options);
     },
+    wakeList(scope: Parameters<SessionCapability["wakeList"]>[0]) {
+      if (usesPrimarySessionList(scope)) {
+        void refresh({ ...scope, force: true });
+      } else {
+        scopedSessions!.wakeList(scope);
+      }
+    },
     reconcile,
     captureReconcile: () => reconcile,
     describe: (
@@ -505,14 +512,18 @@ export function createContext(
   };
   const lifecycle = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
   sidebarSessionGatewayBindings.get(sessions)?.(gateway, lifecycle.agentSelection);
+  const router = createApplicationRouter();
+  onTestFinished(() => router.stop());
   return {
+    basePath: "",
+    resourceBasePath: "",
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
     chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
     navigate: vi.fn(),
-    router: createApplicationRouter(),
+    router,
     sessions,
     plugins: {
       registrations: () => [],

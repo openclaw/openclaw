@@ -1,11 +1,13 @@
 import {
   createDeferred,
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
   latest,
   Loading,
+  onSettled,
   Show,
 } from "solid-js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -27,6 +29,9 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
+import { createKeyedListMotion } from "../../lib/reactive/keyed-list-motion.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
 import { SessionLinkView } from "./session-activity-row.tsx";
@@ -80,6 +85,7 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 
 function DaySessions(props: {
   view: SessionActivityViewProps;
+  scope: string;
   day: ReturnType<typeof projectSessionActivity>["days"][number];
 }) {
   // GatewaySessionRow.hasAutomation records the enabled cron job binding; titles and keys do not.
@@ -92,48 +98,61 @@ function DaySessions(props: {
   const regular = createMemo(() =>
     grouped() ? props.day.sessions.filter((row) => row.hasAutomation !== true) : props.day.sessions,
   );
+  const motion = createKeyedListMotion({
+    ids: () => regular().map((row) => row.key),
+    scope: () => props.scope,
+    active: () => true,
+    ready: () => Boolean(props.view.result),
+  });
   return (
-    <>
-      <For each={regular()} keyed={(row) => row.key}>
-        {(row) => (
-          <SessionLinkView
-            row={row()}
-            onSummaryRetry={props.view.onSummaryRetry}
-            presentationRevision={props.view.presentationRevision}
-          />
-        )}
-      </For>
-      {grouped() ? (
-        <>
-          <button
-            type="button"
-            class="activity-feed__session activity-feed__automation-group"
-            data-activity-automation-group={props.day.key}
-            aria-expanded={props.view.expandedAutomationDays.has(props.day.key) ? "true" : "false"}
-            onClick={() => props.view.onAutomationDayToggle(props.day.key)}
-          >
-            <span class="activity-feed__automation-group-icon" aria-hidden="true">
-              <Icon name="clock" />
-            </span>
-            <span>{t("activityFeed.automationGroup", { count: String(automation().length) })}</span>
-            <span class="activity-feed__automation-group-chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
-          </button>
-          {props.view.expandedAutomationDays.has(props.day.key) ? (
-            <For each={automation()} keyed={(row) => row.key}>
-              {(row) => (
-                <SessionLinkView
-                  row={row()}
-                  onSummaryRetry={props.view.onSummaryRetry}
-                  presentationRevision={props.view.presentationRevision}
-                />
-              )}
-            </For>
-          ) : undefined}
-        </>
-      ) : undefined}
-    </>
+    <div class="activity-feed__sessions" ref={motion.shell}>
+      <div ref={motion.content}>
+        <For each={regular()} keyed={(row) => row.key}>
+          {(row) => (
+            <SessionLinkView
+              row={row()}
+              elementRef={motion.row}
+              onSummaryRetry={props.view.onSummaryRetry}
+              presentationRevision={props.view.presentationRevision}
+            />
+          )}
+        </For>
+        {grouped() ? (
+          <>
+            <button
+              type="button"
+              class="activity-feed__session activity-feed__automation-group"
+              data-activity-automation-group={props.day.key}
+              aria-expanded={
+                props.view.expandedAutomationDays.has(props.day.key) ? "true" : "false"
+              }
+              onClick={() => props.view.onAutomationDayToggle(props.day.key)}
+            >
+              <span class="activity-feed__automation-group-icon" aria-hidden="true">
+                <Icon name="clock" />
+              </span>
+              <span>
+                {t("activityFeed.automationGroup", { count: String(automation().length) })}
+              </span>
+              <span class="activity-feed__automation-group-chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
+            {props.view.expandedAutomationDays.has(props.day.key) ? (
+              <For each={automation()} keyed={(row) => row.key}>
+                {(row) => (
+                  <SessionLinkView
+                    row={row()}
+                    onSummaryRetry={props.view.onSummaryRetry}
+                    presentationRevision={props.view.presentationRevision}
+                  />
+                )}
+              </For>
+            ) : undefined}
+          </>
+        ) : undefined}
+      </div>
+    </div>
   );
 }
 
@@ -285,6 +304,66 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
   // Keep accepted rows and scope changes live while their next read settles.
   const read = createDeferred(() => request()?.promise);
   const projection = createMemo(() => projectSessionActivity(props.result));
+  const scope = createMemo(() =>
+    JSON.stringify([props.filters.personId, props.filters.query, props.filters.time]),
+  );
+  const [readingScope, setReadingScope] = createSignal<string>();
+  let main!: HTMLDivElement;
+  // The compact layout scrolls the page; the desktop layout scrolls the feed.
+  let page: Element | null;
+  const away = () => main.scrollTop > 1 || (page?.scrollTop ?? 0) > 1;
+  const settle = createTimeout(() => {
+    if (!away()) {
+      setReadingScope(undefined);
+    }
+  }, 180);
+  onSettled(() => {
+    page = main.closest("main.content");
+    const scroll = () => {
+      if (away()) {
+        settle.cancel();
+        setReadingScope(scope());
+      } else {
+        // Momentum and direction reversals can briefly touch the top.
+        settle.schedule();
+      }
+    };
+    scroll();
+    const stopFeed = listen(main, "scroll", scroll, { passive: true });
+    const stopPage = page && listen(page, "scroll", scroll, { passive: true });
+    return () => {
+      stopFeed();
+      stopPage?.();
+    };
+  });
+  type ReadingList = { scope: string; days: ReturnType<typeof projectSessionActivity>["days"] };
+  const list = createMemo<ReadingList>((previous) => {
+    const query = scope();
+    const current = projection();
+    if (
+      readingScope() !== query ||
+      previous?.scope !== query ||
+      !previous.days.length ||
+      !props.result
+    ) {
+      return { scope: query, days: current.days };
+    }
+    // Hold placement, not row data or membership. A removed or filtered-out row
+    // must never persist just because the reader is away from the top.
+    const rows = new Map(current.sessions.map((row) => [row.key, row]));
+    return {
+      scope: query,
+      days: previous.days
+        .map((day) => ({
+          ...day,
+          sessions: day.sessions.flatMap((row) => rows.get(row.key) ?? []),
+        }))
+        .filter((day) => day.sessions.length > 0),
+    };
+  });
+  const shownCount = createMemo(() =>
+    list().days.reduce((count, day) => count + day.sessions.length, 0),
+  );
   const onlineById = createMemo(
     () =>
       new Map(
@@ -373,7 +452,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           </Errored>
         </Loading>
       </div>
-      <div class="activity-feed__main">
+      <div class="activity-feed__main" ref={(element) => (main = element)}>
         <Errored fallback={() => null}>
           <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
             {
@@ -411,14 +490,12 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ) : undefined}
         {props.result && (!props.filters.personId || identity()) ? (
           <>
-            {projection().days.length > 0 ? (
-              <For each={projection().days} keyed={(day) => day.key}>
+            {list().days.length > 0 ? (
+              <For each={list().days} keyed={(day) => day.key}>
                 {(day) => (
                   <section class="activity-feed__day">
                     <h3 class="settings-section__heading">{dayLabel(day().timestamp)}</h3>
-                    <div class="activity-feed__sessions">
-                      <DaySessions view={props} day={day()} />
-                    </div>
+                    <DaySessions view={props} scope={scope()} day={day()} />
                   </section>
                 )}
               </For>
@@ -427,10 +504,10 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                 {t("activityFeed.noSessions")}
               </section>
             )}
-            {projection().matchedCount > projection().sessions.length ? (
+            {projection().matchedCount > shownCount() ? (
               <p class="activity-feed__footer">
                 {t("activityFeed.showing", {
-                  shown: String(projection().sessions.length),
+                  shown: String(shownCount()),
                   total: String(projection().matchedCount),
                 })}
               </p>
