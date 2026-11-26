@@ -592,6 +592,9 @@ struct ChatAttachmentTileModel: Identifiable {
             },
             media: Dictionary(uniqueKeysWithValues: photos.compactMap { tile in
                 tile.data.map { (tile.viewerID, OpenClawChatMediaData(data: $0, mimeType: tile.mimeType)) }
+            }),
+            previews: Dictionary(uniqueKeysWithValues: photos.compactMap { tile in
+                tile.preview.map { (tile.viewerID, $0) }
             }))
     }
 
@@ -619,6 +622,8 @@ struct ChatAttachmentTileModel: Identifiable {
 struct ChatDraftPhotoGallery {
     var items: [ChatImageViewerItem] = []
     var media: [String: OpenClawChatMediaData] = [:]
+    /// The tiles' own pictures, for the viewer's row of thumbnails.
+    var previews: [String: UIImage] = [:]
 }
 
 struct ChatAttachmentTile: View {
@@ -686,6 +691,7 @@ struct ChatAttachmentTile: View {
                 label: String(localized: "Photo")),
             artifactId: self.tile.viewerID,
             thumbnail: preview,
+            thumbnails: self.gallery.previews,
             load: { id in media[id].map(OpenClawChatLoadedMedia.data) })
     }
 

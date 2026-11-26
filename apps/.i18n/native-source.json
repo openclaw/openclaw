@@ -3168,6 +3168,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTalkComposerRow.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.cffbb85c9291421b","source":"Talk needs approval"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTalkComposerRow.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2d9aca5b0cfbf284","source":"Waiting for a reply"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTalkComposerRow.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3b9b7cbcd20e12ef","source":"Waiting for approval"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatImageViewerFilmstrip.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f0ded6890f9b6536","source":"Image %lld of %lld"},
     {"path":"apps/macos/Sources/OpenClaw/TalkModeController.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.f9dbb9b6a5edc700","source":"Bottle"},
     {"path":"apps/macos/Sources/OpenClaw/TalkModeController.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.509ba492cb16bbad","source":"Submarine"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.cec469bca79a29dc","source":"Agent"},

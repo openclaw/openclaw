@@ -196,7 +196,12 @@ final class ChatImageViewerChrome {
     var shareImage: UIImage?
     var shareName = ""
     var isHidden = false
+    /// The message's images for the row of thumbnails, in page order; nil while a thumbnail's
+    /// pixels are not in hand. Empty for a single image, which has no row.
+    var strip: [UIImage?] = []
+    var stripIndex = 0
     @ObservationIgnored var close: () -> Void = {}
+    @ObservationIgnored var selectStrip: (Int) -> Void = { _ in }
 }
 
 /// Round close at the leading edge, the name and position in the middle, Share at the trailing edge.
@@ -288,12 +293,15 @@ final class ChatImageViewerController: UIViewController,
 
     private let items: [ChatImageViewerItem]
     private let load: Load
-    private let chrome = ChatImageViewerChrome()
-    private let pager = UIPageViewController(
+    let chrome = ChatImageViewerChrome()
+    let pager = UIPageViewController(
         transitionStyle: .scroll,
         navigationOrientation: .horizontal,
         options: [.interPageSpacing: 16])
     private var bar: UIHostingController<ChatImageViewerBar>?
+    private var filmstrip: UIHostingController<ChatImageViewerFilmstrip>?
+    /// Pixels the opener already holds (a draft's staged photos), keyed like the items.
+    private let providedThumbnails: [String: UIImage]
     /// The system bar material, from the screen's top edge to just under the bar. Shown only while
     /// the image runs under the bar, so the name, the position and both buttons keep contrast;
     /// over the canvas the bar stays clear.
@@ -309,6 +317,7 @@ final class ChatImageViewerController: UIViewController,
         items: [ChatImageViewerItem],
         artifactId: String,
         thumbnail: UIImage,
+        thumbnails: [String: UIImage] = [:],
         load: @escaping Load)
     {
         guard let index = items.firstIndex(where: { $0.artifactId == artifactId }),
@@ -319,7 +328,8 @@ final class ChatImageViewerController: UIViewController,
         while let presented = presenter.presentedViewController, !presented.isBeingDismissed {
             presenter = presented
         }
-        let viewer = ChatImageViewerController(items: items, index: index, thumbnail: thumbnail, load: load)
+        let viewer = ChatImageViewerController(
+            items: items, index: index, thumbnail: thumbnail, thumbnails: thumbnails, load: load)
         // The keyboard would cover the image: put it away for the viewer and bring it back, with the
         // same cursor, once the viewer closes.
         if let responder = ChatFirstResponder.current(), responder.resignFirstResponder() {
@@ -349,10 +359,17 @@ final class ChatImageViewerController: UIViewController,
         presenter.present(viewer, animated: true)
     }
 
-    init(items: [ChatImageViewerItem], index: Int, thumbnail: UIImage, load: @escaping Load) {
+    init(
+        items: [ChatImageViewerItem],
+        index: Int,
+        thumbnail: UIImage,
+        thumbnails: [String: UIImage] = [:],
+        load: @escaping Load)
+    {
         self.items = items
         self.load = load
         self.currentIndex = index
+        self.providedThumbnails = thumbnails
         super.init(nibName: nil, bundle: nil)
         self.pages[index] = ChatImageViewerPageController(
             item: items[index],
@@ -361,6 +378,7 @@ final class ChatImageViewerController: UIViewController,
             load: load,
             host: self)
         self.chrome.close = { [weak self] in self?.dismiss(animated: true) }
+        self.chrome.selectStrip = { [weak self] index in self?.showPage(index) }
     }
 
     @available(*, unavailable)
@@ -388,12 +406,19 @@ final class ChatImageViewerController: UIViewController,
         return frame
     }
 
-    /// Bar bottom and home indicator: a fitted image rests between them when it fits.
+    /// Bar bottom and the row of thumbnails (or the home indicator): a fitted image rests between
+    /// them, so the row never covers it. The row's space stays reserved while the chrome hides, so
+    /// the image does not move.
     var obstructedInsets: UIEdgeInsets {
-        UIEdgeInsets(
+        let bottom = if let strip = self.filmstrip?.view, strip.frame.height > 0 {
+            self.view.bounds.maxY - strip.frame.minY
+        } else {
+            self.view.safeAreaInsets.bottom
+        }
+        return UIEdgeInsets(
             top: self.bar?.view.frame.maxY ?? self.view.safeAreaInsets.top,
             left: 0,
-            bottom: self.view.safeAreaInsets.bottom,
+            bottom: bottom,
             right: 0)
     }
 
@@ -445,6 +470,22 @@ final class ChatImageViewerController: UIViewController,
         ])
         bar.didMove(toParent: self)
         self.bar = bar
+
+        if ChatImageViewerFilmstrip.isShown(count: self.items.count) {
+            let strip = UIHostingController(rootView: ChatImageViewerFilmstrip(chrome: self.chrome))
+            strip.sizingOptions = .intrinsicContentSize
+            strip.view.backgroundColor = .clear
+            self.addChild(strip)
+            strip.view.translatesAutoresizingMaskIntoConstraints = false
+            self.view.addSubview(strip.view)
+            NSLayoutConstraint.activate([
+                strip.view.bottomAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.bottomAnchor),
+                strip.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+                strip.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+            ])
+            strip.didMove(toParent: self)
+            self.filmstrip = strip
+        }
         self.updateChrome()
     }
 
@@ -492,7 +533,7 @@ final class ChatImageViewerController: UIViewController,
         super.viewWillDisappear(animated)
         // The image alone travels back to its thumbnail: the bar and the canvas leave as the
         // drag starts, so the transcript shows around the image.
-        let views: [UIView?] = [self.bar?.view, self.barMaterial]
+        let views: [UIView?] = [self.bar?.view, self.barMaterial, self.filmstrip?.view]
         UIView.animate(withDuration: 0.15) {
             views.forEach { $0?.alpha = 0 }
             self.view.backgroundColor = OpenClawChatTheme.canvasUIColor.withAlphaComponent(0)
@@ -528,18 +569,26 @@ final class ChatImageViewerController: UIViewController,
     }
 
     func pageDidLoadImage(_ page: ChatImageViewerPageController) {
-        if page === self.currentPage { self.updateChrome() }
+        if page === self.currentPage {
+            self.updateChrome()
+        } else {
+            self.updateStrip()
+        }
     }
 
     private func applyChromeVisibility(animatedWith coordinator: UIViewControllerTransitionCoordinator?) {
         let alpha: CGFloat = self.chrome.isHidden ? 0 : 1
         let materialAlpha: CGFloat = self.chrome.isHidden || !self.isBarOverImage ? 0 : 1
         let bar = self.bar?.view
+        let strip = self.filmstrip?.view
         let material = self.barMaterial
-        bar?.isUserInteractionEnabled = !self.chrome.isHidden
-        bar?.accessibilityElementsHidden = self.chrome.isHidden
+        for view in [bar, strip] {
+            view?.isUserInteractionEnabled = !self.chrome.isHidden
+            view?.accessibilityElementsHidden = self.chrome.isHidden
+        }
         let apply = {
             bar?.alpha = alpha
+            strip?.alpha = alpha
             material.alpha = materialAlpha
         }
         if let coordinator {
@@ -558,6 +607,7 @@ final class ChatImageViewerController: UIViewController,
         self.chrome.position = ChatImageViewerItem.positionText(index: self.currentIndex, count: self.items.count)
         self.chrome.shareImage = self.currentPage?.image
         self.chrome.shareName = item.title ?? item.label
+        self.updateStrip()
         self.updateBarSurface()
         // VoiceOver moves to the new page's image, which reads its name and, for a message with
         // several images, its position as the value.
@@ -566,7 +616,35 @@ final class ChatImageViewerController: UIViewController,
         }
     }
 
+    /// The row's thumbnails come from pixels already in hand, never a request of their own: a page's
+    /// image, the opener's, or the transcript's memory and on-screen thumbnails.
+    private func updateStrip() {
+        guard ChatImageViewerFilmstrip.isShown(count: self.items.count) else { return }
+        self.chrome.strip = self.items.indices.map { index in
+            let id = self.items[index].artifactId
+            return self.pages[index]?.image ?? self.providedThumbnails[id]
+                ?? ChatMediaImageMemory.image(for: id) ?? ChatImageViewerSources.view(for: id)?.image
+        }
+        self.chrome.stripIndex = self.currentIndex
+    }
+
     // MARK: Paging
+
+    /// Moves to `index` from the row of thumbnails.
+    func showPage(_ index: Int) {
+        guard index != self.currentIndex, let page = self.page(at: index) else { return }
+        let direction: UIPageViewController.NavigationDirection = index > self.currentIndex ? .forward : .reverse
+        self.pager.setViewControllers([page], direction: direction, animated: !UIAccessibility.isReduceMotionEnabled)
+        self.settle(on: index)
+    }
+
+    private func settle(on index: Int) {
+        self.currentIndex = index
+        // Pages farther than one swipe away are rebuilt on demand.
+        self.pages = self.pages.filter { abs($0.key - index) <= 1 }
+        self.pages[index]?.resetZoom()
+        self.updateChrome()
+    }
 
     private func page(at index: Int) -> ChatImageViewerPageController? {
         guard self.items.indices.contains(index) else { return nil }
@@ -612,11 +690,7 @@ final class ChatImageViewerController: UIViewController,
         guard completed,
               let page = pageViewController.viewControllers?.first as? ChatImageViewerPageController,
               let index = self.index(of: page) else { return }
-        self.currentIndex = index
-        // Pages farther than one swipe away are rebuilt on demand.
-        self.pages = self.pages.filter { abs($0.key - index) <= 1 }
-        page.resetZoom()
-        self.updateChrome()
+        self.settle(on: index)
     }
 
     private func index(of page: ChatImageViewerPageController) -> Int? {

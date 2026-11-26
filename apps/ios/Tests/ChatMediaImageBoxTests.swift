@@ -101,6 +101,54 @@ struct ChatMediaImageBoxTests {
         #expect(ChatImageViewerItem.gallery(in: photos).isEmpty)
     }
 
+    private static func viewer(count: Int, thumbnails: [String: UIImage] = [:]) -> ChatImageViewerController {
+        let items = (0..<count).map {
+            ChatImageViewerItem(artifactId: "draft-attachment:\($0)", label: "Photo", title: nil, pixelSize: nil)
+        }
+        let viewer = ChatImageViewerController(
+            items: items,
+            index: 0,
+            thumbnail: UIImage(data: Self.png)!,
+            thumbnails: thumbnails,
+            load: { _ in nil })
+        viewer.loadViewIfNeeded()
+        return viewer
+    }
+
+    @Test func `the viewer's thumbnail row shows only for several images`() {
+        #expect(!ChatImageViewerFilmstrip.isShown(count: 1))
+        #expect(ChatImageViewerFilmstrip.isShown(count: 2))
+        #expect(Self.viewer(count: 1).chrome.strip.isEmpty)
+        #expect(Self.viewer(count: 5).chrome.strip.count == 5)
+        #expect(ChatImageViewerFilmstrip.accessibilityLabel(index: 1, count: 5) == "Image 2 of 5")
+    }
+
+    @Test func `the row's selection follows a tap and a swipe`() throws {
+        let viewer = Self.viewer(count: 5)
+        viewer.showPage(3)
+        #expect(viewer.currentIndex == 3)
+        #expect(viewer.chrome.stripIndex == 3)
+
+        // A swipe to the next page settles through the pager's delegate.
+        let current = try #require(viewer.pager.viewControllers?.first)
+        let next = try #require(viewer.pageViewController(viewer.pager, viewControllerAfter: current))
+        viewer.pager.setViewControllers([next], direction: .forward, animated: false)
+        viewer.pageViewController(
+            viewer.pager, didFinishAnimating: true, previousViewControllers: [current], transitionCompleted: true)
+        #expect(viewer.currentIndex == 4)
+        #expect(viewer.chrome.stripIndex == 4)
+    }
+
+    @Test func `a draft's photos fill the row from the pictures the composer holds`() throws {
+        let picture = try #require(UIImage(data: Self.png))
+        let viewer = Self.viewer(count: 3, thumbnails: [
+            "draft-attachment:1": picture,
+            "draft-attachment:2": picture,
+        ])
+        // The opened photo, then the two staged ones: no thumbnail waits on a request.
+        #expect(viewer.chrome.strip.allSatisfy { $0 != nil })
+    }
+
     @Test func `arriving bytes keep the row height and a second appearance does not load again`() async throws {
         let artifactId = "artifact_managed_image_\(UUID().uuidString.lowercased())"
         let release = AsyncStream<Void>.makeStream()
