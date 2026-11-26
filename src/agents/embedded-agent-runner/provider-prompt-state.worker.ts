@@ -3,7 +3,7 @@ import { fingerprintMessage } from "./prompt-cache-history.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import type { PromptPreparationTask, PromptPreparationResult } from "./provider-prompt-state.js";
 
-serveWorkerTasks<PromptPreparationResult, PromptPreparationTask>(
+export const startHostedWorker = serveWorkerTasks<PromptPreparationResult, PromptPreparationTask>(
   (task) => {
     return "history" in task
       ? {

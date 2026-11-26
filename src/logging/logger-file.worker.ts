@@ -7,7 +7,7 @@ import {
   type FileLogIOResults,
 } from "./logger-file-io.js";
 
-serveWorkerTasks<
+export const startHostedWorker = serveWorkerTasks<
   FileLogIOResults[keyof FileLogIOResults] | LogTailPayload,
   FileLogIORequest | LogTailRequest
 >((request, _channel, control) =>

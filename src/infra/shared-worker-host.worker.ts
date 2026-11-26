@@ -22,6 +22,15 @@ const hostedModules: Record<SharedWorkerHostKind, () => Promise<unknown>> = {
   "session-transcript": () => import("../config/sessions/session-transcript.worker.js"),
   "state-read": () => import("../state/openclaw-state-read.worker.js"),
   "plugin-model-catalog-read": () => import("../agents/plugin-model-catalog-read.worker.js"),
+  "provider-prompt-state": () =>
+    import("../agents/embedded-agent-runner/provider-prompt-state.worker.js"),
+  "file-log": () => import("../logging/logger-file.worker.js"),
+  "session-disk-budget": () => import("../config/sessions/disk-budget.worker.js"),
+  "skills-discovery": () => import("../skills/runtime/discovery.worker.js"),
+  "cron-read-only": () => import("../cron/store/read-only.worker.js"),
+  "git-operations": () => import("./git-operation.worker.js"),
+  "session-transcript-reconcile": () =>
+    import("../config/sessions/session-transcript-reconcile.worker.js"),
 };
 
 if (!parentPort || !isRecord(workerData) || !(workerData.control instanceof MessagePort)) {

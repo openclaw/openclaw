@@ -8,7 +8,10 @@ import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
 import { workerMutationAssertion } from "./worker-mutation-authority.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
+export const startHostedWorker = serveWorkerTasks<
+  GitWorkerReply<GitWorkerResult>,
+  GitWorkerCommand
+>(
   async (command, channel, control) => {
     try {
       if (!channel) {

@@ -79,108 +79,110 @@ function selectTranscriptBinding(
   };
 }
 
-serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel, control) => {
-  try {
-    if (input.history?.taskIds && input.history.taskIds.length > 200) {
-      throw new Error(
-        "Cron read-only worker requires a database location and an optional store key",
-      );
-    }
-    const { location, storeKey, stagingRoot } = input;
-    const jobNameById = input.history?.jobNameById;
-    const postgres = stateEngineInput() !== undefined;
-    const stateRead =
-      postgres || stagingRoot || input.inspect || (input.history && storeKey !== undefined)
-        ? await import("../../state/openclaw-state-db-read-connection.js")
-        : undefined;
-    return await control.runNativeSection(() =>
-      withSqliteReadOnlyWorkerScope(
-        async () => {
-          // Copying stays in a separate process; the parent owns every unpublished child artifact.
-          const connection = postgres
-            ? stateRead!.openOpenClawStateReadConnection(location, location)
-            : stagingRoot
-              ? stateRead!.openOpenClawStateReadConnection(
-                  location,
-                  await runSqliteReadOnlyWorker(location, {
-                    mode: "sync",
+export const startHostedWorker = serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(
+  async (input, _channel, control) => {
+    try {
+      if (input.history?.taskIds && input.history.taskIds.length > 200) {
+        throw new Error(
+          "Cron read-only worker requires a database location and an optional store key",
+        );
+      }
+      const { location, storeKey, stagingRoot } = input;
+      const jobNameById = input.history?.jobNameById;
+      const postgres = stateEngineInput() !== undefined;
+      const stateRead =
+        postgres || stagingRoot || input.inspect || (input.history && storeKey !== undefined)
+          ? await import("../../state/openclaw-state-db-read-connection.js")
+          : undefined;
+      return await control.runNativeSection(() =>
+        withSqliteReadOnlyWorkerScope(
+          async () => {
+            // Copying stays in a separate process; the parent owns every unpublished child artifact.
+            const connection = postgres
+              ? stateRead!.openOpenClawStateReadConnection(location, location)
+              : stagingRoot
+                ? stateRead!.openOpenClawStateReadConnection(
+                    location,
+                    await runSqliteReadOnlyWorker(location, {
+                      mode: "sync",
+                      stagingRoot,
+                      signal: control.signal,
+                    }),
+                    undefined,
                     stagingRoot,
-                    signal: control.signal,
-                  }),
-                  undefined,
-                  stagingRoot,
-                )
-              : undefined;
-          // The connection owner retains failed-close token custody without imposing a schema gate.
-          const db =
-            connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
-          try {
-            if (input.inspect) {
-              stateRead!.assertStateReadSchema(db, location);
+                  )
+                : undefined;
+            // The connection owner retains failed-close token custody without imposing a schema gate.
+            const db =
+              connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
+            try {
+              if (input.inspect) {
+                stateRead!.assertStateReadSchema(db, location);
+                return {
+                  ok: true,
+                  owners:
+                    input.inspect === "owners" && storeKey !== undefined
+                      ? inspectCronOwnerRowsForDoctor(db, storeKey)
+                      : undefined,
+                } satisfies CronReadOnlyResult;
+              }
+              if (input.history && storeKey !== undefined) {
+                // History consumes the canonical released table only after read admission.
+                stateRead!.assertStateReadSchema(db, location);
+                if (input.history.taskIds) {
+                  return {
+                    ok: true,
+                    history: readCronRunHistoryRecordsInDatabase(
+                      db,
+                      storeKey,
+                      input.history.taskIds,
+                      input.history.view === "summary" ? "summary" : "full",
+                    ),
+                  } satisfies CronReadOnlyResult;
+                }
+                const candidates = readCronRunHistoryCandidatesInDatabase(
+                  db,
+                  storeKey,
+                  input.history.jobId,
+                  input.history.query,
+                  jobNameById,
+                );
+                if (input.history.transcript) {
+                  return {
+                    ok: true,
+                    binding: selectTranscriptBinding(
+                      candidates.records,
+                      storeKey,
+                      input.history.transcript,
+                    ),
+                  } satisfies CronReadOnlyResult;
+                }
+                return {
+                  ok: true,
+                  candidates,
+                } satisfies CronReadOnlyResult;
+              }
               return {
                 ok: true,
-                owners:
-                  input.inspect === "owners" && storeKey !== undefined
-                    ? inspectCronOwnerRowsForDoctor(db, storeKey)
+                inventory: storeKey === undefined ? inspectCronRowsForDoctor(db) : undefined,
+                loaded:
+                  storeKey !== undefined && tableExists(db, "cron_jobs")
+                    ? loadCronStoreFromDatabase(db, storeKey)
                     : undefined,
               } satisfies CronReadOnlyResult;
-            }
-            if (input.history && storeKey !== undefined) {
-              // History consumes the canonical released table only after read admission.
-              stateRead!.assertStateReadSchema(db, location);
-              if (input.history.taskIds) {
-                return {
-                  ok: true,
-                  history: readCronRunHistoryRecordsInDatabase(
-                    db,
-                    storeKey,
-                    input.history.taskIds,
-                    input.history.view === "summary" ? "summary" : "full",
-                  ),
-                } satisfies CronReadOnlyResult;
+            } finally {
+              if (connection) {
+                connection.close();
+              } else {
+                db.close();
               }
-              const candidates = readCronRunHistoryCandidatesInDatabase(
-                db,
-                storeKey,
-                input.history.jobId,
-                input.history.query,
-                jobNameById,
-              );
-              if (input.history.transcript) {
-                return {
-                  ok: true,
-                  binding: selectTranscriptBinding(
-                    candidates.records,
-                    storeKey,
-                    input.history.transcript,
-                  ),
-                } satisfies CronReadOnlyResult;
-              }
-              return {
-                ok: true,
-                candidates,
-              } satisfies CronReadOnlyResult;
             }
-            return {
-              ok: true,
-              inventory: storeKey === undefined ? inspectCronRowsForDoctor(db) : undefined,
-              loaded:
-                storeKey !== undefined && tableExists(db, "cron_jobs")
-                  ? loadCronStoreFromDatabase(db, storeKey)
-                  : undefined,
-            } satisfies CronReadOnlyResult;
-          } finally {
-            if (connection) {
-              connection.close();
-            } else {
-              db.close();
-            }
-          }
-        },
-        { signal: control.signal, deadlineOwnedByCaller: true },
-      ),
-    );
-  } catch (error) {
-    return { ok: false, error: serializeCronLoadError(error) };
-  }
-});
+          },
+          { signal: control.signal, deadlineOwnedByCaller: true },
+        ),
+      );
+    } catch (error) {
+      return { ok: false, error: serializeCronLoadError(error) };
+    }
+  },
+);

@@ -315,8 +315,9 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
   })();
 };
 
-serveWorkerTasks<SkillsDiscoveryOutput, SkillsDiscoveryInput>((request, channel, control) =>
-  "nativeMode" in request
-    ? withWorkerFsSafeNativeMode(request.nativeMode, () => runTask(request, channel, control))
-    : runTask(request, channel, control),
+export const startHostedWorker = serveWorkerTasks<SkillsDiscoveryOutput, SkillsDiscoveryInput>(
+  (request, channel, control) =>
+    "nativeMode" in request
+      ? withWorkerFsSafeNativeMode(request.nativeMode, () => runTask(request, channel, control))
+      : runTask(request, channel, control),
 );

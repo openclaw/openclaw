@@ -275,7 +275,7 @@ async function run(
   releaseLease(reconcileInput, port, closeDatabase !== undefined);
 }
 
-serveWorkerTasks(
+export const startHostedWorker = serveWorkerTasks(
   async (value) => {
     if (!value || typeof value !== "object" || !("input" in value) || !("port" in value)) {
       throw new Error("session transcript reconcile worker requires a task");

@@ -16,6 +16,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
+import { leanPrototype } from "./lean-prototype.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -39,7 +40,20 @@ const hostedEntrypoints = {
   "session-transcript": runtimeProcessEntrypoints.sessionTranscript,
   "state-read": runtimeProcessEntrypoints.stateRead,
   "plugin-model-catalog-read": runtimeProcessEntrypoints.pluginModelCatalogRead,
+  "provider-prompt-state": runtimeProcessEntrypoints.providerPromptState,
+  "file-log": runtimeProcessEntrypoints.fileLog,
+  "session-disk-budget": runtimeProcessEntrypoints.sessionDiskBudget,
+  "skills-discovery": runtimeProcessEntrypoints.skillsDiscovery,
+  "cron-read-only": runtimeProcessEntrypoints.cronReadOnly,
+  "git-operations": runtimeProcessEntrypoints.gitOperations,
+  "session-transcript-reconcile": runtimeProcessEntrypoints.sessionTranscriptReconcile,
 } satisfies Record<SharedWorkerHostKind, unknown>;
+const shippedKinds = new Set<string>([
+  "sqlite-store",
+  "session-transcript",
+  "state-read",
+  "plugin-model-catalog-read",
+]);
 
 // An idle endpoint that cannot acknowledge its stop has no other termination boundary.
 const ENDPOINT_STOP_DEADLINE_MS = 10_000;
@@ -63,7 +77,10 @@ const state = resolveGlobalSingleton(
 function hostedKind(url: URL): SharedWorkerHostKind | undefined {
   for (const [kind, entrypoint] of Object.entries(hostedEntrypoints)) {
     // Retained update generations and sealed copies keep their own isolates.
-    if (resolveRuntimeWorkerUrl(entrypoint).href === url.href) {
+    if (
+      (shippedKinds.has(kind) || leanPrototype.hostMoreKinds) &&
+      resolveRuntimeWorkerUrl(entrypoint).href === url.href
+    ) {
       // SAFETY: Keys come from the typed hostedEntrypoints table above.
       return kind as SharedWorkerHostKind;
     }
@@ -96,7 +113,11 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
     return false;
   }
   const host = state.host;
-  return !host || (!host.failure && !host.hasEndpoint(key ?? kind));
+  // PROTOTYPE: pool slots carry no key; with hostAll every one of them is hosted.
+  return (
+    !host ||
+    (!host.failure && ((!key && leanPrototype.hostEverySlot) || !host.hasEndpoint(key ?? kind)))
+  );
 }
 
 /** Includes construction and retirement until the native owner joins the physical host. */
@@ -130,7 +151,8 @@ export function createHostedWorker(
     throw new Error(`Worker ${url.href} cannot run in the shared worker host`);
   }
   state.host ??= new SharedWorkerHost();
-  return new HostedWorkerEndpoint(state.host, kind, key ?? kind, options, ready);
+  const slotKey = key ?? (leanPrototype.hostEverySlot ? `${kind}#${state.nextEndpointId}` : kind);
+  return new HostedWorkerEndpoint(state.host, kind, slotKey, options, ready);
 }
 
 export function isHostedWorkerEndpoint(worker: unknown): worker is HostedWorkerEndpoint {
@@ -160,7 +182,10 @@ class SharedWorkerHost {
       },
       transferList: [port2],
       // The largest standalone member (SQLite store) uses the same bounded nursery.
-      resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
+      resourceLimits: {
+        maxOldGenerationSizeMb: leanPrototype.hostOldGenerationMiB ?? 512,
+        maxYoungGenerationSizeMb: 16,
+      },
     });
     this.worker.on("started", () => {
       // Hosted modules publish database admission facts under this one physical thread.

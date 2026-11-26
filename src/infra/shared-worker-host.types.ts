@@ -5,7 +5,15 @@ export type SharedWorkerHostKind =
   | "sqlite-store"
   | "session-transcript"
   | "state-read"
-  | "plugin-model-catalog-read";
+  | "plugin-model-catalog-read"
+  // PROTOTYPE kinds, hosted only with OPENCLAW_LEAN_PROTO hostKinds=1.
+  | "provider-prompt-state"
+  | "file-log"
+  | "session-disk-budget"
+  | "skills-discovery"
+  | "cron-read-only"
+  | "git-operations"
+  | "session-transcript-reconcile";
 
 export type SharedWorkerHostRequest =
   | {
