@@ -604,9 +604,11 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    // The history owner observes the edge before input idles. Retiring a held correction
-    // must preserve the reader even when that input reached native zero.
-    this.scrollBy(shift);
+    // Home explicitly requests the start; a touch reaching zero still retains its reader.
+    // History loading observes the edge independently before input idles.
+    if (shift < 0 || offset > 0 || !this.host.offsetState.inputTargetsStart) {
+      this.scrollBy(shift);
+    }
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */

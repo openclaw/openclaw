@@ -1,5 +1,4 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
-import { transcriptMessageSourceKey } from "../chat-thread-item-identity.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
 import type {
@@ -18,9 +17,8 @@ export class TranscriptPrependAnchor {
   private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
   private searchPlacement: "reader" | "end" | null = null;
   private firstMessageKey: string | undefined;
-  private sourceMessages?: readonly unknown[];
-  private firstSourceKey: string | null = null;
-  private sourcePrepended = false;
+  private source?: TranscriptProjectionSource;
+  private firstSourceMessage: unknown;
   private pending:
     | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
     | null = null;
@@ -70,18 +68,7 @@ export class TranscriptPrependAnchor {
     following: boolean,
   ): void {
     this.messageKeys = messageKeys;
-    const sourceMessages = source?.messages;
-    if (this.sourceMessages !== sourceMessages) {
-      this.sourceMessages = sourceMessages;
-      // An older page can join a standalone tool result to its call. Its rendered key
-      // disappears, but the original message is still present after the new prefix.
-      const oldest = this.firstSourceKey;
-      this.sourcePrepended = Boolean(
-        oldest &&
-        sourceMessages &&
-        sourceMessages.findIndex((message) => transcriptMessageSourceKey(message) === oldest) > 0,
-      );
-    }
+    this.source = source;
     const projection = source?.search ?? null;
     const previous = this.searchProjection;
     if (previous?.query === projection?.query && previous?.empty === projection?.empty) {
@@ -121,7 +108,9 @@ export class TranscriptPrependAnchor {
     return Boolean(
       this.firstMessageKey &&
       this.firstMessageKey !== this.messageKeys.keys().next().value &&
-      (this.sourcePrepended || this.messageKeys.has(this.firstMessageKey)),
+      (this.messageKeys.has(this.firstMessageKey) ||
+        (this.firstSourceMessage !== undefined &&
+          (this.source?.messages.indexOf(this.firstSourceMessage) ?? -1) > 0)),
     );
   }
 
@@ -138,8 +127,7 @@ export class TranscriptPrependAnchor {
       this.retainReader(element);
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
-    this.firstSourceKey = transcriptMessageSourceKey(this.sourceMessages?.[0]);
-    this.sourcePrepended = false;
+    this.firstSourceMessage = this.source?.messages[0];
   }
 
   /** Retain current geometry without admitting a candidate message projection. */
@@ -220,9 +208,8 @@ export class TranscriptPrependAnchor {
     this.searchReturn = null;
     this.searchProjection = null;
     this.firstMessageKey = undefined;
-    this.firstSourceKey = null;
-    this.sourceMessages = undefined;
-    this.sourcePrepended = false;
+    this.firstSourceMessage = undefined;
+    this.source = undefined;
     this.messageKeys = new Set();
     this.committedMessageRows = new Map();
   }
