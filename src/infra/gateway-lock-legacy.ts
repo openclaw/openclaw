@@ -33,10 +33,14 @@ export async function assertLegacyGatewayStoppedForMaintenance(
   const owner = await readLegacyGatewayLockIdentity(env);
   if (owner) {
     // `gateway recover-lock` inspects only the state-local lock directory.
+    // A stale PID may be reused by an unrelated process, so the manual-removal
+    // route names the exact verification before the removal.
     const next =
       owner.path === resolveGatewayLockPaths(env).configLockPath
         ? "If that process has stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover it."
-        : "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account.";
+        : process.platform === "win32"
+          ? "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account."
+          : `Confirm PID ${owner.pid} has stopped on this host and in every container sharing this directory (\`ps -p ${owner.pid}\` finds no process, or \`ps -o lstart=,command= -p ${owner.pid}\` shows a reused PID that is not an OpenClaw Gateway), then remove that file as the Gateway service account.`;
     throw new GatewayLockError(
       `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}). ${next}`,
     );
