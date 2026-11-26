@@ -123,7 +123,9 @@ export class TranscriptReaderAnchor {
       this.host.initialRange.pending ||
       offsetState.hasPendingCommand ||
       offsetState.pendingInteractionAnchor !== null ||
-      this.host.prependAnchor.messageKey !== null
+      // The absolute prepend correction pauses during native touch. Measurements that
+      // land in the meantime must still keep the visible content under the reader's finger.
+      (this.host.prependAnchor.messageKey !== null && !offsetState.touchActive)
     );
   }
 

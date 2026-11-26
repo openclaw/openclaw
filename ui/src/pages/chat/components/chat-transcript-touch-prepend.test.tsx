@@ -14,12 +14,13 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it.each([
-  { idleBeforeRelease: false, outsideContact: false },
-  { idleBeforeRelease: true, outsideContact: false },
-  { idleBeforeRelease: true, outsideContact: true },
+  { idleBeforeRelease: false, outsideContact: false, regrouped: false },
+  { idleBeforeRelease: true, outsideContact: false, regrouped: false },
+  { idleBeforeRelease: true, outsideContact: true, regrouped: false },
+  { idleBeforeRelease: false, outsideContact: false, regrouped: true },
 ])(
-  "keeps the committed rows and message lookup together while a touch holds a prepend, idle=$idleBeforeRelease, outside contact=$outsideContact",
-  async ({ idleBeforeRelease, outsideContact }) => {
+  "keeps the committed rows and message lookup together while a touch holds a prepend, idle=$idleBeforeRelease, outside contact=$outsideContact, regrouped=$regrouped",
+  async ({ idleBeforeRelease, outsideContact, regrouped }) => {
     const transcript = createTestTranscript("touch-map");
     const refs = transcript.renderSession(
       "agent:main:touch-map",
@@ -36,12 +37,25 @@ it.each([
         )),
       },
     ];
-    const syncRows = (key: string, ids: string[]) => {
+    const syncRows = (key: string, ids: string[], sourceIds?: string[]) => {
       const rows = new Map(ids.map((id) => [id, key]));
-      session.syncMessageRows(rows, rows);
+      session.syncMessageRows(
+        rows,
+        rows,
+        sourceIds && {
+          messages: sourceIds.map((id) => ({
+            role: id === "result" ? "toolResult" : "assistant",
+            __openclaw: { id },
+          })),
+          search: null,
+        },
+      );
     };
-    const initial = contentRows("retained-row", ["retained"]);
-    const next = contentRows("expanded-row", ["older", "retained"]);
+    // Paging across a tool call can replace a standalone result with the combined activity row.
+    const before = regrouped ? ["standalone-result", "retained"] : ["retained"];
+    const after = regrouped ? ["older", "combined-activity", "retained"] : ["older", "retained"];
+    const initial = contentRows("retained-row", before);
+    const next = contentRows("expanded-row", after);
     const { container, session, renderRows } = await mountTestTranscript(
       "touch-map",
       initial,
@@ -55,7 +69,7 @@ it.each([
       ]);
     };
     try {
-      syncRows("retained-row", ["retained"]);
+      syncRows("retained-row", before, regrouped ? ["result", "retained"] : undefined);
       renderRows(initial);
       const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained bubble");
       const owned = contact(1, bubble);
@@ -72,7 +86,7 @@ it.each([
         container.dispatchEvent(new Event("scroll"));
         await vi.advanceTimersByTimeAsync(200);
       }
-      syncRows("expanded-row", ["older", "retained"]);
+      syncRows("expanded-row", after, regrouped ? ["call", "result", "retained"] : undefined);
       renderRows(next);
       expectRows(null);
       touch("touchend", remaining);

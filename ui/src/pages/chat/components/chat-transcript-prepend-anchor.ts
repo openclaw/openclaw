@@ -1,7 +1,11 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import { transcriptMessageSourceKey } from "../chat-thread-item-identity.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
-import type { TranscriptSearchProjection } from "./chat-transcript-session.ts";
+import type {
+  TranscriptProjectionSource,
+  TranscriptSearchProjection,
+} from "./chat-transcript-session.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -14,6 +18,9 @@ export class TranscriptPrependAnchor {
   private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
   private searchPlacement: "reader" | "end" | null = null;
   private firstMessageKey: string | undefined;
+  private sourceMessages?: readonly unknown[];
+  private firstSourceKey: string | null = null;
+  private sourcePrepended = false;
   private pending:
     | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
     | null = null;
@@ -55,14 +62,27 @@ export class TranscriptPrependAnchor {
     }
   }
 
-  /** The empty shell unmounts every row. Keep the last deliberate position across that gap. */
+  /** Track the source history boundary and the reader to restore across an empty search. */
   project(
     messageKeys: TranscriptMessageKeys,
-    projection: TranscriptSearchProjection,
+    source: TranscriptProjectionSource | undefined,
     element: HTMLDivElement | null,
     following: boolean,
   ): void {
     this.messageKeys = messageKeys;
+    const sourceMessages = source?.messages;
+    if (this.sourceMessages !== sourceMessages) {
+      this.sourceMessages = sourceMessages;
+      // An older page can join a standalone tool result to its call. Its rendered key
+      // disappears, but the original message is still present after the new prefix.
+      const oldest = this.firstSourceKey;
+      this.sourcePrepended = Boolean(
+        oldest &&
+        sourceMessages &&
+        sourceMessages.findIndex((message) => transcriptMessageSourceKey(message) === oldest) > 0,
+      );
+    }
+    const projection = source?.search ?? null;
     const previous = this.searchProjection;
     if (previous?.query === projection?.query && previous?.empty === projection?.empty) {
       return;
@@ -101,7 +121,7 @@ export class TranscriptPrependAnchor {
     return Boolean(
       this.firstMessageKey &&
       this.firstMessageKey !== this.messageKeys.keys().next().value &&
-      this.messageKeys.has(this.firstMessageKey),
+      (this.sourcePrepended || this.messageKeys.has(this.firstMessageKey)),
     );
   }
 
@@ -118,6 +138,8 @@ export class TranscriptPrependAnchor {
       this.retainReader(element);
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
+    this.firstSourceKey = transcriptMessageSourceKey(this.sourceMessages?.[0]);
+    this.sourcePrepended = false;
   }
 
   /** Retain current geometry without admitting a candidate message projection. */
@@ -198,6 +220,9 @@ export class TranscriptPrependAnchor {
     this.searchReturn = null;
     this.searchProjection = null;
     this.firstMessageKey = undefined;
+    this.firstSourceKey = null;
+    this.sourceMessages = undefined;
+    this.sourcePrepended = false;
     this.messageKeys = new Set();
     this.committedMessageRows = new Map();
   }

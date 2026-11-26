@@ -129,7 +129,17 @@ it("preserves a near-end reader when a deferred measurement shrinks the native r
   expect(distanceFromEnd()).toBe(4);
 });
 
-it.each(["settled", "scrolling", "idle-gap", "start", "start-growth", "programmatic"] as const)(
+const predecessorMeasurementPhases = [
+  "settled",
+  "scrolling",
+  "touch-after-prepend",
+  "idle-gap",
+  "start",
+  "start-growth",
+  "programmatic",
+] as const;
+
+it.each(predecessorMeasurementPhases)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
     const estimate = phase === "start-growth" ? 60 : 120;
@@ -167,6 +177,20 @@ it.each(["settled", "scrolling", "idle-gap", "start", "start-growth", "programma
     virtualizer.elementsCache.set("2", retained);
     const offsetState = new TranscriptOffsetState();
     offsetState.nativeInputActive = phase !== "settled" && phase !== "programmatic";
+    const prependAnchor = new TranscriptPrependAnchor(
+      new Map([["2", retained]]),
+      () => {},
+      () => false,
+    );
+    if (phase === "touch-after-prepend") {
+      retained.dataset.messageId = "2";
+      prependAnchor.messageKeys = new Set(["2"]);
+      prependAnchor.capture(viewport, false);
+      prependAnchor.messageKeys = new Set(["older", "2"]);
+      prependAnchor.capture(viewport, false);
+      offsetState.touching = true;
+      expect(prependAnchor.messageKey).toBe("2");
+    }
     const anchor = new TranscriptReaderAnchor(
       {
         virtualizer,
@@ -174,11 +198,7 @@ it.each(["settled", "scrolling", "idle-gap", "start", "start-growth", "programma
         offsetState,
         renderer: { columnElement: column, queueAfterCommit: () => {} },
         initialRange: { pending: false },
-        prependAnchor: new TranscriptPrependAnchor(
-          new Map(),
-          () => {},
-          () => false,
-        ),
+        prependAnchor,
         headerHeight: 0,
         scrollElement: viewport,
         contentElement: content,
