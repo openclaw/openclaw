@@ -466,11 +466,6 @@ extension OpenClawChatComposer {
     }
 
     private var cleanInlineModelDisabledHint: String? {
-        #if os(iOS)
-        if self.viewModel.hasActiveRunForComposerSettings {
-            return String(localized: "Wait until this reply finishes.")
-        }
-        #endif
         if !self.viewModel.composerModelMutationAvailable {
             #if os(iOS)
             return String(localized: "You don’t have permission to change the model.")

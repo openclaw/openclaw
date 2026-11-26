@@ -101,11 +101,13 @@ struct ChatCatalogProjectionTests {
         #expect(speedOnly.composerOffersEffortChoices)
     }
 
-    @Test func `effort controls lock while a reply runs and say why`() throws {
+    @Test func `effort controls stay open while a reply runs`() throws {
         let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
         #expect(model.composerPhoneEffortLockReason == nil)
         model.pendingRuns.insert("r")
-        #expect(model.composerPhoneEffortLockReason == "Wait until this reply finishes.")
+        #expect(model.hasActiveRunForComposerSettings)
+        #expect(model.composerPhoneEffortLockReason == nil)
+        #expect(!model.composerModelChoicesLocked)
     }
 
     @Test func `unknown availability stays selectable without refusal guidance`() throws {

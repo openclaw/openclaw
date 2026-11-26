@@ -133,11 +133,12 @@ extension OpenClawChatViewModel {
         self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID == model.selectionID
     }
 
-    /// Picking a model waits while settings save, and on the phone while a reply runs.
+    /// Picking a model waits while settings save. A running reply does not lock it: the new model answers
+    /// from the next message, as in the Control UI.
     var composerModelChoicesLocked: Bool {
         let unavailable = !self.composerModelMutationAvailable || self.isUpdatingSessionSettings
         #if os(iOS)
-        return unavailable || !self.showsModelPicker || self.hasActiveRunForComposerSettings
+        return unavailable || !self.showsModelPicker
         #else
         return unavailable
         #endif

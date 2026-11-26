@@ -936,7 +936,8 @@ extension OpenClawSnapshotUITests {
         input.typeText("Check the project.")
         app.buttons["chat-send-message"].tap()
         XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
-        self.openSignInMenuWithModelChangesDisabled(in: app)
+        // A running reply does not lock model choices; the new model answers from the next message.
+        self.openSignInMenu(in: app, modelChangesEnabled: true)
         self.attachScreenshot(named: "chat-model-sign-in-active-response")
         self.assertModelSignInSheetOpens(in: app)
         XCTAssertTrue(app.buttons["Stop response"].exists)
@@ -961,10 +962,10 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(effort.waitForExistence(timeout: 5))
         effort.tap()
         self.attachScreenshot(named: "chat-effort-tap-active-response")
-        // A reply in progress locks the levels; the chip still opens the bar, which says why.
+        // A reply in progress does not lock the levels; a change applies from the next message.
         XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Wait until this reply finishes."].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["chat-effort-bar-slider"].isEnabled)
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["chat-effort-bar-locked"].exists)
         self.attachScreenshot(named: "chat-effort-bar-active-response")
         app.buttons["Stop response"].tap()
     }
@@ -986,17 +987,17 @@ extension OpenClawSnapshotUITests {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-model-sign-in-fixture", "read-only"])
         let app = try XCTUnwrap(self.app)
-        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.openSignInMenu(in: app, modelChangesEnabled: false)
         self.assertModelSignInSheetOpens(in: app)
     }
 
-    func openSignInMenuWithModelChangesDisabled(in app: XCUIApplication) {
+    func openSignInMenu(in app: XCUIApplication, modelChangesEnabled: Bool) {
         let modelMenu = self.inlineModelChip(in: app)
         XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
         XCTAssertTrue(modelMenu.isEnabled, "Model mutation restrictions must not disable sign-in")
         modelMenu.tap()
         let choice = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
-        XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
+        XCTAssertEqual(choice.isEnabled, modelChangesEnabled)
         // The provider page is a system push; its back button is the first one in the bar.
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
     }
