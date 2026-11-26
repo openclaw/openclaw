@@ -10,7 +10,7 @@ import {
 import { writeCalendarEventsSummary, writeLatestConferenceRecordSummary } from "./cli-export.js";
 import {
   callGoogleMeetGateway,
-  resolveCliJoinRequest,
+  readCliJoinOptions,
   type CreateOptions,
   type JsonOptions,
   type ResolveSpaceOptions,
@@ -99,10 +99,11 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
-      if (options.join !== false) {
+      const joinOptions = options.join === false ? undefined : readCliJoinOptions(options);
+      if (joinOptions) {
         const delegated = await callGoogleMeetGateway({
           method: "googlemeet.create",
-          payload: { ...options },
+          payload: { ...options, ...joinOptions },
           timeoutMs: operationTimeoutMs,
         });
         if (delegated.ok) {
@@ -146,12 +147,12 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
         };
       }
-      const join =
-        options.join !== false
-          ? await (runtime ?? (await context.ensureRuntime())).join(
-              resolveCliJoinRequest(created.meetingUri, options),
-            )
-          : undefined;
+      const join = joinOptions
+        ? await (runtime ?? (await context.ensureRuntime())).join({
+            url: created.meetingUri,
+            ...joinOptions,
+          })
+        : undefined;
       const { browser, ...result } = created;
       writeGoogleMeetCreateOutput(
         {

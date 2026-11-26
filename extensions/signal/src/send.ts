@@ -273,6 +273,10 @@ export async function sendMessageSignal(
       body: message,
       media: outboundMedia ? [outboundMedia] : undefined,
       sourceTimestamp: timestamp,
+      sentByOpenClaw:
+        target.type === "group" && asPositiveSafeInteger(timestamp) !== undefined
+          ? true
+          : undefined,
     });
   }
   const receiptMessageId = messageId.trim();

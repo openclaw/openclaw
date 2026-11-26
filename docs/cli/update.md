@@ -846,7 +846,8 @@ work, and retained generations. See
 for retention, cleanup warnings, and legacy recovery distinctions.
 
 Candidate SQLite migrations use whole-database `quick_check`, full integrity
-checks of rewritten or re-indexed tables, and foreign-key checks by default.
+checks of rewritten or re-indexed tables, and foreign-key checks by default. Agent
+database version steps check only the schema catalog and the tables they declare.
 Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
 `--full-integrity-check` before creating a run; they do not support this selection.
 Run `openclaw doctor --fix --full-integrity-check` separately for full checks

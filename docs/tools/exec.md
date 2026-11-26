@@ -16,6 +16,8 @@ Workdir errors and failed foreground process results on the Gateway or in its sa
 
 Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
 
+If the Gateway restarts during a managed chat turn and has no saved result for a shell command, it pauses that turn and posts an uncertainty notice. Check the command’s effect before asking the agent to continue. A message already queued as a separate turn can still receive a reply.
+
 ## Host memory protection
 
 On Linux, Gateway-hosted foreground, PTY, background, and durable exec commands share one automatic workload memory budget. A single command can use the unused allowance; starting more commands does not multiply it. No configuration is required.

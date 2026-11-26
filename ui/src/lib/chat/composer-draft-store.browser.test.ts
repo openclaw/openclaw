@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished } from "vitest";
+import { releaseChatAttachmentPayloads } from "../../pages/chat/attachment-payload-store.ts";
 import * as composer from "../../pages/chat/composer-persistence.ts";
 import * as chatPersistence from "../../pages/chat/durable-composer-persistence.ts";
 import * as newSession from "../../pages/new-session/draft-persistence.ts";
@@ -8,6 +9,108 @@ import * as databaseApi from "./control-ui-database.runtime.ts";
 import * as scopes from "./outbox-store-scope.ts";
 
 const namespace = `native-composer-draft-store:${crypto.randomUUID()}`;
+
+it("recovers saved attachments with a newer caption after an interrupted write, but not after removal", async () => {
+  type State = NonNullable<
+    ReturnType<ConstructorParameters<typeof composer.ChatComposerPersistence>[0]>
+  >;
+  const gatewayUrl = `${namespace}:caption-reload`;
+  const scope = {
+    gatewayOwner: gatewayUrl,
+    recoveryScope: "caption-reload-owner",
+    scopeKey: "chat:v3:agent:main:caption-reload\u0000agent:main",
+  };
+  await draftApi.writeDurableComposerDraft(
+    scope,
+    {
+      revision: 1,
+      text: "Review this",
+      attachments: [
+        { blob: new Blob(["saved bytes"]), mimeType: "text/plain", fileName: "saved.txt" },
+      ],
+    },
+    { expectedRevision: 0, writeId: "saved" },
+  );
+  const open = () => {
+    const state: State = {
+      settings: { gatewayUrl },
+      sessionKey: "agent:main:caption-reload",
+      chatMessage: "",
+      chatAttachments: [],
+      chatQueue: [],
+      client: { recoveryScope: scope.recoveryScope, recoveryScopeReady: true },
+      connected: true,
+      selectedChatSessionIncognito: false,
+    };
+    let owner: State | undefined = state;
+    const persistence = new composer.ChatComposerPersistence(() => owner);
+    const close = () => {
+      owner = undefined;
+      persistence.stop();
+      releaseChatAttachmentPayloads(state.chatAttachments);
+    };
+    onTestFinished(close);
+    persistence.restore();
+    persistence.start();
+    return { state, persistence, close };
+  };
+  const first = open();
+  await expect
+    .poll(() => first.state.chatAttachments?.map((file) => file.fileName))
+    .toEqual(["saved.txt"]);
+  const put = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "put")
+    ?.value as IDBObjectStore["put"];
+  let interrupt = true;
+  let interrupted = 0;
+  IDBObjectStore.prototype.put = function (value, key) {
+    if (interrupt && this.name === "composerDrafts" && value.scopeKey === scope.scopeKey) {
+      interrupted += 1;
+      this.transaction.abort();
+      throw new DOMException("Interrupted draft write", "AbortError");
+    }
+    return key === undefined ? put.call(this, value) : put.call(this, value, key);
+  };
+  onTestFinished(() => {
+    IDBObjectStore.prototype.put = put;
+  });
+  first.state.chatMessage = "Review this!";
+  first.persistence.schedule();
+  first.persistence.persistNow();
+  await expect.poll(() => interrupted).toBe(1);
+  expect(await draftApi.readDurableComposerDraft(scope)).toMatchObject({
+    status: "found",
+    draft: { text: "Review this" },
+  });
+  first.close();
+  interrupt = false;
+
+  const reloaded = open();
+  await expect
+    .poll(() => reloaded.state.chatAttachments?.map((file) => file.fileName))
+    .toEqual(["saved.txt"]);
+  expect(reloaded.state.chatMessage).toBe("Review this!");
+  expect(reloaded.state.chatAttachments?.[0]?.dataUrl).toBe(
+    "data:text/plain;base64,c2F2ZWQgYnl0ZXM=",
+  );
+  await expect
+    .poll(() => draftApi.readDurableComposerDraft(scope))
+    .toMatchObject({ status: "found", draft: { text: "Review this!" } });
+
+  interrupt = true;
+  releaseChatAttachmentPayloads(reloaded.state.chatAttachments);
+  reloaded.state.chatAttachments = [];
+  reloaded.persistence.schedule();
+  reloaded.persistence.persistNow();
+  await expect.poll(() => interrupted).toBe(2);
+  reloaded.close();
+  interrupt = false;
+  const removed = open();
+  await expect
+    .poll(() => draftApi.readDurableComposerDraft(scope))
+    .toMatchObject({ status: "found", draft: { text: "Review this!", attachments: [] } });
+  expect(removed.state.chatAttachments).toEqual([]);
+  expect(removed.state.chatMessage).toBe("Review this!");
+});
 
 const store = {
   read: draftApi.readDurableComposerDraft,

@@ -130,7 +130,12 @@ export class ChatComposerPersistence {
         JSON.stringify(state.chatGoalDraftMode ?? null) ||
       JSON.stringify(stored?.replyTarget ?? null) !== JSON.stringify(state.chatReplyTarget ?? null);
     this.#durablePersistence.resetRestoreScope();
-    this.#lastPersisted = this.#snapshot(state, revisions.committed, revisions.committed);
+    this.#lastPersisted = this.#snapshot(
+      state,
+      revisions.committed,
+      revisions.committed,
+      stored?.attachmentVersion,
+    );
     this.#synchronizeDurablePersistence();
   }
 
@@ -150,10 +155,15 @@ export class ChatComposerPersistence {
     const restored = restoreChatComposerState(state, options);
     this.#pending = null;
     this.#clearTimer();
-    const { revisions } = loadChatComposerState(state, state.sessionKey);
+    const { revisions, snapshot: stored } = loadChatComposerState(state, state.sessionKey);
     this.#committedDraftRevision = revisions.committed;
     this.#latestDraftRevision = revisions.latestAttempt;
-    this.#lastPersisted = this.#snapshot(state, revisions.committed, revisions.committed);
+    this.#lastPersisted = this.#snapshot(
+      state,
+      revisions.committed,
+      revisions.committed,
+      stored?.attachmentVersion,
+    );
     this.#durableRestoreProtected = false;
     this.#durablePersistence.resetRestoreScope();
     this.#onRestored();
@@ -315,6 +325,7 @@ export class ChatComposerPersistence {
             goalMode: snapshot.goalMode ?? null,
             replyTarget: snapshot.replyTarget ?? null,
             draftRevision: snapshot.draftRevision,
+            attachmentVersion: snapshot.durable?.attachmentVersion,
             ...(enforceExpectedRevision
               ? { expectedDraftRevision: snapshot.expectedDraftRevision }
               : {}),
@@ -399,6 +410,7 @@ export class ChatComposerPersistence {
     state: DurableChatComposerPersistenceState,
     draftRevision: number = this.#latestDraftRevision,
     expectedDraftRevision: number = this.#committedDraftRevision,
+    restoredAttachmentVersion?: string,
   ): ChatComposerDraftSnapshot {
     return captureChatComposerDraftSnapshot(
       state,
@@ -406,6 +418,7 @@ export class ChatComposerPersistence {
       draftRevision,
       expectedDraftRevision,
       this.#lastPersisted,
+      restoredAttachmentVersion,
     );
   }
 
@@ -471,7 +484,7 @@ export class ChatComposerPersistence {
       state.chatReplyTarget = null;
       state.chatAttachments = [];
       this.#pending = null;
-      const { revisions } = loadChatComposerState(state, state.sessionKey);
+      const { revisions, snapshot: stored } = loadChatComposerState(state, state.sessionKey);
       this.#committedDraftRevision = revisions.committed;
       this.#latestDraftRevision = revisions.latestAttempt;
       // Read the replacement account; never clear its saved draft with old presentation.
@@ -482,6 +495,7 @@ export class ChatComposerPersistence {
         state,
         this.#latestDraftRevision,
         this.#latestDraftRevision,
+        stored?.attachmentVersion,
       );
       this.#durableRestoreProtected = false;
       this.#forceDurableOwnerRestore = true;
@@ -501,6 +515,7 @@ export class ChatComposerPersistence {
         const baseline = this.#snapshot(state);
         return {
           latestRevision: this.#forceDurableOwnerRestore ? 0 : this.#latestDraftRevision,
+          attachmentVersion: baseline.durable?.attachmentVersion,
           signature: this.#currentContentSignature(state),
           onCurrentWins: (storedRevision) => {
             this.#forceDurableOwnerRestore = false;
@@ -537,20 +552,28 @@ export class ChatComposerPersistence {
         const forceOwnerRestore = this.#forceDurableOwnerRestore;
         this.#forceDurableOwnerRestore = false;
         const displaced = state.chatAttachments ?? [];
-        state.chatMessage = normalizeChatComposerDraft(draft.text);
-        state.chatMentions = draft.mentions;
-        state.chatGoalDraftMode = draft.goalMode ?? null;
-        state.chatReplyTarget = draft.replyTarget ?? null;
+        const newerCaption = !forceOwnerRestore && draft.revision < this.#latestDraftRevision;
+        if (!newerCaption) {
+          state.chatMessage = normalizeChatComposerDraft(draft.text);
+          state.chatMentions = draft.mentions;
+          state.chatGoalDraftMode = draft.goalMode ?? null;
+          state.chatReplyTarget = draft.replyTarget ?? null;
+        }
         state.chatAttachments = draft.attachments;
         releaseChatAttachmentPayloads(displaced);
         const adoptedRevision = forceOwnerRestore
           ? nextDraftRevision(Math.max(this.#latestDraftRevision, draft.revision))
-          : draft.revision;
+          : Math.max(this.#latestDraftRevision, draft.revision);
         // Storage presence notifications synchronously invalidate every pane. Adopt
         // the complete restored draft before they can schedule another write.
         this.#committedDraftRevision = adoptedRevision;
         this.#latestDraftRevision = adoptedRevision;
-        this.#lastPersisted = this.#snapshot(state, adoptedRevision, adoptedRevision);
+        this.#lastPersisted = this.#snapshot(
+          state,
+          adoptedRevision,
+          adoptedRevision,
+          draft.attachmentVersion,
+        );
         persistChatComposerState(state, state.sessionKey, {
           agentId: resolveUiConversationIdentity(state, state.sessionKey).agentId,
           draft: state.chatMessage,
@@ -558,8 +581,9 @@ export class ChatComposerPersistence {
           goalMode: state.chatGoalDraftMode,
           replyTarget: state.chatReplyTarget,
           draftRevision: adoptedRevision,
+          attachmentVersion: draft.attachmentVersion,
         });
-        if (forceOwnerRestore && this.#lastPersisted.durable) {
+        if ((forceOwnerRestore || newerCaption) && this.#lastPersisted.durable) {
           void this.#durablePersistence.persist({
             ...this.#lastPersisted.durable,
             expectedRevision: draft.revision,

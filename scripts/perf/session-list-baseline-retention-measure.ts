@@ -35,6 +35,7 @@ import { transformSync } from "esbuild";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { EntryRow } from "../../src/gateway/session-row-projection-record.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -321,12 +322,7 @@ try {
     delete retirements[cause];
   }
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16_384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16_384);
   }
   const misses: Record<string, number> = {};
   const sources: Record<

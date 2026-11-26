@@ -34,6 +34,7 @@ import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { getHeapSpaceStatistics } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode, directory, agentArg = "16", archiveArg = "128", sessionsArg = "625", shape] =
   process.argv.slice(2);
@@ -307,12 +308,7 @@ if (mode === "seed") {
   const sampling = agentArg !== "timing" && !forceGc;
   const inspector = new Session();
   if (sampling) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   let gcMs = 0;
   let gcCount = 0;

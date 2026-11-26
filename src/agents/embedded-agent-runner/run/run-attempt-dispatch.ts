@@ -82,7 +82,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     modelId,
     requestedModelId,
-    expectedHarnessArtifact,
+    expectedHarnessArtifact: expectedArtifact,
     nativeModelOwned,
     authStorage,
     modelRegistry,
@@ -211,7 +211,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
     ? attemptAuthProfileStore
     : undefined;
-  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
+  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedArtifact);
   const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
   const fallbackActive =
     modelId !== requestedModelId ||
@@ -353,28 +353,35 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onAbort: () => params.replyOperation?.abortByUser(),
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const preparedSessionTarget =
+  const preparedSessionTargetBinding =
     (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
     resolvedSessionTarget.sessionId &&
     resolvedSessionTarget.sessionKey &&
     resolvedSessionTarget.storePath
+      ? captureSessionTranscriptTargetBinding({
+          ...resolvedSessionTarget,
+          agentId: resolvedSessionTarget.agentId,
+          sessionId: resolvedSessionTarget.sessionId,
+          sessionKey: resolvedSessionTarget.sessionKey,
+          storePath: resolvedSessionTarget.storePath,
+        })
+      : undefined;
+  using preparedSessionTargetScope = preparedSessionTargetBinding
+    ? createPreparedSessionTargetAssertion({
+        runId: params.runId,
+        sessionId,
+        sessionPromptState,
+        selectedPromptTarget,
+        isAttemptCurrent: attemptControls.isAttemptCurrent,
+        assertActiveRun,
+      })
+    : undefined;
+  const preparedSessionTarget =
+    preparedSessionTargetBinding && preparedSessionTargetScope
       ? {
-          target: captureSessionTranscriptTargetBinding({
-            ...resolvedSessionTarget,
-            agentId: resolvedSessionTarget.agentId,
-            sessionId: resolvedSessionTarget.sessionId,
-            sessionKey: resolvedSessionTarget.sessionKey,
-            storePath: resolvedSessionTarget.storePath,
-          }),
-          assertCurrent: createPreparedSessionTargetAssertion({
-            runId: params.runId,
-            sessionId,
-            sessionPromptState,
-            selectedPromptTarget,
-            isAttemptCurrent: () => attemptControls.isAttemptCurrent(),
-            assertActiveRun,
-          }),
+          target: preparedSessionTargetBinding,
+          assertCurrent: preparedSessionTargetScope.assertCurrent,
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
@@ -397,6 +404,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
     joinObservation: params.joinObservation,
+    onMemoryFlushModelProgress: params.onMemoryFlushModelProgress,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -522,9 +530,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         }
       : {}),
     ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
+    ...(expectedArtifact?.artifact && { expectedRuntimeArtifact: expectedArtifact.artifact }),
     ...(params.sessionKey
       ? {
           agentHarnessCompletionScope: createAgentHarnessCompletionScope({

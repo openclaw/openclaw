@@ -15,6 +15,7 @@ import { parseArgs } from "node:util";
 import type { SessionEntrySummary } from "../../src/config/sessions/session-accessor.types.js";
 import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -160,12 +161,7 @@ fixture.exactReads = 0;
 fixture.inventories = 0;
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const hostLoadBefore = loadavg();
 const stopDiagnostics = startGatewayBenchDiagnostics();

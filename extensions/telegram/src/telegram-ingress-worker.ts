@@ -6,9 +6,10 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { resolveDebugProxySettings } from "openclaw/plugin-sdk/proxy-capture";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER } from "./telegram-ingress-worker.protocol.js";
 
-export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
 const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
 
 export type TelegramIngressWorkerMessage =
@@ -70,6 +71,8 @@ export type TelegramIngressWorkerOptions = {
   timeoutSeconds?: number;
   network?: TelegramNetworkConfig;
   proxy?: string;
+  /** Set by the parent when its debug proxy settings enable capture. */
+  debugProxyCapture?: boolean;
 };
 
 type TelegramIngressWorkerHandle = {
@@ -92,7 +95,11 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
   );
   const worker = createCpuTrackedWorker(workerUrl, {
     execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
-    workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+    workerData: {
+      ...options,
+      debugProxyCapture: resolveDebugProxySettings().enabled,
+      runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
+    },
   });
   const taskPromise = new Promise<void>((resolve, reject) => {
     worker.once("error", reject);
