@@ -16,6 +16,7 @@ import { i18n } from "../../i18n/index.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -258,7 +259,7 @@ it("offers Linux machine classes when the applied target is unset and the catalo
   }
 });
 
-it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+it("keeps profile inputs through catalog registration, refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
@@ -303,6 +304,11 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
       ),
     );
     change(lifetime, "9h");
+    // Another lazy catalog can publish without changing this field's translations.
+    registerEnglishCatalog(() => {});
+    await waitForSolid(() =>
+      expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime),
+    );
     const refresh = async (nextHash: string) => {
       const pending = createDeferred<EnvironmentsListResult>();
       response = pending.promise;

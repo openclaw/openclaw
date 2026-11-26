@@ -99,6 +99,9 @@ export function registerSessionsSendPrivateCompletionTests(
             completionWork = Promise.resolve(result);
             return result;
           },
+          runWithRequester<T>(work: () => Promise<T>): Promise<T> {
+            return this.run(work);
+          },
         },
       });
       const close = vi.spyOn(completion, "close");

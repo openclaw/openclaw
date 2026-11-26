@@ -8,6 +8,10 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import {
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "../exec-approval-participation.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
@@ -258,13 +262,30 @@ export function readOperatorApprovalRequestSource(
   return { ...record.source, requestedByProfileId: record.requester.profileId };
 }
 
+export function bindApprovalReviewerDeviceIds<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  deviceIds?: readonly string[] | null;
+}): void {
+  const deviceIds = normalizeUniqueTrimmedStringList(params.deviceIds);
+  if (deviceIds.length > 0) {
+    params.record.approvalReviewerDeviceIds = deviceIds;
+  }
+}
+
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
   cfg?: OpenClawConfig;
   prepared?: Parameters<typeof canAccessApprovalSession>[0]["prepared"];
   sessionAccess?: Awaited<ReturnType<typeof prepareApprovalSessionAccess>>;
+  resolving?: boolean;
 }): boolean {
+  if (params.resolving) {
+    const participation = canResolveParticipationExecApproval(params.record, params.client);
+    if (participation !== undefined) {
+      return participation;
+    }
+  }
   const scopes = params.client?.connect.scopes ?? [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
@@ -319,6 +340,7 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
   Array<{
     approvalKind?: ChannelApprovalKind;
     id: string;
+    canDecide?: boolean;
     request: TPayload;
     createdAtMs: number;
     expiresAtMs: number;
@@ -337,15 +359,21 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     .filter(
       (record) =>
         !params.client?.invalidated &&
-        isApprovalRecordVisibleToClient({
-          record,
-          client: params.client ?? null,
-          ...(cfg ? { cfg } : {}),
-          sessionAccess,
-        }),
+        (canResolveParticipationExecApproval(record, params.client) ??
+          isApprovalRecordVisibleToClient({
+            record,
+            client: params.client ?? null,
+            ...(cfg ? { cfg } : {}),
+            sessionAccess,
+          })),
     )
-    .map(({ id, request, createdAtMs, expiresAtMs }) => {
-      const approval = { id, request, createdAtMs, expiresAtMs };
+    .map((record) => {
+      const { id, request, createdAtMs, expiresAtMs } = record;
+      const turnActor = participationApprovalTurnActor(record);
+      const approval = Object.assign(
+        { id, request: turnActor ? { ...request, turnActor } : request, createdAtMs, expiresAtMs },
+        record.participation ? { canDecide: true } : {},
+      );
       return params.approvalKind
         ? Object.assign(approval, { approvalKind: params.approvalKind })
         : approval;
@@ -362,6 +390,7 @@ async function resolveApprovalRecordForState<TPayload>(
     getCfg?: () => OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
     recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
+    resolving?: boolean;
   },
   expectedState: "pending" | "resolved",
 ): Promise<ApprovalRecordLookupResult<TPayload>> {
@@ -390,6 +419,7 @@ async function resolveApprovalRecordForState<TPayload>(
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
         sessionAccess,
+        resolving: params.resolving,
       }) &&
       ((await params.recordFilter?.(record)) ?? true)
     );

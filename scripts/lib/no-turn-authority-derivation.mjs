@@ -27,7 +27,6 @@ export const TURN_FLAG_FILES = new Set([
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",
   "src/commands/doctor/cron/execution-context-check.ts",
-  "src/cron/execution-context-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
   "src/gateway/approval-channel-custody.ts",
   "src/gateway/operator-admission.ts",
@@ -37,67 +36,34 @@ export const TURN_FLAG_FILES = new Set([
   "src/gateway/server-methods/restart.ts",
   "src/gateway/server-methods/update-run.ts",
   "src/gateway/server-methods/update.ts",
-  "src/gateway/session-sharing-authorization-async.ts",
   "src/gateway/update-run-notice-target.ts",
   "src/infra/outbound/delivery-queue-recovery-params.ts",
   "src/infra/update-requester-authority.ts",
 ]);
 
 // Owner status has one producer: `grant.owner`. A value that only passes the same name along,
-// or is `false`/`undefined`, is not a producer.
+// or is `false`/`undefined`, is not a producer. Every entry below still sets the bit itself.
 const OWNER_FIELDS = new Set(["senderIsOwner", "requesterOwner"]);
 export const OWNER_PRODUCER_FILES = new Set([
-  "extensions/codex/index.ts",
-  "extensions/discord/src/monitor/native-command-auth.ts",
-  "extensions/discord/src/voice/speaker-context.ts",
-  "extensions/facetime/src/call-events.ts",
-  "extensions/facetime/src/talk-consult-controller.ts",
-  "extensions/voice-call/src/webhook.ts",
+  // Principals admission does not see yet: they match their own credential or owner config.
+  "extensions/discord/src/monitor/native-command-auth.ts", // native slash command, no turn yet
+  "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
+  // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
+  // and pre-turn senders have no grant yet, so this fact still sets the bit.
+  "src/auto-reply/command-auth.ts",
+  "src/auto-reply/reply/reply-source-admission.ts",
+  "src/gateway/agent-turn/agent-run-user-turn.ts",
+  // Scheduled write: an operator-authorized job's operator-policy message action.
+  "src/channels/plugins/message-action-dispatch.ts",
+  // Recorded data read back, never decided: protocol field, transcript and lineage receipts,
+  // and the owner bit scheduled occurrence admission minted (`facts.authority.owner`).
   "packages/gateway-protocol/src/schema/agent.ts",
-  "packages/memory-host-sdk/src/host/session-entry-projection.ts",
-  "src/agents/agent-command-local.ts",
-  "src/agents/agent-command.ts",
-  "src/agents/cli-runner/mcp-grant-context.ts",
-  "src/agents/embedded-agent-runner/compaction-runtime-context.ts",
-  "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",
   "src/agents/scheduled-message-invocation.ts",
-  "src/auto-reply/command-auth.ts",
-  "src/auto-reply/reply/agent-runner-question-input.ts",
-  "src/auto-reply/reply/agent-runner-steer-adoption.ts",
-  "src/auto-reply/reply/get-reply-run-execute.ts",
   "src/auto-reply/reply/memory-flush-prepare.ts",
-  "src/auto-reply/reply/reply-source-admission.ts",
-  "src/auto-reply/reply/session-event-context.ts",
-  "src/auto-reply/reply/session-event-target.ts",
-  "src/channels/plugins/message-action-dispatch.ts",
-  "src/commands/message.ts",
-  "src/cron/execution-context-admission.ts",
   "src/cron/execution-context-registry.ts",
-  "src/gateway/agent-turn/agent-run-user-turn.ts",
-  "src/gateway/cron-job-turn-target.ts",
-  "src/gateway/mcp-http.request.ts",
-  "src/gateway/openai-compatible-http.ts",
-  "src/gateway/operator-admission.ts",
-  "src/gateway/server-methods/conversations.ts",
-  "src/gateway/server-methods/send.ts",
-  "src/gateway/server-methods/tools-invoke.ts",
-  "src/gateway/session-resource-tool-policy.ts",
   "src/gateway/session-transcript-message.ts",
-  "src/gateway/talk/client-tool-authority.ts",
-  "src/gateway/tool-resolution-authority.ts",
-  "src/gateway/tool-resolution.ts",
-  "src/gateway/tools-invoke-http.ts",
-  "src/mcp/codex-supervision-tools-serve.ts",
   "src/plugins/memory-audience.ts",
-  "src/plugins/plugin-command-execution.ts",
-  "src/plugins/registry-registrars.ts",
-  "src/plugins/registry-runtime.ts",
-  "src/plugins/runtime/runtime-agent.ts",
-  "src/plugins/tool-factory-context.ts",
-  "src/sessions/user-turn-transcript.metadata.ts",
-  "src/talk/agent-consult-runtime.ts",
-  "src/worker/embedded-agent.runtime.ts",
 ]);
 
 // Capability modules read the grant, never how the turn started. Deny list, because transcript
@@ -125,7 +91,6 @@ const PROVENANCE_READS = new Set([
 ]);
 export const CAPABILITY_PROVENANCE_FILES = new Set([
   "src/agents/agent-tools.turn-authority.ts",
-  "src/agents/automations-run-scope.ts",
   "src/gateway/server-methods/cron-creator-authority-admission.ts",
   "src/gateway/skill-library-authoring.ts",
 ]);
@@ -142,25 +107,42 @@ const propertyName = (node) =>
 const memberName = (node) =>
   node?.type === "MemberExpression" && !node.computed ? propertyName(node.property) : undefined;
 
-/** Passing the same name along, `….grant.owner`, `false` and `undefined` produce nothing. */
+/**
+ * Passing the same name along, `….grant.owner`, `false` and `undefined` produce nothing. Neither
+ * do forms that can only narrow one: `x === true`, a choice between pass-throughs, `x && y` with
+ * one side passed along, and a getter that returns a pass-through.
+ */
 function passesOwnerAlong(value, field) {
   if (!value) {
     return true;
   }
-  if (value.type === "ChainExpression") {
-    return passesOwnerAlong(value.expression, field);
+  switch (value.type) {
+    case "ChainExpression":
+      return passesOwnerAlong(value.expression, field);
+    case "Literal":
+      return value.value === false;
+    case "Identifier":
+      return value.name === field || value.name === "undefined";
+    case "MemberExpression": {
+      const name = memberName(value);
+      return name === field || (name === "owner" && memberName(value.object) === "grant");
+    }
+    case "BinaryExpression":
+      return (
+        value.operator === "===" &&
+        value.right.type === "Literal" &&
+        value.right.value === true &&
+        passesOwnerAlong(value.left, field)
+      );
+    case "ConditionalExpression":
+      return passesOwnerAlong(value.consequent, field) && passesOwnerAlong(value.alternate, field);
+    case "LogicalExpression":
+      return value.operator === "&&"
+        ? passesOwnerAlong(value.left, field) || passesOwnerAlong(value.right, field)
+        : passesOwnerAlong(value.left, field) && passesOwnerAlong(value.right, field);
+    default:
+      return false;
   }
-  if (value.type === "Literal" && value.value === false) {
-    return true;
-  }
-  if (value.type === "Identifier") {
-    return value.name === field || value.name === "undefined";
-  }
-  if (value.type === "MemberExpression" && !value.computed) {
-    const name = memberName(value);
-    return name === field || (name === "owner" && memberName(value.object) === "grant");
-  }
-  return false;
 }
 
 export default {
@@ -224,12 +206,22 @@ export default {
       Property(node) {
         const field = node.computed ? undefined : propertyName(node.key);
         if (
-          checkOwner &&
-          field &&
-          OWNER_FIELDS.has(field) &&
-          node.parent?.type === "ObjectExpression" &&
-          !passesOwnerAlong(node.value, field)
+          !checkOwner ||
+          !field ||
+          !OWNER_FIELDS.has(field) ||
+          node.parent?.type !== "ObjectExpression"
         ) {
+          return;
+        }
+        // A getter is read as its value: one `return` of a pass-through passes along.
+        const [statement, ...rest] = node.kind === "get" ? node.value.body.body : [];
+        const value =
+          node.kind !== "get"
+            ? node.value
+            : rest.length === 0 && statement?.type === "ReturnStatement"
+              ? statement.argument
+              : node.value;
+        if (!passesOwnerAlong(value, field)) {
           reportOwner(node, field);
         }
       },

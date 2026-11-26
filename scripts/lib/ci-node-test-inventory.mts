@@ -502,6 +502,12 @@ export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
       "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
   },
   {
+    pattern: ".agents/skills/openclaw-writing/scripts/*.test.mjs",
+    owner: "OpenClaw writing skill tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
     pattern: "crates/openclaw-iroh-node/test/*.test.cjs",
     owner: ".github/workflows/iroh-node.yml",
     reason:

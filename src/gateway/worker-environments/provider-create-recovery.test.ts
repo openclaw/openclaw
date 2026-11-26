@@ -417,7 +417,7 @@ describe("worker creation source recovery", () => {
           context: caller.context,
           assertCurrent: () => {},
         }),
-      ).rejects.toThrow("Restart recovery could not admit this input. Start a new user turn.");
+      ).rejects.toThrow("The sign-in it was started with is no longer valid.");
     } finally {
       held.release();
     }

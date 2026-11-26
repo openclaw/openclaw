@@ -2,6 +2,7 @@ import { createSignal, createStore } from "solid-js";
 import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
 import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
 import { loadComposerTasksRuntime } from "../../../lib/chat/composer-tasks.ts";
+import { withoutMemberInvitations } from "../../../lib/chat/human-mentions.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
@@ -99,11 +100,16 @@ export function commitComposerDraft(
   mentions?: readonly HumanMention[],
 ): void {
   const currentDraft = props.getDraft ? props.getDraft() : props.draft;
-  if (currentDraft === value && mentions === undefined) {
+  const currentMentions = props.getMentions?.() ?? props.mentions;
+  const selected = withoutMemberInvitations(
+    mentions ?? (currentDraft === value ? currentMentions : undefined),
+    props.mentionDirectory?.members,
+  );
+  if (currentDraft === value && mentions === undefined && selected === currentMentions) {
     return;
   }
   getChatComposerState(props.paneId).editRevision += 1;
-  props.onDraftChange(value, mentions);
+  props.onDraftChange(value, selected);
 }
 
 /** Enter before the session is ready submits this exact draft once the composer can. */

@@ -44,6 +44,7 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { SessionEntryMetadataFact } from "./session-entry-metadata-receipt.js";
+import { publishSessionParticipationMemberChange } from "./session-participation-source.js";
 import type {
   addSessionMember,
   removeSessionMember,
@@ -305,6 +306,20 @@ export async function runSessionCollaborationWrite<
                       );
                     }
                     const receipt = candidate;
+                    // Revocation is a committed effect even if a newer row supersedes its projection.
+                    for (const [sessionKey, fact] of receipt.publication.facts) {
+                      if (fact.kind === "postimage") {
+                        for (const change of fact.value) {
+                          if (change.kind === "member") {
+                            publishSessionParticipationMemberChange(
+                              location.agentId,
+                              sessionKey,
+                              change,
+                            );
+                          }
+                        }
+                      }
+                    }
                     const changes = [...receipt.publication.facts].flatMap<SessionRowChange>(
                       ([sessionKey, fact]) =>
                         fact.kind === "postimage"
@@ -486,6 +501,9 @@ function publishSessionMembership(
   location: { agentId: string; storePath: string; sessionKey: string },
   databaseIdentity: string | undefined,
 ) {
+  if (!databaseIdentity && facts) {
+    publishSessionParticipationMemberChange(location.agentId, location.sessionKey, facts);
+  }
   publishSessionCollaborationChanges(
     [facts ? { ...location, facts } : { ...location, factsInvalidated: true }],
     databaseIdentity,

@@ -7,6 +7,7 @@ import {
 } from "../../gateway/server-shutdown.js";
 import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayLockHandle } from "../../infra/gateway-lock.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { flushLogger } from "../../logging/logger.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -103,7 +104,13 @@ export function createGatewayRunCleanup(
       () => flushGatewayLogsBeforeExit(logger, graceMs),
       graceMs,
     );
+  const waitForPersistence = (completion: Promise<void> | undefined) =>
+    settleResource("restart.close.persistence", () => completion, 3_000);
   const drainProcessResources = async () => {
+    if (processResourcesDrained) {
+      await flushLogs();
+      return;
+    }
     // Retained callbacks remain callable after an update replaces on-disk chunks.
     if (!isForegroundUpdateClosed()) {
       await settleResource("restart.close.provider-local-services", () =>
@@ -221,8 +228,22 @@ export function createGatewayRunCleanup(
       }
     },
     flushLogs,
-    waitForPersistence: (completion: Promise<void> | undefined) =>
-      settleResource("restart.close.persistence", () => completion, 3_000),
+    waitForPersistence,
+    async releaseStateCustody(
+      lock: GatewayLockHandle | null,
+      completion: Promise<void> | undefined,
+    ) {
+      if (!(await waitForPersistence(completion))) {
+        throw new Error("Gateway state custody release did not settle; successor cannot start");
+      }
+      // The accepted stop's watchdog owns the deadline. A reporting grace must not
+      // turn an active native borrower into a rejected release with a live owner.
+      await measureGatewayCloseStep(
+        "restart.close.state-custody",
+        () => lock?.release(),
+        () => ({ stateDir: lock?.stateDir }),
+      );
+    },
     async waitForStop(owner: { getStopCompletion: () => Promise<void> | undefined }) {
       const completion = owner.getStopCompletion();
       if (!completion) {

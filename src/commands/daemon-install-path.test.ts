@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as ProgramArgs from "../daemon/program-args.js";
 import { auditGatewayInstallPreservation } from "../daemon/service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "../daemon/service-audit-types.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
@@ -63,7 +64,75 @@ function buildPlan(params: Partial<Parameters<typeof buildGatewayInstallPlan>[0]
   });
 }
 
+describe("Gateway install resident entrypoint", () => {
+  it("selects the resident launcher from the install plan environment without changing the process", async () => {
+    const originalArgv = process.argv;
+    const originalState = process.env.OPENCLAW_STATE_DIR;
+    const { resolveGatewayProgramArguments } = await vi.importActual<typeof ProgramArgs>(
+      "../daemon/program-args.js",
+    );
+    mocks.resolveGatewayProgramArguments.mockImplementation(resolveGatewayProgramArguments);
+    try {
+      const npmRoot = path.join(tmpDir, "npm", "lib", "node_modules", "openclaw");
+      fs.mkdirSync(path.join(npmRoot, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(npmRoot, "dist", "index.js"), "");
+      process.argv = [process.execPath, path.join(npmRoot, "dist", "index.js")];
+      for (const profile of ["first", "second"]) {
+        const state = path.join(tmpDir, profile);
+        const prefix = path.join(state, "git-install");
+        const release = path.join(prefix, "releases", "active", "openclaw");
+        const launcher = path.join(prefix, "openclaw-launcher.mjs");
+        fs.mkdirSync(release, { recursive: true });
+        fs.symlinkSync(release, path.join(prefix, "openclaw"), "junction");
+        fs.writeFileSync(launcher, "");
+        const plan = await buildPlan({
+          env: { HOME: tmpDir, OPENCLAW_STATE_DIR: state, OPENCLAW_PROFILE: profile },
+          devMode: false,
+          runtimePath: process.execPath,
+          config: {},
+        });
+        expect(plan.programArguments.at(-4)).toBe(launcher);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(originalState);
+      }
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+});
+
 describe("Gateway install PATH preservation", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps the installed macOS CLI directory ahead of an unchanged Homebrew Node through audit",
+    async () => {
+      const serviceEnv = await vi.importActual<typeof import("../daemon/service-env.js")>(
+        "../daemon/service-env.js",
+      );
+      mocks.buildServiceEnvironment.mockImplementation(serviceEnv.buildServiceEnvironment);
+      const executable = "/opt/homebrew/bin/node";
+      const programArguments = [executable, "/opt/openclaw/dist/index.js", "gateway"];
+      mocks.resolveGatewayProgramArguments.mockResolvedValue({ programArguments });
+
+      const existingCommand = {
+        programArguments,
+        environment: {
+          PATH: "/Users/test/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+      };
+      const plan = await buildPlan({
+        platform: "darwin",
+        runtimePath: executable,
+        serviceCli: { executable, entrypoint: "/Users/test/.local/bin/openclaw" },
+        existingCommand,
+        existingEnvironment: existingCommand.environment,
+      });
+      const findings: ServiceDefinitionDrift[] = [];
+      auditGatewayInstallPreservation(existingCommand, plan, "darwin", findings);
+
+      expect(findings).toEqual([]);
+      expect(plan.environment.PATH).toBe(existingCommand.environment.PATH);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "derives a restored CLI plan from its retained package",
     async () => {
@@ -312,43 +381,34 @@ describe("Gateway install PATH preservation", () => {
     expect(plan.environment.PATH).toBe(testCase.expectedPath);
   });
 
-  it.each([
-    {
-      name: "an unchanged runtime whose directory is not first",
-      previousNode: "/opt/homebrew/bin/node",
-      nextNode: "/opt/homebrew/bin/node",
-      existingPath: "/Users/test/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin",
-      nextPath: "/opt/homebrew/bin:/Users/test/.local/bin:/opt/homebrew/sbin:/usr/bin:/bin",
-      expectedPath: "/Users/test/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin",
-    },
-    {
-      name: "a moved runtime directory that still leads",
-      previousNode: "/opt/node-a/bin/node",
-      nextNode: "/opt/node-b/bin/node",
-      existingPath: "/opt/node-a/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin",
-      nextPath: "/opt/node-b/bin:/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin",
-      expectedPath: "/opt/node-b/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin",
-    },
-  ])("keeps macOS PATH precedence through install-plan audit: $name", async (testCase) => {
-    mocks.buildServiceEnvironment.mockReturnValue({ PATH: testCase.nextPath, TMPDIR: "/tmp" });
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: [testCase.nextNode, "/opt/openclaw/dist/index.js", "gateway"],
-    });
-    const existingCommand = {
-      programArguments: [testCase.previousNode, "/opt/openclaw/dist/index.js", "gateway"],
-      environment: { PATH: testCase.existingPath },
-    };
-    const plan = await buildPlan({
-      platform: "darwin",
-      existingCommand,
-      existingEnvironment: existingCommand.environment,
-    });
-    const findings: ServiceDefinitionDrift[] = [];
-    auditGatewayInstallPreservation(existingCommand, plan, "darwin", findings);
+  it.skipIf(process.platform === "win32")(
+    "keeps macOS PATH precedence through audit when the leading Node runtime directory moves",
+    async () => {
+      mocks.buildServiceEnvironment.mockReturnValue({
+        PATH: "/opt/node-b/bin:/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      });
+      mocks.resolveGatewayProgramArguments.mockResolvedValue({
+        programArguments: ["/opt/node-b/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
+      });
+      const existingCommand = {
+        programArguments: ["/opt/node-a/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
+        environment: { PATH: "/opt/node-a/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin" },
+      };
+      const plan = await buildPlan({
+        platform: "darwin",
+        existingCommand,
+        existingEnvironment: existingCommand.environment,
+      });
+      const findings: ServiceDefinitionDrift[] = [];
+      auditGatewayInstallPreservation(existingCommand, plan, "darwin", findings);
 
-    expect(findings).toEqual([]);
-    expect(plan.environment.PATH).toBe(testCase.expectedPath);
-  });
+      expect(findings).toEqual([]);
+      expect(plan.environment.PATH).toBe(
+        "/opt/node-b/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin",
+      );
+    },
+  );
 });
 
 describe("Gateway allocator startup environment", () => {

@@ -25,6 +25,7 @@ import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
+import { admitGatewayCronOccurrence } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -207,10 +208,11 @@ export async function withCommandPlugin(
     const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
     const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
+    const resolveCronAgent = () => ({ agentId: "main", cfg });
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
-      resolveCronAgent: () => ({ agentId: "main", cfg }),
+      resolveCronAgent,
       resolveGatewayContext,
       resolvePluginRegistry: () => registry,
     });
@@ -224,6 +226,7 @@ export async function withCommandPlugin(
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
         runSchedulerOwned,
+        admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
         // Present, as in the Gateway, so a misrouted command schedule would be observed here.
         runSessionEvent: async ({ text }) => {
           sessionEventPrompts.push(text);

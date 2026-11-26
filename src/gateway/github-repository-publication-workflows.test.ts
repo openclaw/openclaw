@@ -59,7 +59,7 @@ const createFixture = async (
 const rejected = {
   status: "failed",
   code: "github_rejected",
-  nextAction: expect.stringContaining("Ask a maintainer"),
+  nextAction: expect.stringMatching(/Ask a (Gateway admin to do it|maintainer to publish)/),
 };
 const writes = () => mocks.runCommand.mock.calls.filter(([args]) => args.includes("POST"));
 const treeReads = () =>

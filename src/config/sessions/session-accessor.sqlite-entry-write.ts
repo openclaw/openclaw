@@ -8,6 +8,7 @@ import { communicationEntryBinding } from "../../sessions/communication-admissio
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
+import { prepareSessionArchiveUndoWrite } from "./session-accessor.sqlite-archive-undo.js";
 import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import {
   linkSessionConversation,
@@ -158,6 +159,17 @@ function prepareSessionEntryWrite(
     options,
   );
   normalizedEntry = normalized.entry;
+  const archiveUndo = prepareSessionArchiveUndoWrite({
+    database,
+    sessionKey,
+    previous: canonicalPreviousEntry,
+    next: normalizedEntry,
+    options,
+    actorPreparation: actorPreparation !== undefined,
+  });
+  if (archiveUndo === "requires-transaction") {
+    return undefined;
+  }
   // Public/plugin projections omit this server-owned field. Same-session replacements
   // retain publication; only an explicit field clear or a new session id revokes it.
   if (

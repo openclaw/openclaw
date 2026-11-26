@@ -19,10 +19,11 @@ const sourceTarball = process.env.OPENCLAW_CURRENT_PACKAGE_TGZ;
 assert(sourceTarball, "missing packed current checkout");
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
 assert(artifacts, "missing artifact directory");
+const crash = process.env.OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE === "crash";
 const fixtureRoot = "/tmp/openclaw-release-fixtures";
 const fixture = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "fixture.json"), "utf8"));
 fixture.next.tarball = path.join(fixtureRoot, "next.tgz");
-const expected = fixture.next;
+const expected = crash ? fixture.previous : fixture.next;
 fs.mkdirSync(artifacts, { recursive: true });
 // openclaw-temp-dir: allow standalone Docker lane owns its runtime until container removal.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-release-survivor-"));
@@ -356,6 +357,9 @@ try {
   const before = sentinels();
   save("rows-before.json", before);
   assert.equal(before.length, 2, "fixture seed is empty");
+  if (crash) {
+    fs.writeFileSync(path.join(path.dirname(database), "crash-after-migration.json"), "{}");
+  }
   const gateway = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not become ready");
   assert.equal(gateway.exitCode, null, "T exited before the API update");
@@ -367,7 +371,7 @@ try {
     "Gateway target override present",
   );
   const startedAt = Date.now();
-  await command("openclaw", ["update", "--yes", "--json"], "update-cli.json");
+  await command("openclaw", ["update", "--yes", "--json"], "update-cli.json", crash ? 1 : 0);
   const row = await waitFor(
     () => {
       const current = readRun();
@@ -378,7 +382,7 @@ try {
   );
   save("update-row.json", row);
   assert.equal(row.trigger, "api");
-  assert.equal(row.status, "succeeded", row.reason ?? "release update failed");
+  assert.equal(row.status, crash ? "failed" : "succeeded", row.reason ?? "release update failed");
   assert.equal(JSON.parse(row.before_json).version, fixture.previous.version);
   assert.equal(JSON.parse(row.target_json).version, fixture.next.version);
   const verification = JSON.parse(row.verification_json);
@@ -399,8 +403,10 @@ try {
   );
   const after = sentinels();
   assert.equal(after.length, before.length, "row counts changed");
-  for (const entry of before) {
-    entry.store_json = '{"migrated":true}';
+  if (!crash) {
+    for (const entry of before) {
+      entry.store_json = '{"migrated":true}';
+    }
   }
   assert.deepEqual(after, before);
   save("rows-after.json", after);
@@ -410,11 +416,25 @@ try {
         db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'fixture_update_migration'").get(),
       ),
     ),
-    true,
+    !crash,
   );
+  if (crash) {
+    const evidence = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(database), "crash-after-migration.json"), "utf8"),
+    );
+    assert.equal(
+      evidence.schema.user_version,
+      fixture.next.schema,
+      "candidate did not crash after migration",
+    );
+    assert.equal(evidence.rows[0].migrated_to, fixture.next.schema);
+    assert.notEqual(evidence.pid, gateway.pid, "the old Gateway crashed, not the candidate");
+    save("crash-after-migration.json", evidence);
+    assert.equal(verification.rollbackOutcome.status, "succeeded");
+  }
   const releasePrefix = path.join(state, "git-install");
   const trial = JSON.parse(fs.readFileSync(path.join(releasePrefix, "releases", ".trial"), "utf8"));
-  assert.equal(trial.phase, "committed");
+  assert.equal(trial.phase, crash ? "rolled-back" : "committed");
   assert.equal(trial.buildId, fixture.next.buildId);
   const previous = path.resolve(releasePrefix, trial.previous);
   assert(fs.existsSync(path.join(previous, "openclaw.mjs")), "previous release was not retained");
@@ -464,6 +484,16 @@ try {
     console.error(`Could not preserve trial.json: ${captureError.message}`);
   }
   try {
+    const source = path.join(path.dirname(database), "crash-after-migration.json");
+    if (fs.existsSync(source)) {
+      const destination = path.join(artifacts, "crash-after-migration.json");
+      fs.copyFileSync(source, destination);
+      fs.chmodSync(destination, 0o644);
+    }
+  } catch (captureError) {
+    console.error(`Could not preserve crash-after-migration.json: ${captureError.message}`);
+  }
+  try {
     save(
       "update-runs.json",
       readDatabase(database, (db) =>
@@ -477,7 +507,7 @@ try {
     save("summary.json", {
       head: fixture.previous.commit,
       status: "failed",
-      case: "healthy",
+      case: crash ? "crash" : "healthy",
       ready: await ready(),
       error: error.message,
       servingSchema: readDatabase(

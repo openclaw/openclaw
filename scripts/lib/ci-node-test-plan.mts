@@ -1,7 +1,7 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
-import { isAbsolute, matchesGlob, relative, resolve } from "node:path";
+import { isAbsolute, matchesGlob, relative } from "node:path";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -29,11 +29,9 @@ import {
   controlUiE2eTestGlobs,
   isPluginControlUiPath,
   isUiBrowserTestFile,
-  isUiTestTarget,
   resolveUiTypeScriptPath,
   uiTypeScriptPathGlob,
   uiTimingTestFiles,
-  uiE2ePrebuiltParallelTestFiles,
   uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -52,7 +50,6 @@ import {
   isTestFileTarget,
   isToolingTestOwnerPath,
   resolveAffectedTestsFromImportGraph,
-  resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mts";
 import {
   COMMANDS_PARALLEL_TIMING_SUFFIX,
@@ -88,13 +85,16 @@ import {
   type NodeTestVolume,
 } from "./ci-node-test-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import {
+  isRuntimeTestFileIncluded,
+  type RuntimeTestSelection,
+} from "./ci-runtime-test-eligibility.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
 import { resolveCiTestRuntimeInventory, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
-  RELEASE_ONLY_UI_TEST_FILES,
 } from "./ci-test-tier-policy.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
@@ -106,7 +106,6 @@ import {
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
-  readUiE2eFileTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
@@ -164,24 +163,16 @@ export type NodeTestShard = Omit<
   predictedTestSeconds?: number;
 };
 
-type NodeTestPlanOptions = {
-  changedPaths?: readonly string[];
+type NodeTestPlanOptions = RuntimeTestSelection & {
   includeReleaseOnlyPluginShards?: boolean;
   includeProofTests?: boolean;
   includeReleaseOnlyToolingShards?: boolean;
-  includeReleaseOnlyRuntimeTests?: boolean;
-  includePrExemptRuntimeTests?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
   compactNodeJobCap?: number;
   mainValidation?: boolean;
   runnerBackend?: string;
 };
-
-export type RuntimeTestSelection = Pick<
-  NodeTestPlanOptions,
-  "changedPaths" | "includeReleaseOnlyRuntimeTests" | "includePrExemptRuntimeTests"
->;
 
 export type NodeTestVolumeContext = {
   readonly revision: string;
@@ -324,70 +315,6 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       });
     }),
   });
-}
-
-const prExemptChangedTargets = new WeakMap<readonly string[], Map<string, ReadonlySet<string>>>();
-
-function resolvePrExemptChangedTargets(changedPaths: readonly string[], cwd: string) {
-  let byCwd = prExemptChangedTargets.get(changedPaths);
-  const cached = byCwd?.get(cwd);
-  if (cached) {
-    return cached;
-  }
-  const paths = [...changedPaths];
-  // Explicit source owners cover spawned processes and filename readers;
-  // transitive imports cover subjects reached through shared integration fixtures.
-  const targets = new Set(
-    [
-      ...resolvePolicyTestTargets(paths, { cwd }),
-      ...resolveChangedTestTargetPlan(paths, {
-        broad: false,
-        combineSiblingWithImportGraph: true,
-        cwd,
-        forceFullImportGraph: true,
-        includeExtensionImpact: false,
-        resolveAliases: true,
-        runtimeOnly: true,
-      }).targets,
-      ...resolveAffectedTestsFromImportGraph(paths, cwd, {
-        tooling: true,
-        forceFull: true,
-        resolveAliases: true,
-        runtimeOnly: true,
-      }),
-    ].filter(isPrExemptRuntimeTestFile),
-  );
-  if (!byCwd) {
-    byCwd = new Map();
-    prExemptChangedTargets.set(changedPaths, byCwd);
-  }
-  byCwd.set(cwd, targets);
-  return targets;
-}
-
-export function isRuntimeTestFileIncluded(
-  file: string,
-  options: RuntimeTestSelection,
-  cwd = process.cwd(),
-): boolean {
-  const releaseOnly =
-    options.includeReleaseOnlyRuntimeTests === false && isReleaseOnlyRuntimeTestFile(file);
-  const prExempt = options.includePrExemptRuntimeTests === false && isPrExemptRuntimeTestFile(file);
-  if (!releaseOnly && !prExempt) {
-    return true;
-  }
-  if (statSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile() !== true) {
-    return false;
-  }
-  const changedPaths = options.changedPaths ?? [];
-  if (changedPaths.includes(file)) {
-    return true;
-  }
-  return (
-    !releaseOnly &&
-    changedPaths.length > 0 &&
-    resolvePrExemptChangedTargets(changedPaths, cwd).has(file)
-  );
 }
 
 export function resolveStartupCorpusTestFiles(options: RuntimeTestSelection = {}): string[] {
@@ -1688,133 +1615,6 @@ export function resolveUiE2ePrTestSelection(
     return false;
   });
   return { mode: "owners", files, reasons };
-}
-
-export function createUiTestShardGroups(
-  options: RuntimeTestSelection & {
-    includeReleaseOnlyTests?: boolean;
-    includeReleaseOnlyE2eTests?: boolean;
-    uiE2eFiles?: readonly string[];
-  } = {},
-) {
-  const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
-  const changedPaths = new Set(options.changedPaths ?? []);
-  const includeUiTest = (file: string) =>
-    includeReleaseOnlyTests || !RELEASE_ONLY_UI_TEST_FILES.has(file) || changedPaths.has(file);
-  const files =
-    includeReleaseOnlyTests && options.includePrExemptRuntimeTests !== false
-      ? undefined
-      : listTrackedTestFiles(".").filter(
-          (file) => includeUiTest(file) && isRuntimeTestFileIncluded(file, options),
-        );
-  const group = (config: string, ownsFile: (file: string) => boolean) => [
-    {
-      configs: [config],
-      shard_name: config,
-      ...(files ? { includePatterns: files.filter(ownsFile) } : {}),
-    },
-  ];
-  const e2eGroups = group(
-    "test/vitest/vitest.ui-e2e.config.ts",
-    (file) =>
-      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
-      uiE2eRealGatewayTestFiles.includes(file),
-  );
-  if (options.uiE2eFiles) {
-    const retained = (files ?? listTrackedTestFiles(".")).filter((file) =>
-      uiE2eRealGatewayTestFiles.includes(file),
-    );
-    e2eGroups[0]!.includePatterns = [
-      ...new Set([
-        ...options.uiE2eFiles.filter(includeUiTest),
-        ...(options.includeReleaseOnlyE2eTests
-          ? uiE2eRealGatewayTestFiles.filter(includeUiTest)
-          : retained),
-      ]),
-    ].toSorted();
-  }
-  return {
-    ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: e2eGroups,
-  };
-}
-
-export const UI_REAL_GATEWAY_TEST_CONFIG = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
-
-export function createUiRealGatewayTestShards(
-  e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
-  env: Readonly<Record<string, string | undefined>> = process.env,
-) {
-  const selected = new Set(
-    e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
-  );
-  const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
-  const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
-  const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
-  const timings = readUiE2eFileTimings();
-  // Disabled proofs still collect. An enabled DeepSeek flag retains full pricing
-  // without requiring preflight to receive the test job's credentials.
-  const optInEnabled = new Map([
-    [
-      resolveUiTypeScriptPath("ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts"),
-      env.OPENCLAW_DEEPSEEK_UI_LIVE === "1",
-    ],
-    [
-      resolveUiTypeScriptPath("ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts"),
-      Boolean(env.OPENCLAW_STEER_CUSTODY_PROOF),
-    ],
-  ]);
-  // Cold Gateway files use the observed roughly 30s file cost until two CI samples exist.
-  const seconds = (file: string) =>
-    (optInEnabled.get(file) === false ? 0 : (timings.fileSeconds[file] ?? 30)) +
-    timings.perFileOverheadSeconds;
-  const serial = files.filter((file) => !parallelFiles.has(file));
-  // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
-  const desktopSeconds = selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0;
-  // Each runner keeps unqualified fixtures serial. Split that work before placing
-  // qualified fixtures so one runner does not wait behind every serial file.
-  const buckets: { serialSeconds: number; workerSeconds: [number, number]; files: string[] }[] = [
-    { serialSeconds: 0, workerSeconds: [0, 0], files: [] },
-    { serialSeconds: 0, workerSeconds: [0, 0], files: [] },
-  ];
-  for (const file of serial.toSorted(
-    (left, right) => seconds(right) - seconds(left) || left.localeCompare(right),
-  )) {
-    const bucket =
-      buckets[0]!.serialSeconds <= buckets[1]!.serialSeconds ? buckets[0]! : buckets[1]!;
-    bucket.files.push(file);
-    bucket.serialSeconds += seconds(file);
-  }
-  for (const [index, bucket] of buckets.entries()) {
-    const initialSeconds = Math.max(bucket.serialSeconds, index === 0 ? desktopSeconds : 0);
-    bucket.workerSeconds = [initialSeconds, initialSeconds];
-  }
-  // Qualified fixtures use each job's existing two workers after its serial
-  // phase and, on the first runner, overlapping desktop proof have joined.
-  for (const file of files
-    .filter((candidate) => parallelFiles.has(candidate))
-    .toSorted((left, right) => seconds(right) - seconds(left) || left.localeCompare(right))) {
-    const bucket = buckets.reduce((earliest, candidate) =>
-      Math.min(...candidate.workerSeconds) < Math.min(...earliest.workerSeconds)
-        ? candidate
-        : earliest,
-    );
-    const worker = bucket.workerSeconds[0] <= bucket.workerSeconds[1] ? 0 : 1;
-    bucket.files.push(file);
-    bucket.workerSeconds[worker] += seconds(file);
-  }
-  return ([1, 2] as const).map((shard) => ({
-    shard,
-    shard_count: 2 as const,
-    run_desktop: shard === 1 && selected.has(desktop),
-    groups: [
-      {
-        configs: [UI_REAL_GATEWAY_TEST_CONFIG],
-        shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
-        includePatterns: buckets[shard - 1]!.files.toSorted(),
-      },
-    ],
-  }));
 }
 
 const RELEASE_ONLY_TOOLING_CONFIGS = new Set(

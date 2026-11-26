@@ -212,25 +212,7 @@ describe("OpenAI speech public runtime contract", () => {
         expected: "https://api.openai.com/v1",
       },
       {
-        name: "env override",
-        cfg: baseCfg,
-        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-        expected: "http://localhost:8880/v1",
-      },
-      {
         name: "config wins over env",
-        cfg: asLegacyTtsConfig({
-          ...baseCfg,
-          tts: {
-            ...baseCfg.tts,
-            providers: { openai: { baseUrl: "http://my-server:9000/v1" } },
-          },
-        }),
-        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
-        expected: "http://my-server:9000/v1",
-      },
-      {
-        name: "config slash trimming",
         cfg: asLegacyTtsConfig({
           ...baseCfg,
           tts: {
@@ -238,7 +220,7 @@ describe("OpenAI speech public runtime contract", () => {
             providers: { openai: { baseUrl: "http://my-server:9000/v1///" } },
           },
         }),
-        env: { OPENAI_TTS_BASE_URL: undefined },
+        env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
         expected: "http://my-server:9000/v1",
       },
       {

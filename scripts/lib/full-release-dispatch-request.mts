@@ -44,7 +44,7 @@ type QualificationDispatchClient = {
   httpStatus: (response: string) => number;
   // Throws unless the observed main tip is trusted admission tooling that
   // descends from the previously selected P.
-  verifyMainAdvance?: (previousSha: string, currentSha: string) => void;
+  verifyMainAdvance?: (previousSha: string, currentSha: string, preflightFirst: boolean) => void;
 };
 // Bounded re-reads absorb ordinary main merges between P selection and the POST.
 const MAX_ADMISSION_MAIN_ADVANCES = 3;
@@ -558,7 +558,12 @@ export async function qualifyAdmission(
         "Admission tooling ref moved before dispatch",
       );
       try {
-        client.verifyMainAdvance(workflowSha, currentSha);
+        client.verifyMainAdvance(
+          workflowSha,
+          currentSha,
+          decodePublicationDispatchEnvelope(record.request.inputs.trusted_workflow_json).laneInputs
+            ?.preflight_first === "true",
+        );
       } catch (error) {
         throw new Error(
           "Admission tooling ref moved before dispatch: " +

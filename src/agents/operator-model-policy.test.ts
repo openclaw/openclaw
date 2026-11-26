@@ -9,6 +9,7 @@ import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import * as modelSelection from "./model-selection-shared.js";
 import {
   captureOperatorModelPolicySnapshot,
+  intersectOperatorModelPolicy,
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
@@ -34,6 +35,20 @@ const cfg: OpenClawConfig = {
     },
   },
 };
+
+it("keeps both model ceilings when intersecting already-composed child authorities", () => {
+  const policy = (allow: string[]) =>
+    prepareOperatorModelPolicy({ cfg, policy: { allow }, manifestPlugins: [] });
+  const narrow = policy(["vendor/primary"]);
+  const broad = policy(["vendor/primary", "vendor/fallback"]);
+  const wildcard = policy(["vendor/*"]);
+  const composed = intersectOperatorModelPolicy(
+    intersectOperatorModelPolicy(narrow, wildcard),
+    intersectOperatorModelPolicy(broad, wildcard),
+  )!;
+  expect(composed.allows({ provider: "vendor", model: "primary" })).toBe(true);
+  expect(composed.allows({ provider: "vendor", model: "fallback" })).toBe(false);
+});
 
 it("derives membership from source models, aliases, wildcards, and explicit empty policies", () => {
   const cases: Array<{
