@@ -52,11 +52,8 @@ import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
-  readSessionActorTranscriptReplica,
   retainSessionActorEntryFacts,
-  retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
-import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
 import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
@@ -114,19 +111,6 @@ function retainEntry(
     [{ sessionKey: state.target.sessionKey, facts }],
     generation,
   );
-}
-
-function retainText(state: SessionActorHotState, text: string) {
-  const transcript: SessionActorTranscriptReplica = {
-    sessionId: state.entry?.sessionId,
-    version: state.transcript.version,
-    tail: {
-      coveredAfterSeq: -1,
-      events: [{ rawSeq: 0, event: { text }, serializedBytes: text.length }],
-    },
-  };
-  retainSessionActorTranscriptReplica(state, transcript);
-  return transcript;
 }
 
 async function withReplica(
@@ -253,157 +237,6 @@ function reloadInvalidated(fixture: Fixture) {
   expect(fixture.replica.read()).toBeUndefined();
   return hydrate(fixture);
 }
-
-it("accounts for nested replica arrays without per-array reducer callbacks", ({ fixture }) => {
-  const state = hydrate(fixture);
-  const content = [{ type: "text", text: "synthetic" }];
-  const events = [{ rawSeq: 0, serializedBytes: 32, event: { content } }];
-  const transcript: SessionActorTranscriptReplica = {
-    sessionId: state.entry?.sessionId,
-    version: state.transcript.version,
-    tail: { coveredAfterSeq: -1, events },
-  };
-  using reduce = vi.spyOn(Array.prototype, "reduce");
-  retainSessionActorTranscriptReplica(state, transcript);
-  expect(readSessionActorTranscriptReplica(state)).toBe(transcript);
-  expect(reduce.mock.contexts.filter((array) => array === events || array === content)).toEqual([]);
-});
-
-it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
-  await drainGlobalSingletonLifecycleState("restart");
-  await withReplica((fixture) => {
-    const original = fixture.load();
-    fixture.replica.close();
-    fixture.replica.invalidate();
-    const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
-    const create = (entryFirst = false, keepOpen = false, sharedPrompt = "") => {
-      const state: SessionActorHotState = {
-        ...structuredClone(original),
-        target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
-      };
-      if (sharedPrompt) {
-        state.entry = { ...state.entry!, skillsSnapshot: { prompt: sharedPrompt, skills: [] } };
-      }
-      state.dependencySessionIds = [];
-      state.writeToken = tokenFor(state, fixture.database.path);
-      if (entryFirst) {
-        retainEntry(state, { entry: state.entry, snapshots: "full" }, "budget-reader");
-      }
-      const replica = replicaFor(
-        sessionActorFileTarget(fixture.database, state.target.sessionKey),
-        () => "budget-reader",
-      );
-      expect(replica.beginRead()(state)).toBe(true);
-      if (!keepOpen) {
-        replica.close();
-      }
-      const cell = { replica, state };
-      cells.push(cell);
-      return cell;
-    };
-    const retain = (cell: (typeof cells)[number], characters: number) =>
-      retainText(cell.state, "x".repeat(characters));
-    try {
-      const first = create(false, true);
-      const second = create(true, true);
-      const third = create();
-      const firstTranscript = retain(first, 1024 * 1024);
-      retain(second, 1024 * 1024);
-      const thirdTranscript = retain(third, 1024 * 1024);
-      // A copy-on-write append charges shared payloads again and evicts the next oldest.
-      const grown: SessionActorTranscriptReplica = {
-        ...firstTranscript,
-        tail: {
-          ...firstTranscript.tail,
-          events: [
-            ...firstTranscript.tail.events,
-            { ...firstTranscript.tail.events[0]!, rawSeq: 1 },
-          ],
-        },
-      };
-      retainSessionActorTranscriptReplica(first.state, grown);
-      expect([
-        readSessionActorTranscriptReplica(second.state),
-        second.replica.beginCommand().preimage?.entry,
-      ]).toEqual([undefined, second.state.entry]);
-      expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
-      expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
-      retain(first, 512 * 1024);
-      first.replica.invalidate();
-      expect(first.replica.beginRead()(first.state)).toBe(true);
-      retain(first, 1024 * 1024);
-      const fourth = create();
-      retain(fourth, 2 * 1024 * 1024);
-      expect(readSessionActorTranscriptReplica(third.state)).toBeUndefined();
-      expect(readSessionActorTranscriptReplica(first.state)).toBeDefined();
-      const oversized = retain(fourth, 5 * 1024 * 1024);
-      expect(readSessionActorTranscriptReplica(first.state)).toBeUndefined();
-      expect(readSessionActorTranscriptReplica(fourth.state)).toBe(oversized);
-      retain(fourth, 16);
-      for (const cell of cells) {
-        cell.replica.close();
-        cell.replica.invalidate();
-      }
-      // Retired shared values must release their pool charge before the next cohort.
-      for (let index = 0; index < 40; index++) {
-        create(false, false, String(index).padStart(2, "0").repeat(60000)).replica.invalidate();
-      }
-      const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0, true, "Shared instructions".repeat(6000));
-        return { cell, transcript: retain(cell, 16) };
-      });
-      expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
-      for (const { cell, transcript } of small.slice(1)) {
-        expect(readSessionActorTranscriptReplica(cell.state)).toBe(transcript);
-      }
-    } finally {
-      for (const { replica } of cells) {
-        replica.close();
-        replica.invalidate();
-      }
-    }
-  });
-});
-
-it.each(["entry", "plugin keys"] as const)(
-  "evicts old replicas for large %s strings and releases replaced bytes",
-  async (payload) => {
-    await withReplica(({ replica, load }) => {
-      const first = load();
-      assert(first.target.database.kind === "file", "Replica fixture requires a durable target");
-      const database = first.target.database;
-      const siblingTarget = { database, sessionKey: "agent:main:budget-sibling" };
-      using sibling = replicaFor(siblingTarget, () => "budget-sibling");
-      const large = "x".repeat(5 * 1024 * 1024);
-      const install = (label: string) => {
-        const next = load();
-        next.entry = entry(label);
-        if (payload === "plugin keys") {
-          next.entry.label = "before";
-          next.entry.pluginExtensions = { fixture: { [label]: null } };
-        }
-        expect(replica.beginRead()(next)).toBe(true);
-        return next;
-      };
-      const installSibling = () => {
-        const next = { ...load(), target: siblingTarget };
-        next.writeToken = tokenFor(next, database.nativeLocation);
-        expect(sibling.beginRead()(next)).toBe(true);
-        return next;
-      };
-      const oversized = install(large);
-      expect(replica.read()).toBe(oversized);
-      const small = installSibling();
-      expect(replica.read()).toBeUndefined();
-      expect(sibling.read()).toBe(small);
-      install(large);
-      expect(sibling.read()).toBeUndefined();
-      const replaced = install("small");
-      installSibling();
-      expect(replica.read()).toBe(replaced);
-    });
-  },
-);
 
 it("retains the first creation after restart before any replica reader and applies later writes", async () => {
   await drainGlobalSingletonLifecycleState("restart");

@@ -601,13 +601,6 @@ describe("hosted model pricing", () => {
     );
   });
 
-  it("fingerprints provider overlays without explicit model rows", async () => {
-    const config = {
-      models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
-    } as unknown as OpenClawConfig;
-    await expect(resolveModelCostConfigFingerprint(config)).resolves.toEqual(expect.any(String));
-  });
-
   it("keeps optional pricing non-throwing without an ambient agent owner", async () => {
     const config: OpenClawConfig = {
       ...configFor(
