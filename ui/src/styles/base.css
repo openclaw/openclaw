@@ -985,6 +985,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* WebKitGTK can use LCD subpixel smoothing for `auto`. Match the
+   grayscale smoothing used by the surrounding desktop UI. */
+html.openclaw-native-desktop[data-native-platform="linux"] {
+  --reading-font-smoothing: antialiased;
+}
+
 /* Keep page text and document links selectable, including anchors with button
    roles; suppress accidental drag selections on controls and navigation. */
 button,

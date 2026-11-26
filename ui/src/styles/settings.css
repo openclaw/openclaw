@@ -462,7 +462,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
   /* Match chat prose: macOS stem darkening keeps reading text from rendering
      thin. App chrome keeps the body's antialiased smoothing. */
-  -webkit-font-smoothing: auto;
+  -webkit-font-smoothing: var(--reading-font-smoothing, auto);
   -moz-osx-font-smoothing: auto;
 }
 

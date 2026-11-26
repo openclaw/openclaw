@@ -87,6 +87,22 @@ suite.define(() => {
       } else {
         expect(sideInput).toEqual(mainInput);
       }
+      for (const [platform, smoothing] of [
+        ["linux", "antialiased"],
+        ["macos", "auto"],
+      ] as const) {
+        await page.evaluate((nativePlatform) => {
+          document.documentElement.classList.add("openclaw-native-desktop");
+          document.documentElement.dataset.nativePlatform = nativePlatform;
+        }, platform);
+        expect((await textStyle(main, answerText)).smoothing).toBe(smoothing);
+        expect((await textStyle(side, answerText)).smoothing).toBe(smoothing);
+        expect((await typography(side.getByRole("textbox"))).smoothing).toBe(smoothing);
+      }
+      await page.evaluate(() => {
+        document.documentElement.classList.remove("openclaw-native-desktop");
+        delete document.documentElement.dataset.nativePlatform;
+      });
       await side.getByRole("button", { name: "Copy code", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(answerCode);
       const assistant = side.locator(".chat-group.assistant");

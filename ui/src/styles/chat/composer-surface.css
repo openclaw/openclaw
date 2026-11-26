@@ -441,7 +441,7 @@
 .agent-chat__composer-combobox > input,
 .agent-chat__composer-placeholder,
 .agent-chat__composer-prediction {
-  -webkit-font-smoothing: auto;
+  -webkit-font-smoothing: var(--reading-font-smoothing, auto);
   -moz-osx-font-smoothing: auto;
 }
 

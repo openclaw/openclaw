@@ -406,7 +406,7 @@
   /* Diary prose is reading text: keep macOS stem darkening so it does not
      render thin. Dates, navigation and other chrome keep the app-wide
      `antialiased` (base.css body). */
-  -webkit-font-smoothing: auto;
+  -webkit-font-smoothing: var(--reading-font-smoothing, auto);
   -moz-osx-font-smoothing: auto;
   animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

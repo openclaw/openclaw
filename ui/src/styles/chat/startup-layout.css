@@ -225,7 +225,7 @@ div.chat-thread:where(.chat-thread--annotations) {
      `antialiased` (base.css body) thins serif hairlines into gray smear and
      makes light sans faces such as Instrument Sans read thin and harsh at
      chat size. Chrome and labels keep the app-wide smoothing. */
-  -webkit-font-smoothing: auto;
+  -webkit-font-smoothing: var(--reading-font-smoothing, auto);
   -moz-osx-font-smoothing: auto;
 }
 

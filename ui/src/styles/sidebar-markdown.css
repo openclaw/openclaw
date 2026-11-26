@@ -6,7 +6,7 @@
   line-height: 1.6;
   /* Long-form reading text keeps macOS stem darkening; the app-wide
      `antialiased` smoothing (base.css body) stays on app chrome. */
-  -webkit-font-smoothing: auto;
+  -webkit-font-smoothing: var(--reading-font-smoothing, auto);
   -moz-osx-font-smoothing: auto;
 }
 
