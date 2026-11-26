@@ -60,7 +60,7 @@ export function createSshWorkspaceHistoryTransfer(params: {
       return gitHistory;
     },
     async verifyStable() {
-      if (!gitHistory) {
+      if (!gitHistory || gitHistory.unavailableReason) {
         return;
       }
       const head = await params.runWorkspaceCommand({
@@ -75,7 +75,11 @@ export function createSshWorkspaceHistoryTransfer(params: {
       }
     },
     async downloadPack(): Promise<string | undefined> {
-      if (!gitHistory?.descendsFromBase || gitHistory.headCommit === gitHistory.baseCommit) {
+      if (
+        !gitHistory?.descendsFromBase ||
+        gitHistory.unavailableReason ||
+        gitHistory.headCommit === gitHistory.baseCommit
+      ) {
         return undefined;
       }
       const gitPackRoot = path.join(params.temporaryDirectory, "history");

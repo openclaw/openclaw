@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
@@ -51,6 +53,220 @@ it.skipIf(process.platform === "win32")(
       expect((await fs.stat(ancestor)).mode & 0o7777).toBe(0o1777);
     } finally {
       await fs.chmod(ancestor, 0o700);
+    }
+  },
+);
+
+async function runAdmissionProcess(
+  policy: string | undefined,
+  body = "",
+  beforeAdmission = "",
+  timeoutMs = 10_000,
+) {
+  const env = { ...process.env };
+  delete env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS;
+  if (policy !== undefined) {
+    env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS = policy;
+  }
+  return await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      new URL("../../scripts/tsx.mjs", import.meta.url).href,
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+       import fs from "node:fs/promises";
+       import { execFileSync } from "node:child_process";
+       ${beforeAdmission}
+       const { createNodeWorkerTempWorkspace, withNodeWorkerTempWorkspace } =
+         await import(${JSON.stringify(new URL("./node-worker-workspace-admission.ts", import.meta.url).href)});
+       ${body}`,
+    ],
+    { env, timeout: timeoutMs },
+  );
+}
+
+it.skipIf(process.platform === "win32")(
+  "uses one explicit ancestry policy for startup and later transfer workspaces",
+  async () => {
+    const ancestor = tempDirs.make("node-workspace-policy-");
+    const rootDir = path.join(ancestor, "node-host");
+    const nested = path.join(ancestor, "untrusted");
+    const nestedRoot = path.join(nested, "node-host");
+    await fs.mkdir(rootDir, { mode: 0o700 });
+    await fs.mkdir(nestedRoot, { recursive: true, mode: 0o700 });
+    await fs.chmod(ancestor, 0o770);
+    await fs.chmod(nested, 0o770);
+    try {
+      const options = JSON.stringify({ rootDir, prefix: "probe-" });
+      // Fresh processes prove the opt-in boundary without a module-cache reset or mock.
+      await expect(
+        runAdmissionProcess(undefined, `await createNodeWorkerTempWorkspace(${options});`),
+      ).rejects.toThrow("group-writable");
+      await runAdmissionProcess(
+        JSON.stringify([ancestor]),
+        `
+        assert.equal(execFileSync(process.execPath,
+          ["-p", "process.env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS"],
+          { encoding: "utf8" }).trim(), "undefined");
+        const probe = await createNodeWorkerTempWorkspace(${options});
+        const file = await probe.writeText("startup.txt", "private startup");
+        assert.equal(await fs.readFile(file, "utf8"), "private startup");
+        assert.equal((await fs.stat(probe.dir)).mode & 0o777, 0o700);
+        await probe.cleanup();
+        // A later environment mutation cannot extend the admitted policy.
+        process.env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS =
+          ${JSON.stringify(JSON.stringify([ancestor, nested]))};
+        await withNodeWorkerTempWorkspace(${options}, async (transfer) => {
+          const file = await transfer.writeText("transfer.txt", "private transfer");
+          assert.equal(await fs.readFile(file, "utf8"), "private transfer");
+        });
+        await assert.rejects(createNodeWorkerTempWorkspace(
+          ${JSON.stringify({ rootDir: nestedRoot, prefix: "probe-" })}), /group-writable/);
+      `,
+      );
+      expect(await fs.readdir(rootDir)).toEqual([]);
+      expect((await fs.stat(ancestor)).mode & 0o777).toBe(0o770);
+    } finally {
+      await fs.chmod(nested, 0o700);
+      await fs.chmod(ancestor, 0o700);
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "publishes through the real transfer owner beneath an explicitly trusted writable ancestor",
+  async () => {
+    const root = tempDirs.make("node-publication-policy-");
+    const ancestor = path.join(root, "sandbox");
+    const manifestHome = path.join(ancestor, "node-home");
+    await fs.mkdir(manifestHome, { recursive: true, mode: 0o700 });
+    await fs.chmod(ancestor, 0o770);
+    const moduleUrl = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
+    try {
+      await runAdmissionProcess(
+        JSON.stringify([await fs.realpath(ancestor)]),
+        `
+        const path = await import("node:path");
+        const { pathToFileURL } = await import("node:url");
+        const { createHash } = await import("node:crypto");
+        const { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } = await import(${moduleUrl("../gateway/github-repository-publication-snapshot.ts")});
+        const { prepareNodeWorkerPublicationIntegration } = await import(${moduleUrl("../gateway/worker-environments/node-worker-publication-transfer.ts")});
+        const { createNodeWorkspaceTransferCommand } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer-command.ts")});
+        const { createNodeWorkspaceTransferService } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer-service.ts")});
+        const { startNodeWorkspaceTransferTestServer, transferOwner } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer.test-support.ts")});
+        const { runNodeWorkerWorkspaceTransfer } = await import(${moduleUrl("./node-worker-transfer-client.ts")});
+        const { NODE_WORKSPACE_EMPTY_MANIFEST_REF } = await import(${moduleUrl("../worker/node-workspace-transfer-protocol.ts")});
+        const root = ${JSON.stringify(root)};
+        const manifestHome = ${JSON.stringify(manifestHome)};
+        const source = path.join(root, "source");
+        const inputRoot = path.join(root, "input");
+        await fs.mkdir(source, { mode: 0o700 });
+        const env = { ...process.env, GIT_AUTHOR_NAME:"Fixture", GIT_AUTHOR_EMAIL:"fixture@example.test", GIT_COMMITTER_NAME:"Fixture", GIT_COMMITTER_EMAIL:"fixture@example.test", GIT_CONFIG_GLOBAL:"/dev/null", GIT_CONFIG_SYSTEM:"/dev/null" };
+        const git = (...args) => execFileSync("git", args, { cwd:source, env, encoding:"utf8" }).trim();
+        git("init", "--quiet", "--initial-branch=main");
+        await fs.writeFile(path.join(source, "result.txt"), "base");
+        git("add", "."); git("commit", "--quiet", "-m", "base");
+        const baseCommit = git("rev-parse", "HEAD");
+        await fs.writeFile(path.join(source, "result.txt"), "accepted");
+        execFileSync(process.execPath, ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, source, baseCommit, inputRoot], {env});
+        const snapshotDigest = "sha256:" + createHash("sha256").update(await fs.readFile(path.join(inputRoot,"snapshot.json"))).digest("hex");
+        const service = createNodeWorkspaceTransferService({temporaryRoot:path.join(root,"transfers"),getOwner:()=>transferOwner("session")});
+        await service.prepareRepository({environmentId:"environment",ownerEpoch:1,sessionId:"session",baseCommit,baseManifestRef:NODE_WORKSPACE_EMPTY_MANIFEST_REF,isAuthorized:()=>true});
+        const server = await startNodeWorkspaceTransferTestServer(service);
+        const signal = new AbortController().signal;
+        const transfer = createNodeWorkspaceTransferCommand(async (command) => {
+          assert(command.transfer);
+          const stdout = await runNodeWorkerWorkspaceTransfer({gatewayUrl:server.gatewayUrl,environmentId:"environment",workspaceDir:source,manifestHome,baseEnv:env,transfer:command.transfer,signal});
+          return {code:0,termination:"exit",signal:null,killed:false,stdout,stderr:"",workspaceDir:source};
+        });
+        try {
+          const result = await prepareNodeWorkerPublicationIntegration({environmentId:"environment",signal,workspaceTransfer:service,supportsIntegration:async()=>true,transfer}, {snapshotRoot:inputRoot,snapshotDigest,sourceUrl:pathToFileURL(source).href,targetUrl:pathToFileURL(source).href,targetCommit:baseCommit,token:"synthetic-token",assertCurrent:()=>{}});
+          try {
+            assert.equal(result.snapshot.baseCommit, baseCommit);
+            assert.equal(await fs.readFile(path.join(result.snapshotRoot,"blobs",result.snapshot.entries[0].sha),"utf8"),"accepted");
+          } finally { await result.release(); }
+        } finally { await server.close(); await service.closeAll(); }
+        assert.deepEqual(await fs.readdir(path.join(manifestHome,".openclaw-worker","publication")), []);
+        `,
+        "",
+        30_000,
+      );
+      expect((await fs.stat(ancestor)).mode & 0o777).toBe(0o770);
+    } finally {
+      await fs.chmod(ancestor, 0o700);
+    }
+  },
+);
+
+it.each(["invalid-json", "{}", '["/sandbox", 1]', '["relative"]', '["/tmp/.."]'])(
+  "rejects malformed operator ancestry policy %s",
+  async (policy) => {
+    await expect(runAdmissionProcess(policy)).rejects.toThrow(
+      "OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS must be a JSON array of canonical absolute paths",
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "shares initialized node policy with terminal upload recovery and temp-root selection",
+  async () => {
+    const parent = tempDirs.make("node-terminal-policy-");
+    const ancestor = path.join(parent, "volume");
+    const tempRoot = path.join(ancestor, "tmp");
+    const nested = path.join(ancestor, "untrusted");
+    const stale = path.join(tempRoot, "openclaw-terminal-upload-stale");
+    const alias = path.join(parent, "alias");
+    await fs.mkdir(stale, { recursive: true, mode: 0o700 });
+    await fs.mkdir(nested, { mode: 0o770 });
+    await fs.chmod(nested, 0o770);
+    await fs.writeFile(path.join(stale, "old.txt"), "expired upload");
+    await fs.utimes(stale, new Date(0), new Date(0));
+    await fs.symlink(ancestor, alias, "dir");
+    await fs.chmod(ancestor, 0o770);
+    try {
+      // Both preferred and state fallback roots sit below the volume, as in the node bootstrap.
+      const strictCheck = `
+        process.env.TMPDIR = ${JSON.stringify(tempRoot)};
+        process.env.OPENCLAW_STATE_DIR = ${JSON.stringify(path.join(ancestor, "state"))};
+        const { resolvePreferredOpenClawTmpDir } = await import(
+          ${JSON.stringify(new URL("../infra/tmp-openclaw-dir.ts", import.meta.url).href)});
+        const { ensureTerminalUploadCleanup, stageTerminalUpload } = await import(
+          ${JSON.stringify(new URL("../infra/terminal-file-upload.ts", import.meta.url).href)});
+        const options = { preferredDir: ${JSON.stringify(path.join(tempRoot, "private"))},
+          tmpdir: () => process.env.TMPDIR };
+        const upload = { name: "upload.txt", contentBase64: Buffer.from("node upload").toString("base64") };
+        assert.throws(() => resolvePreferredOpenClawTmpDir(options), /No safe OpenClaw temp root/);
+        await ensureTerminalUploadCleanup();
+        assert.equal(await fs.readFile(${JSON.stringify(path.join(stale, "old.txt"))}, "utf8"), "expired upload");
+        await assert.rejects(stageTerminalUpload(upload), /No safe OpenClaw temp root/);
+      `;
+      await runAdmissionProcess(undefined, strictCheck);
+      // Merely importing shared consumers with the env setting present cannot activate it.
+      await runAdmissionProcess(
+        JSON.stringify([ancestor]),
+        `
+        assert.equal(resolvePreferredOpenClawTmpDir(options), options.preferredDir);
+        await ensureTerminalUploadCleanup();
+        await assert.rejects(fs.stat(${JSON.stringify(stale)}), { code: "ENOENT" });
+        const uploaded = await stageTerminalUpload(upload);
+        assert.equal(await fs.readFile(uploaded.path, "utf8"), "node upload");
+        assert.equal((await fs.stat(uploaded.path)).mode & 0o777, 0o600);
+        process.env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS = ${JSON.stringify(JSON.stringify([ancestor, nested]))};
+        const nestedOptions = { preferredDir: ${JSON.stringify(path.join(nested, "private"))},
+          tmpdir: () => ${JSON.stringify(nested)} };
+        assert.notEqual(resolvePreferredOpenClawTmpDir(nestedOptions), nestedOptions.preferredDir);
+      `,
+        strictCheck,
+      );
+      await expect(runAdmissionProcess(JSON.stringify([alias]))).rejects.toThrow(
+        "must be a JSON array of canonical absolute paths",
+      );
+      expect((await fs.stat(ancestor)).mode & 0o777).toBe(0o770);
+    } finally {
+      await fs.chmod(ancestor, 0o700);
+      await fs.chmod(nested, 0o700);
     }
   },
 );

@@ -1204,6 +1204,7 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
+src/infra/node-filesystem-policy.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
@@ -2207,6 +2208,7 @@ src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-preparation.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
+src/state/openclaw-agent-fts-schema.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-active-event-facts-schema.ts
@@ -3004,6 +3006,7 @@ src/config/sessions/session-run-lifecycle-projection.ts
 src/config/sessions/session-restart-resume-scope.ts
 src/shared/agent-liveness.ts
 src/tui/gateway-chat-requests.ts
+src/tui/tui-history-full-text.ts
 packages/gateway-client/src/request-error.ts
 packages/gateway-client/src/protocol-request.ts
 packages/gateway-protocol/src/connect-error-details.ts
