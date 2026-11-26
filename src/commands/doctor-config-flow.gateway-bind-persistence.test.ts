@@ -103,6 +103,12 @@ it.each(["unchanged", "root edit", "include edit", "different profile"] as const
         expect(snapshot.raw).toBe(original);
         expect(await read(includePath)).toBe(originalInclude);
         if (scenario === "unchanged") {
+          const identity = plan!.includeIdentity;
+          plan!.includeIdentity = {};
+          await expect(persist()).rejects.toThrow("missing include write identities");
+          expect(await read(configPath)).toBe(original);
+          expect(await read(includePath)).toBe(originalInclude);
+          plan!.includeIdentity = identity;
           const result = await persist();
           expect(result.repaired).toBe(true);
           expect(result.snapshot.config.gateway?.bind).toBe("loopback");
