@@ -292,6 +292,7 @@ function DraftBlock(props: {
         options={Object.assign(props.options(), {
           permissionControl,
           dictationStatus,
+          readDictation: () => props.page().dictation.dictation,
           voiceControl,
         })}
       />

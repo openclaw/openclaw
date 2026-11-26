@@ -13,6 +13,7 @@ import {
   createSessionCompanionAsk,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { DirectDictationControl } from "./composer-direct-dictation.ts";
 import "./components/chat-session-rail.tsx";
 
@@ -516,33 +517,69 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
   });
 
-  it("commits active dictation before a keyboard submit sends the question", async () => {
-    const onSubmit = vi.fn();
-    const element = await mount({
-      onSubmit,
-      companion: { turns: [], loading: false, draft: "Summarize" },
-    });
-    const finishActive = vi.fn(async () => {
-      element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
-      await element.updateComplete;
-      return true;
-    });
-    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
-      active: true,
-      finalizing: false,
-      finishActive,
-    } as never);
+  it.each([false, true])(
+    "snapshots dictation review before a keyboard submit (review: %s)",
+    async (requiresReview) => {
+      const onSubmit = vi.fn();
+      const element = await mount({
+        onSubmit,
+        companion: { turns: [], loading: false, draft: "Summarize" },
+      });
+      const owner = new ComposerDictationOwner({
+        client: null,
+        connected: true,
+        enabled: true,
+        realtimeTalkActive: false,
+        onCommit: vi.fn(),
+        onError: vi.fn(),
+      });
+      const active = vi.spyOn(owner, "active", "get").mockReturnValue(true);
+      const transcribing = vi.spyOn(owner, "transcribing", "get").mockReturnValue(false);
+      const policy = vi
+        .spyOn(owner, "requiresFormattingReview", "get")
+        .mockReturnValue(requiresReview);
+      let finishDrain!: () => void;
+      const drain = new Promise<void>((resolve) => {
+        finishDrain = resolve;
+      });
+      const finishActive = vi.spyOn(owner, "finishActive").mockImplementation(async () => {
+        active.mockReturnValue(false);
+        transcribing.mockReturnValue(true);
+        await drain;
+        transcribing.mockReturnValue(false);
+        policy.mockReturnValue(!requiresReview);
+        element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
+        await element.updateComplete;
+        return true;
+      });
+      vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue(owner);
 
-    element
-      .querySelector("textarea")!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    expect(onSubmit).not.toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
-    );
-    expect(finishActive).toHaveBeenCalledOnce();
-  });
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(finishActive).toHaveBeenCalledOnce();
+      if (requiresReview) {
+        // Stop unlocks typing while final STT drains. A second Enter or native
+        // form submission must not send the prior question during that interval.
+        element
+          .querySelector("textarea")!
+          .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(finishActive).toHaveBeenCalledOnce();
+      }
+      finishDrain();
+      await finishActive.mock.results[0]?.value;
+      if (requiresReview) {
+        expect(onSubmit).not.toHaveBeenCalled();
+      } else {
+        expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part");
+      }
+      owner.dispose();
+    },
+  );
 
   it.each([false, true])(
     "submits attachments without a written question (image: %s)",

@@ -1,8 +1,14 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  loadSettings,
+  patchSettings,
+  settingsKeyForGateway,
+  subscribeSettingsChanges,
+} from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import * as formatting from "./composer-dictation-formatting.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
@@ -14,26 +20,6 @@ const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
-
-type ComposerDictationFailure = {
-  kind: "interrupted" | "start" | "busy";
-  preservesText: boolean;
-};
-
-type ComposerDictationOwnerOptions = {
-  client: GatewayBrowserClient | null;
-  sessionKey?: string;
-  prepareSession?: () => Promise<string | undefined>;
-  draftKey?: string;
-  connected: boolean;
-  enabled: boolean;
-  dictationAvailable?: boolean;
-  realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
-  onError: (message: string, failure: ComposerDictationFailure) => void;
-  onTap?: () => void;
-  onDictationUnavailable?: () => void;
-};
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
@@ -53,9 +39,25 @@ export class ComposerDictationOwner extends EventTarget {
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
+  private mode: formatting.DictationFormattingMode =
+    loadSettings().dictationFormatting?.mode ?? "preserve";
+  private captureMode: formatting.DictationFormattingMode = "preserve";
+  private policyRevision = 0;
+  private capturePolicyRevision = 0;
+  private prepareFormatting: formatting.PrepareFormatting | undefined;
+  private preparationGeneration = 0;
+  private formattingCapture: formatting.DictationFormattingCapture | undefined;
+  private review: formatting.DictationFormattingReview | undefined;
+  private lastReceipt: formatting.DictationFormattingReceipt = "not-committed";
+  private readonly stopSettings: () => void;
 
-  constructor(private options: ComposerDictationOwnerOptions) {
+  constructor(private options: formatting.ComposerDictationOwnerOptions) {
     super();
+    this.stopSettings = subscribeSettingsChanges((previous, next) => {
+      if (formatting.policyChanged(previous, next)) {
+        this.refreshFormattingPolicy();
+      }
+    });
   }
 
   subscribe(listener: () => void) {
@@ -84,7 +86,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get locksComposer(): boolean {
-    return this.phase !== "idle";
+    return this.phase !== "idle" && (this.active ? this.captureMode : this.mode) === "preserve";
   }
 
   /** Places a transcript in a draft; there is nothing to place before capture loads. */
@@ -100,6 +102,179 @@ export class ComposerDictationOwner extends EventTarget {
 
   get transcript(): string {
     return this.session?.transcriptSnapshot() ?? "";
+  }
+
+  get formattingMode(): formatting.DictationFormattingMode {
+    return this.mode;
+  }
+
+  /** Snapshot this before awaiting Stop: a review must never resume an automatic Send. */
+  get requiresFormattingReview(): boolean {
+    return this.captureMode === "explicit" || this.review !== undefined;
+  }
+
+  get formattingReceipt(): formatting.DictationFormattingReceipt {
+    return this.lastReceipt;
+  }
+
+  /** Bounded local diagnostics contain no transcript, target value, or credentials. */
+  get formattingDiagnostics() {
+    return formatting.diagnostics(this.review);
+  }
+
+  get formattingReview() {
+    return formatting.reviewProjection(
+      this.review,
+      (review) => this.reviewIsCurrent(review),
+      () => this.options.readFormattingTarget?.(),
+    );
+  }
+
+  setFormattingMode(mode: formatting.DictationFormattingMode): void {
+    if (mode !== "preserve" && mode !== "explicit") {
+      return;
+    }
+    patchSettings({ dictationFormatting: { version: 1, mode } });
+    if (this.mode !== mode) {
+      this.policyRevision++;
+    }
+    this.mode = mode;
+    this.invalidateFormattingReview();
+  }
+
+  reprocessFormatting(): void {
+    this.refreshFormattingPolicy();
+    const review = this.review;
+    if (
+      !review ||
+      review.receipt !== "not-committed" ||
+      !this.prepareFormatting ||
+      !this.sourceIsCurrent(review)
+    ) {
+      return;
+    }
+    const result = formatting.prepareReview(this.prepareFormatting, review, this.mode);
+    this.review = {
+      ...review,
+      result,
+      generation: ++this.preparationGeneration,
+      mode: this.mode,
+      invalidated: false,
+    };
+    // Reprocessing cannot retarget an edited draft or reacquire a lost selection.
+    this.dispatchEvent(new Event("change"));
+  }
+
+  confirmFormattingMarkers(ranges: readonly { start: number; end: number }[]): void {
+    this.refreshFormattingPolicy();
+    const review = this.review;
+    if (
+      !review ||
+      !this.reviewIsCurrent(review) ||
+      !review.source.finalized ||
+      this.mode !== "explicit"
+    ) {
+      return;
+    }
+    const result = formatting.prepareReview(this.prepareFormatting!, review, this.mode, ranges);
+    this.review = { ...review, result, generation: ++this.preparationGeneration };
+    this.dispatchEvent(new Event("change"));
+  }
+
+  acceptFormatting(choice: "formatted" | "original"): boolean {
+    this.refreshFormattingPolicy();
+    const review = this.review;
+    if (!review || !this.reviewIsCurrent(review)) {
+      return false;
+    }
+    const selection = formatting.selectDictationFormatting(
+      review.result,
+      review.target,
+      this.options.readFormattingTarget?.(),
+      choice === "original",
+    );
+    if (!selection.canApply) {
+      review.invalidated = true;
+      this.dispatchEvent(new Event("change"));
+      return false;
+    }
+    // Set the receipt before the indivisible attempt. A callback can cancel/reenter;
+    // that cannot authorize another write or make an uncertain effect disappear.
+    review.receipt = "outcome-unknown";
+    this.lastReceipt = review.receipt;
+    try {
+      const committed = this.options.onCommit(selection.text, true, undefined, {
+        target: review.target!,
+        format: selection.format,
+        isCurrent: () =>
+          this.review === review &&
+          this.options.enabled &&
+          this.sourceIsCurrent(review) &&
+          !review.invalidated &&
+          review.mode === this.mode &&
+          review.generation === this.preparationGeneration &&
+          formatting.selectDictationFormatting(
+            review.result,
+            review.target,
+            this.options.readFormattingTarget?.(),
+            choice === "original",
+          ).canApply,
+      });
+      review.receipt = formatting.commitReceipt(committed);
+    } catch {
+      review.receipt = "outcome-unknown";
+    }
+    review.invalidated = true;
+    this.lastReceipt = review.receipt;
+    this.dispatchEvent(new Event("change"));
+    return review.receipt === "committed";
+  }
+
+  dismissFormatting(): void {
+    this.review = undefined;
+    const generation = ++this.preparationGeneration;
+    this.pendingCommitsChanged();
+    this.restoreFormattingFocus(generation);
+  }
+
+  private sourceIsCurrent(review: formatting.DictationFormattingAuthority): boolean {
+    return (
+      !this.disposed &&
+      this.options.connected &&
+      !this.options.realtimeTalkActive &&
+      this.options.client === review.client &&
+      review.client.auth === review.auth &&
+      review.client.connectionGeneration === review.connection
+    );
+  }
+
+  private refreshFormattingPolicy(): void {
+    const mode = loadSettings().dictationFormatting?.mode ?? "preserve";
+    if (mode !== this.mode) {
+      this.mode = mode;
+      this.policyRevision++;
+      this.invalidateFormattingReview();
+    }
+  }
+
+  private readonly handleSettingsStorage = (event: StorageEvent): void => {
+    if (event.key === null || event.key === settingsKeyForGateway(loadSettings().gatewayUrl)) {
+      // Storage events retain intervening writes even when another tab changes A→B→A.
+      this.policyRevision++;
+      this.refreshFormattingPolicy();
+      this.invalidateFormattingReview();
+    }
+  };
+
+  private reviewIsCurrent(review: formatting.DictationFormattingReview): boolean {
+    return (
+      this.options.enabled &&
+      this.sourceIsCurrent(review) &&
+      !review.invalidated &&
+      review.generation === this.preparationGeneration &&
+      review.mode === this.mode &&
+      review.receipt === "not-committed"
+    );
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -119,15 +294,24 @@ export class ComposerDictationOwner extends EventTarget {
     return true;
   }
 
-  update(options: ComposerDictationOwnerOptions): void {
-    if (
-      this.options.client !== options.client ||
-      this.options.sessionKey !== options.sessionKey ||
-      this.options.draftKey !== options.draftKey
-    ) {
-      this.cancel();
+  update(options: formatting.ComposerDictationOwnerOptions): void {
+    if (formatting.scopeChanged(this.options, options)) {
+      this.cancel(false);
     }
     this.options = options;
+    const mode = loadSettings().dictationFormatting?.mode ?? "preserve";
+    if (this.mode !== mode) {
+      this.mode = mode;
+      this.policyRevision++;
+      if (this.review) {
+        this.review.invalidated = true;
+      }
+    }
+    if (this.review && !this.sourceIsCurrent(this.review)) {
+      this.review = undefined;
+      this.preparationGeneration++;
+    }
+    this.observeFormattingTarget();
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -209,10 +393,18 @@ export class ComposerDictationOwner extends EventTarget {
 
   dispose(): void {
     this.disposed = true;
-    this.cancel();
+    this.stopSettings();
+    this.cancel(false);
   }
 
-  cancel(): void {
+  cancel(restoreFormattingFocus = true): void {
+    const restoreFocus =
+      restoreFormattingFocus &&
+      !this.disposed &&
+      (this.review !== undefined || (this.captureMode === "explicit" && this.transcribing));
+    this.review = undefined;
+    this.formattingCapture = undefined;
+    const generation = ++this.preparationGeneration;
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -220,6 +412,16 @@ export class ComposerDictationOwner extends EventTarget {
       this.pendingCommitsChanged();
     }
     void this.stop({ commit: false });
+    this.pendingCommitsChanged();
+    if (restoreFocus) {
+      this.restoreFormattingFocus(generation);
+    }
+  }
+
+  private restoreFormattingFocus(generation: number): void {
+    if (!this.disposed && generation === this.preparationGeneration) {
+      this.options.onFormattingDismiss?.();
+    }
   }
 
   private readonly handleDocumentPointerMove = (event: PointerEvent): void => {
@@ -267,7 +469,7 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
+    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing && !this.review)) {
       return;
     }
     event.preventDefault();
@@ -287,19 +489,56 @@ export class ComposerDictationOwner extends EventTarget {
       return;
     }
     this.clearClickSuppression();
+    if (this.formattingCapture) {
+      this.formattingCapture.invalidated = true;
+    }
+    if (this.review) {
+      this.invalidateFormattingReview();
+    }
     void this.finishActive();
   };
+
+  private readonly handleFormattingFocus = (): void => {
+    if (!this.formattingCapture || this.connecting || this.captureMode !== "explicit") {
+      return;
+    }
+    this.observeFormattingTarget();
+  };
+
+  private readonly observeFormattingTarget = (): void => {
+    if (
+      this.formattingCapture &&
+      !this.formattingCapture.invalidated &&
+      !formatting.sameDictationFormattingTarget(
+        this.formattingCapture.target,
+        this.options.readFormattingTarget?.(),
+      )
+    ) {
+      this.formattingCapture.invalidated = true;
+      this.invalidateFormattingReview();
+    }
+  };
+
+  private invalidateFormattingReview(): void {
+    if (this.review) {
+      this.review.invalidated = true;
+    }
+    this.dispatchEvent(new Event("change"));
+  }
 
   private canHold(): boolean {
     return (
       this.options.enabled &&
       this.options.connected &&
       !this.options.realtimeTalkActive &&
-      this.options.client !== null
+      this.options.client !== null &&
+      this.review === undefined &&
+      !((this.mode === "explicit" || this.captureMode === "explicit") && this.transcribing)
     );
   }
 
   private async start(): Promise<void> {
+    this.refreshFormattingPolicy();
     const client = this.options.client;
     if (this.phase !== "holding" || !client || !this.canHold()) {
       await this.stop({ commit: false });
@@ -318,22 +557,32 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
+    this.captureMode = this.mode;
+    this.capturePolicyRevision = this.policyRevision;
+    this.preparationGeneration++;
     this.setPhase("connecting");
+    this.formattingCapture =
+      this.captureMode === "explicit"
+        ? formatting.captureTarget(this.options.readFormattingTarget?.(), client)
+        : undefined;
     if (this.captureStart !== captureStart) {
       return;
     }
-    let describeStartError = (error: unknown): [string, ComposerDictationFailure["kind"]] => [
-      formatUiError(error),
-      "start",
-    ];
+    let describeStartError = (
+      error: unknown,
+    ): [string, formatting.ComposerDictationFailure["kind"]] => [formatUiError(error), "start"];
     try {
       // Preserve Safari playback activation before the lazy capture module loads.
-      this.playback.prepare(client, () => this.cancel());
+      this.playback.prepare(client, () => this.cancel(false));
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
+      if (this.captureMode === "explicit") {
+        const { prepareDictationFormatting } = await import("../../lib/dictation/formatting.ts");
+        this.prepareFormatting = prepareDictationFormatting;
+      }
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
@@ -368,7 +617,10 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey },
+        {
+          sessionKey,
+          ...(this.captureMode === "explicit" ? { finalizationDeadlineMs: 2_500 } : {}),
+        },
       );
       this.session = session;
       await session.start();
@@ -395,10 +647,20 @@ export class ComposerDictationOwner extends EventTarget {
       this.releasePlayback();
       return Promise.resolve(false);
     }
+    const preparation = formatting.finalPreparation(
+      this.captureMode,
+      this.preparationGeneration,
+      this.formattingCapture,
+      this.options.client!,
+    );
+    const policyRevision = this.capturePolicyRevision;
     this.setPhase("stopping");
     this.session = null;
     this.setPhase("idle");
-    if (!options.commit) {
+    if (
+      !options.commit ||
+      (preparation.mode === "explicit" && preparation.generation !== this.preparationGeneration)
+    ) {
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -415,6 +677,25 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        return false;
+      }
+      if (preparation.mode === "explicit" && this.prepareFormatting) {
+        if (
+          preparation.generation !== this.preparationGeneration ||
+          !this.sourceIsCurrent(preparation)
+        ) {
+          return false;
+        }
+        const review = formatting.prepareFinalReview(
+          this.prepareFormatting,
+          lateTranscript,
+          session,
+          preparation,
+        );
+        review.invalidated ||= this.policyRevision !== policyRevision;
+        this.review = review;
+        this.lastReceipt = "not-committed";
+        this.pendingCommitsChanged();
         return false;
       }
       if (this.active) {
@@ -482,7 +763,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing) {
+    if (this.phase !== "idle" || this.transcribing || this.review) {
       if (this.cancellationListeners) {
         return;
       }
@@ -491,6 +772,10 @@ export class ComposerDictationOwner extends EventTarget {
       listen(document, "keydown", this.handleDocumentKeyDown, options);
       listen(document, "visibilitychange", this.handleWindowLeave, options);
       listen(window, "blur", this.handleWindowLeave, options);
+      listen(document, "focusin", this.handleFormattingFocus, options);
+      listen(document, "input", this.observeFormattingTarget, options);
+      listen(document, "selectionchange", this.observeFormattingTarget, options);
+      listen(window, "storage", this.handleSettingsStorage, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

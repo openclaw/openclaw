@@ -67,6 +67,20 @@ export function ActiveDictationStatus(props: {
             status={current}
             inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
           />
+          <Show
+            when={
+              props.readDictation()?.transcribing && props.readDictation()?.requiresFormattingReview
+            }
+          >
+            <button
+              type="button"
+              class="btn btn--xs"
+              aria-label={t("chat.composer.dictationCancel")}
+              onClick={() => props.readDictation()?.cancel()}
+            >
+              {t("common.cancel")}
+            </button>
+          </Show>
         </div>
       )}
     </Show>

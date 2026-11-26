@@ -21,6 +21,7 @@ import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatDictationFormattingEnglish } from "../../ui/src/i18n/locales/en-chat-dictation-formatting.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
@@ -156,6 +157,7 @@ const sourceFiles = [
   "en-chat-camera.ts",
   "en-chat-voice-api-key.ts",
   "en-chat-dictation.ts",
+  "en-chat-dictation-formatting.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
@@ -702,6 +704,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerChatCameraEnglish.catalog,
     registerChatVoiceApiKeyEnglish.catalog,
     registerChatDictationEnglish.catalog,
+    registerChatDictationFormattingEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
     {

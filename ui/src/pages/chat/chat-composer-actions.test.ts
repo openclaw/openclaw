@@ -214,8 +214,37 @@ describe("renderChatComposer controls", () => {
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, onSend, commit };
+    return { container, props, dictation, active, locked, finishActive, onSend, commit };
   }
+
+  it("finishes editable Explicit dictation on Enter and blocks another Send while it drains", async () => {
+    const { container, props, dictation, active, locked, finishActive, onSend } =
+      renderDictatingComposer();
+    vi.spyOn(dictation, "requiresFormattingReview", "get").mockReturnValue(true);
+    locked.mockReturnValue(false);
+    const transcribing = vi.spyOn(dictation, "transcribing", "get").mockReturnValue(false);
+    const pending = createDeferred<boolean>();
+    finishActive.mockImplementation(() => {
+      active.mockReturnValue(false);
+      transcribing.mockReturnValue(true);
+      return pending.promise;
+    });
+    renderComposerInto(container, props);
+    expect(textarea(container).readOnly).toBe(false);
+
+    expect(pressComposerEnter(container).defaultPrevented).toBe(true);
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+
+    renderComposerInto(container, props);
+    expect(pressComposerEnter(container).defaultPrevented).toBe(true);
+    expect(primaryButton(container).disabled).toBe(true);
+    primaryButton(container).click();
+    expect(finishActive).toHaveBeenCalledOnce();
+    pending.resolve(true);
+    await pending.promise;
+    expect(onSend).not.toHaveBeenCalled();
+  });
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
     const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({

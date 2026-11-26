@@ -1,0 +1,8 @@
+# M04 / issue #205634: complete opt-in semantic dictation path.
+# Independent source-map/Markdown/HTML validation; existing owner lifecycle;
+# settings/draft retention; reviewed editor transaction; actual component and
+# direct-owner focus/readonly integration; main/Side chat submission; browser fixture.
+# Each suite protects a separate required boundary; no serializer-only proof.
+# Net test growth against 04b854b239cd8ab8a14beae4914ed9c54d791e62: 2269 LF lines.
+# Requested allocation covers the excess over the 400-line default allowance.
+1869

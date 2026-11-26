@@ -183,3 +183,20 @@ export function ComposerDictationStatus(props: {
     </Show>
   );
 }
+
+const DictationFormattingReview = lazy(() => import("./composer-dictation-formatting.tsx"), {
+  export: "DictationFormattingReview",
+});
+
+/** Review gets the full composer width; capture status stays in the compact toolbar. */
+export function ComposerDictationReview(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  return (
+    <Show when={props.readDictation()?.formattingReview}>
+      <ChatLazyBoundary>
+        <DictationFormattingReview readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
+  );
+}

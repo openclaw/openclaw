@@ -24,6 +24,45 @@ export function registerComposerEditor(input: HTMLTextAreaElement, editor: Compo
 export function readComposerEditor(input: HTMLTextAreaElement) {
   return editors.get(input);
 }
+
+/** Reviewed dictation requires an existing undoable text adapter. */
+export function canReplaceComposerInputWithHistory(input: HTMLTextAreaElement): boolean {
+  return (
+    editors.has(input) ||
+    (typeof input.ownerDocument.execCommand === "function" &&
+      typeof input.ownerDocument.queryCommandSupported === "function" &&
+      input.ownerDocument.queryCommandSupported("insertText"))
+  );
+}
+
+/** One attempted edit; undefined means the effect cannot be confirmed. Never retries. */
+export function replaceComposerInputWithHistory(
+  input: HTMLTextAreaElement,
+  text: string,
+  isCurrent: () => boolean,
+): boolean | undefined {
+  if (!canReplaceComposerInputWithHistory(input)) {
+    return false;
+  }
+  focusComposerInput(input, { preventScroll: true });
+  // Focusing/syncing can synchronously run another owner's draft or cancellation handler.
+  if (!isCurrent()) {
+    return false;
+  }
+  const editor = editors.get(input);
+  if (editor) {
+    editor.replaceAll(text);
+    return input.value === text ? true : undefined;
+  }
+  const previous = input.value;
+  input.setSelectionRange(0, previous.length);
+  const reported = input.ownerDocument.execCommand("insertText", false, text);
+  return reported && input.value === text
+    ? true
+    : !reported && input.value === previous
+      ? false
+      : undefined;
+}
 export function composerInputElement(input: HTMLElement): HTMLElement {
   return input instanceof HTMLTextAreaElement ? (editors.get(input)?.element ?? input) : input;
 }

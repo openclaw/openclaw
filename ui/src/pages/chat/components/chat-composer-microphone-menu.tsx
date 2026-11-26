@@ -3,19 +3,28 @@ import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
-import type { MenuEntry } from "../../../components/solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
+import { DictationFormattingModeSelect } from "./composer-dictation-formatting.tsx";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
+  controls: MenuControls;
   renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
   onReady: (items: (() => MenuEntry[]) | undefined) => void;
   onDevicePointer: (pointer: boolean) => void;
 }) {
+  // Retain the native select while device/settings rows refresh, including its focus.
+  const formattingControl = (
+    <DictationFormattingModeSelect
+      readDictation={() => props.picker.readDictation?.()}
+      controlRef={() => props.controls.ref()}
+    />
+  );
   const items = createMemo(
     () => {
       const keyed = props.picker.apiKeyProviders ?? {};
@@ -228,6 +237,14 @@ export function MicrophoneMenu(props: {
           attributes: { "data-chat-talk-preference": "hold-to-dictate" },
           closeOnSelect: false,
           details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
+        });
+      }
+      if (props.picker.readDictation) {
+        separator("formatting-separator");
+        entries.push({
+          kind: "content",
+          id: "dictation-formatting",
+          content: formattingControl,
         });
       }
       return entries;

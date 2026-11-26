@@ -37,6 +37,7 @@ import {
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeDashboardsDisplay,
+  normalizeDictationFormatting,
   normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
@@ -52,6 +53,7 @@ export {
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
+  normalizeDictationFormatting,
   normalizeTextScale,
   TEXT_SCALE_STOPS,
   UI_APPEARANCE_DEFAULTS,
@@ -60,6 +62,7 @@ export type {
   CatalogOpenTarget,
   ChatFollowUpMode,
   ChatSendShortcut,
+  DictationFormatting,
   TextScaleStop,
   UiPreferences,
   UiSettings,
@@ -449,6 +452,7 @@ export function loadUiPreferences(
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
+      dictationFormatting: normalizeDictationFormatting(parsed.dictationFormatting),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -500,6 +504,13 @@ export function loadUiPreferences(
 // prefs through to config ui.prefs without each call site knowing about it.
 type SettingsChangeListener = (previous: UiSettings, next: UiSettings) => void;
 let settingsChangeListener: SettingsChangeListener | null = null;
+const settingsChangeObservers = new Set<SettingsChangeListener>();
+
+/** Observe the existing write channel without replacing server preference sync. */
+export function subscribeSettingsChanges(listener: SettingsChangeListener): () => void {
+  settingsChangeObservers.add(listener);
+  return () => settingsChangeObservers.delete(listener);
+}
 
 export function setSettingsChangeListener(listener: SettingsChangeListener | null) {
   settingsChangeListener = listener;
@@ -515,6 +526,9 @@ export function patchSettings(
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
     writeShortcuts: Object.hasOwn(patch, "sidebarEntries"),
   });
+  for (const observer of settingsChangeObservers) {
+    observer(previous, next);
+  }
   settingsChangeListener?.(previous, next);
   return next;
 }
@@ -610,6 +624,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    dictationFormatting: normalizeDictationFormatting(next.dictationFormatting),
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

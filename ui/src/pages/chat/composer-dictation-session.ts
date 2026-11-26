@@ -198,6 +198,22 @@ export class ComposerDictationSession {
   private resumeFinalDrain: (() => void) | null = null;
   private heardSpeech = false;
   private silentSamples = 0;
+  private finalizedRevision = 0;
+  private completeFinalResult = false;
+  private finalizationTimedOut = false;
+
+  get transcriptRevision(): number {
+    return this.finalizedRevision;
+  }
+
+  /** Partial recovery stays usable text, but cannot be labeled finalized refinement. */
+  get finalResultIsComplete(): boolean {
+    return this.completeFinalResult;
+  }
+
+  get finalResultTimedOut(): boolean {
+    return this.finalizationTimedOut;
+  }
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -206,6 +222,7 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      finalizationDeadlineMs?: number;
     },
   ) {}
 
@@ -267,6 +284,7 @@ export class ComposerDictationSession {
           this.currentPartial = text;
         } else if (text) {
           this.finalTranscripts.push(text);
+          this.finalizedRevision++;
           this.currentPartial = "";
         }
         this.callbacks.onTranscriptChange();
@@ -315,9 +333,19 @@ export class ComposerDictationSession {
   async finish(requireTranscript?: true): Promise<string> {
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
+    // Explicit review bounds the existing drain, independently of provider close.
+    const deadline = this.options?.finalizationDeadlineMs;
+    const deadlineTimer =
+      deadline === undefined
+        ? undefined
+        : globalThis.setTimeout(() => {
+            this.finalizationTimedOut = true;
+            this.settleLateFinalDrain?.(false);
+          }, deadline);
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
     const text = await transcript;
+    globalThis.clearTimeout(deadlineTimer);
     // Composer dictation needs a visible outcome; split Talk can quietly listen again.
     // Cancellation and already-reported provider failures keep their existing outcomes.
     if (requireTranscript && !text && !this.discarded && !this.failed) {
@@ -452,7 +480,15 @@ export class ComposerDictationSession {
       let partial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
-      const finish = (text: string) => {
+      const finish = (text: string, terminalSuccess = false) => {
+        this.completeFinalResult =
+          !this.failed &&
+          !this.gatewayDisconnected &&
+          !this.discarded &&
+          !this.finalizationTimedOut &&
+          terminalSuccess &&
+          transcripts.length > 0 &&
+          partial.length === 0;
         globalThis.clearTimeout(timer);
         unsubscribe();
         this.settleLateFinalDrain = null;
@@ -478,6 +514,7 @@ export class ComposerDictationSession {
           payload.text.trim()
         ) {
           transcripts.push(payload.text.trim());
+          this.finalizedRevision++;
           partial = "";
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
@@ -488,7 +525,7 @@ export class ComposerDictationSession {
               ),
             );
           } else {
-            finish(transcript());
+            finish(transcript(), true);
           }
         }
       });

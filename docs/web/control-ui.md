@@ -972,6 +972,7 @@ Every section heading from the previous single-page version keeps its anchor her
 
 ## Related
 
+- [Dictation formatting](/web/control-ui-dictation-formatting) — paragraph/list review and qualified target boundaries
 - [Dashboard](/web/dashboard) — gateway dashboard
 - [Health Checks](/gateway/health) — gateway health monitoring
 - [TUI](/web/tui) — terminal user interface

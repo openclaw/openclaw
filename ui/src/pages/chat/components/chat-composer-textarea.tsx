@@ -35,7 +35,7 @@ export function renderComposerTextarea(
     const state = context().state;
     const draft = context().visibleDraft;
     const dictation = context().dictation;
-    return dictation?.active
+    return dictation?.active && !dictation.requiresFormattingReview
       ? (dictation.placeTranscript(dictation.transcript, state.dictationSelection, {
           start: draft.length,
           end: draft.length,

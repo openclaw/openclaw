@@ -95,15 +95,27 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         }
       : undefined,
   };
-  // Dictation admission invalidates edits and dismisses errors before the next input event.
-  onSettled(() =>
-    voice.dictation.subscribe(() => {
-      if (voice.dictation.locksComposer) {
+  // Preserve's live caption owns its selection and draft until the recording stops.
+  onSettled(() => {
+    let locked = voice.dictation.locksComposer;
+    return voice.dictation.subscribe(() => {
+      const nextLocked = voice.dictation.locksComposer;
+      if (nextLocked && !locked) {
+        const target = state.composerTextarea;
+        const value = target?.value ?? currentProps.getDraft?.() ?? currentProps.draft;
+        state.dictationSelection = {
+          start: target?.selectionStart ?? value.length,
+          end: target?.selectionEnd ?? value.length,
+          value,
+        };
+        // Admission changes the edit generation once. Partial transcripts and
+        // formatting preferences do not edit the draft or invalidate its target.
         state.editRevision += 1;
         currentProps.onDismissRealtimeTalkError?.();
       }
-    }),
-  );
+      locked = nextLocked;
+    });
+  });
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
   const readPredictionSource = () => {

@@ -422,7 +422,7 @@ export class NewSessionPageOwner {
 
   composerOptions(): Omit<
     NewSessionComposerOptions,
-    "dictationStatus" | "voiceControl" | "permissionControl"
+    "dictationStatus" | "readDictation" | "voiceControl" | "permissionControl"
   > {
     const { context, gateway, place, submission, dictation } = this;
     const draftOwnerKey = this.routeOwnerKey();
@@ -440,6 +440,9 @@ export class NewSessionPageOwner {
       onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {
         return dictation.active;
+      },
+      get dictationLocksDraft() {
+        return dictation.locksDraft;
       },
       dictationPreview: dictation.previewDraft(),
       dictationError: this.dictationError,

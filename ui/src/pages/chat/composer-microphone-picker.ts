@@ -3,6 +3,7 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { ComposerDictationOwner } from "./composer-dictation.ts";
 import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
@@ -45,6 +46,7 @@ export type MicrophonePickerProps = {
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
   dictationStatus: ComposerTalkCapabilityStatus;
+  readDictation?: () => ComposerDictationOwner | undefined;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;

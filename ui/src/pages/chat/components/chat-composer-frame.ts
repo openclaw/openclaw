@@ -267,6 +267,8 @@ export function createChatComposerContext(
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
+    state.dictation?.active !== true &&
+    !(state.dictation?.requiresFormattingReview && state.dictation.transcribing) &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected ||
@@ -548,6 +550,7 @@ export function createChatComposerContext(
         holdToDictate: props.composerHoldToRecord !== false,
         realtimeStatus: devicePicker.realtimeStatus,
         dictationStatus: devicePicker.dictationStatus,
+        readDictation: () => voice.dictation,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,
         onSelect: (deviceId: string) => {
@@ -577,7 +580,8 @@ export function createChatComposerContext(
     visibleDraft.trim() || props.attachments?.length ? startRealtimeTalk : handleVoicePrimaryAction,
   );
   const dictation =
-    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
+    props.onToggleRealtimeTalk &&
+    (props.composerHoldToRecord !== false || voice.dictation.formattingReview)
       ? voice.dictation
       : undefined;
   const handleDictationStart = (event?: PointerEvent) => {
@@ -593,7 +597,7 @@ export function createChatComposerContext(
     // Stop also emits pointerdown; only a new gesture owns a draft snapshot.
     if (!event || dictation?.handlePointerDown(event)) {
       state.dictationSelection = selection;
-      if (event && target) {
+      if (event && target && dictation?.locksComposer) {
         target.readOnly = true;
       }
     }
@@ -644,6 +648,17 @@ export function createChatComposerContext(
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
+    onDictationReleaseFocus: (source: ComposerDictationOwner) => {
+      const target = dictationOptions.readFormattingTarget();
+      if (
+        state.composerDraftScope === draftScope &&
+        state.dictation === source &&
+        target?.editable &&
+        target.focused
+      ) {
+        composerInput.focusComposerInput(state.composerTextarea, NO_SCROLL);
+      }
+    },
     onPrimaryActionPointerDown: (event: PointerEvent) => {
       if (composerInput.composerInputHasFocus(state.composerTextarea)) {
         event.preventDefault();

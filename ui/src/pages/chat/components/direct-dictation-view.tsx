@@ -17,7 +17,12 @@ export function DirectDictationView(props: {
     void props.renderRevision;
     return props.control.prepare(props.ownerKey, props.inputDeviceId);
   });
-  const microphonePicker = <MicrophonePicker {...presentation().voice.microphonePicker} />;
+  const microphonePicker = (
+    <MicrophonePicker
+      {...presentation().voice.microphonePicker}
+      readDictation={() => presentation().voice.readDictation()}
+    />
+  );
   return (
     <>
       <ComposerVoiceButton
@@ -28,6 +33,7 @@ export function DirectDictationView(props: {
       <ComposerDictationSendAction
         readDictation={() => presentation().voice.readDictation()}
         onSend={presentation().onSubmit}
+        onReleaseFocus={presentation().onReleaseFocus}
       />
     </>
   );
