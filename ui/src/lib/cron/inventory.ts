@@ -213,15 +213,23 @@ function readRows<Row>(
             signal: pending.controller.signal,
           });
           const first = readCanonicalCronListPage<Row>(response, params.limit ?? 50);
-          resolveCronListPageNextOffset(first, 0);
-          const jobs = [...first.jobs];
+          const jobs: Row[] = [];
           let page = first;
-          while (page.hasMore && version === owner.version) {
-            const offset = resolveCronListPageNextOffset(page, page.offset);
-            if (offset === null) {
+          let offset = 0;
+          for (;;) {
+            const nextOffset = resolveCronListPageNextOffset(page, offset);
+            for (const job of page.jobs) {
+              // A partial or malformed response must not replace the last valid scoped inventory.
+              if (!isRecord(job)) {
+                throw new Error("cron.list returned an invalid inventory job");
+              }
+              jobs.push(job);
+            }
+            if (nextOffset === null || version !== owner.version) {
               break;
             }
             assertPresented();
+            offset = nextOffset;
             const next = await client.request(
               "cron.list",
               { ...params, offset },
@@ -231,12 +239,10 @@ function readRows<Row>(
               break;
             }
             page = readCanonicalCronListPage<Row>(next, params.limit ?? 50);
-            resolveCronListPageNextOffset(page, offset);
             // Name order and membership hold until the definition invalidation.
             if (first.total !== page.total) {
               throw new Error("Automation inventory changed. Refresh and try again.");
             }
-            jobs.push(...page.jobs);
           }
           pending.controller.signal.throwIfAborted();
           if (!isCurrentCronInventory(client, owner)) {

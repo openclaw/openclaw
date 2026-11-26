@@ -656,6 +656,39 @@ describe("sidebar attention source publication", () => {
     expect(names).not.toHaveBeenCalled();
   });
 
+  it("keeps the last failure and retries if a later page contains a malformed job", async () => {
+    vi.useFakeTimers();
+    const offsets: number[] = [];
+    const request = inventoryRequest((params) => {
+      const offset = isRecord(params) ? Number(params.offset) : 0;
+      offsets.push(offset);
+      if (offsets.length === 1) {
+        return cronPage("previous");
+      }
+      const page = cronPage("healthy", "ok");
+      if (offsets.length === 2) {
+        return { ...page, total: 2, hasMore: true, nextOffset: 1 };
+      }
+      if (offset === 1) {
+        return { ...page, jobs: [null], total: 2, offset };
+      }
+      return page;
+    });
+    const harness = startAuthenticatedStore(request);
+    store = harness.attention;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.hasFailedAutomation).toBe(true);
+
+    harness.emitEvent("cron.inventory.changed", {});
+    await vi.advanceTimersByTimeAsync(50);
+    expect(offsets).toEqual([0, 0, 1]);
+    expect(store.hasFailedAutomation).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(offsets).toEqual([0, 0, 1, 0]);
+    expect(store.hasFailedAutomation).toBe(false);
+  });
+
   it("keeps the indicator while a replacement inventory is only partially loaded", async () => {
     const remaining = deferred<CompactCronPage>();
     let reads = 0;

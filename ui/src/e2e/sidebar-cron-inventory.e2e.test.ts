@@ -102,12 +102,12 @@ suite.define(() => {
       await expect
         .poll(() => clock.getAttribute("aria-description"))
         .toBe("An automation has failed");
-      await finish(0, "ok");
-      await expect.poll(() => clock.getAttribute("aria-description")).toBeNull();
       await page.locator(".sidebar-issues-button").click();
       const inbox = page.locator("#sidebar-issues-panel");
       await inbox.locator(".sidebar-issues-panel__empty").waitFor();
       expect(await inbox.getByText(/Report [01]/).count()).toBe(0);
+      await finish(0, "ok");
+      await expect.poll(() => clock.getAttribute("aria-description")).toBeNull();
       expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toEqual([
         expect.objectContaining({ compact: true }),
         expect.objectContaining({ compact: true, offset: 1 }),
