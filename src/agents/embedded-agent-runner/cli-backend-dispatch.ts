@@ -5,6 +5,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -28,11 +29,6 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   // The one-shot bridge cannot carry authenticated source-channel delivery
   // context; private source replies must stay with their embedded owner.
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
-    return undefined;
-  }
-  // The one-shot CLI bridge cannot carry credential-lifetime callbacks. Keep bound
-  // runs with the embedded auth owner that enforces them at credential use.
-  if (params.authProfileBinding) {
     return undefined;
   }
   // The CLI runner needs the caller-owned transcript path or the caller's in-memory session;
@@ -68,7 +64,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const toolsAllow = [...new Set(names)];
-  const requiredProfile = params.requiredAuthProfileId;
+  const requiredProfile = params.authProfileBinding?.profileId ?? params.requiredAuthProfileId;
   const selectedProfile = requiredProfile ?? params.authProfileId;
   const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync({
     ...params,
@@ -83,6 +79,15 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     cliBackendAcceptsAuthProfileForwarding,
     resolveCliExecutionAuthProfileId,
   } = await import("../cli-execution-auth.js");
+  if (params.authProfileBinding) {
+    // The bridge cannot carry credential-lifetime callbacks. Refuse rather than
+    // turning a subscription request into metered embedded/API inference.
+    const error = new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the caller credential binding; no inference was started.`,
+    );
+    recordModelFallbackStop(error);
+    throw error;
+  }
   // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
   // subscription login reaches the CLI as it does for the session's own turns.
   const { config, agentDir } = params;

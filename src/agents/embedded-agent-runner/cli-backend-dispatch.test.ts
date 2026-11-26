@@ -18,6 +18,7 @@ import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
+import { resolveModelFallbackError } from "../failover-error.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
@@ -250,34 +251,61 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     },
   );
 
-  it("keeps callback-bound credentials with the embedded credential owner", async () => {
-    resolveRuntimeCliBackends.mockReturnValue([
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        subscriptionAuthDispatch: true,
-      },
-    ]);
-    ensureAuthProfileStore.mockReturnValue({ version: 1, profiles });
-    const rejectBinding = () => {
-      throw new Error("Binding cannot authorize this account");
-    };
-    await expect(
-      runDispatch({
+  it.each([false, true])(
+    "does not replace callback-bound subscription dispatch with API billing (bound=%s)",
+    async (bound) => {
+      const profileId = "anthropic:stored-subscription";
+      resolveRuntimeCliBackends.mockReturnValue([
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          subscriptionAuthDispatch: true,
+        },
+      ]);
+      ensureAuthProfileStore.mockReturnValue({
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: 4102444800000,
+          },
+        },
+      });
+      const dispatch = runDispatch({
         config: {},
         agentDir: "/agents/main",
-        authProfileId: "anthropic:claude-cli",
-        authProfileBinding: {
-          profileId: "anthropic:claude-cli",
-          authRequirement: "subscription",
-          assertCurrent: rejectBinding,
-          revalidate: async () => rejectBinding(),
-        },
-      }),
-    ).resolves.toBeUndefined();
-    expect(runCliAgent).not.toHaveBeenCalled();
-  });
+        authProfileId: profileId,
+        ...(bound
+          ? {
+              authProfileBinding: {
+                profileId,
+                authRequirement: "subscription" as const,
+                assertCurrent() {
+                  throw new Error("Binding cannot authorize this account");
+                },
+                async revalidate() {
+                  throw new Error("Binding cannot authorize this account");
+                },
+              },
+            }
+          : {}),
+      });
+      if (bound) {
+        await expect(dispatch).rejects.toThrow("cannot honor the caller credential binding");
+        await dispatch.catch((error: unknown) =>
+          expect(resolveModelFallbackError(error)).toMatchObject({ kind: "terminal" }),
+        );
+        expect(runCliAgent).not.toHaveBeenCalled();
+      } else {
+        await expect(dispatch).resolves.toBeDefined();
+        expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBe(profileId);
+      }
+    },
+  );
 
   it("uses the required API-key account before subscription eligibility", async () => {
     resolveRuntimeCliBackends.mockReturnValue([
