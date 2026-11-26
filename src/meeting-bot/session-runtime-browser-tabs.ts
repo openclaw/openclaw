@@ -16,6 +16,16 @@ export type MeetingBrowserTabRelease<TTab> = {
   leave(tab: TTab): Promise<{ left: boolean; note: string }>;
 };
 
+export const releasedMeetingBrowserHealth = {
+  captioning: false,
+  audioInputRouted: false,
+  audioOutputRouted: false,
+  providerConnected: false,
+  realtimeReady: false,
+  audioInputActive: false,
+  audioOutputActive: false,
+} as const;
+
 export async function leaveTrackedMeetingBrowserTab<
   TSession extends MeetingSessionRecord,
   TTab extends MeetingBrowserTab,

@@ -546,7 +546,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
         trackedTargetId: session.chrome?.browserTab?.targetId,
         url: session.url,
       });
-      if (result.found && session.chrome) {
+      if (result.found && session.chrome && this.canObserveBrowser(session)) {
         if (result.targetId) {
           const currentTab = session.chrome.browserTab;
           session.chrome.browserTab = {

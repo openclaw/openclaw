@@ -975,7 +975,8 @@ Use `MeetingPlatformAdapter.defineBrowserMeetingPlugin` from
 that also supports dial-in can extend `MeetingSessionRuntime` and delegate its
 `releaseBrowserTab` callback to the protected `releaseTrackedBrowserTab` method.
 Supply the platform's leave operation and operator messages. The runtime checks
-for another active session on the same tab and clears audio routes after a confirmed leave.
+for another active session on the same tab. After a confirmed leave, status reports
+the final audio state without searching for a replacement tab.
 
 `MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
 `parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,

@@ -375,6 +375,10 @@ export function createMeetingRuntimeFacade<
           timeoutMs: refreshOptions.timeoutMs,
           url: session.url,
         });
+        // A status read can finish after leave. Its tab may now belong to a replacement.
+        if (!this.canObserveBrowser(session)) {
+          return;
+        }
         if (result.found && session.chrome) {
           if (result.tab?.targetId) {
             const currentTab = session.chrome.browserTab;
@@ -395,6 +399,9 @@ export function createMeetingRuntimeFacade<
           });
         }
       } catch (error) {
+        if (!this.canObserveBrowser(session)) {
+          return;
+        }
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
         if (options.hooks?.recordBrowserRecoveryFailure) {

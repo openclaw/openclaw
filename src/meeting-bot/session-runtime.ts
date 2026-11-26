@@ -23,6 +23,7 @@ import {
   inheritMeetingBrowserTabOwnership,
   leaveTrackedMeetingBrowserTab,
   type MeetingBrowserTabRelease,
+  releasedMeetingBrowserHealth,
   settleMeetingRetainedBrowserTabs,
   settleMeetingRetainedBrowserTabsAfterFailure,
 } from "./session-runtime-browser-tabs.js";
@@ -296,16 +297,7 @@ export class MeetingSessionRuntime<
       this.options.setBrowserTab(session, undefined);
       const health = this.options.getBrowser(session)?.health;
       if (health) {
-        this.options.setBrowserHealth(session, {
-          ...health,
-          captioning: false,
-          audioInputRouted: false,
-          audioOutputRouted: false,
-          providerConnected: false,
-          realtimeReady: false,
-          audioInputActive: false,
-          audioOutputActive: false,
-        });
+        this.options.setBrowserHealth(session, { ...health, ...releasedMeetingBrowserHealth });
       }
     }
     return left;
@@ -414,24 +406,28 @@ export class MeetingSessionRuntime<
     }
   }
 
+  protected canObserveBrowser(session: TSession): boolean {
+    return session.state !== "ended" || session.browserLeft !== true;
+  }
+
   async refreshBrowserHealth(
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<void> {
-    if (!this.#isManagedBrowserSession(session)) {
-      this.refreshSpeechReadiness(session);
+    if (!this.canObserveBrowser(session)) {
       return;
     }
     if (
-      !options.force &&
-      this.options.isTalkBackMode(session.mode) &&
-      this.#evaluateSpeechReadiness(session).ready
+      this.#isManagedBrowserSession(session) &&
+      (options.force ||
+        !this.options.isTalkBackMode(session.mode) ||
+        !this.#evaluateSpeechReadiness(session).ready)
     ) {
-      this.refreshSpeechReadiness(session);
-      return;
+      await this.options.refreshBrowserHealth(session, options);
     }
-    await this.options.refreshBrowserHealth(session, options);
-    this.refreshSpeechReadiness(session);
+    if (this.canObserveBrowser(session)) {
+      this.refreshSpeechReadiness(session);
+    }
   }
 
   async refreshCaptionHealth(session: TSession): Promise<void> {

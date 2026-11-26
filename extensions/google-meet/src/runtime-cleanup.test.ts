@@ -62,6 +62,44 @@ it("clears routed audio after a confirmed browser departure", async () => {
   expect(leave).toHaveBeenCalledTimes(2);
 });
 
+it("keeps a confirmed departure when an in-flight status finds a replacement tab", async () => {
+  const runtime = trackedBrowserRuntime("chrome");
+  vi.spyOn(chromeTransport, "launchChromeMeet").mockResolvedValue(meetLaunchedTab("original"));
+  vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({ left: true, note: "Left call" });
+  const started = createDeferred<void>();
+  const resume = createDeferred<void>();
+  const recover = vi
+    .spyOn(chromeTransport, "recoverCurrentMeetTab")
+    .mockImplementation(async () => {
+      started.resolve();
+      await resume.promise;
+      return {
+        found: true,
+        targetId: "replacement",
+        browser: { inCall: true, audioInputRouted: true },
+        transport: "chrome",
+        message: "Active call at the same URL",
+      };
+    });
+  const { session } = await runtime.join({ url: MEET_URL });
+  const pending = runtime.status(session.id);
+  await Promise.race([started.promise, pending]);
+  try {
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({ browserLeft: true });
+  } finally {
+    resume.resolve();
+  }
+  const ended = {
+    id: session.id,
+    state: "ended",
+    chrome: { browserTab: undefined, health: { inCall: false, audioInputRouted: false } },
+  };
+  await expect(pending).resolves.toMatchObject({ session: ended });
+  await expect(runtime.status(session.id)).resolves.toMatchObject({ session: ended });
+  await expect(runtime.status()).resolves.toMatchObject({ sessions: [ended] });
+  expect(recover).toHaveBeenCalledOnce();
+});
+
 it.each([
   { transport: "chrome-node", nodeId: "node-a", shared: true },
   { transport: "chrome-node", nodeId: "node-b", shared: false },
