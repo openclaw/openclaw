@@ -11,7 +11,7 @@ import {
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { SignalAccountConfig } from "../account-types.js";
-import { formatSignalSenderId, isSignalSenderAllowed, type SignalSender } from "../identity.js";
+import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
 import type { SignalInboundEntry } from "./event-handler.control-lane.js";
 import type {
@@ -180,12 +180,11 @@ export function forgetSignalHistoryImages(
   if (typeof timestamp !== "number") {
     return;
   }
-  const senderId = message?.adminDelete ? undefined : formatSignalSenderId(sender);
   for (const entry of entries ?? []) {
     if (
       entry.messageId === String(timestamp) &&
       entry.imageSource &&
-      (!senderId || isSignalSenderAllowed(entry.imageSource.sender, [senderId]))
+      (message?.adminDelete || isSameSignalSender(entry.imageSource.sender, sender))
     ) {
       delete entry.imageSource;
     }

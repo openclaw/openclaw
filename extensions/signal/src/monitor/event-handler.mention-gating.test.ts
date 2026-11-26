@@ -337,6 +337,7 @@ it("keeps deleted, disappearing, view-once, and missing images out of model inpu
     ignoreAttachments: false,
     fetchAttachment,
   });
+  const photoAuthor = "11111111-2222-4333-8444-555555555555";
   const images = [
     { id: "view-once", viewOnce: true },
     { id: "disappearing", expiresInSeconds: 60 },
@@ -351,6 +352,7 @@ it("keeps deleted, disappearing, view-once, and missing images out of model inpu
         { ...options, attachments: [{ id, contentType: "image/jpeg" }] },
         {
           timestamp: 1700000000000 + index,
+          ...(id === "deleted" ? { sourceNumber: null, sourceUuid: photoAuthor } : {}),
         },
       ),
     );
@@ -359,9 +361,12 @@ it("keeps deleted, disappearing, view-once, and missing images out of model inpu
     groupEvent(
       "",
       { remoteDelete: { targetTimestamp: 1700000000002 } },
-      { timestamp: 1700000000005 },
+      { timestamp: 1700000000005, sourceUuid: photoAuthor },
     ),
   );
+  expect(
+    groupHistories.get("g1")?.find((entry) => entry.messageId === "1700000000002")?.imageSource,
+  ).toBeUndefined();
   await handler(
     groupEvent(
       "",
