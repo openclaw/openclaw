@@ -53,25 +53,45 @@ export function upgradeNotice(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob
       `${scribe.title} runs on an automation an earlier version of Knowledge set up in a chat turn. Its scheduled runs can't read channel plugins such as Slack. Upgrading replaces it with one you own.`,
     ),
   );
-  const upgrade = button(
-    "Upgrade automation…",
+  notice.append(
+    replacementButton(ui, snapshot, "Upgrade automation…", "Upgrade", "automation upgraded", () =>
+      updateScribe(ui.s.context.host, snapshot, job, agentId),
+    ),
+  );
+  return notice;
+}
+
+/**
+ * A control that replaces an automation an agent turn created (Upgrade, or Repair of one), behind
+ * the confirmation that says what replacing it changes.
+ */
+export function replacementButton(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  label: string,
+  confirmLabel: string,
+  done: string,
+  replace: () => Promise<unknown>,
+) {
+  const { scribe } = snapshot;
+  const control = button(
+    label,
     () => {
       openConfirmDialog(
-        `Upgrade the automation for ${scribe.title}?`,
+        `${confirmLabel} the automation for ${scribe.title}?`,
         `Its automation is replaced with one you own, in the same conversation, keeping its schedule, run message, options and on or off state. Runs then use your model account, and Recent runs starts over.`,
-        "Upgrade",
+        confirmLabel,
         async () => {
-          await updateScribe(ui.s.context.host, snapshot, job, agentId);
-          ui.announce(`${scribe.title}: automation upgraded.`);
+          await replace();
+          ui.announce(`${scribe.title}: ${done}.`);
           void ui.load();
         },
       );
     },
     "knowledge-button knowledge-small",
   );
-  upgrade.disabled = !ui.s.context.host.connection.canAdmin;
-  notice.append(upgrade);
-  return notice;
+  control.disabled = !ui.s.context.host.connection.canAdmin;
+  return control;
 }
 
 /**

@@ -63,7 +63,10 @@ const isTurnCreated = (job: ScribeJob) => job.scheduledToolPolicy?.mode === "acc
  * no automation. The page never replaces one on its own.
  */
 export const needsUpgrade = (snapshot: ScribeSnapshot) =>
-  snapshot.status !== "missing" && snapshot.jobs.some(isTurnCreated);
+  snapshot.status !== "missing" && replacesTurnCreated(snapshot);
+
+/** Whether declaring the scribe again replaces an automation an agent turn created. */
+export const replacesTurnCreated = (snapshot: ScribeSnapshot) => snapshot.jobs.some(isTurnCreated);
 
 /** What an ongoing scribe's automation is declared with. */
 type Declaration = {

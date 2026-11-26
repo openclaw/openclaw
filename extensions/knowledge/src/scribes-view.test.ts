@@ -350,9 +350,11 @@ it("lets a writer without administrator access run a scribe once, but not schedu
   dialog.remove();
   ui.s.scribe = "claim-consolidation";
   const detail = await render();
-  for (const name of ["Run now", "Disable", "Remove automation…", "Change…"]) {
+  for (const name of ["Run now", "Disable", "Remove automation…", "Upgrade automation…"]) {
     expect(buttonNamed(detail, name).disabled, name).toBe(true);
   }
+  // Rescheduling a turn's automation would replace it, so that waits for Upgrade.
+  expect(buttonNamed(detail, "Change…")).toBeUndefined();
 });
 
 it.each([false, true])(
@@ -736,9 +738,16 @@ it("repairs a scribe whose conversation is gone into a new one, replacing a turn
     scheduledToolPolicy: { mode: "account" },
   };
   // Its conversation is gone, so the scribe reads as Conversation not found until it starts again.
-  const { render, calls, ui } = fixture({ jobs: [elsewhere] });
+  const { render, calls, ui, page } = fixture({ jobs: [elsewhere] });
   ui.s.scribe = "claim-consolidation";
-  buttonNamed(await render(), "Repair").click();
+  buttonNamed(await render(), "Repair…").click();
+  // Replacing a turn's automation asks first, as Upgrade does.
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.textContent).toContain(
+    "Runs then use your model account, and Recent runs starts over.",
+  );
+  expect(calls.some(([method]) => method === "cron.remove")).toBe(false);
+  buttonNamed(dialog, "Repair").click();
   await vi.waitFor(() => expect(calls.some(([method]) => method === "cron.add")).toBe(true));
   expect(calls.find(([method]) => method === "cron.remove")![1]).toEqual({
     id: "job-elsewhere",

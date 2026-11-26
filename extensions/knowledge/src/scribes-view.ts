@@ -11,6 +11,7 @@ import {
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import {
   needsUpgrade,
+  replacesTurnCreated,
   repairScribe,
   runScribeNow,
   setScribePaused,
@@ -31,7 +32,7 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
-import { update, updateNotice, upgradeNotice } from "./scribes-updates.js";
+import { replacementButton, update, updateNotice, upgradeNotice } from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -507,15 +508,19 @@ function detail(
     );
   }
   // A scribe with an automation repairs it; one without starts over from the start dialog.
+  // Repairing an automation an agent turn created replaces it, so it asks first, as Upgrade does.
   if (job && (status === "missing" || status === "failing")) {
+    const repair = () => repairScribe(host, snapshot, job, agentId);
     actions.append(
-      control(
-        "Repair",
-        () => repairScribe(host, snapshot, job, agentId),
-        status === "missing" && session?.archived
-          ? `Restored ${scribeLabel(scribe)} and turned it back on.`
-          : `Repaired ${scribe.title} and turned it on.`,
-      ),
+      replacesTurnCreated(snapshot)
+        ? replacementButton(ui, snapshot, "Repair…", "Repair", "repaired and turned on", repair)
+        : control(
+            "Repair",
+            repair,
+            status === "missing" && session?.archived
+              ? `Restored ${scribeLabel(scribe)} and turned it back on.`
+              : `Repaired ${scribe.title} and turned it on.`,
+          ),
     );
   }
   if (job && status !== "missing") {
@@ -570,7 +575,8 @@ function detail(
   const facts: [string, string | Node][] = [["Status", statusValue]];
   if (job) {
     const scheduleValue = el("span", scheduleText(job.schedule), "scribe-status");
-    if (status !== "missing") {
+    // A schedule change replaces an automation an agent turn created; Upgrade does that first.
+    if (status !== "missing" && !needsUpgrade(snapshot)) {
       const change = button(
         "Change…",
         () =>
