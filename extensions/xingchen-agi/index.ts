@@ -31,21 +31,21 @@ export default defineSingleProviderPluginEntry({
             reasoning: true,
             input: ["text"],
             output: ["text"],
-            // Official pricing, USD per 1M tokens (RMB rate card: off-peak 0.75 /
-            // 0.015 / 3, peak 1.5 / 0.03 / 6).
-            // Off-peak (standard): input $0.11 / cache read $0.0022 / output $0.45
-            // Peak (input/output 2x off-peak; official cache read $0.0045):
-            // Peak window: Beijing time (UTC+8) Mon-Fri 00:00-11:00; off-peak
-            // otherwise plus all weekend. Beijing time has no daylight saving.
-            // Single-value cost fields hold the off-peak (standard) tier.
+            // Pricing (USD per 1M tokens), public price card:
+            // https://xingchen-agi.github.io/pricing/
+            // List: input $0.225 / cache read $0.01125 / output $0.90.
+            // Limited-time offer (20% of list, through 2026-12-20):
+            // input $0.045 / cache read $0.00225 / output $0.18.
+            // Single-value cost fields hold the offer price currently in effect;
+            // switch them to the list prices when the offer ends on 2026-12-20.
             cost: {
-              input: 0.11,
-              output: 0.45,
-              cacheRead: 0.0022,
+              input: 0.045,
+              output: 0.18,
+              cacheRead: 0.00225,
               cacheWrite: 0,
             },
-            contextWindow: 1000000,
-            maxTokens: 192000,
+            contextWindow: 1024000,
+            maxTokens: 128000,
           },
         ],
       }),

@@ -27,12 +27,12 @@
             "output": [
               "text"
             ],
-            "contextWindow": 192000,
-            "maxTokens": 192000,
+            "contextWindow": 1024000,
+            "maxTokens": 128000,
             "cost": {
-              "input": 0.11,
-              "output": 0.45,
-              "cacheRead": 0.0022,
+              "input": 0.045,
+              "output": 0.18,
+              "cacheRead": 0.00225,
               "cacheWrite": 0
             }
           }
