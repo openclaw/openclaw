@@ -509,11 +509,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
-      composerHoldToRecord: state.settings.composerHoldToRecord,
       realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
-      onComposerHoldToRecordChange: (enabled) => {
-        state.settings = patchSettings({ composerHoldToRecord: enabled });
-      },
       onOpenTalkSettings: () => this.context.navigate("talk"),
       onOpenDictationSettings: () => this.context.navigate("talk"),
       suggestionComposer: suggestionViewer,

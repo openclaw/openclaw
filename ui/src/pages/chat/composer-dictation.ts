@@ -31,7 +31,7 @@ type ComposerDictationOwnerOptions = {
   realtimeTalkActive: boolean;
   onCommit: (text: string, late?: true, preservePreview?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
-  onTap?: () => void;
+  onHold?: () => void;
   onDictationUnavailable?: () => void;
 };
 
@@ -109,11 +109,10 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (this.phase !== "idle" || !this.canStart()) {
       return false;
     }
-    // Surfaces without Talk do not need the hold discriminator. Enter the same
-    // session start path directly so capture, errors, partials and finalization stay canonical.
+    // Every dictation entry uses the same capture, error and finalization path.
     this.setPhase("holding");
     void this.start();
     return true;
@@ -134,7 +133,7 @@ export class ComposerDictationOwner extends EventTarget {
     if (this.phase === "stopping") {
       return;
     }
-    if (this.phase !== "idle" && !this.canHold()) {
+    if (this.phase !== "idle" && !this.canStart()) {
       const keepFinal = this.active && !options.connected;
       const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
@@ -149,7 +148,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   handlePointerDown(event: PointerEvent): boolean {
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
+    if (event.button !== 0 || this.phase !== "idle" || !this.canStart()) {
       return false;
     }
     event.preventDefault();
@@ -169,14 +168,17 @@ export class ComposerDictationOwner extends EventTarget {
     }
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
-    // A normal click gets a quiet grace period. Only a sustained press enters
-    // the visible 350ms ring, so the hold affordance cannot steal tap-to-talk.
+    // A normal click stays quiet; a sustained press previews Talk before starting it.
     this.holdTimer = globalThis.setTimeout(() => {
       if (this.phase !== "pressing") {
         return;
       }
       this.setPhase("holding");
-      this.holdTimer = globalThis.setTimeout(() => void this.start(), HOLD_PROGRESS_MS);
+      this.holdTimer = globalThis.setTimeout(() => {
+        this.clearPointerGesture();
+        this.setPhase("idle");
+        this.options.onHold?.();
+      }, HOLD_PROGRESS_MS);
     }, HOLD_ARM_DELAY_MS);
     listen(document, "pointermove", this.handleDocumentPointerMove, pointerOptions);
     listen(document, "pointerup", this.handleDocumentPointerUp, pointerOptions);
@@ -190,15 +192,24 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   handleClick(event: MouseEvent): void {
-    if (this.suppressedPointerId !== null) {
-      this.clearClickSuppression();
-    } else if (this.active) {
-      void this.finishActive();
-    } else if (this.phase === "idle") {
-      this.options.onTap?.();
+    if (this.consumeGestureClick(event)) {
       return;
     }
+    if (this.active) {
+      void this.finishActive();
+    } else if (this.phase === "idle") {
+      this.startDirect();
+    }
     event.preventDefault();
+  }
+
+  consumeGestureClick(event: MouseEvent): boolean {
+    if (this.suppressedPointerId === null) {
+      return false;
+    }
+    this.clearClickSuppression();
+    event.preventDefault();
+    return true;
   }
 
   handleContextMenu(event: MouseEvent): void {
@@ -210,10 +221,13 @@ export class ComposerDictationOwner extends EventTarget {
   dispose(): void {
     this.disposed = true;
     this.cancel();
+    this.clearClickSuppression();
   }
 
   cancel(): void {
-    this.clearClickSuppression();
+    if (this.pointerId === null) {
+      this.clearClickSuppression();
+    }
     this.playback.stop();
     if (this.commits?.size) {
       this.commits.retire();
@@ -242,12 +256,9 @@ export class ComposerDictationOwner extends EventTarget {
       return;
     }
     if (this.phase === "pressing" || this.phase === "holding") {
-      const cleanTap = this.phase === "pressing";
       this.clearPointerGesture();
       this.setPhase("idle");
-      if (cleanTap) {
-        this.options.onTap?.();
-      }
+      this.startDirect();
       this.expireClickSuppression();
       return;
     }
@@ -290,7 +301,7 @@ export class ComposerDictationOwner extends EventTarget {
     void this.finishActive();
   };
 
-  private canHold(): boolean {
+  private canStart(): boolean {
     return (
       this.options.enabled &&
       this.options.connected &&
@@ -301,7 +312,7 @@ export class ComposerDictationOwner extends EventTarget {
 
   private async start(): Promise<void> {
     const client = this.options.client;
-    if (this.phase !== "holding" || !client || !this.canHold()) {
+    if (this.phase !== "holding" || !client || !this.canStart()) {
       await this.stop({ commit: false });
       return;
     }
@@ -313,8 +324,7 @@ export class ComposerDictationOwner extends EventTarget {
       // suppression only after handleClick has had a chance to consume the tail.
       return;
     }
-    // Crossing the threshold latches dictation. Pointer ownership ends here,
-    // while Escape/visibility/blur keep guarding the live capture lifecycle.
+    // Dictation stays active until Stop or Send; Escape/visibility/blur guard capture.
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
@@ -338,7 +348,7 @@ export class ComposerDictationOwner extends EventTarget {
         this.captureStart !== captureStart ||
         this.disposed ||
         !this.connecting ||
-        !this.canHold()
+        !this.canStart()
       ) {
         return;
       }

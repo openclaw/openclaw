@@ -64,7 +64,7 @@ function rhythmHtml() {
                         </details>
                       </div>
                       <div class="agent-chat__composer-actions">
-                        <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
+                        <button class="chat-send-btn chat-send-btn--voice" aria-label="Dictate">${iconSvg()}</button>
                         <span class="chat-desktop-primary-action"><button class="chat-send-btn chat-send-btn--send" aria-label="Send">${iconSvg()}</button></span>
                       </div>
                     </div>

@@ -56,8 +56,8 @@ suite.define(() => {
         .toBe(0);
       // The oversized response completes without navigation; don't wait for one.
       await page
-        .getByRole("button", { name: "Start voice input" })
-        .click({ noWaitAfter: scenario.status === 200 });
+        .getByRole("button", { name: "Dictate", exact: true })
+        .click({ delay: 600, noWaitAfter: scenario.status === 200 });
       await waitForWebRtcSdpFetch(page);
 
       const alert = page.locator('.agent-chat__composer-alert[role="alert"]');

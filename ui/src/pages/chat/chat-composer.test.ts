@@ -78,6 +78,7 @@ async function mountTalk(
   await vi.waitFor(() =>
     expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
   );
+  await vi.advanceTimersByTimeAsync(0);
   return { ...view, request };
 }
 
@@ -257,7 +258,7 @@ it("shows dictation starting at once and microphone guidance only when access is
     true,
   );
   await vi.advanceTimersByTimeAsync(0);
-  voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
+  voiceButton(container).click();
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
   expect(openMicrophoneMock).toHaveBeenCalledOnce();
@@ -432,12 +433,14 @@ it("keeps send and dictation distinct for attachment-only drafts", () => {
   expect(voiceButton(container)).not.toBeNull();
 });
 
-it("keeps the dictation button stable through hold progress and latch", async () => {
+it("keeps the microphone stable through Talk hold feedback without submitting the draft", async () => {
   openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
   vi.stubGlobal("AudioContext", MockDictationAudioContext);
+  const onToggleRealtimeTalk = vi.fn();
+  const onSend = vi.fn();
   const { query, request } = await mountTalk(
-    { transcription: { ready: true } },
-    { draft: "Keep this text" },
+    { transcription: { ready: true }, realtime: { ready: true } },
+    { draft: "Keep this text", onToggleRealtimeTalk, onSend },
     true,
   );
   await vi.waitFor(() => expect(query('[data-chat-talk-capability="dictation"]')).toBeNull());
@@ -454,7 +457,7 @@ it("keeps the dictation button stable through hold progress and latch", async ()
   capturedButton!.dispatchEvent(dictationPointer("pointerdown", 9));
   expect(capturedButton!.hasPointerCapture(9)).toBe(true);
   await vi.advanceTimersByTimeAsync(300);
-  expect(capturedButton?.matches(".chat-send-btn--dictation-arming")).toBe(true);
+  expect(capturedButton?.matches(".chat-send-btn--talk-arming")).toBe(true);
   const holdingControl = capturedButton?.closest(".chat-talk-control");
   expect(holdingControl?.matches(".chat-talk-control--holding")).toBe(true);
   expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
@@ -464,16 +467,18 @@ it("keeps the dictation button stable through hold progress and latch", async ()
   const rerenderedButton = query<HTMLButtonElement>(
     ".chat-talk-control > openclaw-tooltip > button",
   );
-  expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
+  expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
   expect(rerenderedButton).toBe(capturedButton);
-  expect(rerenderedButton?.matches(".chat-send-btn--dictating")).toBe(true);
-  expect(query(".agent-chat__dictation-phase--listening")?.textContent?.trim()).toBe(
-    t("chat.composer.dictationListening"),
-  );
+  document.dispatchEvent(dictationPointer("pointerup", 9));
+  capturedButton!.click();
+  expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+  expect(onSend).not.toHaveBeenCalled();
   expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
 });
 
-it("keeps the microphone picker open without leaking an unavailable hold into Talk", async () => {
+it("keeps unavailable dictation clicks in the microphone picker instead of starting Talk", async () => {
   discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
   const onToggleRealtimeTalk = vi.fn();
   const { container, query } = await mountTalk(
@@ -482,6 +487,8 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
   );
   const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 10));
+  document.dispatchEvent(dictationPointer("pointerup", 10));
+  microphone.click();
   await vi.advanceTimersByTimeAsync(801);
   const dropdown = query(".chat-talk-input-picker");
   expect(dropdown?.hasAttribute("open")).toBe(true);
@@ -497,7 +504,7 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
   expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 
   microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+  expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 });
 
 it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
@@ -510,7 +517,7 @@ it("shows an actionable error status and returns the microphone to idle on start
   );
 
   const microphone = voiceButton(container);
-  microphone.dispatchEvent(dictationPointer("pointerdown", 12));
+  microphone.click();
   await vi.advanceTimersByTimeAsync(800);
   await vi.waitFor(() =>
     expect(query('.agent-chat__composer-status[data-tone="danger"]')).not.toBeNull(),

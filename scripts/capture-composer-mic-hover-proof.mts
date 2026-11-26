@@ -37,7 +37,7 @@ try {
   await page.goto(`${server.baseUrl}chat`);
   const composer = page.locator(".agent-chat__input");
   await composer.waitFor({ state: "visible" });
-  const voice = page.getByRole("button", { name: "Start voice input" });
+  const voice = page.getByRole("button", { name: "Dictate", exact: true });
   await voice.waitFor({ state: "visible" });
 
   await page.mouse.move(10, 10);

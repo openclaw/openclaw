@@ -5,6 +5,7 @@ import {
   installTalkGateway,
 } from "./browser-talk-regression.test-support.ts";
 import {
+  holdComposerForTalk,
   installMicrophoneLossWebRtcFixture,
   type MicrophoneLossE2eProof,
   waitForTalkReady,
@@ -36,7 +37,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await holdComposerForTalk(page);
       await expect
         .poll(() =>
           page.evaluate(
@@ -75,7 +76,7 @@ suite.define(() => {
       const gateway = await installMicrophone(page, "voice-microphone-loss-e2e");
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await holdComposerForTalk(page);
       await expect
         .poll(() => page.locator(".agent-chat__voice-activity").getAttribute("data-status"))
         .toBe("listening");

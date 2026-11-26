@@ -26,6 +26,8 @@ const dictationHarness = vi.hoisted(() => {
     handleClick = vi.fn(() => {
       if (this.active) {
         void this.finishActive();
+      } else {
+        this.startDirect();
       }
     });
     startDirect = vi.fn(() => {
@@ -191,7 +193,7 @@ describe("DirectDictationControl", () => {
     ).toBe("Dictate");
     expect(captureSelection).toHaveBeenCalledOnce();
     expect(dictationHarness.controllers[0]?.startDirect).toHaveBeenCalledOnce();
-    expect(dictationHarness.controllers[0]?.handleClick).not.toHaveBeenCalled();
+    expect(dictationHarness.controllers[0]?.handleClick).toHaveBeenCalledOnce();
     expect(onError).not.toHaveBeenCalled();
     control.dispose();
   });

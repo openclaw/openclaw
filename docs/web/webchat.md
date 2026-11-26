@@ -114,7 +114,13 @@ Already-downloaded speech keeps playing through a Gateway connection blip, and
 **Stop reading** remains available. New synthesis requires a live connection;
 changing Gateway or losing speech access stops the old playback.
 
-Hold the microphone button for dictation. Explicit audio models in
+Click the microphone button to dictate into the unsent draft. In desktop chat,
+hold it for about half a second to start Talk instead; the microphone menu also
+offers **Start Talk** for keyboard access. Finish dictation and let its transcript
+settle before starting Talk, so pending words stay in the draft. The former **Hold to dictate**
+preference is removed, and its saved value no longer changes these gestures.
+Mobile web keeps its separate dictation and Talk controls; New Session and Side
+chat remain dictation-only. Explicit audio models in
 `tools.media.models` use the same transcription owner as uploaded voice notes,
 including local OpenAI-compatible `/v1/audio/transcriptions` endpoints and local
 CLI models. Audio is transcribed when capture ends; file-based providers do not

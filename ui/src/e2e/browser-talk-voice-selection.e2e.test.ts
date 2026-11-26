@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
+  holdComposerForTalk,
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
   TALK_READY_HISTORY_MESSAGE,
@@ -44,7 +45,7 @@ suite.define(() => {
       await installOpenAiTalkFixture(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Start voice input" }).click();
+      await holdComposerForTalk(page);
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
       const openAudio = () =>
         page.waitForFunction(() => {
