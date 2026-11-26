@@ -2,6 +2,10 @@ import fs from "node:fs";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
+// Carries the exact path OpenClaw added for version-manager compatibility.
+// Consumers can distinguish that default from an operator's explicit custom CA.
+export const OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS = "OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS";
+
 const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/certs/ca-certificates.crt",
   "/etc/pki/tls/certs/ca-bundle.crt",

@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
+import { OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS } from "./bootstrap/node-startup-env.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
@@ -54,6 +55,7 @@ it("runs one-shot model inference in process unless Node must reload its trust s
   }
   const withCa = requirePlan({ args: local, autoNodeExtraCaCerts: systemCa });
   expect(withCa.env.NODE_EXTRA_CA_CERTS).toBe(systemCa);
+  expect(withCa.env[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBe(systemCa);
   expect(withCa.argv).not.toContain(warningFlag);
   const otherCommand = ["infer", "model", "--agent", "run", "list"];
   expect(requirePlan({ args: otherCommand, autoNodeExtraCaCerts: "" }).argv).toContain(warningFlag);

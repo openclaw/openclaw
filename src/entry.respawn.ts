@@ -2,7 +2,10 @@ import path from "node:path";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
-import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
+import {
+  OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS,
+  resolveNodeStartupTlsEnvironment,
+} from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
   shouldSkipRespawnForArgv,
@@ -109,6 +112,7 @@ export function buildCliRespawnPlan(
       !childEnv.NODE_EXTRA_CA_CERTS
     ) {
       childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
+      childEnv[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS] = autoNodeExtraCaCerts;
       childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
       needsRespawn = true;
     }

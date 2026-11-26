@@ -11,6 +11,7 @@ export type NodeWorkerContainerEngine = {
   id: "docker" | "podman";
   command: string;
   target: string;
+  rootless?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -107,7 +108,7 @@ async function runContainerCommand(
 async function resolveContainerEngineTarget(
   engine: Pick<NodeWorkerContainerEngine, "id" | "command" | "env">,
   options: { pinned?: boolean } = {},
-): Promise<Pick<NodeWorkerContainerEngine, "target" | "env">> {
+): Promise<Pick<NodeWorkerContainerEngine, "target" | "env" | "rootless">> {
   const env = engine.env ?? process.env;
   const timeoutMs = options.pinned ? CONTAINER_REVALIDATION_TIMEOUT_MS : 5_000;
   if (engine.id === "docker") {
@@ -134,8 +135,26 @@ async function resolveContainerEngineTarget(
     if (!daemonId || daemonId === "<no value>") {
       throw new Error("Docker daemon did not report a stable identity");
     }
+    const rawSecurityOptions = await runContainerCommand(
+      { ...engine, env: frozenEnv },
+      ["info", "--format", "{{json .SecurityOptions}}"],
+      timeoutMs,
+    );
+    let securityOptions: unknown;
+    try {
+      securityOptions = JSON.parse(rawSecurityOptions);
+    } catch {
+      throw new Error("Docker daemon returned invalid security options");
+    }
+    if (
+      !Array.isArray(securityOptions) ||
+      !securityOptions.every((value) => typeof value === "string")
+    ) {
+      throw new Error("Docker daemon returned invalid security options");
+    }
     return {
       target: createHash("sha256").update(`docker\0${daemonId}`).digest("hex"),
+      rootless: securityOptions.includes("name=rootless"),
       env: frozenEnv,
     };
   }
@@ -306,7 +325,7 @@ export async function createNodeWorkerContainer(
   if (params.homeDir && params.homeDir !== params.workspaceDir) {
     args.push("--mount", bindMount(params.homeDir, params.homeDir));
   }
-  if (engine.id === "docker" && process.getuid && process.getgid) {
+  if (engine.id === "docker" && engine.rootless !== true && process.getuid && process.getgid) {
     args.push("--user", `${process.getuid()}:${process.getgid()}`);
   }
   const containerEnv: NodeJS.ProcessEnv = {

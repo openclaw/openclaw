@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
+import {
+  OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS,
+  resolveNodeStartupTlsEnvironment,
+} from "../bootstrap/node-startup-env.js";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
@@ -315,10 +318,24 @@ function buildCommonServiceEnvironment(
         );
   // Generic shell proxy vars are audited but never frozen into services.
   const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
+  // Persist the provenance of the automatic CA so downstream consumers can drop
+  // OpenClaw's version-manager default without discarding an operator's explicit
+  // NODE_EXTRA_CA_CERTS. A matching inherited marker (for example from the CLI
+  // respawn plan, which sets both the CA and its marker before `node install`)
+  // is carried forward; an unmatched or absent marker means the CA is explicit.
+  const inheritedCaCerts = env.NODE_EXTRA_CA_CERTS?.trim();
+  const inheritedAutoCaCerts = env[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]?.trim();
+  const nodeAutoCaCerts =
+    inheritedCaCerts === undefined
+      ? startupTlsEnv.NODE_EXTRA_CA_CERTS
+      : inheritedAutoCaCerts !== undefined && inheritedAutoCaCerts === inheritedCaCerts
+        ? inheritedAutoCaCerts
+        : undefined;
   const environment: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     NODE_EXTRA_CA_CERTS: startupTlsEnv.NODE_EXTRA_CA_CERTS,
+    [OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]: nodeAutoCaCerts,
     NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
     OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,

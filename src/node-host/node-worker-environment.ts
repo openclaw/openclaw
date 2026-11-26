@@ -1,4 +1,5 @@
 import path from "node:path";
+import { OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS } from "../bootstrap/node-startup-env.js";
 import { NODE_SERVICE_KIND, resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -60,8 +61,9 @@ export function snapshotNodeWorkerExecutionEnv(
   transport?: NodeWorkerManagedIdentityTransport,
   platformTrust?: NodeWorkerPlatformTrust,
   homeDir?: string,
+  options: { excludeAutomaticCa?: boolean } = {},
 ): NodeJS.ProcessEnv {
-  const snapshot = snapshotNodeWorkerEnv(source, homeDir);
+  const snapshot = snapshotNodeWorkerEnv(source, homeDir, options);
   if (platformTrust) {
     applyNodeWorkerPlatformTrust(snapshot, platformTrust);
   }
@@ -103,8 +105,13 @@ const WINDOWS_WORKER_ENV_KEYS = new Set([
 export function snapshotNodeWorkerEnv(
   source: NodeJS.ProcessEnv,
   homeDir?: string,
+  options: { excludeAutomaticCa?: boolean } = {},
 ): NodeJS.ProcessEnv {
   const windows = process.platform === "win32";
+  const autoNodeExtraCaCerts =
+    options.excludeAutomaticCa === true
+      ? source[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]?.trim()
+      : undefined;
   const snapshot: NodeJS.ProcessEnv = {};
   const retainedWindowsKeys = new Map<string, string>();
   for (const [key, value] of Object.entries(source)) {
@@ -116,6 +123,18 @@ export function snapshotNodeWorkerEnv(
       (windows ? WINDOWS_WORKER_ENV_KEYS : POSIX_WORKER_ENV_KEYS).has(normalized) ||
       normalized.startsWith("LC_");
     if (!allowed) {
+      continue;
+    }
+    // A container launch must drop the automatic host CA: container images carry
+    // their own trust store, and this host-only path would fail the worker's mount
+    // confinement. Host-process workers keep it — they still use the host runtime's
+    // trust additions — so the exclusion is opt-in per caller. An explicit custom
+    // CA always survives and keeps the existing path gate.
+    if (
+      normalized === "NODE_EXTRA_CA_CERTS" &&
+      autoNodeExtraCaCerts !== undefined &&
+      value === autoNodeExtraCaCerts
+    ) {
       continue;
     }
     if (windows) {

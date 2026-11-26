@@ -270,7 +270,17 @@ export function prepareNodeWorkerSupervisorEnvironment(
     ? undefined
     : options.managedIdentityTransport;
   const platformTrust = options.containerEngine ? undefined : options.platformTrust;
-  const workerEnv = snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust);
+  // Only container-isolated workers must drop OpenClaw's automatic host CA; the
+  // host-process paths that share this snapshot still need the host runtime's
+  // trust additions.
+  const snapshotOptions = { excludeAutomaticCa: options.containerEngine !== undefined };
+  const workerEnv = snapshotNodeWorkerExecutionEnv(
+    env,
+    managedIdentityTransport,
+    platformTrust,
+    undefined,
+    snapshotOptions,
+  );
   const execution =
     !options.containerEngine && options.executionContext
       ? JSON.stringify(options.executionContext)
@@ -287,6 +297,7 @@ export function prepareNodeWorkerSupervisorEnvironment(
             managedIdentityTransport,
             platformTrust,
             homeDir,
+            snapshotOptions,
           )
         : workerEnv),
       ...(execution === undefined ? {} : { [NODE_WORKER_EXECUTION_ENV]: execution }),
