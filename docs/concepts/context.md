@@ -20,6 +20,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 ## Quick start (inspect context)
 
 - `/status` → quick "how full is my window?" view + session settings.
+- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus latest-run cache hit and cost. Same categories as the Control UI context popover, on every chat channel. `/context help` lists the modes.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
@@ -70,6 +71,25 @@ OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
+
+### `/context`
+
+```text
+🧠 Prompt budget · 121.6k / 980k · 12%
+🟦🟧🟩🟨🟪⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜
+
+🟦 Messages & other · ~88.3k
+🟧 Workspace files · ~11.8k
+🟩 Tool schemas · ~5.9k
+🟨 Skills catalog · ~7.2k
+🟪 System instructions · ~8.4k
+
+Latest run: 97.76% cache hit · $0.31
+
+More: /context list · /context detail · /context map · /context json
+```
+
+The bar spans the context window; every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale.
 
 ### `/context list`
 

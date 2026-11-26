@@ -265,10 +265,38 @@ describe("buildContextReply", () => {
   );
 
   it("describes compactable chat history counts in help output", async () => {
-    const result = await buildContextReply(makeParams("/context", false));
+    const result = await buildContextReply(makeParams("/context help", false));
     expect(result.text).toContain(
       "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
+  });
+
+  it("shows the prompt budget card for bare /context", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 8_192, totalTokens: 4_000 }),
+    );
+    expect(result.text).toBe(
+      [
+        "🧠 Prompt budget · 4k / 8.2k · 49%",
+        "🟦🟦🟦🟦🟦🟦🟦🟦🟧🟧🟧🟧🟧🟩🟨⬜⬜⬜⬜⬜",
+        "",
+        "🟦 Messages & other · ~3.7k",
+        "🟧 Workspace files · ~2.5k",
+        "🟩 Tool schemas · ~8",
+        "🟨 Skills catalog · ~3",
+        "🟪 System instructions · ~0",
+        "",
+        "More: /context list · /context detail · /context map · /context json",
+      ].join("\n"),
+    );
+  });
+
+  it("does not invent a message share when cached usage is stale", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 8_192, totalTokensFresh: false }),
+    );
+    expect(result.text?.split("\n")[0]).toBe("🧠 Prompt budget · ? / 8.2k");
+    expect(result.text).toContain("🟦 Messages & other · unknown");
   });
 
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {

@@ -1,3 +1,4 @@
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -30,6 +31,11 @@ import {
 } from "../../config/sessions/types.js";
 import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
 import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
+import {
+  buildContextBudgetCategories,
+  type ContextCategory,
+} from "../../shared/context-budget-categories.js";
+import { formatUsd } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
@@ -48,6 +54,94 @@ function formatListTop(entries: Array<{ name: string; value: number }>, noun = "
     ...top.map((entry) => `- ${entry.name}: ${formatCharsAndTokens(entry.value)}`),
     ...(omitted ? [`… (+${omitted} more ${noun})`] : []),
   ];
+}
+
+const CONTEXT_BUDGET_LABELS: Record<ContextCategory["id"], { swatch: string; label: string }> = {
+  messages: { swatch: "🟦", label: "Messages & other" },
+  files: { swatch: "🟧", label: "Workspace files" },
+  tools: { swatch: "🟩", label: "Tool schemas" },
+  skills: { swatch: "🟨", label: "Skills catalog" },
+  system: { swatch: "🟪", label: "System instructions" },
+};
+const CONTEXT_BUDGET_BAR_CELLS = 20;
+const formatBudgetTokens = (tokens: number) =>
+  formatCompactTokenCount(tokens, { trimTrailingZero: true });
+
+/** Text form of the Control UI prompt-budget popover, shared by every chat channel. */
+export function formatContextBudget(params: {
+  report: SessionSystemPromptReport;
+  used: number | null;
+  limit: number | null;
+  entry?: SessionEntry;
+}): string {
+  const { report, limit } = params;
+  // A fresh session reports zero before its first run; that is no measurement.
+  const used = params.used || null;
+  // Without a fresh usage total, "messages" is unknown rather than a negative remainder.
+  const categories = buildContextBudgetCategories(report, used ?? -1);
+  const known = categories.reduce((sum, category) => sum + (category.tokens ?? 0), 0);
+  const header = [
+    "🧠 Prompt budget",
+    `${used == null ? "?" : formatBudgetTokens(used)} / ${limit ? formatBudgetTokens(limit) : "?"}`,
+    ...(used != null && limit ? [`${Math.min(100, Math.round((used / limit) * 100))}%`] : []),
+  ].join(" · ");
+
+  const lines = [header];
+  if (limit && known > 0) {
+    // Each visible category keeps at least one cell, like the UI's sliver, so a small
+    // share stays legible; the header and legend carry the exact numbers.
+    const shown = categories.filter((category) => (category.tokens ?? 0) > 0);
+    const filled = Math.min(
+      CONTEXT_BUDGET_BAR_CELLS,
+      Math.max(shown.length, Math.round((known / limit) * CONTEXT_BUDGET_BAR_CELLS)),
+    );
+    const exact = shown.map((category) => ((category.tokens ?? 0) / known) * filled);
+    const cells = exact.map((value) => Math.max(1, Math.floor(value)));
+    for (let spare = filled - cells.reduce((sum, value) => sum + value, 0); spare > 0; spare -= 1) {
+      const next = exact.reduce(
+        (best, value, index) =>
+          value - cells[index]! > exact[best]! - cells[best]! ? index : best,
+        0,
+      );
+      cells[next]! += 1;
+    }
+    lines.push(
+      shown
+        .map((category, index) => CONTEXT_BUDGET_LABELS[category.id].swatch.repeat(cells[index]!))
+        .join("") +
+        "⬜".repeat(
+          Math.max(0, CONTEXT_BUDGET_BAR_CELLS - cells.reduce((sum, value) => sum + value, 0)),
+        ),
+    );
+  }
+  lines.push("");
+  for (const category of categories) {
+    const { swatch, label } = CONTEXT_BUDGET_LABELS[category.id];
+    const value =
+      category.tokens === null
+        ? category.id === "messages"
+          ? "unknown"
+          : "unverified"
+        : `~${formatBudgetTokens(category.tokens)}`;
+    lines.push(`${swatch} ${label} · ${value}`);
+  }
+
+  const entry = params.entry;
+  const prompt = (entry?.inputTokens ?? 0) + (entry?.cacheRead ?? 0) + (entry?.cacheWrite ?? 0);
+  const latestRun = [
+    entry?.cacheRead != null && prompt > 0
+      ? `${(Math.floor((entry.cacheRead / prompt) * 10_000) / 100).toFixed(2)}% cache hit`
+      : null,
+    formatUsd(entry?.estimatedCostUsd),
+  ].filter(Boolean);
+  if (latestRun.length) {
+    lines.push("", `Latest run: ${latestRun.join(" · ")}`);
+  }
+  if (report.source === "estimate") {
+    lines.push("", "Estimated: no run has been recorded for this session yet.");
+  }
+  lines.push("", "More: /context list · /context detail · /context map · /context json");
+  return lines.join("\n");
 }
 
 function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
@@ -159,7 +253,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
-  if (!sub || sub === "help") {
+  if (sub === "help") {
     return {
       text: [
         "🧠 /context",
@@ -167,6 +261,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "What counts as context (high-level), plus a breakdown mode.",
         "",
         "Try:",
+        "- /context        (prompt budget: where the context window is going)",
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
         "- /context map    (WinDirStat-style treemap image)",
@@ -305,6 +400,17 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
+
+  if (!sub) {
+    return {
+      text: formatContextBudget({
+        report,
+        used: cachedContextUsageTokens ?? null,
+        limit: session.contextTokens,
+        entry: targetSessionEntry,
+      }),
+    };
+  }
 
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
