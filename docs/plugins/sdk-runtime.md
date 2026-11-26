@@ -978,6 +978,10 @@ Supply the platform's leave operation and operator messages. The runtime checks
 for another active session on the same tab. After a confirmed leave, status reports
 the final audio state without searching for a replacement tab.
 
+Official plugins with a custom meeting entry can use `registerMeetingPluginRuntime`
+from `openclaw/plugin-sdk/meeting-plugin-entry`. Gateway handlers and the registered
+live-caption source share one runtime and wait for its initial transcript policy.
+
 `MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
 `parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
 permission origins, display names, manual-action prefixes, and retry policy.

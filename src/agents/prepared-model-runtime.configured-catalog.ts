@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { copyContextWindowOption, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
@@ -117,7 +117,7 @@ function prepareRuntimeFacts(
       entry.provider = provider;
       // Both the configured alias and its canonical row may expose these mutable options.
       if (entry.contextWindows) {
-        entry.contextWindows = entry.contextWindows.map((option) => ({ ...option }));
+        entry.contextWindows = entry.contextWindows.map(copyContextWindowOption);
       }
     }
   }

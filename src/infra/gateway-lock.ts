@@ -16,6 +16,7 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
@@ -99,6 +100,8 @@ export type GatewayLockOptions = {
   databasePortRecovery?: DatabasePortRecoveryIntent;
   /** Config-only repairs retain file custody without inspecting or admitting database work. */
   databaseAccess?: "none";
+  /** Startup schema preparation may wait for brief CLI schema custody, not offline maintenance. */
+  waitForTransientSchemaOwner?: boolean;
   listenerMode?: "foreground" | "supervised";
   supervisor?: GatewayOwnerSupervisor | null;
 };
@@ -414,7 +417,7 @@ async function assertHistoricalLockOwnerStopped(
       path.join(paths.stateDir, "state", "openclaw.sqlite"),
       undefined,
       describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
-      { pid: payload.pid, role: payload.role },
+      { pid: payload.pid, role: payload.role, stateOwnerKind: payload.stateOwnerKind },
     );
   }
 }
@@ -444,6 +447,8 @@ export async function acquireGatewayLock(
     0,
   );
   const deadlineMs = Math.min(opts.lifecycleDeadlineMs ?? Infinity, startedAt + timeoutMs);
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250);
+  const schemaDeadline = Math.min(deadlineMs, startedAt + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
   const startTime = readGatewayLockProcessStartTime(
     process.pid,
     opts.platform ?? process.platform,
@@ -492,7 +497,7 @@ export async function acquireGatewayLock(
       borrowedOwner ??
       (await acquireWithWait({
         deadlineMs,
-        pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
+        pollIntervalMs,
         now,
         sleep: opts.sleep,
         acquire: async () => {
@@ -573,11 +578,14 @@ export async function acquireGatewayLock(
             waited = true;
             return { delayMs: Math.min(5_000, remaining) };
           }
-          if (
-            role === "sqlite-maintenance" ||
-            !(error instanceof GatewayStateOwnerContentionError)
-          ) {
+          if (!(error instanceof GatewayStateOwnerContentionError)) {
             return false;
+          }
+          if (role === "sqlite-maintenance") {
+            return (
+              opts.waitForTransientSchemaOwner === true &&
+              error.transientSchemaRetry(schemaDeadline - now(), pollIntervalMs)
+            );
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
             onWait(

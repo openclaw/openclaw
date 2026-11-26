@@ -276,7 +276,12 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path).toSorted());
+  // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private path array.
+  const paths = scan.entries.map((entry) => entry.path).sort();
+  // One directory can contain more paths than a single function call accepts.
+  for (const file of paths) {
+    files.push(file);
+  }
 }
 
 export async function listMemoryFiles(
