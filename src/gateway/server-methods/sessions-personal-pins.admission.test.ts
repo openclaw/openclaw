@@ -63,6 +63,7 @@ async function fixture() {
     (await preferences.setCanonicalUserPreferences(viewer, { [PREF]: ["route:usage"] }))?.ok,
   ).toBe(true);
   return {
+    viewer,
     invite,
     switchViewer: () => {
       client.authenticatedUserProfile = identifiedClient(other).authenticatedUserProfile;
@@ -184,7 +185,7 @@ it.each(["read", "write"] as const)(
     }),
 );
 
-it.each(["Stop", "requester change", "snooze", "replacement"] as const)(
+it.each(["Stop", "snooze", "replacement"] as const)(
   "%s before preference write still prevents an admitted pin",
   (change) =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -196,8 +197,6 @@ it.each(["Stop", "requester change", "snooze", "replacement"] as const)(
         .mockImplementationOnce(async (...args) => {
           if (change === "Stop") {
             stop.abort(new Error("pin request stopped"));
-          } else if (change === "requester change") {
-            f.switchViewer();
           } else {
             await upsertSessionEntryCore(
               scope(own),
@@ -220,3 +219,24 @@ it.each(["Stop", "requester change", "snooze", "replacement"] as const)(
       expect(await f.layout()).toEqual(["route:usage"]);
     }),
 );
+
+it("an admitted pin commits for its original requester after the connection switches profile", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const f = await fixture();
+    const write = preferences.setCanonicalUserPreferences;
+    using intercept = vi
+      .spyOn(preferences, "setCanonicalUserPreferences")
+      .mockImplementationOnce(async (...args) => {
+        f.switchViewer();
+        return write(...args);
+      });
+    await expect(
+      f.patch("sessions.patchMany", {
+        targets: [{ key: own, expectedSessionId: own }],
+        patch: { pinned: true },
+      }),
+    ).resolves.toEqual({ outcomes: [{ key: own, ok: true }] });
+    expect(intercept).toHaveBeenCalledOnce();
+    expect(intercept.mock.calls[0]?.[0]).toBe(f.viewer);
+    expect(await f.layout()).toEqual(["route:usage", `session:${own}`]);
+  }));
