@@ -408,6 +408,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
   "agents.entries.*.agentProfileId":
     'Per-agent Agent Profile selector. Omit it to inherit agents.defaults.agentProfileId. Use "auto" to select by the model\'s trusted total parameter count, or a registered profile id to pin one.',
+  "agents.entries.*.sharedUserDir":
+    "Directory holding a USER.md that several agents share. When set, this agent loads that USER.md in place of its workspace's own; personal USER.md overlays still apply. The directory stays outside the workspace path guard, so workspace file tools neither read nor edit it. Omit to keep the workspace USER.md.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":

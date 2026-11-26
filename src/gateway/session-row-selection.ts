@@ -32,6 +32,40 @@ type SessionRowSelectionSource = {
   onMembershipChange(listener: (sessionKey?: string) => void): void;
 };
 
+function isSelectionRowInScope(cfg: OpenClawConfig, scope: SelectionScope, row: SelectionTarget) {
+  return (
+    scope.paths.has(row.storeTarget.storePath) &&
+    (!scope.agentId || row.agentId === scope.agentId) &&
+    (!scope.configuredAgentIds ||
+      isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry))
+  );
+}
+
+function duplicateSelectionKey(key: string) {
+  return canonicalSessionKeyMigrationRequiredError(
+    `duplicate rows resolve to canonical session key ${key}`,
+  );
+}
+
+/** Resolve an indexed ordinary key in the federation scope. Sentinels use physical ownership. */
+export function selectUniqueSessionRow(
+  cfg: OpenClawConfig,
+  scope: SelectionScope,
+  rows: readonly SelectionTarget[],
+) {
+  let winner: SelectionTarget | undefined;
+  for (const row of rows) {
+    if (!isSelectionRowInScope(cfg, scope, row)) {
+      continue;
+    }
+    if (winner) {
+      throw duplicateSelectionKey(row.key);
+    }
+    winner = row;
+  }
+  return winner;
+}
+
 // Topology retires scopes; accepted facts advance only their affected partitions.
 const sessionRowSelections = new WeakMap<
   SessionRowSelectionSource,
@@ -142,9 +176,7 @@ export function createSessionRowSelection(
     Buffer.compare(Buffer.from(left.row.key), Buffer.from(right.row.key));
   const assertCanonical = () => {
     for (const key of duplicates) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${key}`,
-      );
+      throw duplicateSelectionKey(key);
     }
   };
   // Store-admission scopes also include ACP IDs; owner facets use only the agent roster.
@@ -237,12 +269,7 @@ export function createSessionRowSelection(
   const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
     let group = groups.get(key);
     const oldWinner = winners.get(key);
-    const eligible =
-      row &&
-      scope.paths.has(row.storeTarget.storePath) &&
-      (!scope.agentId || row.agentId === scope.agentId) &&
-      (!scope.configuredAgentIds ||
-        isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry));
+    const eligible = row && isSelectionRowInScope(cfg, scope, row);
     if (!group && oldWinner && rowIdentity(oldWinner.row) !== id) {
       group = new Map([[rowIdentity(oldWinner.row), oldWinner]]);
     }

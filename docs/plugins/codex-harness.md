@@ -731,6 +731,15 @@ and connection. Native-parent thread rotation can preserve those assignments;
 resetting the requester or changing the connection does not adopt them. Missing
 assignment metadata is not reconstructed from retired Tasks history.
 
+In Codex V1, `resume_agent` can find a worker even when `send_input` reports
+“Cannot verify this worker belongs to the current parent.” Changing the
+app-server address or credentials can give the same chat a new native parent
+thread. Check the parent's history and confirm what the worker finished,
+including any file changes or remote writes. If the outcome is unclear, don't
+resend the task. If the earlier work is settled and a different worker is
+acceptable, use `spawn_agent` with `fork_context: false` for the next task.
+Pass only the confirmed results it needs.
+
 For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
 records the matching turn as an assignment. This allows recovery after a yield or restart.
 When a warm thread closes, observation stops but unmatched receipts remain available.

@@ -99,6 +99,7 @@ export type ResolvedAgentConfig = {
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
   agentProfileId?: AgentEntry["agentProfileId"];
+  sharedUserDir?: AgentEntry["sharedUserDir"];
   skills?: AgentEntry["skills"];
   memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -489,6 +490,7 @@ export function resolveAgentConfig(
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
     agentProfileId: entry.agentProfileId,
+    sharedUserDir: entry.sharedUserDir,
     skills: entry.skills,
     memory: entry.memory,
     humanDelay: entry.humanDelay,

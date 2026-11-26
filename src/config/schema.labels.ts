@@ -118,6 +118,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.bootstrapMaxChars": "Agent Bootstrap Max Chars",
   "agents.entries.*.bootstrapTotalMaxChars": "Agent Bootstrap Total Max Chars",
   "agents.entries.*.agentProfileId": "Agent Profile",
+  "agents.entries.*.sharedUserDir": "Agent Shared USER.md Directory",
   agents: "Agents",
   "agents.ownership": "Agent Ownership Generation",
   "agents.defaults": "Agent Defaults",
