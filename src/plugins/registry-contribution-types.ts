@@ -277,14 +277,16 @@ export type MemoryPluginRuntime = {
     /** The session caller's host-granted recall pass, exactly as its tool context received it. */
     conversationRecall?: ConversationRecallContext;
   }): Promise<MemorySearchResult[]>;
-  /** The classifier consumes pinned read sources without probing Gateway-local paths. */
+  /** The classifier consumes pinned read sources without reopening workspace paths. */
   supportsWorkspaceMemoryReadSources?: true;
   classifyWorkspaceMemoryPaths?(params: {
     cfg: OpenClawConfig;
     agentId: string;
     workspaceDir: string;
     relativePaths: string[];
-    /** Already-read remote files; an absent canonical path must remain untrusted. */
+    /** Hash of the content being classified, by requested workspace-relative path. */
+    contentHashes?: Readonly<Record<string, string>>;
+    /** Already-read workspace files; an absent canonical path must remain untrusted. */
     readSources?: readonly { relativePath: string; canonicalRelativePath?: string }[];
   }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
   /** Fence and drain managers consuming these exact retiring capability objects. */

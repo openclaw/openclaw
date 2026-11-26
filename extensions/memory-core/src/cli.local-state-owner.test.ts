@@ -23,6 +23,8 @@ afterEach(() => vi.clearAllMocks());
 describe("memory CLI owner admission", () => {
   it.each([
     [["status"], "memory.cli", true],
+    [["trust"], "memory.trust", true],
+    [["trust", "--sha256", "a".repeat(64)], "memory.trust", true],
     [["index"], "memory.cli", true],
     [["search", "query"], "memory.search.owner", false],
     [["forget", "--session", "fixture"], "memory.cli", true],

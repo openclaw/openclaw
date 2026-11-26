@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { DEFAULT_MEMORY_FILENAME, DEFAULT_USER_FILENAME } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
-import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
+import {
+  readMemoryArtifactProvenance,
+  readRootMemoryForTrust,
+} from "../memory/memory-artifact-provenance.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -43,7 +47,7 @@ async function listCuratedMemoryFiles(workspaceDir: string): Promise<string[]> {
   return present.filter((relativePath) => relativePath !== undefined);
 }
 
-function finding(filePath: string, message: string): HealthFinding {
+function finding(filePath: string, message: string, fixHint = FIX_HINT): HealthFinding {
   return {
     checkId: MEMORY_PROVENANCE_CHECK_ID,
     severity: "warning",
@@ -52,7 +56,7 @@ function finding(filePath: string, message: string): HealthFinding {
     docsUrl: DOCS_URL,
     message,
     path: filePath,
-    fixHint: FIX_HINT,
+    fixHint,
   };
 }
 
@@ -76,11 +80,15 @@ export async function collectMemoryProvenanceExclusionFindings(
         continue;
       }
       // Ask the same classifier as the bootstrap gate so Doctor reports only real exclusions.
+      const rootMemory = relativePaths.includes(DEFAULT_MEMORY_FILENAME)
+        ? await readRootMemoryForTrust(workspaceDir).catch(() => undefined)
+        : undefined;
       const result = await classifyActiveMemoryWorkspacePaths({
         cfg,
         agentId,
         workspaceDir,
         relativePaths,
+        ...(rootMemory ? { contentHashes: { [DEFAULT_MEMORY_FILENAME]: rootMemory.sha256 } } : {}),
       });
       if (result.status !== "classified") {
         continue;
@@ -97,6 +105,11 @@ export async function collectMemoryProvenanceExclusionFindings(
           finding(
             path.join(workspaceDir, relativePath),
             `${agentPrefix}${relativePath} is excluded from automatic context: its memory provenance is ${originClass}.${lastWrite}`,
+            relativePath === DEFAULT_MEMORY_FILENAME && rootMemory && provenance
+              ? "Review the entire file. With the Gateway stopped, run " +
+                  formatCliCommand("openclaw memory trust --agent " + agentId) +
+                  " to preview its SHA-256, then rerun with --sha256 <digest> only for the bytes you reviewed. Doctor does not change provenance."
+              : FIX_HINT,
           ),
         );
       }

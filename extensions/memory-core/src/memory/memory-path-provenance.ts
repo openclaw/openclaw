@@ -5,7 +5,10 @@ import type {
   MemoryEntryProvenance,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  readMemoryArtifactProvenance,
+  resolveRecordedMemoryArtifactOrigin,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 type MemoryPathClassification = {
   curatedRoot: boolean;
@@ -17,6 +20,7 @@ export async function resolveMemoryPathClassification(params: {
   source: MemorySource;
   workspaceDir: string;
   readSource?: { canonicalRelativePath?: string };
+  contentSha256?: string;
 }): Promise<MemoryPathClassification> {
   if (params.source !== "memory") {
     return { curatedRoot: false, originClass: "untrusted" };
@@ -75,7 +79,10 @@ export async function resolveMemoryPathClassification(params: {
       })
     : undefined;
   if (recorded) {
-    return { curatedRoot, originClass: recorded.originClass };
+    return {
+      curatedRoot,
+      originClass: resolveRecordedMemoryArtifactOrigin(recorded, params.contentSha256),
+    };
   }
   // Workspace memory Markdown is owner-controlled. Flush-recorded provenance
   // still downgrades machine-written untrusted material during ingestion; the

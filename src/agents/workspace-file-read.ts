@@ -3,8 +3,13 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isRootFileMissingFailure, openRootFile } from "../infra/boundary-file-read.js";
+import {
+  isRootFileMissingFailure,
+  openRootFile,
+  readFileDescriptorBounded,
+} from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { runFsSafeFilesystemTask } from "../infra/fs-safe-filesystem-worker.js";
 import { FsSafeError } from "../infra/fs-safe.js";
@@ -22,10 +27,7 @@ import {
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
-import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-  readWorkspaceBootstrapFile,
-} from "./workspace-bootstrap-read.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import type {
   WorkspaceFileSourceIdentity,
   WorkspaceFilesystemReadCommand,
@@ -48,7 +50,13 @@ export function retryWorkspaceRead<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 // Loader-owned records retain the pinned-open identity through final session filtering.
-const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
+const workspaceFileSources = new WeakMap<
+  object,
+  {
+    identity: WorkspaceFileSourceIdentity;
+    contentSha256?: string;
+  }
+>();
 
 export function createLoadedWorkspaceBootstrapFile(
   name: WorkspaceBootstrapFile["name"],
@@ -63,18 +71,25 @@ export function createLoadedWorkspaceBootstrapFile(
     missing: false,
     ...(personalUser ? { personalUser } : {}),
   };
-  workspaceFileSourceIdentities.set(file, loaded.sourceIdentity);
+  workspaceFileSources.set(file, {
+    identity: loaded.sourceIdentity,
+    contentSha256: loaded.contentSha256,
+  });
   return file;
 }
 
-/** Remote source recorded by the successful read, unavailable on hook-created copies. */
+/** Canonical source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
-  return workspaceFileSourceIdentities.get(file)?.[2];
+  return workspaceFileSources.get(file)?.identity[2];
+}
+
+export function getWorkspaceFileContentSha256(file: object): string | undefined {
+  return workspaceFileSources.get(file)?.contentSha256;
 }
 
 export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
-  const leftIdentity = workspaceFileSourceIdentities.get(left);
-  const rightIdentity = workspaceFileSourceIdentities.get(right);
+  const leftIdentity = workspaceFileSources.get(left)?.identity;
+  const rightIdentity = workspaceFileSources.get(right)?.identity;
   if (!leftIdentity || !rightIdentity) {
     return false;
   }
@@ -118,6 +133,9 @@ export async function readWorkspaceFileWithGuards(
         ok: true,
         content: data.toString("utf-8"),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
+        ...(workspaceRelativePath === DEFAULT_MEMORY_FILENAME
+          ? { contentSha256: sha256Hex(data) }
+          : {}),
       };
     } catch (error) {
       assertCurrent();
@@ -195,10 +213,18 @@ export async function readLocalWorkspaceFileWithGuards(
         return opened;
       }
 
-      const sourceIdentity = [opened.path, opened.exactIdentity] as const;
+      const relativePath = path
+        .relative(opened.rootRealPath, opened.path)
+        .replaceAll(path.sep, "/");
+      const sourceIdentity = [opened.path, opened.exactIdentity, relativePath] as const;
       try {
-        const content = await readWorkspaceBootstrapFile(opened.fd);
-        return { ok: true, content, sourceIdentity };
+        const data = await readFileDescriptorBounded(opened.fd, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+        return {
+          ok: true,
+          content: data.toString("utf-8"),
+          sourceIdentity,
+          ...(relativePath === DEFAULT_MEMORY_FILENAME ? { contentSha256: sha256Hex(data) } : {}),
+        };
       } finally {
         syncFs.closeSync(opened.fd);
       }

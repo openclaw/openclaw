@@ -24,6 +24,7 @@ import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
+import { getWorkspaceFileContentSha256 } from "./workspace-file-read.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -174,14 +175,16 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
       agentId,
       workspaceDir: params.workspaceDir,
       relativePaths,
-      ...(access
-        ? {
-            readSources: candidates.map((file, index) => ({
-              relativePath: relativePaths[index]!,
-              canonicalRelativePath: getWorkspaceFileSourceRelativePath(file),
-            })),
-          }
-        : {}),
+      contentHashes: Object.fromEntries(
+        candidates.flatMap((file, index) => {
+          const hash = getWorkspaceFileContentSha256(file);
+          return hash ? [[relativePaths[index]!, hash]] : [];
+        }),
+      ),
+      readSources: candidates.map((file, index) => ({
+        relativePath: relativePaths[index]!,
+        canonicalRelativePath: getWorkspaceFileSourceRelativePath(file),
+      })),
     });
     if (access && getAgentWorkspaceAccess(params.workspaceDir) !== access) {
       throw new Error("Workspace access changed during memory classification");

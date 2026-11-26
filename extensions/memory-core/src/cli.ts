@@ -166,6 +166,13 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--verbose", "Verbose logging", false)
     .action(lazyAction("runMemoryIndex"));
 
+  agentCommand("trust", "Preview or restore reviewed root MEMORY.md trust (offline only)")
+    .option("--sha256 <digest>", "Restore trust only for this reviewed SHA-256 (omit to preview)")
+    .action(async (opts: { agent?: string; sha256?: string }) => {
+      const { runMemoryTrust } = await import("./cli-trust.runtime.js");
+      await runMemoryTrust(opts);
+    });
+
   agentCommand(
     "reset",
     "Clear the derived memory index and embedding cache without deleting sessions",

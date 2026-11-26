@@ -9,6 +9,10 @@ export { formatCliJsonFailure } from "../cli/failure-output.js";
 export { formatHelpExamples } from "../cli/help-format.js";
 export { withProgress, withProgressTotals } from "../cli/progress.js";
 export { isVerbose, setVerbose } from "../globals.js";
+export {
+  readRootMemoryForTrust,
+  restoreRootMemoryTrust,
+} from "../memory/memory-artifact-provenance.js";
 export { defaultRuntime } from "../runtime.js";
 export { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 export { theme } from "../../packages/terminal-core/src/theme.js";

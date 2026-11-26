@@ -421,8 +421,11 @@ export async function classifyActiveMemoryWorkspacePaths(
   ) {
     // Workspace provenance belongs to the host even when the selected search
     // plugin does not implement classification. Missing support must not hide USER.md.
-    const { normalizeMemoryArtifactRelativePath, readMemoryArtifactProvenance } =
-      await import("../memory/memory-artifact-provenance.js");
+    const {
+      normalizeMemoryArtifactRelativePath,
+      readMemoryArtifactProvenance,
+      resolveRecordedMemoryArtifactOrigin,
+    } = await import("../memory/memory-artifact-provenance.js");
     const workspaceRoot =
       params.readSources === undefined
         ? await fs.realpath(params.workspaceDir).catch(() => undefined)
@@ -453,7 +456,12 @@ export async function classifyActiveMemoryWorkspacePaths(
           workspaceDir: params.workspaceDir,
           relativePath: memoryPath,
         });
-        return { relativePath, originClass: provenance?.originClass ?? "agent" };
+        return {
+          relativePath,
+          originClass: provenance
+            ? resolveRecordedMemoryArtifactOrigin(provenance, params.contentHashes?.[relativePath])
+            : "agent",
+        };
       }),
     );
     return { status: "classified", classifications };
