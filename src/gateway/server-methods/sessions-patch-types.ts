@@ -68,6 +68,7 @@ export type ExecuteSessionPatchMutationsParams = {
   context: GatewayRequestContext;
   signal?: AbortSignal;
   archiveUndo?: ArchiveUndoCaller;
+  deferredSelfSnooze?: boolean;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];

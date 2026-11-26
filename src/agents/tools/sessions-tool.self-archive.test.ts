@@ -9,7 +9,12 @@ import {
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as inProcessGateway from "./in-process-gateway.js";
@@ -70,6 +75,104 @@ async function createArchiveSession(name: string, sessionId = `session-${name}`)
     archiveRequest: patchRequest(sessionKey, { archived: true, expectedSessionId: sessionId }),
   };
 }
+
+describe("sessions tool self-snooze", () => {
+  it.each([
+    "quiet",
+    "queued",
+    "submitted",
+    "aborted",
+    "failed",
+    "yielded",
+    "rejected-replacement",
+    "accepted-replacement",
+  ] as const)("settles with %s", async (scenario) => {
+    const { sessionKey, sessionId, storePath, createTool } =
+      await createArchiveSession("self-snooze");
+    const snoozedUntil = Date.now() + 60_000;
+    const patches: unknown[] = [];
+    const tool = createTool(async (request) => {
+      request.sessionMutationCommitGuard?.();
+      patches.push(request.params);
+      return {} as never;
+    });
+    const continuation = inProcessGateway.runWithGatewayToolContinuationContext;
+    const pending: Promise<unknown>[] = [];
+    const spy = vi
+      .spyOn(inProcessGateway, "runWithGatewayToolContinuationContext")
+      .mockImplementation(<T>(run: () => Promise<T>, options?: { agentId?: string }) => {
+        const work = continuation(run, options);
+        pending.push(work);
+        return work;
+      });
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    try {
+      await withSessionControllerOwner(operation, async () => {
+        const result = await tool.execute("snooze", { action: "patch", snoozedUntil });
+        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
+        expect(patches).toEqual([]);
+        if (scenario === "aborted") {
+          operation.abortByUser();
+        } else if (scenario === "failed") {
+          operation.fail("run_stalled");
+        } else if (scenario === "yielded") {
+          operation.yield();
+        } else if (scenario === "accepted-replacement") {
+          await tool.execute("replace", { action: "patch", snoozedUntil: snoozedUntil + 60_000 });
+        } else if (scenario === "rejected-replacement") {
+          await expect(
+            tool.execute("replace", { action: "patch", snoozedUntil: Date.now() - 1 }),
+          ).rejects.toThrow(/future/);
+        } else if (scenario !== "quiet") {
+          const recorder = createUserTurnTranscriptRecorder({
+            target: { agentId: "main", sessionKey, sessionId, storePath, sessionEntry: undefined },
+            input: { text: "New human input", idempotencyKey: "newer-human" },
+          });
+          if (scenario === "queued") {
+            expect(await recorder.stageApproved!({ runId: "newer", assertCurrent() {} })).toBe(
+              true,
+            );
+            recorder.finishPendingInput!("cancelled", "failed");
+            await recorder.waitForPendingInputSettlement?.();
+          } else {
+            expect(await recorder.persistApproved()).toBeDefined();
+          }
+        }
+      });
+      operation.complete();
+      await Promise.all(pending);
+      expect(patches).toEqual(
+        scenario === "quiet" || scenario.endsWith("replacement")
+          ? [
+              {
+                key: sessionKey,
+                expectedSessionId: sessionId,
+                snoozedUntil:
+                  scenario === "accepted-replacement" ? snoozedUntil + 60_000 : snoozedUntil,
+              },
+            ]
+          : [],
+      );
+    } finally {
+      operation.complete();
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects an effect without a requesting reply turn", async () => {
+    const { createTool, beginAdmission } = await createArchiveSession("effect-without-turn");
+    const gateway = vi.fn();
+    await withAdmission(await beginAdmission(), async () => {
+      await expect(
+        createTool(gateway).execute("snooze", {
+          action: "patch",
+          snoozedUntil: Date.now() + 60_000,
+        }),
+      ).rejects.toThrow(/requesting turn/);
+    });
+    expect(gateway).not.toHaveBeenCalled();
+  });
+});
 
 describe("sessions tool self-archive", () => {
   it.each(["current", "replaced"])(
@@ -409,7 +512,7 @@ describe("sessions tool ownership", () => {
         { action: "patch", archived: true, model: "other" },
       ]) {
         await expect(tool.execute("settings-denied", denied)).rejects.toThrow(
-          /only permits archive, restore, and stop/,
+          /only permits archive, restore, snooze, wake, and stop/,
         );
       }
       expect(callGateway).toHaveBeenCalledOnce();
@@ -478,12 +581,14 @@ it("patches and clears sidebar title, icon, group, status, attention, and archiv
   });
   await tool.execute("clear-null", { action: "patch", group: null });
 
+  await tool.execute("wake", { action: "patch", snoozedUntil: null });
   const { group, ...unchanged } = settings;
   expect(callGateway.mock.calls).toEqual(
     [
       { ...unchanged, category: group, expectedSessionId: "session-main" },
       { label: null, icon: null, category: null, attention: null },
       { category: null },
+      { snoozedUntil: null, expectedSessionId: "session-main" },
     ].map((params) => [patchRequest(sessionKey, params)]),
   );
 });

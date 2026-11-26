@@ -73,6 +73,7 @@ import {
   SessionRenameToolSchema,
   resolveSessionsToolSchema,
 } from "./sessions-tool-schema.js";
+import { scheduleSelfSnooze } from "./sessions-tool-snooze.js";
 
 const GROUP_NAME_MAX_LENGTH = 512;
 const log = createSubsystemLogger("agents/sessions");
@@ -84,6 +85,7 @@ type SessionsToolOptions = {
   stopAllowed?: boolean;
   agentSessionKey?: string;
   agentSessionId?: string;
+  runId?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -210,7 +212,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     // offers the same tool; per-turn authority is enforced when it runs.
     description: sandboxRenameOnly
       ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. Archive and restore are unavailable in this authority context. No other session actions or settings."
-      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. owner_profiles lists canonical human profile IDs; optional githubAccountIds resolves verified account mappings. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent, not access. Report unresolved ownership separately and continue independently authorized work. reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
+      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. owner_profiles lists canonical human profile IDs; optional githubAccountIds resolves verified account mappings. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, snooze/wake, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent, not access. Report unresolved ownership separately and continue independently authorized work. reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
     parameters: sandboxRenameOnly
       ? SessionRenameToolSchema
       : resolveSessionsToolSchema(stopAllowed),
@@ -254,16 +256,18 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (
           (action !== "patch" && action !== "stop") ||
           (action === "patch" &&
-            (typeof params.archived !== "boolean" ||
+            ((typeof params.archived !== "boolean" && params.snoozedUntil === undefined) ||
+              (params.archived !== undefined && params.snoozedUntil !== undefined) ||
               params.runId !== undefined ||
               params.clearQueued !== undefined)) ||
-          (action === "stop" && params.archived !== undefined) ||
+          (action === "stop" &&
+            (params.archived !== undefined || params.snoozedUntil !== undefined)) ||
           Object.keys(params).some(
             (key) => !Object.hasOwn(SessionControlToolSchema.properties, key),
           )
         ) {
           throw new ToolAuthorizationError(
-            "This session tool only permits archive, restore, and stop",
+            "This session tool only permits archive, restore, snooze, wake, and stop",
           );
         }
       }
@@ -465,7 +469,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         readToolStringParam(params, "sessionKey"),
         gatewayRequest,
       );
-      const archived = values.archived;
+      const { archived, snoozedUntil } = values;
       const requestedSessionId = readToolStringParam(params, "expectedSessionId");
       const renameSessionId = isRequesterSession
         ? normalizeOptionalString(opts.agentSessionId)
@@ -476,25 +480,23 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       ) {
         throw new ToolInputError("Session rename requires the current durable session identity");
       }
+      const lifecycle = typeof archived === "boolean" || values.snoozedUntil !== undefined;
       const expectedSessionId = restrictedRename
         ? renameSessionId
-        : (requestedSessionId ??
-          (typeof archived === "boolean" && isRequesterSession
-            ? normalizeOptionalString(opts.agentSessionId)
-            : undefined));
-      if (typeof archived === "boolean" && !expectedSessionId) {
+        : (requestedSessionId ?? (lifecycle && isRequesterSession ? renameSessionId : undefined));
+      if (lifecycle && !expectedSessionId) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       const lifecycleIdentity = expectedSessionId ? { expectedSessionId } : undefined;
       const patch = { key, ...lifecycleIdentity, ...values };
       let selectedLifecycleRevision: string | null | undefined;
-      const controlTarget = () => ({
+      const controlTarget = (): Parameters<typeof prepareSessionToolControlTarget>[0] => ({
         cfg,
         agentId,
         key,
         expectedSessionId,
         expectedLifecycleRevision: selectedLifecycleRevision,
-        operation: archived === true ? ("archive" as const) : ("restore" as const),
+        operation: snoozedUntil !== undefined ? "snooze" : archived ? "archive" : "restore",
         restricted: true,
       });
       const callSessionPatch = (
@@ -516,6 +518,22 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             : patchGateway({ method: "sessions.patch", params: sessionPatch });
       const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
       const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
+
+      if (isRequesterSession && typeof snoozedUntil === "number" && expectedSessionId) {
+        return scheduleSelfSnooze({
+          cfg,
+          key,
+          agentId,
+          expectedSessionId,
+          until: snoozedUntil,
+          runSessionId: opts.agentSessionId,
+          runId: opts.runId,
+          inProcessGatewayAvailable,
+          singleField: Object.keys(values).length === 1,
+          controlOnly,
+          callGateway: patchGateway,
+        });
+      }
 
       if (patch.archived === true && isRequesterSession && key !== "global") {
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {

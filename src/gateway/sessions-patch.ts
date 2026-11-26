@@ -77,7 +77,6 @@ import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
 import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -353,13 +352,8 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if (patch.snoozedUntil !== undefined && patch.snoozedUntil !== null) {
-    const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
-    if (protectedError) {
-      return { ok: false, error: protectedError };
-    }
-  }
   const lifecycleFlagsError = applySessionPatchLifecycleFlags({
+    cfg,
     patch,
     next,
     existingEntry: params.existingEntry,

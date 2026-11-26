@@ -57,6 +57,7 @@ import {
   createSessionPatchGroupWriter,
 } from "./sessions-patch-replacement.js";
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
+import { cancelSupersededSnooze } from "./sessions-patch-self-snooze.js";
 import type {
   ExecuteSessionPatchMutationsParams,
   GroupMutationOperation,
@@ -64,7 +65,6 @@ import type {
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
-import type { SessionMutationAuthorization } from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
 const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
@@ -294,9 +294,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                   ...target.initialTarget.storeKeys,
                 ]);
                 const archiveTransitions = new Map<number, ArchiveTransition>();
-                const createdSessions: Parameters<
-                  NonNullable<SessionMutationAuthorization["recordCreatedSession"]>
-                >[0][] = [];
+                const afterLifecycleCommit: Array<() => void> = [];
                 const originalGuards = group.map(({ index }) =>
                   expectDefined(originalCommitGuards[index], "original patch guard"),
                 );
@@ -314,7 +312,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                   catalogPreparation?: SessionPatchCatalogResult,
                 ): Promise<GroupMutationOperation> => {
                   releaseRuntimeSelections();
-                  createdSessions.length = 0;
+                  afterLifecycleCommit.length = 0;
                   const workingStore = Object.fromEntries(
                     entries.flatMap(({ entry, sessionKey }) =>
                       isInternalSessionEffectsKey(sessionKey) ? [] : [[sessionKey, entry] as const],
@@ -575,15 +573,21 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                           replacement.outcome,
                         );
                         replacements.push(replacement.replacement);
+                        const { entry } = replacement.outcome;
+                        afterLifecycleCommit.push(() =>
+                          cancelSupersededSnooze(target, entry, params),
+                        );
                         if (!existingEntry && params.onCreatedSessionCommitted) {
-                          createdSessions.push({
-                            agentId: target.targetAgentId,
-                            sessionKey: primaryKey,
-                            storePath: target.storePath,
-                            sessionId: replacement.outcome.entry.sessionId,
-                            entry: replacement.outcome.entry,
-                            lifecycleRevision: replacement.outcome.entry.lifecycleRevision,
-                          });
+                          afterLifecycleCommit.push(() =>
+                            params.onCreatedSessionCommitted?.({
+                              agentId: target.targetAgentId,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                              sessionId: entry.sessionId,
+                              entry,
+                              lifecycleRevision: entry.lifecycleRevision,
+                            }),
+                          );
                         }
                       }
                       projectedOutcomes.push(replacement.outcome);
@@ -603,11 +607,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                 const groupStore = {
                   includeArchiveUndoMarkers: Boolean(params.archiveUndo),
                   ...(storage ? { env: storage.env, retainedExecution: storage.execution } : {}),
-                  onLifecycleCommitted: () => {
-                    for (const created of createdSessions) {
-                      params.onCreatedSessionCommitted?.(created);
-                    }
-                  },
+                  onLifecycleCommitted: () => afterLifecycleCommit.forEach((apply) => apply()),
                   afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                   assertCommitAllowed,
                   sessionKeys: selectedSessionKeys,
