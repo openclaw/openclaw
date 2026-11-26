@@ -70,7 +70,7 @@ export type RefinementRequest = Readonly<{
   authorizedEdits: readonly AuthorizedRefinementEdit[];
   featurePolicy: Readonly<{ enabled: boolean; processorIds: readonly string[] }>;
   providerPolicy: Readonly<{ routeId: string | null; locality: "strict-local" | "selected" }>;
-  /** Absolute owner clock time, normally capture Stop + deadlineMs. */
+  /** Absolute owner clock time, normally terminal capture finalization + deadlineMs. */
   deadlineAt: number;
 }>;
 

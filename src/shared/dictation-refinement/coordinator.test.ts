@@ -261,10 +261,11 @@ describe("one bounded plan and eligible recovery", () => {
   });
 
   it("only trims outer whitespace and preserves quoted/code/literal bytes", async () => {
-    const rawTranscript = '  keep " a  b " and `x  =  1` and customer_id  ';
+    const quoted = '"https://example.test/customer_id"';
+    const rawTranscript = '  keep " a  b " and `x  =  1` and ' + (quoted + " ").repeat(70);
     const result = await owner().refine(request({ rawTranscript }));
     expect(result.status).toBe("refined");
-    expect(result.text).toBe('keep " a  b " and `x  =  1` and customer_id');
+    expect(result.text).toBe(rawTranscript.trim());
     expect(result.rawText).toBe(rawTranscript);
   });
 

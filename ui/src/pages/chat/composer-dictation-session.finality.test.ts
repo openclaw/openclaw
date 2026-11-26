@@ -107,7 +107,7 @@ describe("dictation finality at the capture owner", () => {
     h.emit("partial", "late partial for completed turn", 3);
     h.emit("close", "", 4);
 
-    await expect(result).resolves.toEqual({
+    await expect(result).resolves.toMatchObject({
       text: "Do not delete the backup.",
       revision: 2,
       isFinal: true,

@@ -45,6 +45,7 @@ export function DictationRefinementView(props: {
             <input
               type="checkbox"
               checked={owner()?.refinementEnabled === true}
+              disabled={owner()?.refinementPreferenceLocked === true}
               onChange={(event) => owner()?.setRefinementEnabled(event.currentTarget.checked)}
             />{" "}
             {t("chat.dictation.refinementEnable")}

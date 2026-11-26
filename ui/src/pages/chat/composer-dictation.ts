@@ -96,6 +96,10 @@ export class ComposerDictationOwner extends EventTarget {
     return this.refinementSelected;
   }
 
+  get refinementPreferenceLocked(): boolean {
+    return this.locksComposer || this.transcribing || this.refinementOwner?.pending === true;
+  }
+
   get refinementAvailable(): boolean {
     return this.options.refinementAvailable === true;
   }
@@ -117,10 +121,13 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   setRefinementEnabled(enabled: boolean): void {
-    if ((enabled && !this.refinementAvailable) || this.refinementSelected === enabled) {
+    if (
+      this.refinementPreferenceLocked ||
+      !this.refinementAvailable ||
+      this.refinementSelected === enabled
+    ) {
       return;
     }
-    this.cancel();
     this.refinementSelected = enabled;
     this.dispatchEvent(new Event("change"));
   }
@@ -182,7 +189,9 @@ export class ComposerDictationOwner extends EventTarget {
     this.options = options;
     if (!this.refinementAvailable) {
       if (this.refinementSelected) {
-        this.setRefinementEnabled(false);
+        this.cancel();
+        this.refinementSelected = false;
+        this.dispatchEvent(new Event("change"));
       }
       this.setRefinementOptionsOpen(false);
     }

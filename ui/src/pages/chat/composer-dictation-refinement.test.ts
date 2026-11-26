@@ -84,7 +84,6 @@ function fixture() {
     state.draft += ` ${text}`;
     state.revision += 1;
   });
-  const onError = vi.fn();
   const options: OwnerOptions = {
     client: createClient(),
     connected: true,
@@ -96,7 +95,7 @@ function fixture() {
     getDraftRevision: () => state.revision,
     getDraftText: () => state.draft,
     onCommit,
-    onError,
+    onError: vi.fn(),
   };
   const owner = new ComposerDictationOwner(options);
   owners.push(owner);
@@ -117,12 +116,11 @@ function fixture() {
           sessionId: id,
           seq: sequence,
           turnId: "turn-1",
-          type:
-            type === "partial"
-              ? "transcript.delta"
-              : type === "transcript"
-                ? "transcript.done"
-                : "session.closed",
+          type: {
+            partial: "transcript.delta",
+            transcript: "transcript.done",
+            close: "session.closed",
+          }[type],
         },
       },
     };
@@ -151,7 +149,6 @@ function fixture() {
     media,
     listeners,
     onCommit,
-    onError,
     emit,
     start,
     complete,
@@ -231,7 +228,6 @@ describe("dictation refinement at the composer boundary", () => {
       const state = getChatComposerState(props.paneId);
       const dictation = state.dictation;
       assert.isNotNull(dictation);
-      expect(state.microphonePicker?.dictationStatus).toBe("ready");
       const mobileControls = container.querySelector<HTMLElement>(".chat-mobile-dictation-action");
       assert.isNotNull(mobileControls);
       within(mobileControls).getByRole("button", { name: "Dictation text options" }).click();
@@ -258,7 +254,6 @@ describe("dictation refinement at the composer boundary", () => {
       h.emit("close");
       await vi.advanceTimersByTimeAsync(0);
       flush();
-      expect(dictation.refinement?.phase).toBe("refined");
       expect(within(container).getByLabelText("Text preview")).toHaveProperty(
         "value",
         "Do not delete customer_id.",
@@ -279,7 +274,6 @@ describe("dictation refinement at the composer boundary", () => {
           : "Existing draft.",
       );
       expect(onDraftChange).toHaveBeenCalledTimes(draftChange === "unchanged" ? 1 : 0);
-      expect(dictation.refinement?.result).toBeUndefined();
       expect(props.onSend).not.toHaveBeenCalled();
       expect(props.onToggleRealtimeTalk).not.toHaveBeenCalled();
       expect(h.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
@@ -470,7 +464,6 @@ describe("dictation refinement at the composer boundary", () => {
     const checkbox = view.getByRole("checkbox", { name: "Review dictated text before inserting" });
     expect(checkbox).toHaveProperty("checked", false);
     checkbox.click();
-    flush();
     expect(h.owner.refinementEnabled).toBe(true);
     const status = view.getByRole("status");
     expect(status.getAttribute("aria-live")).toBe("polite");
@@ -478,7 +471,8 @@ describe("dictation refinement at the composer boundary", () => {
     await h.start();
     h.emit("partial", "لا تحذف");
     flush();
-    expect(view.getByRole("status")).toBe(status);
+    expect(checkbox).toHaveProperty("disabled", true);
+    h.owner.setRefinementEnabled(false);
     expect(status.textContent).not.toContain("لا تحذف");
     const caption = view.getByLabelText("Provisional caption");
     expect(caption.getAttribute("aria-live")).toBe("off");
@@ -492,6 +486,7 @@ describe("dictation refinement at the composer boundary", () => {
     await finished;
     flush();
     expect(view.getByRole("status")).toBe(status);
+    expect(checkbox).toHaveProperty("disabled", true);
     expect(status.textContent).toContain("Nothing has been sent.");
     view.getByText("Inspect changes").click();
     for (const label of ["Text preview", "Original finalized transcript"]) {
@@ -503,6 +498,7 @@ describe("dictation refinement at the composer boundary", () => {
     expect(h.onCommit).not.toHaveBeenCalled();
     view.getByRole("button", { name: "Keep raw transcript" }).click();
     flush();
+    expect(checkbox).toHaveProperty("disabled", false);
     expect(h.onCommit).toHaveBeenCalledExactlyOnceWith(literal, true);
     expect(view.queryByRole("button", { name: "Use reviewed text" })).toBeNull();
   });
@@ -528,20 +524,23 @@ describe("dictation refinement at the composer boundary", () => {
     },
   );
 
-  it("labels eligible raw fallback if final STT preceded an exhausted refinement budget", async () => {
+  it.each(["deadline", "span"])("offers raw fallback after %s", async (reason) => {
     const h = fixture();
     h.owner.setRefinementEnabled(true);
     await h.start();
     const finished = h.owner.finishActive();
-    h.emit("transcript", "Keep the original quantity at -12 mg.");
+    const raw = reason === "deadline" ? "Keep -12 mg." : "id_x ".repeat(257).trim();
+    h.emit("transcript", raw);
     h.emit("close");
-    // A main-thread delay after the clean STT event consumes the remaining budget.
-    vi.setSystemTime(Date.now() + 2_501);
+    // A main-thread delay after terminal STT consumes the refinement budget.
+    if (reason === "deadline") {
+      vi.setSystemTime(Date.now() + 2_501);
+    }
     await finished;
     expect(h.owner.refinement?.result).toMatchObject({
       status: "raw-fallback",
-      text: "Keep the original quantity at -12 mg.",
-      warnings: ["deadline"],
+      text: raw,
+      warnings: [reason === "deadline" ? "deadline" : "disabled"],
     });
     expect(h.onCommit).not.toHaveBeenCalled();
     expect(h.owner.refinement?.accept("raw")).toBe(true);

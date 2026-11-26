@@ -126,8 +126,12 @@ function protection(value: unknown): Pick<ProtectedSpan, "kind" | "identity"> {
 }
 
 function protectedSpans(value: unknown, base: string): readonly ProtectedSpan[] {
+  const entries = array(value, REFINEMENT_LIMITS.spans);
+  if (!entries.length) {
+    return [];
+  }
   const edges = boundaries(base);
-  const spans = array(value, REFINEMENT_LIMITS.spans).map((entry) => {
+  const spans = entries.map((entry) => {
     const item = record(entry, ["start", "end", "kind", "identity"]);
     const start = revision(item.start);
     const end = revision(item.end);
@@ -313,6 +317,9 @@ export function applyRefinementEdits(
   edits: readonly RefinementEdit[],
   spans: readonly ProtectedSpan[],
 ): { text: string; protectedSpans: readonly ProtectedSpan[] } {
+  if (!edits.length) {
+    return { text: text(base, REFINEMENT_LIMITS.outputBytes), protectedSpans: spans };
+  }
   const ordered = edits.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const edges = boundaries(base);
   let prior: RefinementEdit | undefined;
@@ -398,10 +405,11 @@ export function validateRefinementCandidate(
     }
     let output: { text: string; protectedSpans: readonly ProtectedSpan[] };
     if (candidate.kind === "edits" && candidate.text === undefined) {
-      const edges = boundaries(base.text);
-      const edits = array(candidate.edits, REFINEMENT_LIMITS.edits).map((entry) =>
-        range(record(entry, ["start", "end", "text"]), base.text, edges),
-      );
+      const entries = array(candidate.edits, REFINEMENT_LIMITS.edits);
+      const edges = entries.length ? boundaries(base.text) : undefined;
+      const edits = edges
+        ? entries.map((entry) => range(record(entry, ["start", "end", "text"]), base.text, edges))
+        : [];
       output = applyRefinementEdits(base.text, edits, base.protectedSpans);
     } else if (candidate.kind === "text" && candidate.edits === undefined) {
       const replacement = text(candidate.text, REFINEMENT_LIMITS.outputBytes);

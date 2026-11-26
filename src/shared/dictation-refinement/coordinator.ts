@@ -285,14 +285,11 @@ export class DictationRefinementCoordinator {
         text = validated.text;
         protectedSpans = validated.protectedSpans;
       };
-      // Owner-approved literal/expansion spans must also be valid in the resulting text.
-      accept({
-        schemaVersion: 1,
-        offsetUnit: "utf16",
-        baseRevision,
-        kind: "text",
-        text,
-      });
+      // Existing spans were already validated and remapped. Only new
+      // owner-approved protections need checking in the resulting text.
+      if (request.authorizedEdits.some((edit) => edit.protection && edit.text.length)) {
+        accept({ schemaVersion: 1, offsetUnit: "utf16", baseRevision, kind: "text", text });
+      }
       endPhase();
       phase = "deterministic";
       for (const processor of plan.processors) {

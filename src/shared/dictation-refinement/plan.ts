@@ -30,14 +30,6 @@ export function detectRefinementLiteralSpans(value: string): readonly ProtectedS
     throw new RefinementError("payload-limit");
   }
   const matches: ProtectedSpan[] = [];
-  const edges = [
-    0,
-    ...Array.from(
-      new Intl.Segmenter("en", { granularity: "grapheme" }).segment(value),
-      (part) => part.index,
-    ),
-    value.length,
-  ];
   const patterns = [
     /```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|'[^'\n]*'/gu,
     /https?:\/\/[^\s<>"'`]+/gu,
@@ -47,25 +39,28 @@ export function detectRefinementLiteralSpans(value: string): readonly ProtectedS
   ];
   for (const pattern of patterns) {
     for (const match of value.matchAll(pattern)) {
-      const end = match.index + match[0].length;
-      matches.push({
-        start: edges.findLast((edge) => edge <= match.index) ?? 0,
-        end: edges.find((edge) => edge >= end) ?? value.length,
-        kind: "literal",
-      });
-      if (matches.length > REFINEMENT_LIMITS.spans) {
-        throw new RefinementError("payload-limit");
-      }
+      matches.push({ start: match.index, end: match.index + match[0].length, kind: "literal" });
     }
   }
+  if (!matches.length) {
+    return freezeRefinementValue(matches);
+  }
   matches.sort((a, b) => a.start - b.start || b.end - a.end);
+  const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" }).segment(value);
   const merged: ProtectedSpan[] = [];
   for (const match of matches) {
+    const first = graphemes.containing(match.start)!;
+    const last = graphemes.containing(match.end - 1)!;
+    const start = first.index;
+    const end = last.index + last.segment.length;
     const previous = merged.at(-1);
-    if (previous && match.start < previous.end) {
-      merged[merged.length - 1] = { ...previous, end: Math.max(previous.end, match.end) };
+    if (previous && start < previous.end) {
+      merged[merged.length - 1] = { ...previous, end: Math.max(previous.end, end) };
     } else {
-      merged.push(match);
+      merged.push({ start, end, kind: "literal" });
+      if (merged.length > REFINEMENT_LIMITS.spans) {
+        throw new RefinementError("payload-limit");
+      }
     }
   }
   return freezeRefinementValue(merged);

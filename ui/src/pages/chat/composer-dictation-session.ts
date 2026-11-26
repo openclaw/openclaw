@@ -44,6 +44,7 @@ export type ComposerDictationFinalSnapshot = Readonly<{
   /** Recognizer-final segments only; an incomplete capture is never eligible refinement input. */
   text: string;
   revision: number;
+  finalizedAt: number;
   isFinal: boolean;
   /** Preserved for manual recovery, never silently promoted to a finalized transcript. */
   incompleteText: string;
@@ -559,6 +560,7 @@ export class ComposerDictationSession {
           snapshot: Object.freeze({
             text,
             revision: this.transcriptRevision,
+            finalizedAt: Date.now(),
             isFinal,
             incompleteText,
             reason,

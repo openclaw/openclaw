@@ -5,6 +5,7 @@ import {
 } from "../../../../src/shared/dictation-refinement/plan.js";
 import {
   REFINEMENT_LIMITS,
+  RefinementError,
   type RefinementRequest,
   type RefinementResult,
 } from "../../../../src/shared/dictation-refinement/types.js";
@@ -116,6 +117,19 @@ export class ComposerDictationRefinement {
         this.options.changed();
         return false;
       }
+      let protectedSpans: RefinementRequest["protectedSpans"] | undefined = [];
+      if (transcript.isFinal) {
+        try {
+          protectedSpans = detectRefinementLiteralSpans(transcript.text);
+        } catch (error) {
+          if (!(error instanceof RefinementError) || error.code !== "payload-limit") {
+            throw error;
+          }
+          // No processing is safe without the full set of protections. The
+          // coordinator still offers the complete raw text for explicit review.
+          protectedSpans = undefined;
+        }
+      }
       // This integration supplies no optional context/vocabulary hints to STT.
       // Their owners must supply provenance and revocation before enabling them here.
       const request: RefinementRequest = {
@@ -146,12 +160,12 @@ export class ComposerDictationRefinement {
         },
         contextSnapshots: [],
         vocabularySnapshots: [],
-        protectedSpans: detectRefinementLiteralSpans(transcript.text),
+        protectedSpans: protectedSpans ?? [],
         authorizedEdits: [],
-        featurePolicy: { enabled: true, processorIds: ["whitespace"] },
+        featurePolicy: { enabled: protectedSpans !== undefined, processorIds: ["whitespace"] },
         // Local text processing says nothing about the separately selected STT route.
         providerPolicy: { routeId: null, locality: "strict-local" },
-        deadlineAt: Date.now() + REFINEMENT_LIMITS.deadlineMs,
+        deadlineAt: transcript.finalizedAt + REFINEMENT_LIMITS.deadlineMs,
       };
       this.coordinator = new DictationRefinementCoordinator({
         processors: [whitespaceRefinementProcessor],
