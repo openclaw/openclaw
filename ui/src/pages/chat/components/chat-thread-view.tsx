@@ -436,7 +436,7 @@ function ChatThreadContent(
   return (
     <>
       <Show when={renderReady() === false}>
-        {() => {
+        {(_deferred) => {
           onSettled(() => {
             let active = true;
             void yieldChatTask().then(() => {
