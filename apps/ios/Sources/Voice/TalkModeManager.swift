@@ -139,14 +139,22 @@ final class TalkModeManager {
     private let chimePlayer = TalkChimePlayer()
     private let chimePlaybackOverride: (@MainActor (TalkChimeLifecycle.Cue) async -> Void)?
 
-    private func playChime(_ cue: TalkChimeLifecycle.Cue) async {
+    private func playChime(
+        _ cue: TalkChimeLifecycle.Cue,
+        onPlaybackFinished: (@Sendable () -> Void)? = nil) async
+    {
+        defer { onPlaybackFinished?() }
         if let chimePlaybackOverride {
             await chimePlaybackOverride(cue)
         } else if !Self.isSimulator || !self.allowSimulatorCapture {
             // Synthetic capture tests must not open a hardware audio player.
-            await self.chimePlayer.play(cue)
+            await self.chimePlayer.play(cue, onPlaybackFinished: onPlaybackFinished)
         }
     }
+
+    #if DEBUG
+    var _test_waitForNativeCapture: (@MainActor () async throws -> Void)?
+    #endif
 
     private var byeChimeTask: Task<Void, Never>?
 
@@ -734,7 +742,9 @@ final class TalkModeManager {
             // Set this before starting recognition so any early speech errors are classified correctly.
             self.captureMode = .continuous
             self.nativeSpeechActive = true
-            try await self.startRecognitionWithChime(afterNativeReply: afterNativeReply)
+            let chime = try await self.prepareRecognitionWithChime(
+                afterNativeReply: afterNativeReply,
+                attemptID: attemptID)
             guard self.isCurrentStartAttempt(attemptID) else { return }
             self.isListening = !self.isMicrophoneMuted
             if let issue = pendingRealtimeIssue {
@@ -746,7 +756,12 @@ final class TalkModeManager {
                 self.startSilenceMonitor()
             }
             self.logger.info("listening")
+            if let (cue, gate) = chime {
+                gate.withLock { $0 = true }
+                await self.playChime(cue, onPlaybackFinished: { gate.withLock { $0 = false } })
+            }
         } catch {
+            guard self.isCurrentStartAttempt(attemptID) else { return }
             self.stopNativeCaptureAndDiscardTranscript()
             deactivateAudioSession()
             let status = String(
@@ -816,26 +831,64 @@ final class TalkModeManager {
             self.realtimeVoiceSelection?.isChanging == true
     }
 
-    private func startRecognitionWithChime(afterNativeReply: Bool) async throws {
+    private func prepareRecognitionWithChime(
+        afterNativeReply: Bool,
+        attemptID: Int) async throws -> (TalkChimeLifecycle.Cue, OSAllocatedUnfairLock<Bool>)?
+    {
+        var lifecycle = self.chimeLifecycle
         if afterNativeReply {
-            self.chimeLifecycle.replyFinished(isRealtime: self.activeRouteIsRealtime)
+            lifecycle.replyFinished(isRealtime: self.activeRouteIsRealtime)
         }
-        let replyCue = self.chimeLifecycle.resumedListening(
+        let replyCue = lifecycle.resumedListening(
             isRealtime: self.activeRouteIsRealtime,
             enabled: afterNativeReply && !self.isMicrophoneMuted &&
                 self.chimeEnabled(TalkChimePlayer.replyPreferenceKey))
-        let gate = replyCue != nil || self.chimeEnabled(TalkChimePlayer.startPreferenceKey)
-            ? OSAllocatedUnfairLock(initialState: true)
-            : nil
-        if !self.isMicrophoneMuted {
-            try self.startRecognition(chimeGate: gate)
+        let cue = replyCue ?? lifecycle.ready(
+            enabled: !self.isMicrophoneMuted && self.chimeEnabled(TalkChimePlayer.startPreferenceKey))
+        guard !self.isMicrophoneMuted else {
+            // Keep clean-end semantics even if the call starts muted.
+            self.chimeLifecycle = lifecycle
+            return nil
         }
-        if let replyCue {
-            await self.playChime(replyCue)
-        } else {
-            await self.playWakeChime(gated: gate != nil)
+        guard let cue else {
+            try self.startRecognition()
+            self.chimeLifecycle = lifecycle
+            return nil
         }
-        gate?.withLock { $0 = false }
+
+        let gate = OSAllocatedUnfairLock(initialState: false)
+        let appendedInput = OSAllocatedUnfairLock(initialState: false)
+        try self.startRecognition(chimeGate: gate, appendedInput: appendedInput)
+        let generation = self.recognitionGeneration
+        #if DEBUG
+        if Self.isSimulator, let waitForCapture = self._test_waitForNativeCapture {
+            try await waitForCapture()
+        }
+        #endif
+        if !Self.isSimulator {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while self.isCurrentStartAttempt(attemptID),
+                  !self.isMicrophoneMuted,
+                  self.recognitionGeneration == generation,
+                  self.audioEngine.isRunning,
+                  !(self.recognitionTask?.state == .running && appendedInput.withLock { $0 }),
+                  ContinuousClock.now < deadline
+            {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        guard self.isCurrentStartAttempt(attemptID), !self.isMicrophoneMuted else { return nil }
+        guard self.recognitionGeneration == generation,
+              Self.isSimulator || (self.audioEngine.isRunning &&
+                  self.recognitionTask?.state == .running && appendedInput.withLock { $0 })
+        else {
+            throw NSError(domain: "TalkMode", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Speech recognition did not receive microphone input",
+            ])
+        }
+
+        self.chimeLifecycle = lifecycle
+        return (cue, gate)
     }
 
     private func playWakeChime(gated: Bool) async {
@@ -1481,7 +1534,8 @@ final class TalkModeManager {
 
     private func startRecognition(
         pttCaptureId: String? = nil,
-        chimeGate: OSAllocatedUnfairLock<Bool>? = nil) throws
+        chimeGate: OSAllocatedUnfairLock<Bool>? = nil,
+        appendedInput: OSAllocatedUnfairLock<Bool>? = nil) throws
     {
         self.stopRecognition()
         let recognitionGeneration = self.recognitionGeneration
@@ -1526,7 +1580,12 @@ final class TalkModeManager {
         let tapBlock = SpeechRecognitionAudioTap.make(
             request: request,
             acceptsInput: { !(chimeGate?.withLock { $0 } ?? false) },
-            onBuffer: { buffer in tapLevels.onBuffer(buffer) })
+            onBuffer: { buffer in
+                if buffer.frameLength > 0 {
+                    appendedInput?.withLock { $0 = true }
+                }
+                tapLevels.onBuffer(buffer)
+            })
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
         self.inputTapInstalled = true
 

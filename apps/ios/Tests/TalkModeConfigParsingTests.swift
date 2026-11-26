@@ -381,7 +381,9 @@ struct TalkModeManagerTests {
             chimePlaybackOverride: { cue in
                 guard cue == .bye else { return }
                 endCueStarted.continuation.yield()
-                for await _ in endCueGate.stream { break }
+                for await _ in endCueGate.stream {
+                    break
+                }
             })
         manager._test_applyLoadedTalkConfig(parsed)
         manager.updateGatewayConnected(true)
@@ -398,7 +400,9 @@ struct TalkModeManagerTests {
         let capture = try await manager.beginPushToTalk(transcriptionOnly: true)
         endCueGate.continuation.yield()
         endCueGate.continuation.finish()
-        for _ in 0..<20 { await Task.yield() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
 
         // The old end cue's cleanup must not deactivate the session the new capture owns.
         #expect(deactivations == baseline)
@@ -428,11 +432,15 @@ struct TalkModeManagerTests {
         await manager.start(afterNativeReply: true)
         trace.append("listening=\(manager.isListening) (microphone recovered after reply)")
         manager.stop()
-        for _ in 0..<200 where trace.last != "cue bye" { await Task.yield() }
+        for _ in 0..<200 where trace.last != "cue bye" {
+            await Task.yield()
+        }
 
         print("TALK_CUE_TRACE " + trace.joined(separator: " | "))
         if let dir = ProcessInfo.processInfo.environment["TALK_CHIME_PROOF_DIR"],
-           let data = try? JSONSerialization.data(withJSONObject: ["trace": trace, "events": timed], options: [.prettyPrinted, .sortedKeys])
+           let data = try? JSONSerialization.data(
+               withJSONObject: ["trace": trace, "events": timed],
+               options: [.prettyPrinted, .sortedKeys])
         {
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-cue-events.json"))
@@ -444,6 +452,28 @@ struct TalkModeManagerTests {
             "listening=true (microphone recovered after reply)",
             "cue bye",
         ])
+    }
+
+    @Test(.testWaitLimit)
+    func `native chimes wait for capture`() async {
+        var events: [String] = []
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { events.append($0.rawValue) })
+        manager._test_waitForNativeCapture = {
+            try await Task.sleep(for: .milliseconds(30))
+            events.append("capture ready")
+        }
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        defer { manager.stop() }
+
+        await manager.start()
+        manager.isListening = false
+        await manager.start(afterNativeReply: true)
+
+        #expect(events == ["capture ready", "wake", "capture ready", "follow"])
     }
 
     @Test func `preserves the released realtime model override`() {
