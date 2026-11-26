@@ -29,6 +29,7 @@ import {
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -317,6 +318,8 @@ type CliPromptImageInput = {
   imagePrompt?: string;
   workspaceDir: string;
   localRoots?: readonly string[];
+  /** Owning run config: its image limits apply to hydrated images. */
+  config?: OpenClawConfig;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
@@ -340,6 +343,7 @@ export async function loadCliPromptImages(params: CliPromptImageInput): Promise<
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         maxBytes: MAX_IMAGE_BYTES,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
         localRoots: params.localRoots,
       })
     : undefined;
