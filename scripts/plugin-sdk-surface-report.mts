@@ -339,7 +339,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: interactive agent control text and stamping helpers (#201764).
       // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
-      3919,
+      // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
+      3920,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -403,7 +404,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: interactive agent control text and stamping helpers (#201764).
       // +1: OAuth failure converter; ProviderAuthFailure is construct-only (#203394).
       // +1: shipped reply session-init conflict classifier (#201363).
-      2255,
+      // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
+      2256,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

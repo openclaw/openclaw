@@ -26,7 +26,6 @@ defineDiscordVoiceTests((harness) => {
     stopTranscripts,
     decodeOpusStreamChunksMock,
     transcribeAudioFileMock,
-    resolveAudioInputBudgetMock,
     realtimeSessionMock,
     agentCommandMock,
     loggerWarnMock,
@@ -766,7 +765,6 @@ defineDiscordVoiceTests((harness) => {
     "retains recording chunks under the prepared %i-byte upload cap with ingress timestamps",
     async (maxBytes) => {
       const pcmBytes = maxBytes - 44;
-      resolveAudioInputBudgetMock.mockResolvedValueOnce({ enabled: true, maxBytes });
       const f = await fixture("agent-proxy", false, {
         tools: {
           media: {
