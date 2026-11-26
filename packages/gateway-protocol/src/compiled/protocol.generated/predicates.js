@@ -759,7 +759,7 @@ var External = [
     /(^provider$|^profileId$|^warning$)/u,
     /(^provider$|^profileIds$|^credentialType$|^agentId$)/u,
     /(^provider$|^profileIds$|^agentId$)/u,
-    /(^operation$|^agentId$)/u,
+    /(^operation$|^agentId$|^clearTransientCooldowns$)/u,
     /(^refresh$|^refreshUsage$|^agentId$)/u,
     /(^agentId$|^sessionKey$|^authProfileId$|^provider$|^includeDetails$|^includeProviderCapabilities$|^includeDefaultModels$|^preparedOnly$|^refresh$|^view$)/u,
     /(^agentId$|^sessionKey$|^refresh$)/u,
@@ -4540,7 +4540,10 @@ var External = [
       (unique_273, unique_274) => External[136].test(unique_273) || check_2(value[unique_273]),
     ) &&
     check_508(value.operation) &&
-    (value.agentId === void 0 || !("agentId" in value) || check_277(value.agentId)),
+    (value.agentId === void 0 || !("agentId" in value) || check_277(value.agentId)) &&
+    (value.clearTransientCooldowns === void 0 ||
+      !("clearTransientCooldowns" in value) ||
+      check_64(value.clearTransientCooldowns)),
   check_508 = (value) => check_509(value) || check_510(value) || check_18(value),
   check_509 = (value) => typeof value == "string" && value === "login",
   check_510 = (value) => typeof value == "string" && value === "logout",

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -40,6 +41,84 @@ async function refresh(
     ).toContainEqual(expect.objectContaining({ profileId }));
   }
 }
+
+it("clears transient cooldowns on refresh when clearTransientCooldowns is set for both shared and local stores", async () => {
+  await using state = await createModelsTestState("models-auth-refresh-cooldown");
+  const token = "auth-refresh-cooldown-token";
+  const cfg = modelsTestConfig(state, token);
+  await state.writeConfig(cfg);
+  await using gateway = await startModelsGateway(state, cfg, token);
+  await gateway.server.startupSettled;
+  const { client } = gateway;
+
+  // Set shared auth store state
+  writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" });
+  const sharedProfileId = "shared-provider:key";
+  const sharedStore: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      [sharedProfileId]: { type: "token", provider: "shared-provider", token: "shared-tok" },
+    },
+    usageStats: {
+      [sharedProfileId]: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        errorCount: 2,
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    },
+  };
+  runOpenClawStateWriteTransaction((database) => {
+    writePersistedAuthProfileStoreRaw(sharedStore, undefined, database);
+  });
+
+  const localProfileId = "local-provider:key";
+  const localStore: AuthProfileStore = {
+    version: 1,
+    profiles: { [localProfileId]: { type: "token", provider: "local-provider", token: "tok" } },
+    usageStats: {
+      [localProfileId]: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        errorCount: 2,
+        failureCounts: { timeout: 1 },
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    },
+  };
+  await state.writeAuthProfiles(localStore);
+
+  // Normal refresh without the flag keeps transient cooldowns
+  await expect(
+    client.request("models.authRefresh", { agentId: "main", operation: "update" }),
+  ).resolves.toEqual({ refreshed: true });
+  let localPersisted = loadPersistedAuthProfileStore(state.agentDir());
+  expect(localPersisted?.usageStats?.[localProfileId]?.cooldownReason).toBe("rate_limit");
+
+  // Refresh with clearTransientCooldowns clears rate_limit in both shared and local stores
+  await expect(
+    client.request("models.authRefresh", {
+      agentId: "main",
+      operation: "update",
+      clearTransientCooldowns: true,
+    }),
+  ).resolves.toEqual({ refreshed: true });
+
+  localPersisted = loadPersistedAuthProfileStore(state.agentDir());
+  expect(localPersisted?.usageStats?.[localProfileId]?.cooldownReason).toBeUndefined();
+  expect(localPersisted?.usageStats?.[localProfileId]?.cooldownUntil).toBeUndefined();
+  expect(localPersisted?.usageStats?.[localProfileId]?.disabledReason).toBe("billing");
+
+  let sharedPersisted: AuthProfileStore | null = null;
+  runOpenClawStateWriteTransaction((database) => {
+    sharedPersisted = loadPersistedAuthProfileStore(undefined, { database });
+  });
+  expect(sharedPersisted?.usageStats?.[sharedProfileId]?.cooldownReason).toBeUndefined();
+  expect(sharedPersisted?.usageStats?.[sharedProfileId]?.cooldownUntil).toBeUndefined();
+  expect(sharedPersisted?.usageStats?.[sharedProfileId]?.disabledReason).toBe("billing");
+});
 
 it("publishes saved credentials and persisted removals before acknowledging an administrator", async () => {
   await using state = await createModelsTestState("models-auth-refresh");

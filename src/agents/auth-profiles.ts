@@ -88,6 +88,7 @@ export type {
 } from "./auth-profiles/types.js";
 export {
   clearExpiredCooldowns,
+  clearTransientCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,

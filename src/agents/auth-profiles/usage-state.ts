@@ -305,6 +305,35 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
   return mutated;
 }
 
+/** Clear active transient cooldowns (rate_limit, overloaded) while preserving billing and auth blocks. */
+export function clearTransientCooldowns(store: AuthProfileStore): boolean {
+  const usageStats = store.usageStats;
+  if (!usageStats) {
+    return false;
+  }
+
+  let mutated = false;
+  for (const [profileId, stats] of Object.entries(usageStats)) {
+    if (!stats) {
+      continue;
+    }
+    const reason = stats.cooldownReason;
+    if (reason === "rate_limit" || reason === "overloaded") {
+      for (const field of cooldownFields) {
+        stats[field] = undefined;
+      }
+      if (!resolveProfileUnusableUntil(stats)) {
+        stats.errorCount = 0;
+        stats.failureCounts = undefined;
+      }
+      usageStats[profileId] = stats;
+      mutated = true;
+    }
+  }
+
+  return mutated;
+}
+
 /**
  * Infer the most likely reason all candidate profiles are currently unavailable.
  *

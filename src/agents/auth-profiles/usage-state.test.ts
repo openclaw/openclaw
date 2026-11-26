@@ -1,11 +1,12 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createAuthProfileUsageStore as makeStore } from "./credential-fixtures.test-support.js";
 import type { ProfileUsageStats as Stats } from "./types.js";
 import {
   clearExpiredCooldowns,
+  clearTransientCooldowns,
   resetAuthProfileFailureState,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -298,4 +299,52 @@ it.each([
     nowSpy.mockRestore();
   }
   expect(store.usageStats).toEqual({ primary: after });
+});
+
+describe("clearTransientCooldowns", () => {
+  it("clears active rate_limit and overloaded cooldowns while preserving billing and auth", () => {
+    const store = makeStore({
+      rl: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "m1",
+        errorCount: 2,
+        failureCounts: { timeout: 1 },
+      },
+      ol: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "overloaded",
+        errorCount: 3,
+      },
+      bill: {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+      authPerm: {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "auth_permanent",
+      },
+    });
+
+    expect(clearTransientCooldowns(store)).toBe(true);
+    expect(store.usageStats?.rl.cooldownUntil).toBeUndefined();
+    expect(store.usageStats?.rl.cooldownReason).toBeUndefined();
+    expect(store.usageStats?.rl.errorCount).toBe(0);
+    expect(store.usageStats?.ol.cooldownUntil).toBeUndefined();
+    expect(store.usageStats?.ol.cooldownReason).toBeUndefined();
+    expect(store.usageStats?.ol.errorCount).toBe(0);
+    expect(store.usageStats?.bill.disabledReason).toBe("billing");
+    expect(store.usageStats?.bill.disabledUntil).toBeDefined();
+    expect(store.usageStats?.authPerm.disabledReason).toBe("auth_permanent");
+  });
+
+  it("returns false when no transient cooldowns exist", () => {
+    const store = makeStore({
+      bill: {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    });
+    expect(clearTransientCooldowns(store)).toBe(false);
+  });
 });

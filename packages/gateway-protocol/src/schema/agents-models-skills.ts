@@ -158,14 +158,7 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
-  failed: Type.Optional(
-    Type.Array(
-      closedObject({
-        path: NonEmptyString,
-        reason: NonEmptyString,
-      }),
-    ),
-  ),
+  failed: Type.Optional(Type.Array(closedObject({ path: NonEmptyString, reason: NonEmptyString }))),
   purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
@@ -181,6 +174,7 @@ export const ModelsAuthStatusParamsSchema = closedObject({
 export const ModelsAuthRefreshParamsSchema = closedObject({
   operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
   agentId: Type.Optional(Type.String()),
+  clearTransientCooldowns: Type.Optional(Type.Boolean()),
 });
 
 /** Saves a model-provider API key without changing model selection. */
