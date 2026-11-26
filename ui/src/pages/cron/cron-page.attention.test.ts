@@ -1,8 +1,79 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { waitForCronPage } from "./cron-page.test-support.tsx";
-import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
+import { cronRpc, emitEvent, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
+
+it("updates an open job's recorded attention across quiet runs, recovery and errors", async () => {
+  let job = createCronViewJob("source-check", {
+    state: {
+      lastRunStatus: "ok",
+      lastRunAtMs: 10,
+      lastMeaningfulResult: { outcome: "blocked", summary: "Source access required", atMs: 11 },
+    },
+  });
+  const { page, client, gateway } = mountCronPage(
+    cronRpc({ "cron.get": () => structuredClone(job) }),
+  );
+  const warning = () => page.querySelector(".cron-failure-details");
+  const publish = async () => {
+    job = { ...job, updatedAtMs: job.updatedAtMs + 1 };
+    emitEvent(gateway, "cron", {
+      action: "finished",
+      jobId: job.id,
+      status: job.state.lastRunStatus,
+      error: job.state.lastError,
+      job: structuredClone(job),
+    });
+    await page.settle();
+  };
+  try {
+    page.routeSearch = `?job=${job.id}`;
+    await waitForCronPage(() => expect(warning()?.textContent).toContain("Source access required"));
+    for (const lastRunAtMs of [20, 30]) {
+      job = { ...job, state: { ...job.state, lastRunAtMs } };
+      await publish();
+      expect(warning()?.textContent).toContain("Source access required");
+      expect(page.querySelector('[data-test-id="cron-review-failed-run"]')).toBeNull();
+    }
+    for (const outcome of ["progress", "done"] as const) {
+      job = {
+        ...job,
+        state: {
+          lastRunStatus: "ok",
+          lastMeaningfulResult: { outcome, summary: "Source processed", atMs: 40 },
+        },
+      };
+      await publish();
+      await waitForCronPage(() => expect(warning()).toBeNull());
+    }
+    job = {
+      ...job,
+      state: {
+        lastRunStatus: "ok",
+        lastMeaningfulResult: {
+          outcome: "needs_attention",
+          summary: "Choose the source",
+          atMs: 50,
+        },
+      },
+    };
+    await publish();
+    await waitForCronPage(() => expect(warning()?.textContent).toContain("Choose the source"));
+    job = {
+      ...job,
+      state: { ...job.state, lastRunStatus: "error", lastError: "Execution interrupted" },
+    };
+    await publish();
+    await waitForCronPage(() => expect(warning()?.textContent).toContain("Last run failed"));
+    expect(warning()?.textContent).not.toContain("Choose the source");
+    const methods = vi.mocked(client).request.mock.calls.map(([method]) => method);
+    expect(methods).not.toContain("cron.run");
+    expect(methods).not.toContain("cron.update");
+  } finally {
+    page.remove();
+  }
+});
 
 it("opens a job-only failure link on its history and reviews the failed run on request", async () => {
   const job = createCronViewJob("failed-once", {
