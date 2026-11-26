@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -685,6 +686,7 @@ class MainViewModel internal constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chat.modelCatalog }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
+  internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }

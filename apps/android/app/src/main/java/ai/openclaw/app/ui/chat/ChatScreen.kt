@@ -415,7 +415,7 @@ internal fun ChatScreen(
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
-  val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
+  val streamingAssistant by viewModel.chatStreamingAssistant.collectAsState()
   val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val progressCard by viewModel.chatProgressCard.collectAsState()
@@ -983,7 +983,7 @@ internal fun ChatScreen(
       loading = historyLoading || sessionCreating,
       sending = sendInFlight,
       activeRun = pendingRunCount > 0,
-      streaming = streamingAssistantText != null,
+      streaming = streamingAssistant != null,
       settingsMutationPending = sessionSettingsPending,
     )
   ChatMessageList(
@@ -1015,7 +1015,7 @@ internal fun ChatScreen(
     activeRunOutputTokens = selectedActiveRun.outputTokens,
     pendingToolCalls = pendingToolCalls,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-    streamingAssistantText = streamingAssistantText,
+    streamingAssistant = streamingAssistant,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
     outboxItems = currentSessionOutboxItems,
@@ -1755,7 +1755,7 @@ private fun ChatMessageList(
   activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
-  streamingAssistantText: String?,
+  streamingAssistant: ChatController.StreamingAssistant?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,
@@ -1787,6 +1787,7 @@ private fun ChatMessageList(
   header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
   composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
+  val streamingAssistantText = streamingAssistant?.text
   val history = remember(messages, sessionKey, mainSessionKey) { prepareChatHistory(messages, sessionKey, mainSessionKey) }
   val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
@@ -1870,6 +1871,10 @@ private fun ChatMessageList(
           catalogRevision = gatewayCatalogRevision,
           prepareRead = prepareFullMessageRead,
         ) { visibleContent, disclosure ->
+          val codeReaderFor =
+            key(fullMessageOwner, selectionGeneration, sessionKey) {
+              rememberChatCodeReaderForRow(messages, streamingAssistant, fullMessageOwner, activeRunCount, visibleContent)
+            }
           ChatBrowserLayout(browser = browser, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             LazyColumn(
               modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection).onGloballyPositioned(readerScroll.navigation.anchors::viewportPlaced),
@@ -1884,6 +1889,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.Message -> {
                       key(fullMessageOwner, selectionGeneration) {
                         ChatBubble(
+                          codeReaders = codeReaderFor(item),
                           messageId = item.message.id,
                           entryId = item.message.entryId,
                           role = item.message.role,
@@ -1983,6 +1989,7 @@ private fun ChatMessageList(
 
                     is ChatTimelineItem.StreamingAssistant -> {
                       ChatBubble(
+                        codeReaders = codeReaderFor(item),
                         messageId = null,
                         entryId = null,
                         role = "assistant",
@@ -2209,6 +2216,7 @@ internal fun ChatBubble(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  codeReaders: ChatCodeReaderRow? = null,
   sourcePreviews: List<ChatSourcePreview> = emptyList(),
   sourcePreviewConfig: GatewaySourcePreviewConfig? = null,
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
@@ -2321,10 +2329,11 @@ internal fun ChatBubble(
     val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
     var imageOffset = 0
     var transcriptShown = false
+    val firstTextGroup = if (codeReaders == null) -1 else groups.indexOfFirst { parts -> parts.any { it.type == "text" } }
     caption?.let {
       Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-    groups.forEach { parts ->
+    groups.forEachIndexed { groupIndex, parts ->
       if (parts.first().isDetachedChatAttachment()) {
         val groupImageOffset = imageOffset
         imageOffset += parts.count { it.type == "image" }
@@ -2348,15 +2357,18 @@ internal fun ChatBubble(
               onExpandedChange = { userMessageExpanded = it },
             )
           }
-          parts.forEach { part ->
+          val firstTextIndex = if (groupIndex == firstTextGroup) parts.indexOfFirst { it.type == "text" } else -1
+          parts.forEachIndexed { partIndex, part ->
             when {
               part.type == "text" && !collapsibleUserText -> {
-                ChatMarkdown(
-                  text = part.text.orEmpty(),
-                  textColor = ClawTheme.colors.text,
-                  isStreaming = live,
-                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-                )
+                CompositionLocalProvider(LocalChatCodeReaderHandoff provides codeReaders.takeIf { partIndex == firstTextIndex }) {
+                  ChatMarkdown(
+                    text = part.text.orEmpty(),
+                    textColor = ClawTheme.colors.text,
+                    isStreaming = live,
+                    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                  )
+                }
               }
 
               part.type == "text" -> {}
