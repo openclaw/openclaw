@@ -12,6 +12,7 @@ import {
   type RunnerTestFile,
   type TestTryOptions,
   type VitestTestRunner,
+  type WorkerGlobalState,
   vi,
 } from "vitest";
 import type { SessionMcpRuntimeManager } from "../src/agents/agent-bundle-mcp-types.js";
@@ -67,8 +68,65 @@ type ModuleMocker = {
 };
 
 type TestRunnerInternals = {
-  moduleRunner?: { mocker?: ModuleMocker };
-  workerState: { evaluatedModules: unknown; moduleExecutionInfo: ModuleExecutionInfo };
+  moduleRunner?: {
+    mocker?: ModuleMocker;
+    // Vitest 5.0.5/Vite 8.3.5 private contract: observe fetches without joining them.
+    readonly concurrentModuleNodePromises: ReadonlyMap<string, Promise<ViteEvaluatedModuleNode>>;
+  };
+  workerState: {
+    evaluatedModules: unknown;
+    moduleExecutionInfo: ModuleExecutionInfo;
+    readonly ctx: WorkerGlobalState["ctx"];
+    readonly resolvingModules: ReadonlySet<string>;
+  };
+};
+
+const cronImportDiagnosticFiles = new Set([
+  "src/gateway/server-cron.test.ts",
+  "src/gateway/server-cron.drain.test.ts",
+  "src/gateway/server-cron.stream-lifecycle.test.ts",
+  "src/gateway/server-reload-hot.cron-lazy.test.ts",
+  "src/gateway/server.cron-session-cleanup.test.ts",
+  "src/gateway/server-cron.session-target.test.ts",
+  "src/gateway/server.cron-schedule-validation.test.ts",
+]);
+// Synthetic tokens are local to this module evaluation, not real run IDs.
+const cronImportDiagnosticIds = new WeakMap<object, number>();
+let nextCronImportDiagnosticId = 0;
+
+function cronImportDiagnosticId(value: object): number {
+  let id = cronImportDiagnosticIds.get(value);
+  if (id === undefined) {
+    id = ++nextCronImportDiagnosticId;
+    cronImportDiagnosticIds.set(value, id);
+  }
+  return id;
+}
+
+function cronImportDiagnosticModuleId(value: string, root: string): string {
+  const id =
+    value
+      .replaceAll("\\", "/")
+      .replace(/^mock:/u, "")
+      .split(/[?#]/u)[0] ?? "";
+  const prefix = `${root.replaceAll("\\", "/")}/`;
+  const relative = id.startsWith(prefix) ? id.slice(prefix.length) : id.replace(/^\//u, "");
+  if (
+    !/^(?:src|test|packages|scripts|extensions)\/[\w./@-]+$/u.test(relative) ||
+    relative.split("/").includes("..")
+  ) {
+    return "<external>";
+  }
+  return relative.length <= 40 ? relative : `${relative.slice(0, 12)}...${relative.slice(-25)}`;
+}
+
+type CronImportDiagnosticSnapshot = {
+  phase: "before-drain" | "after-drain" | "before-reset";
+  context: readonly [number, number, number];
+  mock: number | null;
+  evaluated: readonly [number, Array<readonly [string, number]>];
+  resolving: readonly [number, string[]];
+  fetching: readonly [number, Array<readonly [string, number]>] | null;
 };
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
@@ -551,6 +609,68 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const internals = this as unknown as TestRunnerInternals;
     const modules = internals.workerState.evaluatedModules as EvaluatedModules;
     const executions = internals.workerState.moduleExecutionInfo;
+    const importDiagnostics: CronImportDiagnosticSnapshot[] = [];
+    const captureImportDiagnostics = (phase: CronImportDiagnosticSnapshot["phase"]) => {
+      try {
+        if (!cronImportDiagnosticFiles.has(testFiles) || importDiagnostics.length === 3) {
+          return;
+        }
+        const context = internals.workerState.ctx;
+        const mocker = internals.moduleRunner?.mocker;
+        const resolving = internals.workerState.resolvingModules;
+        const fetching = internals.moduleRunner?.concurrentModuleNodePromises;
+        const evaluatedIds: Array<readonly [string, number]> = [];
+        const resolvingIds: string[] = [];
+        const fetchingIds: Array<readonly [string, number]> = [];
+        const moduleId = (id: string) => cronImportDiagnosticModuleId(id, this.config.root);
+        let pending = 0;
+        for (const [id, node] of modules.idToModuleMap) {
+          if (node.promise && !node.evaluated) {
+            pending += 1;
+            if (evaluatedIds.length < 2) {
+              evaluatedIds.push([moduleId(id), cronImportDiagnosticId(node.promise)]);
+            }
+          }
+        }
+        for (const id of resolving) {
+          resolvingIds.push(moduleId(id));
+          if (resolvingIds.length === 2) break;
+        }
+        if (fetching) {
+          for (const [id, promise] of fetching) {
+            fetchingIds.push([moduleId(id), cronImportDiagnosticId(promise)]);
+            if (fetchingIds.length === 2) break;
+          }
+        }
+        importDiagnostics.push({
+          phase,
+          context: [cronImportDiagnosticId(context), context.workerId, context.concurrencyId],
+          mock: mocker ? cronImportDiagnosticId(mocker.pendingMockResolution) : null,
+          evaluated: [pending, evaluatedIds],
+          resolving: [resolving.size, resolvingIds],
+          fetching: fetching ? [fetching.size, fetchingIds] : null,
+        });
+      } catch {
+        // Diagnostics must never replace the original collection or teardown failure.
+      }
+    };
+    const emitImportDiagnostics = () => {
+      try {
+        if (!importDiagnostics.length) return;
+        const line = `[cron-import-boundary] ${JSON.stringify({
+          pid: process.pid,
+          file: testFiles,
+          failed: files.some((file) => file.result?.state === "fail"),
+          teardown: files.some((file) =>
+            file.result?.errors?.some((error) => error.name === "EnvironmentTeardownError"),
+          ),
+          snapshots: importDiagnostics,
+        })}`;
+        if (Buffer.byteLength(line, "utf8") < 2_048) nativeConsoleMethods.error(line);
+      } catch {
+        // Reporting is observational; preserve every existing failure and cleanup call.
+      }
+    };
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
       // Preserve nested failure messages independently of redacted stack locations.
@@ -593,12 +713,14 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       );
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
     clean("Solid roots", cleanupSolid);
+    captureImportDiagnostics("before-drain");
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
     if (!this.config.isolate) {
       // Lazy modules may still register elements after their rendering root is disposed.
       // Finish that generation before dropping its tags and resetting the module graph.
       await drain("dynamic imports", () => vi.dynamicImportSettled());
     }
+    captureImportDiagnostics("after-drain");
     // The last test's scheduled closes must finish before cleanup restores shared state.
     await settleSqliteTestAgentCloses();
     // Restore independent file state even when failed cancellation retains the runtime owners.
@@ -623,6 +745,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     if (!(await drain("run state", resetOpenClawGlobalRunState))) {
       // Failed cancellation retains the run's runtime, storage and module generation.
       retainSqliteTestCustody();
+      emitImportDiagnostics();
       await publishFailures();
       return;
     }
@@ -700,9 +823,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
         ["evaluated modules", () => resetEvaluatedModules(modules, executions, testFiles)],
       ] as const) {
+        if (phase === "module mocks") captureImportDiagnostics("before-reset");
         clean(phase, run);
       }
     }
+    emitImportDiagnostics();
     if (failed.size) {
       await publishFailures();
     }
