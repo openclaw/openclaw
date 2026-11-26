@@ -2,7 +2,7 @@
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ignoreMissingPath } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { sameFsObject } from "../infra/path-case.js";
 
@@ -22,10 +22,7 @@ export async function readSafePackageManifest(
     boundaryLabel: "installed plugin package directory",
   });
   if (!result.ok) {
-    if (
-      result.reason === "open" &&
-      (result.failure.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
-    ) {
+    if (result.reason === "open" && hasErrnoCode(result.failure.error, "ENOENT")) {
       return null;
     }
     if (result.reason === "parse") {
