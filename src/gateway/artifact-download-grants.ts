@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import type { SessionsFilesGetParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { logWarn } from "../logger.js";
 import type {
   ArtifactDownloadResponse,
   ArtifactDownloadResponseRequest,
@@ -55,9 +57,13 @@ function removeDownload(grants: Map<string, Download>, ticket: string) {
       // abort listeners, expiry sweeps, or teardown as an uncaught exception.
       try {
         grant.release();
-      } catch {
+      } catch (err) {
         // The owner's cleanup failure is not recoverable at this boundary;
-        // the deregistered ticket leaves no path for a caller to retry it.
+        // the deregistered ticket leaves no path for a caller to retry it,
+        // so record it for shutdown callers instead of discarding the signal.
+        logWarn(
+          `gateway: artifact download grant release failed during cleanup: ${formatErrorMessage(err)}`,
+        );
       }
     }
   }
