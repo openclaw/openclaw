@@ -377,13 +377,16 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       ready.resolve();
       await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(count));
       await decodeImages(container);
+      await page.elementLocator(container.querySelector(".chat-message-image-button")!).hover();
       expect(rectangles()).toEqual(before);
       for (const surface of container.querySelectorAll(".chat-image-surface")) {
         const rect = surface.getBoundingClientRect();
         expect(rect.width).toBe(rect.height);
+        // Hover scales the clipped image, not its layout box or the gallery tile.
         for (const content of surface.querySelectorAll("button, img")) {
-          expect(content.getBoundingClientRect().width).toBe(rect.width);
-          expect(content.getBoundingClientRect().height).toBe(rect.height);
+          const style = getComputedStyle(content);
+          expect(Number.parseFloat(style.width)).toBe(rect.width);
+          expect(Number.parseFloat(style.height)).toBe(rect.height);
         }
       }
       expect(container.querySelector("[data-next-message]")!.getBoundingClientRect().top).toBe(
