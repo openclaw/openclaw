@@ -120,7 +120,11 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         target.value = capturedSelection.value;
       }
       const transaction = reviewed
-        ? replaceComposerDraft(target, insertion.value, reviewed.isCurrent)
+        ? replaceComposerDraft(target, insertion.value, reviewed.isCurrent, {
+            start: capturedSelection?.start ?? (late ? target.selectionStart : target.value.length),
+            end: capturedSelection?.end ?? (late ? target.selectionEnd : target.value.length),
+            caret: insertion.caret,
+          })
         : undefined;
       if (transaction && !transaction.committed) {
         return transaction;

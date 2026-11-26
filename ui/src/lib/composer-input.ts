@@ -10,13 +10,39 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (
+    text: string,
+    start: number,
+    end: number,
+    options?: { isolateHistory?: boolean },
+  ) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */
   undo: () => void;
 };
 const editors = new WeakMap<HTMLTextAreaElement, ComposerEditorBridge>();
+type ComposerNativeEditMetadata = (edit: {
+  before: string;
+  after: string;
+  start: number;
+  end: number;
+}) => { write: (run: () => void) => void; undo: (run: () => void) => void };
+const nativeEditMetadata = new WeakMap<HTMLTextAreaElement, ComposerNativeEditMetadata>();
+
+/** Feature bindings keep their own metadata beside synchronous native edits. */
+export function registerComposerNativeEditMetadata(
+  input: HTMLTextAreaElement,
+  capture: ComposerNativeEditMetadata,
+) {
+  nativeEditMetadata.set(input, capture);
+  return () => {
+    if (nativeEditMetadata.get(input) === capture) {
+      nativeEditMetadata.delete(input);
+    }
+  };
+}
+
 export function registerComposerEditor(input: HTMLTextAreaElement, editor: ComposerEditorBridge) {
   editors.set(input, editor);
   return () => editors.delete(input);
@@ -81,6 +107,7 @@ export function replaceComposerDraft(
   target: HTMLTextAreaElement,
   text: string,
   isCurrent?: () => boolean,
+  range?: { start: number; end: number; caret: number },
 ): ComposerDraftTransaction {
   const before = {
     value: target.value,
@@ -91,24 +118,45 @@ export function replaceComposerDraft(
   const editor = readComposerEditor(target);
   focusComposerInput(target, { preventScroll: true });
   if (
-    isCurrent &&
-    (!isCurrent() ||
-      target.value !== before.value ||
-      readComposerEditor(target) !== editor ||
-      target.disabled ||
-      target.readOnly)
+    (isCurrent &&
+      (!isCurrent() ||
+        target.value !== before.value ||
+        readComposerEditor(target) !== editor ||
+        target.disabled ||
+        target.readOnly)) ||
+    (range && before.value === text)
   ) {
     return { value: text, committed: false, canUndo: () => false, undo: () => false };
   }
+  const start = range ? Math.max(0, Math.min(range.start, before.value.length)) : 0;
+  const end = range
+    ? Math.max(start, Math.min(range.end, before.value.length))
+    : before.value.length;
+  // The insertion owner supplies the admitted source range and resulting caret.
+  // Its joined text includes any separators without inferring a diff from labels.
+  const inserted = range ? text.slice(start, range.caret) : text;
+  const captureMetadata = range && !editor ? nativeEditMetadata.get(target) : undefined;
+  const metadata = captureMetadata?.({ before: before.value, after: text, start, end });
   if (editor) {
-    editor.replaceAll(text);
+    if (range) {
+      editor.replace(inserted, start, end, { isolateHistory: true });
+    } else {
+      editor.replaceAll(text);
+    }
   } else {
-    target.setSelectionRange(0, target.value.length);
-    if (!target.ownerDocument.execCommand?.("insertText", false, text)) {
-      target.setRangeText(text, 0, target.value.length, "end");
-      target.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
+    const write = () => {
+      target.setSelectionRange(start, range ? end : target.value.length);
+      if (!target.ownerDocument.execCommand?.("insertText", false, inserted)) {
+        target.setRangeText(inserted, start, range ? end : target.value.length, "end");
+        target.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText", data: inserted }),
+        );
+      }
+    };
+    if (metadata) {
+      metadata.write(write);
+    } else {
+      write();
     }
   }
   // Input handlers run inside the write. A changed value after dispatch cannot
@@ -120,7 +168,8 @@ export function replaceComposerDraft(
     !target.disabled &&
     !target.readOnly &&
     target.value === text &&
-    readComposerEditor(target) === editor;
+    readComposerEditor(target) === editor &&
+    (editor !== undefined || !range || nativeEditMetadata.get(target) === captureMetadata);
   const canUndo = () => committed === true && !used && targetMatches();
   return {
     value: text,
@@ -140,10 +189,17 @@ export function replaceComposerDraft(
       } else {
         // Native history may be unavailable (the insertText fallback). Restore
         // only this verified field, never issue application-wide undo commands.
-        target.setRangeText(before.value, 0, target.value.length, "end");
-        target.dispatchEvent(
-          new InputEvent("input", { bubbles: true, inputType: "historyUndo", data: null }),
-        );
+        const restore = () => {
+          target.setRangeText(before.value, 0, target.value.length, "end");
+          target.dispatchEvent(
+            new InputEvent("input", { bubbles: true, inputType: "historyUndo", data: null }),
+          );
+        };
+        if (metadata) {
+          metadata.undo(restore);
+        } else {
+          restore();
+        }
       }
       if (target.value !== before.value) {
         return undefined;

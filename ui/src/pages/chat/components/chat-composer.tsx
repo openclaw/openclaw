@@ -96,14 +96,20 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       : undefined,
   };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
-  onSettled(() =>
-    voice.dictation.subscribe(() => {
-      if (voice.dictation.locksComposer) {
-        state.editRevision += 1;
+  onSettled(() => {
+    let locked = voice.dictation.locksComposer;
+    return voice.dictation.subscribe(() => {
+      const wasLocked = locked;
+      locked = voice.dictation.locksComposer;
+      if (locked) {
+        // An admitted review freezes this revision; phase/preview notifications are not edits.
+        if (!wasLocked || !voice.dictation.requiresReview) {
+          state.editRevision += 1;
+        }
         currentProps.onDismissRealtimeTalkError?.();
       }
-    }),
-  );
+    });
+  });
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
   const readPredictionSource = () => {

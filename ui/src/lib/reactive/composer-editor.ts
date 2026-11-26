@@ -1,5 +1,10 @@
 import type { HumanMention } from "../chat/chat-types.ts";
-import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
+import {
+  HUMAN_MENTION_CLIPBOARD_TYPE,
+  readHumanMentions,
+  withHumanMentionEdit,
+} from "../chat/human-mentions.ts";
+import { registerComposerNativeEditMetadata } from "../composer-input.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
 import { elementRef } from "./element-ref.ts";
@@ -23,6 +28,30 @@ export function createMentionComposerBinding(
       | undefined;
     let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    const unregisterMetadata = registerComposerNativeEditMetadata(
+      node,
+      ({ before, after, start, end }) => {
+        const previousMentions = readHumanMentions(before, getMentions()) ?? [];
+        return {
+          write(run) {
+            withHumanMentionEdit(
+              after,
+              undefined,
+              { value: before, start, end, inputType: "insertText" },
+              run,
+            );
+          },
+          undo(run) {
+            withHumanMentionEdit(
+              before,
+              previousMentions,
+              { value: after, start: 0, end: after.length, inputType: "historyUndo" },
+              run,
+            );
+          },
+        };
+      },
+    );
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
       if (
@@ -178,6 +207,7 @@ export function createMentionComposerBinding(
       );
     }
     return () => {
+      unregisterMetadata();
       native.abort();
       observer.disconnect();
       editor?.destroy();

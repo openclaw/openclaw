@@ -149,9 +149,11 @@ export function SessionRailComposer(props: {
     if (active.finalizing) {
       return;
     }
+    // Finishing may retire the capture; its review decision still belongs to this submission.
+    const requiresReview = active.requiresReview;
     const sessionKey = props.sessionKey;
     void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+      if (!requiresReview && props.sessionKey === sessionKey) {
         props.submit();
       }
     });

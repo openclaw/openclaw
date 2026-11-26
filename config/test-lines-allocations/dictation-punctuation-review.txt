@@ -2,4 +2,6 @@
 # retirement and one-write/undo receipts, actual review controls, settings
 # migration/privacy, and the required browser keyboard journey. The existing
 # owner fixture is extracted once; its removed lines are included in the net delta.
-784
+# Follow-up regressions exercise actual pane capture admission, Side chat and
+# queued/history keyboard paths, and rich/native mention identity plus Undo.
+1222

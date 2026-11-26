@@ -89,7 +89,11 @@ export function createComposerDictationOptions(
       }
       const transaction =
         reviewed && target
-          ? replaceComposerDraft(target, insertion.value, reviewed.isCurrent)
+          ? replaceComposerDraft(target, insertion.value, reviewed.isCurrent, {
+              start: captured?.start ?? target.selectionStart,
+              end: captured?.end ?? target.selectionEnd,
+              caret: insertion.caret,
+            })
           : undefined;
       if (transaction && !transaction.committed) {
         return transaction;

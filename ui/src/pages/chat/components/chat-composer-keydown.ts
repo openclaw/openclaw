@@ -63,6 +63,13 @@ export function createComposerKeyDownHandler({
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
+    if (state.dictation?.requiresReview && state.dictation.locksComposer) {
+      // Provisional captions belong to dictation, before menus, history, or deferred Send.
+      if (event.key === "Enter") {
+        event.preventDefault();
+      }
+      return;
+    }
 
     if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;
