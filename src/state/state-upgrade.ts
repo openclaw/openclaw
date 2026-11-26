@@ -143,7 +143,7 @@ export async function upgradeStateDirectory(params: {
       // Additive-only schema work has no historical content repair to run.
       // Reader-floor upgrades retain the full Doctor detector after convergence.
       if (outdated.length === 0 && !configRepair && !includeRepair && !legacySources) {
-        await publishStateUpgradeRestore(restore, { targets: [], config });
+        (await publishStateUpgradeRestore(restore, { targets: [], config }))?.();
         return { status: "current" };
       }
       if (process.platform === "linux" && (configRepair || includeRepair)) {
@@ -186,7 +186,7 @@ export async function upgradeStateDirectory(params: {
           );
         }
       }
-      await publishStateUpgradeRestore(restore, {
+      const completeRestore = await publishStateUpgradeRestore(restore, {
         targets: [
           ...protectedTargets,
           ...(configRepair || includeRepair
@@ -196,7 +196,7 @@ export async function upgradeStateDirectory(params: {
         ],
         config,
       });
-      return await runWithDoctorMigrationBackup(
+      const migrationResult = await runWithDoctorMigrationBackup(
         captureFreshDoctorMigrationTables,
         async (): Promise<StateUpgradeResult> => {
           for (const file of restore?.existing?.files ?? []) {
@@ -382,6 +382,8 @@ export async function upgradeStateDirectory(params: {
           return { status: "upgraded" };
         },
       );
+      completeRestore?.();
+      return migrationResult;
     } catch (error) {
       return { status: "refused", reason: formatErrorMessage(error) };
     }
