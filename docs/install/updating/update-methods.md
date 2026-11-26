@@ -72,6 +72,8 @@ preserves the build timestamps, so ordinary CLI commands keep using that
 validated runtime without regenerating it after the move.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
+The target's `pnpm-workspace.yaml` pins pnpm's project virtual store, so a
+user-level `virtualStoreType: global` setting does not stop the candidate build.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
 Candidate commands keep the qualified Node first among Node providers on `PATH`,

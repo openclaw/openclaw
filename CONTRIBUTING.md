@@ -50,8 +50,11 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 Run `pnpm install --frozen-lockfile` from the workspace root. Source checkouts use
 pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and links
-them into each workspace package. On supported macOS volumes, this also lets pnpm
-reuse whole-package APFS clones instead of importing every file separately.
+them into each workspace package. The workspace pins pnpm's project virtual store,
+so a user-level `virtualStoreType: global` setting does not apply to source
+checkouts; the build requires dependencies inside the checkout. On supported
+macOS volumes, this also lets pnpm reuse whole-package APFS clones instead of
+importing every file separately.
 
 Installation also prepares Kysely declarations from the SQL schemas in `src/state`.
 The generated files live in ignored `.artifacts/kysely/`; build, typecheck,
