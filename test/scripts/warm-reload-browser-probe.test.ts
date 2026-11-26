@@ -73,7 +73,7 @@ function installProbe(cpuAttribution = false) {
   });
   const probe = window.eval(
     `(${installWarmReloadBrowserProbe.toString()})("chat", false, false, false, ${cpuAttribution})`,
-  );
+  ) as NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>>;
   return {
     document: window.document,
     probe,
@@ -187,11 +187,11 @@ it("retains native LoAF attribution and drains pending entries without geometry 
   const row = document.querySelector("p")!;
   paint(row, 40);
   paint(row, 50);
-  probe.finishCpuAttribution();
-  expect(probe.cpuAttribution.loaf).toEqual([raw]);
+  probe.finishCpuAttribution!();
+  expect(probe.cpuAttribution!.loaf).toEqual([raw]);
   expect(probe.loafBlockingMs).toBe(30);
-  expect(probe.cpuAttribution.droppedEntries).toBeNull();
-  expect(probe.cpuAttribution.overflow).toBe(false);
+  expect(probe.cpuAttribution!.droppedEntries).toBeNull();
+  expect(probe.cpuAttribution!.overflow).toBe(false);
   expect(markers).toEqual(["warm-reload-cpu:rows-observed"]);
   expect(probe.firstPaintedRowsMs).toBe(40);
 });
