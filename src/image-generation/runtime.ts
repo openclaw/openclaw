@@ -122,9 +122,22 @@ async function runImageGeneration(
         const modeCapabilities = params.inputImages?.length
           ? provider.capabilities.edit
           : provider.capabilities.generate;
+        const supportsGeometry = modeCapabilities.supportsGeometryByModel?.[candidate.model];
+        if (
+          supportsGeometry === false &&
+          (params.size !== undefined ||
+            params.aspectRatio !== undefined ||
+            params.resolution !== undefined)
+        ) {
+          throw new Error(
+            `${candidate.model} does not support size, aspectRatio, or resolution overrides.`,
+          );
+        }
         // An empty resolution list means this model accepts no resolution, like supportsResolution: false.
         const supportsResolution =
-          modeCapabilities.supportsResolution !== false && resolutions?.length !== 0;
+          supportsGeometry !== false &&
+          modeCapabilities.supportsResolution !== false &&
+          resolutions?.length !== 0;
         const inferredResolution = supportsResolution ? params.inferredResolution : undefined;
         const sanitized = resolveMediaGeometryOverrides({
           size: params.size,

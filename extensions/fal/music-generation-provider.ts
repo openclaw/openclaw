@@ -2,6 +2,8 @@ import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generat
 import {
   downloadGeneratedMusicAsset,
   extractGeneratedMusicFileCandidates,
+  validateMusicGenerationDuration,
+  type MusicGenerationModeCapabilities,
   type MusicGenerationProvider,
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
@@ -14,6 +16,11 @@ const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
 const FAL_ACE_STEP_MODEL = "fal-ai/ace-step/prompt-to-audio";
 const FAL_STABLE_AUDIO_MODEL = "fal-ai/stable-audio-25/text-to-audio";
 const DEFAULT_TIMEOUT_MS = 180_000;
+const DURATION_CONSTRAINTS = {
+  [DEFAULT_FAL_MUSIC_MODEL]: false,
+  [FAL_ACE_STEP_MODEL]: { minSeconds: 5, maxSeconds: 240 },
+  [FAL_STABLE_AUDIO_MODEL]: { minSeconds: 1, maxSeconds: 190, integer: true },
+} satisfies MusicGenerationModeCapabilities["durationConstraintsByModel"];
 
 const FAL_MUSIC_MODELS = [
   DEFAULT_FAL_MUSIC_MODEL,
@@ -25,6 +32,11 @@ function buildFalMusicRequestBody(
   req: MusicGenerationRequest,
   model: string,
 ): Record<string, unknown> {
+  validateMusicGenerationDuration({
+    capabilities: { durationConstraintsByModel: DURATION_CONSTRAINTS },
+    model,
+    durationSeconds: req.durationSeconds,
+  });
   const lyrics = normalizeOptionalString(req.lyrics);
   if (model === FAL_ACE_STEP_MODEL || model === FAL_STABLE_AUDIO_MODEL) {
     const isStableAudio = model === FAL_STABLE_AUDIO_MODEL;
@@ -82,6 +94,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
           [FAL_STABLE_AUDIO_MODEL]: false,
         },
         supportsDuration: true,
+        durationConstraintsByModel: DURATION_CONSTRAINTS,
         supportsFormat: true,
         supportedFormats: ["mp3", "wav"],
         supportedFormatsByModel: {
@@ -99,13 +112,14 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         throw new Error("fal music generation does not support image reference inputs.");
       }
 
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
+      const body = buildFalMusicRequestBody(req, model);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
-      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
       const payload = await postJsonResponse<unknown>({
         url: `${baseUrl}/${model}`,
         headers,
-        body: buildFalMusicRequestBody(req, model),
+        body,
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
         allowPrivateNetwork,
