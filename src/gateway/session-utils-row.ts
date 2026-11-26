@@ -567,7 +567,9 @@ export function materializeSessionRow(
       childLinks:
         input.childLinks === previous?.source.childLinks
           ? previous?.source.childLinks
-          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
+          : freezeTrustedJsonSnapshot(
+              projectSessionRowChildLinks(input.childLinks, previous?.source.childLinks),
+            ),
     }),
   });
 }

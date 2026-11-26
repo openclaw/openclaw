@@ -443,6 +443,7 @@ describe("CodexNativeSubagentMonitor", () => {
       turnId: "parent-turn",
       result: "first result",
     });
+    await client.finishTurn("initial-turn", agentMessage("initial-final", "first result"));
     await client.startTurn("followup-turn");
     onDirectChildAccepted.mockClear();
     await client.item(collabItem("sendInput", ["child-thread"], { id: "followup" }));
@@ -473,7 +474,7 @@ describe("CodexNativeSubagentMonitor", () => {
       "followup-turn",
       agentMessage("followup-final", "second result", "final_answer"),
     );
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ childSessionId: "child-thread", result: "second result" }),
     );
     await monitor.dispose();
