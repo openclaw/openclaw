@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import * as sessionEvents from "../../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import * as sessions from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionWriter from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -25,7 +26,7 @@ it.for(["fresh", "failed-clear"] as const)(
     await using fixture = await createFixture({ active: false });
     if (prior === "failed-clear") {
       const predecessor = { sourceRunId: "earlier-execution" };
-      await sessions.patchSessionEntryCore(fixture.scope, () => ({
+      await sessionWriter.patchSessionEntryCore(fixture.scope, () => ({
         resumeAfterRestart: predecessor,
       }));
       using admission = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
@@ -35,7 +36,7 @@ it.for(["fresh", "failed-clear"] as const)(
         cancel: () => false,
       });
       using clear = vi
-        .spyOn(sessions, "patchSessionEntryCore")
+        .spyOn(sessionWriter, "patchSessionEntryCore")
         .mockRejectedValueOnce(new Error("retained marker write failed"));
       const warn = vi.fn();
       const context = {
@@ -54,9 +55,9 @@ it.for(["fresh", "failed-clear"] as const)(
       );
       expect(clear).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("retained marker write failed"));
-      expect(sessions.loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual(predecessor);
+      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual(predecessor);
     }
-    let admittedEntry: ReturnType<typeof sessions.loadSessionEntry>;
+    let admittedEntry: ReturnType<typeof loadSessionEntry>;
     const { dispatchInboundMessage } = await vi.importActual<
       typeof import("../../auto-reply/dispatch.js")
     >("../../auto-reply/dispatch.js");
@@ -67,7 +68,7 @@ it.for(["fresh", "failed-clear"] as const)(
           replyResolver: async (_ctx, options) => {
             const operation = options?.replyOperation;
             assert(operation);
-            admittedEntry = sessions.loadSessionEntry(fixture.scope);
+            admittedEntry = loadSessionEntry(fixture.scope);
             markGatewayRestartDraining();
             operation.abortForRestart();
             return {};
@@ -86,7 +87,7 @@ it.for(["fresh", "failed-clear"] as const)(
         ),
       ).toBe(false);
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(sessions.loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
+      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
     } finally {
       resetGatewayWorkAdmission();
     }
@@ -101,7 +102,7 @@ it.for(["held", "setup-error"] as const)(
     fixture.params.idempotencyKey = runId;
     // Crash recovery before runtime start compares the scope admission recorded.
     vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", "token-a");
-    await sessions.patchSessionEntryCore(fixture.scope, () => ({
+    await sessionWriter.patchSessionEntryCore(fixture.scope, () => ({
       status: "done",
       lifecycleRevision: "prior-lifecycle",
       lastRunId: "prior-run",
@@ -119,7 +120,7 @@ it.for(["held", "setup-error"] as const)(
         },
       }),
     );
-    const entry = sessions.loadSessionEntry(fixture.scope);
+    const entry = loadSessionEntry(fixture.scope);
     if (outcome === "held") {
       await fixture.dispatchedRecorder;
       expect(response.mock.calls[0]?.[0]).toBe(true);

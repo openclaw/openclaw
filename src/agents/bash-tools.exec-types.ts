@@ -20,6 +20,10 @@ export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySucce
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   /** Host-stamped participation context, never a tool argument. */
   participation?: boolean;
+  /** Installed only by the managed embedded session that owns restart recovery. */
+  admitShellCall?: (
+    callId: string,
+  ) => Promise<import("../config/sessions/transcript-shell-receipt.js").ShellCallReceipt>;
   /** Host-owned starting-directory boundary; this does not sandbox command arguments. */
   participationRoot?: string;
   /** Retained participant allowlist misses cannot be reopened by a host approval. */
@@ -114,6 +118,9 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
+  admitShellDispatch?: () => Promise<
+    import("../config/sessions/transcript-shell-receipt.js").RecordDeferredShellOutcome | undefined
+  >;
   approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;
