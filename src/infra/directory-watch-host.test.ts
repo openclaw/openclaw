@@ -108,6 +108,41 @@ describe("directory watch host", () => {
     }
   });
 
+  it.each([false, true])("retires a failed final watch unless readmitted (%s)", async (readmit) => {
+    const spawned = vi.spyOn(childProcess, "spawn");
+    syncBuiltinESMExports();
+    const root = tempDirs.make("directory-watch-failure-");
+    const failed = Promise.withResolvers<boolean>();
+    const ready = Promise.withResolvers<void>();
+    const missing = watchDirectory(path.join(root, "missing"), () => {});
+    const helper = spawned.mock.results[0]!.value;
+    const exited = once(helper, "exit");
+    let replacement: ReturnType<typeof watchDirectory> | undefined;
+    missing.on("error", (_error, pathUnavailable) => {
+      missing.close();
+      if (readmit) {
+        replacement = watchDirectory(root, () => ready.resolve());
+      }
+      failed.resolve(pathUnavailable);
+    });
+    try {
+      await expect(failed.promise).resolves.toBe(true);
+      if (readmit) {
+        await ready.promise;
+        expect(spawned).toHaveBeenCalledTimes(1);
+        expect(helper.stdin!.writableEnded).toBe(false);
+        replacement!.close();
+      }
+      expect(helper.stdin!.writableEnded).toBe(true);
+      await exited;
+    } finally {
+      missing.close();
+      replacement?.close();
+      helper.stdin!.end();
+      await exited;
+    }
+  });
+
   it("keeps observation recoverable when helper startup throws", async () => {
     vi.spyOn(childProcess, "spawn").mockImplementationOnce(() => {
       throw new Error("synthetic helper startup failure");
