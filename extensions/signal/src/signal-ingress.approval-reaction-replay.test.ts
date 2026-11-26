@@ -137,3 +137,48 @@ it(
     }
   },
 );
+
+it("resolves a group approval from a native signal-cli reaction", async () => {
+  reactionStores.clearSignalApprovalReactionStoresForTest();
+  resolveApproval.mockReset().mockResolvedValue({
+    applied: true,
+    approval: { status: "allowed", decision: "allow-once" },
+  });
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({
+      cfg: {
+        channels: { signal: { allowFrom: ["+15550001111"] } },
+        approvals: { exec: { enabled: true, mode: "session" } },
+      },
+    }),
+  );
+  await registerSignalApprovalReactionTarget({
+    accountId: "default",
+    conversationKey: "group:g1",
+    messageId: "1700000000123",
+    approvalId: "group-approval",
+    approvalKind: "exec",
+    allowedDecisions: ["allow-once"],
+    targetAuthorKeys: ["+15550009999"],
+    route: { deliveryMode: "session" },
+  });
+
+  await handler(
+    createSignalReceiveEvent({
+      dataMessage: {
+        groupInfo: { groupId: "g1" },
+        reaction: {
+          emoji: "👍",
+          targetAuthor: "+15550009999",
+          targetAuthorNumber: "+15550009999",
+          targetSentTimestamp: 1700000000123,
+          isRemove: false,
+        },
+      },
+    }),
+  );
+
+  expect(resolveApproval).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ approvalId: "group-approval", decision: "allow-once" }),
+  );
+});

@@ -801,8 +801,8 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       }
       const emojiLabel = normalizeOptionalString(reaction.emoji) ?? "emoji";
       const reactionSenderName = envelope.sourceName ?? senderDisplay;
-      const reactionGroupId = reaction.groupInfo?.groupId ?? undefined;
-      const reactionGroupName = reaction.groupInfo?.groupName ?? undefined;
+      const reactionGroup = reaction.groupInfo ?? dataMessage?.groupInfo;
+      const reactionGroupId = reactionGroup?.groupId ?? undefined;
       const isReactionGroup = Boolean(reactionGroupId);
       const reactionMessageId = reaction.targetSentTimestamp
         ? String(reaction.targetSentTimestamp)
@@ -852,7 +852,7 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         senderPeerId: reactionSenderPeerId,
       });
       const groupLabel = isReactionGroup
-        ? `${reactionGroupName ?? "Signal Group"} id:${reactionGroupId}`
+        ? `${reactionGroup?.groupName ?? "Signal Group"} id:${reactionGroupId}`
         : undefined;
       const text = buildSignalReactionSystemEventText({
         emojiLabel,
