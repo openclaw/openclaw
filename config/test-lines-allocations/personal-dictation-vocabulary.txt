@@ -1,0 +1,4 @@
+# P03 pure vocabulary preparation: reused shared validator/resolver regressions plus
+# distinct personal import, Unicode, scope, revision, ambiguity, and quota boundaries.
+# This records test growth, not production acceptance or executed test evidence.
+474

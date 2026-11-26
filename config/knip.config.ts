@@ -74,6 +74,7 @@ const repositoryScriptEntries = [
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-personal-vocabulary.mts!",
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
