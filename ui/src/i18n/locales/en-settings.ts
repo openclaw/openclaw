@@ -1766,7 +1766,7 @@ const enSettings = {
       speakerphoneEnabled: "Use speakerphone",
       wakeTriggersTalkMode: "Wake triggers Talk mode",
       pushToTalkEnabled: "Hold Right Option to talk",
-      talkShiftToStopEnabled: "Shift to stop",
+      talkShiftToStopEnabled: "Right Option to stop",
       talkPhaseSoundsEnabled: "Phase sounds",
       realtimeRelayEnabled: "Use realtime Gateway relay",
       realtimeRelayHint:
