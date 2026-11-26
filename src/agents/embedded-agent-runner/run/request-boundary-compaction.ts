@@ -3,6 +3,7 @@ import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
+  resolveCompletionTokenReservation,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
 import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
@@ -183,7 +184,13 @@ export function createRequestBoundaryCompaction(params: {
     if (conservativeInputTokens < softTriggerTokens) {
       return undefined;
     }
-    const maxOutputTokens = options?.maxTokens ?? params.maxOutputTokens ?? model.maxTokens;
+    const maxOutputTokens = resolveCompletionTokenReservation(
+      model,
+      options?.thinkingBudgets
+        ? model.maxTokens
+        : (options?.maxTokens ?? params.maxOutputTokens ?? model.maxTokens),
+      options?.reasoning,
+    );
     if (
       !failed &&
       context.messages.at(-1)?.role === "toolResult" &&
