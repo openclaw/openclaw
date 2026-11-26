@@ -19,6 +19,7 @@ import { resolveAgentDir } from "../agent-scope.js";
 import * as harness from "../decision-inference.test-support.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner/model.fixture.test-support.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { decisionToolResult } from "./decision-tool-contract.js";
 import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 import { createDecisionTool } from "./decision-tool.js";
 
@@ -139,6 +140,43 @@ it("keeps capability guidance bound to catalog order, visibility and prepared pr
       createDecisionTool("main", { config: disabled, preparedModelRuntime })?.description,
     ).toContain("Provider limits are undeclared");
   }
+});
+
+it("reports undeclared decisionModel diagnostics when capabilities are missing", () => {
+  const undeclared = decisionToolResult(
+    { status: "unavailable", reason: "unsupported-input" },
+    undefined,
+    {
+      provider: "typesafe",
+      modelId: "decision",
+      declaredModels: ["jev-latest", "jev-preview", "jev-1.13.0", "kev-latest"],
+    },
+  );
+  expect(undeclared.details).toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
+    guidance:
+      'Selected decisionModel "typesafe/decision" is not declared as a decision model by provider "typesafe" (declared: jev-latest, jev-preview, jev-1.13.0, kev-latest). Ask the operator to select a declared decisionModel or configure a provider entry with decision capabilities. No evidence was sent.',
+  });
+  expect(Value.Check(DecisionEvaluateOutput, undeclared.details)).toBe(true);
+
+  const manyDeclared = decisionToolResult(
+    { status: "unavailable", reason: "unsupported-input" },
+    undefined,
+    {
+      provider: "example",
+      modelId: "custom",
+      declaredModels: Array.from({ length: 14 }, (_, index) => `m-${index + 1}`),
+    },
+  );
+  expect(manyDeclared.details).toMatchObject({
+    guidance: expect.stringContaining("m-12, and 2 more"),
+  });
+
+  const hostBound = decisionToolResult({ status: "unavailable", reason: "unsupported-input" });
+  expect(hostBound.details).toMatchObject({
+    guidance: expect.stringContaining("Shorten the state or rubric"),
+  });
 });
 
 it("returns rich native outcomes through the core tool, registered host and real preparation", async () => {
@@ -381,6 +419,33 @@ it("returns rich native outcomes through the core tool, registered host and real
       text: expect.stringContaining("at most 3 questions"),
     });
     expect(captured.description).toContain("at most 8 questions");
+    expect(trace.calls).toBe(4);
+
+    setRuntimeConfigSnapshot({
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          decisionModel: `${id}/undeclared-custom`,
+        },
+      },
+    });
+    const undeclared = await tool!.execute("undeclared-model", {
+      state: "Synthetic undeclared model evidence",
+      questions: { selected: { type: "boolean" } },
+    });
+    expect(undeclared.details).toMatchObject({
+      status: "unavailable",
+      reason: "unsupported-input",
+      guidance: expect.stringContaining(
+        `Selected decisionModel "${id}/undeclared-custom" is not declared as a decision model by provider "${id}" (declared: native, other).`,
+      ),
+    });
+    expect(Value.Check(DecisionEvaluateOutput, undeclared.details)).toBe(true);
+    expect(undeclared.content[0]).toMatchObject({
+      text: expect.not.stringContaining("Shorten the state or rubric"),
+    });
     expect(trace.calls).toBe(4);
   });
 });

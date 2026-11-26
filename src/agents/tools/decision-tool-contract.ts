@@ -143,20 +143,42 @@ const unavailableGuidance: Record<
     "The evaluation exceeded its deadline. Shorten the input or ask the operator to check provider performance.",
 };
 
+export type UndeclaredDecisionModelDiagnostic = {
+  readonly provider: string;
+  readonly modelId: string;
+  readonly declaredModels: readonly string[];
+};
+
+function undeclaredDecisionModelGuidance(diagnostic: UndeclaredDecisionModelDiagnostic): string {
+  const listed = diagnostic.declaredModels.slice(0, 12);
+  const suffix =
+    diagnostic.declaredModels.length > listed.length
+      ? `, and ${diagnostic.declaredModels.length - listed.length} more`
+      : "";
+  return (
+    `Selected decisionModel "${diagnostic.provider}/${diagnostic.modelId}" is not declared as a decision model by provider "${diagnostic.provider}"` +
+    ` (declared: ${listed.join(", ")}${suffix}). ` +
+    "Ask the operator to select a declared decisionModel or configure a provider entry with decision capabilities. No evidence was sent."
+  );
+}
+
 /** Preserve provider values and provenance; diagnostics contain only bounded local facts. */
 export function decisionToolResult(
   outcome: DecisionOutcomeV2,
   capabilities?: ModelDecisionCapabilities,
+  undeclaredModel?: UndeclaredDecisionModelDiagnostic,
 ) {
   const details =
     outcome.status === "unavailable"
       ? {
           ...outcome,
           guidance:
-            unavailableGuidance[outcome.reason] +
-            (outcome.reason === "unsupported-input" && capabilities
-              ? ` ${capabilityGuidance(capabilities)}`
-              : ""),
+            outcome.reason === "unsupported-input" && !capabilities && undeclaredModel
+              ? undeclaredDecisionModelGuidance(undeclaredModel)
+              : unavailableGuidance[outcome.reason] +
+                (outcome.reason === "unsupported-input" && capabilities
+                  ? ` ${capabilityGuidance(capabilities)}`
+                  : ""),
         }
       : outcome;
   return textResult(JSON.stringify(details), details);
