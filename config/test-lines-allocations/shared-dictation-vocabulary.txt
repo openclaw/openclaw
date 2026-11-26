@@ -1,0 +1,5 @@
+# Distinct import/overlay/budget, scoped CAS/ACL, snapshot lineage, and
+# existing Talk relay publication boundaries require separate regressions.
+# Synthetic authority/provider fixtures do not certify production mappings.
+# 1184 net test lines minus the standard 400-line allowance.
+784
