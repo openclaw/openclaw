@@ -244,6 +244,7 @@ export function buildSessionEventContext(params: {
   const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
+        options.source === "exec" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.
@@ -253,14 +254,14 @@ export function buildSessionEventContext(params: {
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
+    (options.source !== "exec" || operatorAuthority.scopes.includes("operator.admin")) &&
     (automation?.automationAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
         : readSessionEventTargetOwnerContinuation(target)))
   ) {
-    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
-    // under the same live operator source, retaining internal provenance and the event
-    // text's existing command authorization. Non-owner and system turns never gain it.
+    // Exec completion and tool handoff continue the originating turn's owner decision
+    // without authorizing the internal event text as a command.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       sourceAssertion: params.assertCurrent,

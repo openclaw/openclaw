@@ -72,10 +72,18 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
+  const caller = getGatewayToolCallerIdentity();
   return captureSessionEventTarget(owner, targetKey, {
-    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    operatorAuthority: caller?.operatorAuthority,
     // The completion continues the requester's own command, not a new sender's request.
     retainRequesterOwner: true,
+    // A routed notice must not continue the starting session's operator-owner decision.
+    ownerContinuation:
+      caller?.agentId === owner &&
+      caller.sessionKey === session.sessionKey &&
+      targetKey === session.sessionKey
+        ? true
+        : undefined,
   }).then(
     (target) => {
       if (oneShot && sessionsYieldAvailable) {
