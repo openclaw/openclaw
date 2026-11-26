@@ -3,7 +3,8 @@
  * Run: node --import ./scripts/tsx.mjs scripts/perf/extension-boundary-compile-measure.mts
  * REV_OR_SNAPSHOT_DIRECTORY_URL CONFIG [--count] [--manifest]. Use --warm as CONFIG
  * to measure package-boundary preparation with already-current SDK receipts.
- * Snapshots contain the worker/emitter, or the receipt input owner for --warm, at
+ * Snapshots contain the worker/emitter, or the receipt input owner for --warm, and
+ * the shared declaration input boundary at
  * their repository-relative paths. Alternate sources in fresh processes; use
  * external GNU time for CPU and peak RSS. Count runs are separate.
  */
@@ -25,10 +26,12 @@ if (!revision || !config) {
   throw new Error("Expected a revision and prepared package-boundary config");
 }
 const sources = new Map(
-  (warm
-    ? ["scripts/lib/extension-boundary-inputs.mts"]
-    : ["scripts/lib/native-declaration-emitter.mts", "scripts/compile-extension-boundary.mts"]
-  ).map((owner) => [
+  [
+    "scripts/lib/local-check-runtime.mts",
+    ...(warm
+      ? ["scripts/lib/extension-boundary-inputs.mts"]
+      : ["scripts/lib/native-declaration-emitter.mts", "scripts/compile-extension-boundary.mts"]),
+  ].map((owner) => [
     pathToFileURL(path.join(root, owner)).href,
     revision.startsWith("file:")
       ? fs.readFileSync(path.join(fileURLToPath(revision), owner), "utf8")

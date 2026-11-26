@@ -155,12 +155,17 @@ export function createDeclarationInputBoundary(cwd: string) {
     resolve,
     assert(file: string) {
       const absolute = resolve(file);
-      // Generated declaration IDs do not exist yet, but their source directory does.
-      let existing = absolute;
-      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
-        existing = path.dirname(existing);
+      let real: string;
+      try {
+        real = fs.realpathSync.native(absolute);
+      } catch {
+        // Generated declaration IDs do not exist yet, but their source directory does.
+        let existing = absolute;
+        while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+          existing = path.dirname(existing);
+        }
+        real = fs.realpathSync.native(existing);
       }
-      const real = fs.realpathSync.native(existing);
       if (!contains(absolute) || !contains(real)) {
         const diagnosis = `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
         throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
