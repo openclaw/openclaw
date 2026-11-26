@@ -195,8 +195,9 @@ export function readStateLeaseProcessOwnerStatus(
   return readSameNamespaceProcessOwnerStatus(owner);
 }
 
-function readSameNamespaceProcessOwnerStatus(
-  owner: StateLeaseProcessOwner,
+/** The caller has already established that local PID observations apply to this owner. */
+export function readSameNamespaceProcessOwnerStatus(
+  owner: Pick<StateLeaseProcessOwner, "pid" | "startedAt">,
 ): "live" | "dead" | "unknown" {
   if (isPidDefinitelyDead(owner.pid)) {
     return "dead";

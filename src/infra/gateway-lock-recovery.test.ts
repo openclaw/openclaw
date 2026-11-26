@@ -167,6 +167,76 @@ describe("explicit Gateway lock recovery", () => {
     expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
   });
 
+  it
+    .skipIf(process.platform !== "linux")
+    .each(["matching", "different file", "missing incarnation"] as const)(
+    "recovers only files from the verified foreign Gateway instance (%s)",
+    async (kind) => {
+      const { payload, paths, lockPaths } = fixture();
+      const namespace = {
+        ...payload.processNamespace,
+        pidNsInode: "12345",
+        pidNsInitStartTicks: 7,
+      };
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(
+          pathname,
+          JSON.stringify({
+            ...payload,
+            role: "gateway",
+            processNamespace: { ...payload.processNamespace, pidNsInode: namespace.pidNsInode },
+            pidNsInitStartTicks: kind === "missing incarnation" ? undefined : 7,
+          }),
+        );
+      }
+      if (kind === "different file") {
+        fs.writeFileSync(paths.configLockPath, JSON.stringify(payload));
+      }
+      const recovery = recoverGatewayLock({ terminatedNamespace: namespace });
+      if (kind === "matching") {
+        await expect(recovery).resolves.toEqual({ recovered: true, removed: 3 });
+      } else {
+        await expect(recovery).rejects.toThrow("does not belong");
+      }
+      expect(lockPaths.every((pathname) => fs.existsSync(pathname) === (kind !== "matching"))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.skipIf(process.platform !== "linux").each(["gateway", "sqlite-maintenance"] as const)(
+    "checks the live %s PID when another hostname uses the caller's PID namespace",
+    async (role) => {
+      const { payload, lockPaths } = fixture();
+      const local = readGatewayLockProcessNamespace();
+      if (local?.platform !== "linux") {
+        throw new Error("Linux PID namespace required");
+      }
+      const placement = { ...local, host: "previous-container" };
+      const proof = { ...placement, pidNsInitStartTicks: processIdentity.getProcessStartTime(1) };
+      const record = {
+        ...payload,
+        role,
+        processNamespace: placement,
+        pidNsInitStartTicks: role === "gateway" ? proof.pidNsInitStartTicks : undefined,
+      };
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(pathname, JSON.stringify(record));
+      }
+      await expect(recoverGatewayLock({ terminatedNamespace: proof })).rejects.toThrow(
+        "Cannot verify that PID",
+      );
+      expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(pathname, JSON.stringify({ ...record, pid: 2_147_483_647 }));
+      }
+      await expect(recoverGatewayLock({ terminatedNamespace: proof })).resolves.toEqual({
+        recovered: true,
+        removed: 3,
+      });
+    },
+  );
+
   it("clears the matching SQLite lease while retaining physical custody", async () => {
     const { env, databasePath, payload, lockPaths } = fixture();
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
