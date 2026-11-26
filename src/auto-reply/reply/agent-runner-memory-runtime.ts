@@ -13,9 +13,30 @@ import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-c
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
+import { isExplicitChatFork } from "../../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemoryFlushRunParams } from "./agent-runner-memory.types.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+
+/** Copied chat history is searchable storage, not an estimate of the next runnable prompt. */
+export function shouldEstimatePreflightTranscript(
+  entry: SessionEntry,
+  scope: { sessionId: string; sessionKey?: string },
+  runtimeId: string,
+  freshTokens: number | undefined,
+): boolean {
+  return (
+    freshTokens === undefined &&
+    !(
+      runtimeId === "openclaw" &&
+      scope.sessionKey !== undefined &&
+      entry.sessionId === scope.sessionId &&
+      entry.forkSource !== undefined &&
+      entry.forkSource.entryId === undefined &&
+      isExplicitChatFork(scope.sessionKey, entry.createdVia, entry.spawnDepth)
+    )
+  );
+}
 
 type FollowupRuntimeParams = {
   cfg: OpenClawConfig;
