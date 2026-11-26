@@ -88,8 +88,8 @@ export function projectUpdateRun(
     headline,
     lines: [
       ...summaryLines.filter(Boolean),
-      ...updateRunWarningMessages(visibleSteps),
-      ...listUpdateOwedSteps(run).map(formatUpdateOwedStep),
+      ...(historical ? [] : updateRunWarningMessages(visibleSteps)),
+      ...(historical ? [] : listUpdateOwedSteps(run).map(formatUpdateOwedStep)),
       ...(run.downtimeMs == null
         ? []
         : [`Gateway downtime: ${formatDurationPrecise(run.downtimeMs)}.`]),

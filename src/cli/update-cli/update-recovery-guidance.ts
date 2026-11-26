@@ -108,7 +108,10 @@ export function resolveUpdateResultNextAction(params: {
     if (
       result.recovery?.serviceRestartSafe === true &&
       result.recovery.service === "healthy" &&
-      !result.recovery.packageRollbackVerified
+      !result.recovery.packageRollbackVerified &&
+      result.steps.some(
+        (step) => step.name === "installed gateway recovery admission" && step.exitCode === 0,
+      )
     ) {
       const rollback = result.rollbackOutcome;
       const rollbackDetail =
