@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  chooseScheduleKind,
   cronJob,
   cronList,
   cronRuns,
@@ -25,10 +26,8 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "automations?new");
-      await page.locator("#cron-name").fill(name);
       await page.locator("#cron-payload-text").fill(prompt);
-      await page.locator('[data-test-id="cron-schedule-frequency"]').click();
-      await page.locator('[data-test-id="cron-schedule-frequency-once"]').click();
+      await chooseScheduleKind(page, "at");
       await page.locator("#cron-schedule-at").fill("2026-11-20T16:30");
       await page.getByText("Advanced", { exact: true }).click();
       for (const label of [
@@ -42,7 +41,6 @@ suite.define(() => {
       await page.locator('[data-test-id="cron-submit"]').click();
       const { params } = await gateway.waitForRequest("cron.add");
       expect(params).toMatchObject({
-        name,
         schedule: { kind: "at", at: "2026-11-20T16:30:00.000Z" },
         payload: { kind: "agentTurn", message: prompt },
       });

@@ -502,7 +502,7 @@ it.each([
   }
 });
 
-it("preserves routing on duplicate and leaves hidden settings alone on edit", async () => {
+it("preserves hidden settings on duplicate and leaves them alone on edit", async () => {
   const sourceJob = createCronJob("job-routing", "Routed job", {
     sessionKey: "agent:ops:main",
     enabled: false,
@@ -521,8 +521,8 @@ it("preserves routing on duplicate and leaves hidden settings alone on edit", as
   const addPayload = await cloneJob(sourceJob).submit();
   expect(addPayload.delivery).toEqual(sourceJob.delivery);
   expect(addPayload.sessionKey).toBe("agent:ops:main");
-  expect(addPayload).not.toHaveProperty("enabled");
-  expect(addPayload).not.toHaveProperty("deleteAfterRun");
+  expect(addPayload.enabled).toBe(false);
+  expect(addPayload.deleteAfterRun).toBe(false);
 
   const { state, submit } = editJob(sourceJob);
   state.cronForm.deliveryThreadId = "thread-42";

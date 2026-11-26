@@ -4,7 +4,7 @@ import { action, createMemo, createOptimistic, createSignal } from "solid-js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../../src/cron/agent-id.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { CronFormState, CronState } from "../../lib/cron/types.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -26,10 +26,12 @@ type CronPresentationDeps = {
 };
 
 export function resolveCronModelAgentId(
-  form: CronFormState,
+  state: Pick<CronState, "cronForm" | "cronEditingJob" | "cronCloningJob">,
   config: Record<string, unknown> | null,
   roster: AgentsListResult | null | undefined,
 ) {
+  const form = state.cronForm;
+  const sourceJob = state.cronEditingJob ?? state.cronCloningJob;
   const defaults = asNullableRecord(asNullableRecord(config?.agents)?.defaults);
   const configuredOwner = normalizeOptionalString(asNullableRecord(defaults?.systemAgent)?.agentId);
   // The Gateway can expose a UI fallback ID even when cron has no implicit owner.
@@ -40,7 +42,7 @@ export function resolveCronModelAgentId(
       ? roster.defaultId
       : undefined;
   return tryResolveCronJobEffectiveAgentId(
-    { agentId: form.clearAgent ? undefined : form.agentId, sessionKey: form.sessionKey },
+    { agentId: form.clearAgent ? undefined : form.agentId, sessionKey: sourceJob?.sessionKey },
     configuredOwner ?? rosterOwner,
   );
 }

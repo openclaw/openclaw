@@ -298,8 +298,10 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       try {
         response = await client.request<CronAddResult>("cron.add", {
           ...job,
-          // A duplicate keeps its source’s saved routing. The Gateway owns start and cleanup defaults.
+          // Duplicates retain saved settings; only new jobs use Gateway defaults.
           sessionKey: sourceJob?.sessionKey,
+          enabled: sourceJob?.enabled,
+          deleteAfterRun: sourceJob?.deleteAfterRun,
         });
       } catch (error) {
         if (!isCurrent()) {

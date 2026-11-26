@@ -315,7 +315,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
 
   function resolveModelAgentId(state: CronState) {
     return resolveCronModelAgentId(
-      state.cronForm,
+      state,
       currentDisplayConfig(runtimeConfig.read()),
       agents.read().agentsList,
     );
@@ -486,11 +486,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       void deliveryDirectory.load();
     }
     publishCronState();
-    if (
-      current.agentId !== next.agentId ||
-      current.clearAgent !== next.clearAgent ||
-      current.sessionKey !== next.sessionKey
-    ) {
+    if (current.agentId !== next.agentId || current.clearAgent !== next.clearAgent) {
       ensureEditorCatalog();
     }
   }
