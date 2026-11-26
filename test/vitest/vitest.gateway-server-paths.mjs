@@ -632,6 +632,7 @@ export const gatewayClientTestInclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
 ];
 export const gatewayClientTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/**/*server*.test.ts",
   "src/gateway/server-methods/**/*.test.ts",

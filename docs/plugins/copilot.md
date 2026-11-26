@@ -100,6 +100,33 @@ the harness, or on a provider to route every model under that provider.
 account- and organization-policy-dependent; confirm your authenticated
 Copilot CLI actually exposes a model before pinning it.
 
+### Copilot Fusion
+
+Route `github-copilot/fusion` through the Copilot runtime and set its tier in
+the model's `params`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "github-copilot/fusion",
+      models: {
+        "github-copilot/fusion": {
+          agentRuntime: { id: "copilot" },
+          params: { fusionTier: "high" },
+        },
+      },
+    },
+  },
+}
+```
+
+`fusionTier` accepts `"standard"` (the default), `"high"`, or `"max"`.
+It controls Copilot's model routing, separately from `reasoningEffort`.
+Changing the tier starts a fresh SDK session. New, resumed, and isolated
+completion sessions all receive the selected tier. Fusion availability remains
+subject to your Copilot account and organization policies.
+
 ## Supported providers
 
 The harness supports the standard `github-copilot` provider (owned by
@@ -281,16 +308,14 @@ best-effort and logged.
 
 ## Side questions (`/btw`)
 
-`/btw` is **not** native on this harness. `createCopilotAgentHarness()`
-deliberately leaves `harness.runSideQuestion` undefined
-(asserted in `extensions/copilot/harness.test.ts`, `describe("runSideQuestion")`),
-so OpenClaw's `/btw` dispatcher (`src/agents/btw.ts`) falls through to the
-same path it uses for every non-Codex runtime: the configured model provider
-is called directly with a short side-question prompt and streamed back via
-`streamSimple` (no CLI session, no extra pool slot).
+`/btw` uses a fresh Copilot SDK session with the selected model and Fusion tier.
+OpenClaw supplies sanitized conversation context, including earlier images and
+the current question's images. The session has no tools, disables remote export
+before sending the prompt, and closes after the answer. It does not resume or
+append to the main Copilot conversation.
 
-This keeps Copilot CLI sessions reserved for the agent's main turn loop, and
-keeps `/btw` behavior identical to other non-Codex runtimes.
+When OpenClaw supplies a session-fork operation, that existing owner handles the
+fork instead of creating another side-question session.
 
 ## Doctor
 

@@ -18,14 +18,19 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WorktreeRestoreError } from "../../agents/worktrees/errors.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../agents/worktrees/git.js";
-import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
+import {
+  readLiveRegistryWorktreeByPath,
+  readRegistryWorktree,
+} from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { resolveRecordedProjectByRoot } from "../../projects/project-registry.js";
+import { operatorRefusalText } from "../operator-refusal.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
   captureLocalStateMutationGuard,
@@ -280,6 +285,30 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       return;
     }
     const id = normalizeOptionalString(params.id) ?? params.id;
+    if (opts.client?.connect && !opts.client.connect.scopes?.includes(ADMIN_SCOPE)) {
+      // Admission lets operator.sessions.write through; only the owning session's writer restores.
+      const record = await readRegistryWorktree(captureWorktreeRunEndContext(process.env), id);
+      const owner =
+        record?.ownerKind === "session"
+          ? await resolveSessionMutationAuthorizationAsync({
+              client: opts.client,
+              context: opts.context,
+              method: "worktrees.restore",
+              requestParams: { sessionKey: record.ownerId },
+              sessionScope: "operator.sessions.write",
+            })
+          : undefined;
+      owner?.authorization?.release?.();
+      if (!owner || owner.error) {
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          operatorRefusalText("workspace-not-owned", "restore this workspace"),
+          { details: { mutationAccepted: false } },
+        );
+        return;
+      }
+    }
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(new Error("Worktree restore timed out")),

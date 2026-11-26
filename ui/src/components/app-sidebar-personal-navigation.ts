@@ -3,33 +3,50 @@ import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
+import { areUiSessionKeysEquivalent, isPinnableUiSessionRow } from "../lib/sessions/session-key.ts";
 import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
+import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
 import {
   buildReconciledSidebarZone,
   findSidebarSessionRow,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
-import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
+import {
+  applySidebarSessionOwnerFilter,
+  filterPinnedSessionChildrenByOwner,
+} from "./app-sidebar-session-ownership.ts";
+import type { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   sidebarPinnedSessionRows,
   type SidebarRecentSession,
   type SidebarPinZone,
+  type SidebarSavedPinTime,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
-  readonly sessionData: Pick<SessionDataOwner, "sessionResultsByAgent">;
+  readonly sessionData: SessionDataOwner;
   readonly pinnedSessions: ReturnType<typeof createSidebarPinnedSessions>;
   readonly sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+  readonly sessionsShowSystem: boolean;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
+  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sidebarAgentsMode: "chip" | "roster";
   expandedAgentId(): string;
+  selectedAgentMainSessionKey(agentId?: string): string;
+  readonly resolveSessionAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
+    | Pick<
+        ApplicationContext,
+        "agents" | "sessions" | "gateway" | "plugins" | "connectionBootstrap"
+      >
     | undefined;
   sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
   getRouteSessionKey(): string;
@@ -49,7 +66,6 @@ export function createSidebarPinnedSessions(
     | "findSidebarSessionByKey"
     | "sidebarEntries"
     | "sessionNavigationAgentId"
-    | "getSessionNavigationState"
     | "getRouteSessionKey"
   > & {
     readonly isConnected: boolean;
@@ -224,17 +240,16 @@ export function createSidebarPinnedSessions(
     }
     return read;
   }
-  function get(key: string): SidebarRecentSession | undefined {
+  function get(
+    key: string,
+    project: (row: GatewaySessionRow) => SidebarRecentSession,
+  ): SidebarRecentSession | undefined {
     const read = readReference(key);
     if (!read) {
       return undefined;
     }
     const row = read.observation?.row;
-    return row
-      ? host.getSessionNavigationState().toSidebarSession(row)
-      : read.settled
-        ? undefined
-        : seeds.get(key)?.();
+    return row ? project(row) : read.settled ? undefined : seeds.get(key)?.();
   }
   return { synchronize, seed, get, dispose };
 }
@@ -244,12 +259,30 @@ function resolvePinnedSession(
   key: string,
   navigationState: SidebarSessionNavigationState,
 ) {
+  const project = (row: GatewaySessionRow) => {
+    const agentId = host.sessionNavigationAgentId(row);
+    if (
+      !isPinnableUiSessionRow(row) ||
+      areUiSessionKeysEquivalent(key, host.selectedAgentMainSessionKey(agentId))
+    ) {
+      return navigationState.toSidebarSession(row);
+    }
+    const { session } = projectSidebarSessionReference({
+      host,
+      row,
+      agentId,
+      navigationState,
+      resolveAttention: host.resolveSessionAttention,
+      involvingMe: host.sessionInvolvingMeFilterActive,
+    });
+    return filterPinnedSessionChildrenByOwner(session, host.sessionOwnerFilterId);
+  };
   const row = findSidebarSessionRow({
     sessionKey: key,
     navigationState,
     sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
   });
-  return row ? navigationState.toSidebarSession(row) : host.pinnedSessions.get(key);
+  return row ? project(row) : host.pinnedSessions.get(key, project);
 }
 
 function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {

@@ -5640,7 +5640,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$BUNDLED_RECOVERY_RUNTIME" == "true" ]]; then
-            [[ "$NATIVE_RUNTIME_PREPARED" == "success" ]]
+            [[ "$NATIVE_RUNTIME_PREPARED" == "success" ]] || exit 1
             echo "Reusing the exact-source bundled recovery runtime from build-artifacts."
           else
             pnpm build:ci-artifacts

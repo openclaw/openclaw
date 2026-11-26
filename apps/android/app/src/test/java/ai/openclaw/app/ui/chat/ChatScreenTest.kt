@@ -17,6 +17,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 class ChatScreenTest {
   @Test
@@ -99,21 +102,6 @@ class ChatScreenTest {
     assertEquals(
       "Messages: 2",
       branchMetadataText(SessionBranch("leaf", "", 2, updatedAt = null, active = false)),
-    )
-  }
-
-  @Test
-  fun longUserMessagesProduceABoundedPlainTextPreview() {
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(List(12) { "line" }.joinToString("\n")))
-    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(700)))
-    assertEquals(
-      List(12) { "line" }.joinToString("\n") + "…",
-      ChatUserMessageDisclosurePolicy.collapsedPreview(List(13) { "line" }.joinToString("\n")),
-    )
-    assertEquals(
-      "a".repeat(700) + "…",
-      ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(701)),
     )
   }
 
@@ -282,5 +270,38 @@ class ChatScreenTest {
     assertEquals("openclaw", chatHeaderProjectLabel("agent:main:thread-1", listOf(catalog)))
     assertNull(chatHeaderProjectLabel("agent:main:other", listOf(catalog)))
     assertNull(chatHeaderProjectLabel("", listOf(catalog)))
+  }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], manifest = Config.NONE)
+class ChatUserMessageDisclosurePolicyTest {
+  @Test
+  fun longUserMessagesProduceABoundedPlainTextPreview() {
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(List(12) { "line" }.joinToString("\n")))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(700)))
+    assertEquals(
+      List(12) { "line" }.joinToString("\n") + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview(List(13) { "line" }.joinToString("\n")),
+    )
+    assertEquals(
+      "a".repeat(700) + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(701)),
+    )
+  }
+
+  @Test
+  fun characterLimitPreservesWholeGraphemes() {
+    for (cluster in listOf("👍🏽", "🇳🇿", "👩‍👩‍👧‍👦", "e\u0301")) {
+      val exactFit = "a".repeat(700 - cluster.length) + cluster
+      assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(exactFit))
+      assertEquals("$exactFit…", ChatUserMessageDisclosurePolicy.collapsedPreview(exactFit + "x"))
+
+      for (included in 1 until cluster.length) {
+        val prefix = "a".repeat(700 - included)
+        assertEquals("$prefix…", ChatUserMessageDisclosurePolicy.collapsedPreview(prefix + cluster))
+      }
+    }
   }
 }

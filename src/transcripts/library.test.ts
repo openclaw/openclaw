@@ -720,7 +720,10 @@ describe("transcript library SQLite query budgets", () => {
       for (const target of [first, later, collision]) {
         await store.writeSession(target);
       }
-      await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
+      await store.appendUtteranceForSession(later, {
+        text: "Summarize this speech",
+        metadata: { private: "x".repeat(1024 * 1024) },
+      });
       const db = database();
       seedExportBookkeeping(db);
       const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
@@ -752,13 +755,24 @@ describe("transcript library SQLite query budgets", () => {
         expect(await store.readSummarySnapshot(later, 20)).toMatchObject({
           nextSequence: 1,
           summaryRevision: "",
-          utterances: [{ text: "Summarize this speech" }],
+          turns: [{ text: "Summarize this speech" }],
         });
         expect(reads.some((read) => read.rows > 0)).toBe(true);
       }
       expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
     },
   );
+  it("skips covered live summary inputs and reads the next append", async () => {
+    const { store, database, target } = await captured("live-checkpoint", [{ text: "Opening" }]);
+    const reads = observeArchiveReads(store, database());
+
+    expect(await store.readSummarySnapshot(target, 1, 2)).toBeUndefined();
+    expect(reads.filter((read) => read.executions > 0).map((read) => read.rows)).toEqual([0]);
+
+    await store.appendUtteranceForSession(target, { text: "Follow-up" });
+    expect((await store.readSummarySnapshot(target, 1, 2))?.nextSequence).toBe(2);
+  });
+
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {

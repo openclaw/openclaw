@@ -168,6 +168,13 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    summary with the failed step and exact next command; they never fail the core
    update or trigger rollback.
 
+Packaged bundled plugins belong to the selected core release, not a second
+plugin installation. Channel synchronization retires obsolete compiled-bundle
+install records before it plans package updates; switching to a packaged bundle
+does not create another path install record. Plugin configuration, explicit local
+links, and source-checkout selections stay intact. Registered plugin host links
+are reconciled by the existing post-core plugin owner before activation reload.
+
 Once the resident launcher owns an installation, `gateway install` keeps that
 state directory's selected launcher as its service entry, including before the
 first pending trial replaces an unmodified npm fallback. Checked durable CLI
@@ -416,6 +423,17 @@ database objects, catalog snapshots, or queried row values.
 
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
+
+Gateway post-ready maintenance and `openclaw update repair` refresh the known
+legacy Git launcher from development build `d44f263`, which incorrectly counted
+`gateway status` as a start. The candidate must contain this repair. It applies
+only to that launcher's exact bytes in the selected, account-owned installation;
+custom launchers, other installations, read-only mode, and resident launchers
+are left unchanged. The repair preserves the legacy trial and genuine-start
+rollback behavior; it does not settle the trial or rewrite update history. This
+is recovery for an observed development install, not a stable-release migration.
+The normal next release update replaces the legacy launcher with the resident
+launcher.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older

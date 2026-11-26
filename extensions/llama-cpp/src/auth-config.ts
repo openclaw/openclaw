@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { LLAMA_CPP_PROVIDER_ID } from "./defaults.js";
 
-export const LLAMA_CPP_DEFAULT_PROFILE_ID = `${LLAMA_CPP_PROVIDER_ID}:default`;
+const LLAMA_CPP_DEFAULT_PROFILE_ID = `${LLAMA_CPP_PROVIDER_ID}:default`;
 
 export function buildLlamaCppAuthProfileRemovalPatch(
   config: OpenClawConfig,

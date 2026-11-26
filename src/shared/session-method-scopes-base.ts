@@ -92,6 +92,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
+  "worktrees.restore",
 ]);
 
 /** Admission only: reads retain sharing policy; mutation owners must bind the caller's own row. */
