@@ -414,6 +414,17 @@ database objects, catalog snapshots, or queried row values.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+Gateway post-ready maintenance and `openclaw update repair` refresh the known
+legacy Git launcher from development build `d44f263`, which incorrectly counted
+`gateway status` as a start. The candidate must contain this repair. It applies
+only to that launcher's exact bytes in the selected, account-owned installation;
+custom launchers, other installations, read-only mode, and resident launchers
+are left unchanged. The repair preserves the legacy trial and genuine-start
+rollback behavior; it does not settle the trial or rewrite update history. This
+is recovery for an observed development install, not a stable-release migration.
+The normal next release update replaces the legacy launcher with the resident
+launcher.
+
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older
 releases do not have the post-ready job and do not migrate the schema forward.
