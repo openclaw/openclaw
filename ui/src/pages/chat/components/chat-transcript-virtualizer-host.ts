@@ -54,7 +54,7 @@ import {
   type TranscriptCallbacks,
   type TranscriptHeader,
   type TranscriptRenderSnapshot,
-  type TranscriptSearchProjection,
+  type TranscriptProjectionSource,
 } from "./chat-transcript-session.ts";
 import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
@@ -684,12 +684,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
-    search: TranscriptSearchProjection = null,
+    source?: TranscriptProjectionSource,
   ): void {
     // The projection hands off finished indexes and never mutates them afterward.
     this.#candidateMessageRowKeysById = messageRowKeysById;
     this.#candidateMessageRowsByKey = messageRowsByKey;
-    this.prependAnchor.project(messageRowsByKey, search, this.scrollElement, this.canFollowEnd);
+    this.prependAnchor.project(messageRowsByKey, source, this.scrollElement, this.canFollowEnd);
   }
 
   activeMessageId(messageIds: readonly string[]): string | null {
