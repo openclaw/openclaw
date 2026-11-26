@@ -691,7 +691,6 @@ export function projectChatTranscript(
         },
     isEmpty,
     isLoading,
-    hasRows: transcriptRows.length > 0,
     showLoadingSkeleton,
     searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
