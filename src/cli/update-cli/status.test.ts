@@ -614,7 +614,7 @@ it.each([false, true])(
     expect(output.includes("Let the current update or repair finish")).toBe(!finished);
     if (!finished) {
       expect(output).toContain("in progress · validating");
-      expect(output.trim()).toMatch(/Check progress with openclaw update status\.$/);
+      expect(output.trim()).toMatch(/run `openclaw update status` in your terminal\.$/);
     }
     expect(await jsonStatus()).toMatchObject({
       availability: { available: true },

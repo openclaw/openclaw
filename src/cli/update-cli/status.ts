@@ -609,9 +609,7 @@ async function inspectUpdateStatus(
     const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
-      if (advisory.runId !== run?.runId) {
-        defaultRuntime.log(advisory.message);
-      }
+      defaultRuntime.log(advisory.message);
     }
     if (run) {
       if (!activeRun) {

@@ -582,6 +582,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
   }
   const summary = renderUpdateRunSummary(record);
   if (record.status === "failed" || record.status === "rolled-back") {
+    const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
+    if (detail) {
+      defaultRuntime.error(detail);
+    }
     defaultRuntime.error(summary);
   } else {
     defaultRuntime.log(summary);

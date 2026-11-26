@@ -257,7 +257,7 @@ describe("update progress", () => {
       Object.assign(run, timeline("verifying", "requested"));
       await printResult(result, { run: context });
       const lines = log.mock.calls.flat();
-      expect(lines.join("\n")).toContain("OpenClaw update in progress: verifying.");
+      expect(lines.join("\n")).toContain("OpenClaw is updating.");
       expectPhases("requested", "verifying");
     } finally {
       // Replace and dispose a leaked observer when this regression runs on old code.

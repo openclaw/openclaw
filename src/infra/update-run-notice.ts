@@ -66,16 +66,16 @@ export function renderUpdateRunSummary(
       ? `Next: ${run.origin.nextAction}`
       : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
   const failedStep = run.steps?.findLast((step) => step.status === "failed");
-  const serving = run.verification?.runningVersion ?? run.after?.version;
+  const finalVersion = run.verification?.runningVersion ?? run.after?.version;
   if (failedStep && (run.status === "succeeded" || run.status === "skipped")) {
     return [
-      `⚠️ OpenClaw updated${serving ? `; ${serving} is serving` : ""}.`,
+      `⚠️ OpenClaw updated${finalVersion ? `; ${finalVersion} is serving` : ""}.`,
       `Failed step: ${failedStep.step}.`,
       run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
     ].join("\n");
   }
-  if (run.status === "succeeded" && serving) {
-    return `✅ OpenClaw updated to ${serving}.\n${nextStep}`;
+  if (run.status === "succeeded" && finalVersion) {
+    return `✅ OpenClaw updated to ${finalVersion}.\n${nextStep}`;
   }
   if (run.status === "failed" && run.steps) {
     const phase =

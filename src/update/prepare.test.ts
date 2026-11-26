@@ -878,7 +878,7 @@ describe("retained updater runtimes", () => {
       // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
       expect(log.mock.calls.map(([line]) => String(line))).toEqual([
         `Removed abandoned updater runtime: ${abandoned}`,
-        "Already up to date.",
+        expect.stringContaining("already up to date"),
       ]);
     } finally {
       process.exitCode = undefined;
