@@ -9,6 +9,7 @@ struct ChatInputHistory: Equatable, Sendable {
     private(set) var entries: [String] = []
     private(set) var cursor: Int?
     private(set) var stashedDraft: String?
+    private var stashedDraftRevision: UInt64?
     private var hasSeededTranscript = false
     private var transcriptSnapshot: [String] = []
     private var pendingTranscriptEchoes: [String] = []
@@ -17,7 +18,7 @@ struct ChatInputHistory: Equatable, Sendable {
         self.cursor != nil
     }
 
-    mutating func record(_ input: String, transcriptEcho: String? = nil) {
+    mutating func record(_ input: String, transcriptEcho: String? = nil, submittedRevision: UInt64? = nil) {
         let text = Self.normalized(input)
         if !text.isEmpty, self.entries.first != text {
             self.prepend(text)
@@ -44,8 +45,11 @@ struct ChatInputHistory: Equatable, Sendable {
                 }
             }
         }
-        // A late acceptance retires the stashed draft if it has just been sent.
-        if let stash = self.stashedDraft, Self.normalized(stash) == text {
+        // An edit can bring the draft back to the submitted text before recall starts.
+        if let stash = self.stashedDraft,
+           self.stashedDraftRevision == submittedRevision,
+           Self.normalized(stash) == text
+        {
             self.stashedDraft = ""
         }
     }
@@ -81,10 +85,11 @@ struct ChatInputHistory: Equatable, Sendable {
         self.hasSeededTranscript = true
     }
 
-    mutating func previous(draft: String) -> String? {
+    mutating func previous(draft: String, revision: UInt64? = nil) -> String? {
         guard !self.entries.isEmpty else { return nil }
         if self.cursor == nil {
             self.stashedDraft = draft
+            self.stashedDraftRevision = revision
             self.cursor = 0
             return self.entries[0]
         }
@@ -121,6 +126,7 @@ struct ChatInputHistory: Equatable, Sendable {
     mutating func resetNavigation() {
         self.cursor = nil
         self.stashedDraft = nil
+        self.stashedDraftRevision = nil
     }
 
     private mutating func prepend(_ entry: String, movingFrom index: Int? = nil) {
@@ -245,7 +251,7 @@ extension OpenClawChatViewModel {
     func recallPreviousInput(caretOnFirstLine: Bool) -> Bool {
         self.recallInput { history in
             guard history.isRecalling || caretOnFirstLine || self.input.isEmpty else { return nil }
-            return history.previous(draft: self.input)
+            return history.previous(draft: self.input, revision: self.composerRevision(for: self.sessionKey))
         }
     }
 
@@ -274,7 +280,8 @@ extension OpenClawChatViewModel {
     {
         self.inputHistoriesBySession[sessionKey, default: ChatInputHistory()].record(
             input,
-            transcriptEcho: transcriptEcho)
+            transcriptEcho: transcriptEcho,
+            submittedRevision: submittedRevision)
         if let submittedRevision, self.savedDraftRevisionsBySession[sessionKey] == submittedRevision {
             self.draftsBySession.removeValue(forKey: sessionKey)
             self.savedDraftRevisionsBySession.removeValue(forKey: sessionKey)
