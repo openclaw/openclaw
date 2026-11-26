@@ -74,8 +74,10 @@ pairing approvals only grant DM access; they do not add more owners.
 Once `commands.ownerAllowFrom` is set, other paired senders can chat and use
 `/new` and `/reset`, but not other slash commands. In a private chat, built-in
 commands such as `/help`, `/commands`, `/status` and `/tools` reply that the
-command is limited to the bot's owners; in groups the command is ignored
-silently. Plugin commands follow their plugin's own handling. `commands.allowFrom` grants ordinary commands, but
+command is limited to the bot's owners. In groups, typed commands are ignored
+silently, and native commands (a channel's command menu) get the standard
+"You are not authorized to use this command." reply. Plugin commands follow
+their plugin's own handling. `commands.allowFrom` grants ordinary commands, but
 it is keyed per channel, not per account.
 
 Manually allowlisted senders are not automatically command owners. If an
