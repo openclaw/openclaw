@@ -58,6 +58,10 @@ const refusalCauses = {
     nextStep:
       "Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
   },
+  "workspace-not-owned": {
+    why: "Only the person who started this conversation or an administrator can restore its workspace.",
+    nextStep: "Ask an administrator to restore this workspace, or start a new conversation.",
+  },
 } as const satisfies Record<string, { why: string; nextStep: string }>;
 
 export type OperatorRefusalCause = keyof typeof refusalCauses;
