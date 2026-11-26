@@ -527,6 +527,22 @@ nothing and names the field: **Reload** takes the newer value, **Overwrite**
 keeps yours. If the connection drops during Save, the dialog checks the saved
 configuration once reconnected and shows whether the change was saved.
 
+**Settings → Team → Roles** manages [named operator roles](/gateway/operator-scopes#named-operator-roles)
+for administrators (`operator.admin`). The list shows the role for people without
+one, how many GitHub logins are mapped, and each role with the people who
+currently resolve to it. Opening a role shows what it allows in the person's own
+sessions and in sessions they're invited to, then its settings: other people's
+sessions, sandboxing, agents, invited access, the agent's permission and tools
+on invited turns, and Gateway permissions. Role edits save only when you select
+**Save**; if someone else changed the role after you started editing, Save
+writes nothing and **Reload** shows their version. **New role** starts from a
+preset, **Duplicate** copies a role (optionally moving some of its people to the
+copy), **Assign people** changes each chosen person's role, and **Delete** first
+moves the role's people and GitHub mappings to another role. The default role
+can't be deleted. People whose role changes reconnect. This is the only place
+in the Control UI to change an existing person's role; Remote access shows each
+member's role and picks one only when inviting.
+
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 
