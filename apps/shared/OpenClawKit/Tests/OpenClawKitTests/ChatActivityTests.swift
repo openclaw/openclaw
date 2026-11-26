@@ -26,7 +26,10 @@ struct ChatActivityTests {
         status: String = "ready") throws -> OpenClawSessionPullRequestSnapshot
     {
         let rows = states.enumerated().map { index, state in
-            #"{"number":\#(100 + index),"owner":"o","repo":"r","branch":"b\#(index)","title":"T\#(index)","url":"https://github.com/o/r/pull/\#(100 + index)","state":"\#(state)","checks":{"state":"failing","passed":1,"failed":1,"skipped":0,"running":0}}"#
+            let number = 100 + index
+            let checks = #""checks":{"state":"failing","passed":1,"failed":1,"skipped":0,"running":0}"#
+            return #"{"number":\#(number),"owner":"o","repo":"r","branch":"b\#(index)","title":"T\#(index)","#
+                + #""url":"https://github.com/o/r/pull/\#(number)","state":"\#(state)",\#(checks)}"#
         }
         let json = #"{"pullRequests":[\#(rows.joined(separator: ","))],"rateLimited":false,"status":"\#(status)"}"#
         return try JSONDecoder().decode(OpenClawSessionPullRequestSnapshot.self, from: Data(json.utf8))
