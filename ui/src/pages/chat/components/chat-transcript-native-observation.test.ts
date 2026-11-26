@@ -101,8 +101,8 @@ it.each(
     }
     const { pane } = createNativeShowEarlierPane(vi.fn());
     pane.visuallyPresented = true;
-    pane.historyObserverArmed = false;
-    const armOlder = vi.spyOn(pane, "syncHistoryObserver").mockImplementation(() => {});
+    pane.historyReaderIntent = false;
+    const loadOlder = vi.spyOn(pane, "loadOlderMessages").mockResolvedValue(true);
     observed.owner.onNativeScroll.mockImplementation((scroll) =>
       pane.handleTranscriptScroll(scroll),
     );
@@ -118,8 +118,8 @@ it.each(
       programmatic: !readerInput,
       maintenance: !readerInput,
     });
-    expect(armOlder).toHaveBeenCalledTimes(Number(readerInput));
-    expect(pane.historyObserverArmed).toBe(readerInput);
+    expect(loadOlder).toHaveBeenCalledTimes(Number(readerInput));
+    expect(pane.historyReaderIntent).toBe(false);
   },
 );
 
@@ -511,9 +511,9 @@ it.each(
     pane.visuallyPresented = true;
     state.chatHistoryPagination.hasNewer = true;
     pane.historyAutoLoadBlocked = true;
-    const armOlder = vi.spyOn(pane, "syncHistoryObserver").mockImplementation(() => {});
+    const loadOlder = vi.spyOn(pane, "loadOlderMessages").mockResolvedValue(true);
     const loadNewer = vi.spyOn(pane, "loadNewerMessages").mockResolvedValue(true);
-    pane.historyObserverArmed = false;
+    pane.historyReaderIntent = false;
     observed.owner.onNativeScroll.mockImplementation((scroll) =>
       pane.handleTranscriptScroll(scroll),
     );
@@ -538,7 +538,7 @@ it.each(
     expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith(
       readerScroll(direction < 0 ? 100 : 700, direction * 300),
     );
-    expect(armOlder).toHaveBeenCalledTimes(direction < 0 ? 1 : 0);
+    expect(loadOlder).toHaveBeenCalledTimes(direction < 0 ? 1 : 0);
     expect(loadNewer).toHaveBeenCalledTimes(direction > 0 ? 1 : 0);
   },
 );

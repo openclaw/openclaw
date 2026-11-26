@@ -209,7 +209,7 @@ suite.define(() => {
             (element as HTMLElement & { state: ChatPageHost }).state.chatHistoryPagination.hasMore,
         ),
       ).toBe(true);
-      await pane.locator(".chat-history-sentinel").waitFor({ state: "attached" });
+      await pane.locator(".chat-history-boundary").waitFor({ state: "attached" });
       await twoFrames(page);
       const tops = await probe.evaluate((stop) => stop());
       await probe.dispose();
@@ -384,7 +384,7 @@ suite.define(() => {
                   .hasMore,
             ),
           ).toBe(true);
-          await pane.locator(".chat-history-sentinel").waitFor({ state: "attached" });
+          await pane.locator(".chat-history-boundary").waitFor({ state: "attached" });
         }
         // Require the fetched page to reach the viewport, not just pane state.
         await expect.poll(scrollTop).toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);

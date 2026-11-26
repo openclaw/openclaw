@@ -1,0 +1,6 @@
+# Joined physical-order history traversal and source-lifetime regression coverage.
+# Covers bounded physical suffixes and opaque-edge round trips; body/media release
+# with live survivors; cancellation and collection before a cold progress import
+# settles; and release of a pending reader-settlement frame when its owner resets.
+# After 45 LF of fixture reuse: 112 joined + 136 postjoin = 248 additional test LF.
+248

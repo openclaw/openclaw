@@ -93,7 +93,7 @@ it("uses native reader direction after a newer window remaps the physical offset
     await nativeHistoryPane();
   native(60_879);
   expect(newer).toHaveBeenCalledOnce();
-  expect(pane.historyObserverArmed).toBe(false);
+  expect(pane.historyReaderIntent).toBe(false);
   correctRange(60_879, 51, 55_755);
   expect(thread.scrollTop).toBe(51);
   expect(pane.transcript.isProgrammaticScroll).toBe(true);
@@ -104,7 +104,7 @@ it("uses native reader direction after a newer window remaps the physical offset
   expect(pane.transcript.isMaintenanceScroll).toBe(false);
   expect(newer).toHaveBeenCalledOnce();
   expect(older).not.toHaveBeenCalled();
-  expect(pane.historyObserverArmed).toBe(false);
+  expect(pane.historyReaderIntent).toBe(false);
   expect(state.chatLastScrollTop).toBe(551);
 });
 
@@ -138,22 +138,23 @@ it("keeps one native snapshot when a generic subscriber remaps geometry", async 
   expect(state.chatLastScrollTop).toBe(551);
   expect(state.chatLastScrollHeight).toBe(55_755);
   expect(getChatSessionScrollPosition(pane.paneId, state.sessionKey)?.scrollTop).toBe(551);
-  expect(pane.historyObserverArmed).toBe(false);
+  expect(pane.historyReaderIntent).toBe(false);
   expect(newer).toHaveBeenCalledOnce();
 });
 
 it("distinguishes an owned echo from genuine upward native movement", async () => {
-  const { pane, state, newer, native, correctRange } = await nativeHistoryPane();
+  const { pane, state, newer, older, native, correctRange } = await nativeHistoryPane();
   state.chatFollowLocked = false;
   state.chatReadingHistory = false;
   correctRange(0, 551, 55_755);
   native(551);
   expect(pane.transcript.isMaintenanceScroll).toBe(true);
-  expect(pane.historyObserverArmed).toBe(false);
+  expect(pane.historyReaderIntent).toBe(false);
   expect(state.chatFollowLocked).toBe(false);
   native(511);
   expect(pane.transcript.isMaintenanceScroll).toBe(false);
-  expect(pane.historyObserverArmed).toBe(true);
+  expect(older).toHaveBeenCalledOnce();
+  expect(pane.historyReaderIntent).toBe(false);
   expect(state.chatFollowLocked).toBe(true);
   expect(state.chatReadingHistory).toBe(true);
   expect(newer).not.toHaveBeenCalled();

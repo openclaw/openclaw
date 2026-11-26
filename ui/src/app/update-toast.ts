@@ -1,5 +1,4 @@
 import { i18n, t } from "../i18n/index.ts";
-import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { showToast, type ToastSeverity } from "../lib/toast.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { isNativeMobileHost } from "./native-web-chrome.ts";
@@ -22,7 +21,6 @@ export function bindUpdateToast(
       current = undefined;
       return;
     }
-    registerUpdateActionsEnglish();
     const running = run.status === "running";
     const waiting = running && run.phase === "requested";
     const reconnecting = running && gateway.snapshot.phase !== "connected";

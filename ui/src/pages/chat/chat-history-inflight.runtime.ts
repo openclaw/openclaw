@@ -6,14 +6,10 @@ import {
   runProjectionsUnchanged,
   type ChatHistoryRunApplication,
 } from "./chat-history-stream.ts";
-import {
-  isChatRunStartupPhase,
-  isChatRunRecoveryStatus,
-  reconcileChatRunStartup,
-} from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
-import { replaceChatStream } from "./stream-causal-boundary.ts";
+import { replaceChatStream, retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 
 // History recovery shares the cold tool reducer; the live dispatcher keeps its own pane boundary.
 export { handleAgentEvent } from "./tool-stream.ts";
@@ -30,6 +26,8 @@ export function applyHistoryInFlightRun(params: ChatHistoryRunApplication): void
   const {
     state,
     run,
+    messages,
+    replayProgress,
     sessionInfo,
     historyRun,
     previousRunProjections,
@@ -85,49 +83,40 @@ export function applyHistoryInFlightRun(params: ChatHistoryRunApplication): void
   const advancedDuringRead =
     previousRunProjections[inFlightRunId]?.messageRevision !==
     runProjectionsBeforeApply[inFlightRunId]?.messageRevision;
-  // Ordered live frames already establish their baseline, including shrinking
-  // replacements. A pending history snapshot cannot extend that baseline by text.
-  if (advancedDuringRead && !replacesOwnedRun) {
+  const source = run.textFromMessage;
+  const persisted = Array.isArray(source)
+    ? source.map((index) => extractText(messages?.[index])).join("\n\n")
+    : source != null && extractText(messages?.[source]);
+  const bufferedText = (persisted || "") + (run.text ?? "");
+  const usesSnapshotText = replacesOwnedRun || !advancedDuringRead;
+  // Prefix receipts index the admitted wire page; a later live revision still wins.
+  if (usesSnapshotText) {
+    replaceChatStream(state, resolveInFlightAssistantText(bufferedText));
+    if (persisted) {
+      retainPersistedStreamPrefix(state, persisted);
+    }
+  } else {
     state.chatStream = resolveInFlightAssistantText(
       extractText(getChatSessionProjection(state).runs[inFlightRunId]?.message),
     );
-  } else {
-    replaceChatStream(state, resolveInFlightAssistantText(run.text));
   }
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-  const startup = run.events?.findLast(
-    (event) => event.runId === inFlightRunId && event.stream === "run_status",
-  );
-  const startupPhase = startup?.data.phase;
-  if (
-    (run.text ||
-      (!startup &&
-        state.chatRunStartup?.runId !== inFlightRunId &&
-        (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
-    startupPhase !== "waiting_for_model" &&
-    !isChatRunRecoveryStatus(state.chatRunStartup)
-  ) {
-    reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
-  } else if (startup && isChatRunStartupPhase(startupPhase)) {
-    reconcileChatRunStartup(state, {
-      state: "status",
-      runId: inFlightRunId,
-      phase: startupPhase,
-      ...(startupPhase === "waiting_for_model"
-        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
-        : {}),
-      seq: startup.seq,
-    });
-  }
-  // Disconnect cleanup intentionally removes transient activity rows while
-  // retaining the owned run. Replay fills that gap; per-identity sequence
-  // fences keep a delayed snapshot from replacing newer live progress.
-  if (state.chatRunId === run.runId && Array.isArray(run.events)) {
-    for (const event of run.events) {
-      if (event?.runId === run.runId) {
-        // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        params.replayAgentEvent?.(state as never, event as never, "history");
-      }
+  const markObservedActivity = (hasStartup: boolean) => {
+    if (
+      (bufferedText ||
+        (!hasStartup &&
+          state.chatRunStartup?.runId !== inFlightRunId &&
+          (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
+      !isChatRunRecoveryStatus(state.chatRunStartup)
+    ) {
+      reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
+      return true;
     }
+    return false;
+  };
+  if (replayProgress) {
+    replayProgress(state, inFlightRunId, bufferedText, markObservedActivity, usesSnapshotText);
+  } else {
+    markObservedActivity(false);
   }
 }

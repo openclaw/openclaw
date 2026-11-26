@@ -1,4 +1,4 @@
-import { expect, onTestFinished, vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewayHarness,
@@ -173,51 +173,26 @@ export function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryP
     : { hasMore: true, nextOffset, olderCursor: `older-${nextOffset}`, totalMessages };
 }
 
-export function installHistoryObserver(intersect = true) {
-  const observe = vi.fn();
-  const disconnect = vi.fn();
-  const construct =
-    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
-  let rootMargin: string | undefined;
-  class FakeIntersectionObserver {
-    readonly root: IntersectionObserver["root"] | undefined;
-    constructor(
-      private readonly callback: IntersectionObserverCallback,
-      options?: IntersectionObserverInit,
-    ) {
-      rootMargin = options?.rootMargin;
-      this.root = intersect ? undefined : (options?.root ?? null);
-      construct(callback, this as unknown as IntersectionObserver);
-    }
-    disconnect() {
-      disconnect();
-    }
-    observe(target: Element) {
-      observe(target);
-      if (intersect) {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-    }
-  }
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-  return { observe, disconnect, construct, rootMargin: () => rootMargin };
-}
-
-export function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
-  const sentinel = document.createElement("div");
-  sentinel.className = "chat-history-sentinel";
-  thread.append(sentinel);
-  pane.historySentinel = sentinel;
-  return sentinel;
-}
-
 export type CapacityHistoryRequest = { cursor: string; limit: number; maxBytes: number };
+
+export function createRelocatedHistorySource(tier: "disk" | "memory") {
+  const text = tier === "memory" ? "x".repeat(160 * 1024) : "message";
+  return Array.from({ length: 82 }, (_, index) => {
+    const seq = index + 1;
+    return {
+      ...nativeHistoryMessage(seq, text),
+      __openclaw: {
+        id: `source-${seq}`,
+        seq,
+        transcriptPosition: {
+          source: "history",
+          rawSeq: seq,
+          ...(seq === 8 ? { activity: { afterRawSeq: 1, scopeId: "tool", startOrder: 0 } } : {}),
+        },
+      },
+    };
+  });
+}
 
 export function createCapacityHistoryPages(lastSource: number) {
   const source = (seq: number, keyed = true) =>

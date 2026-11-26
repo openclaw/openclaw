@@ -1,8 +1,8 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// These actions are lazy; terminal guidance stays in en.ts so a retired chunk
-// cannot leave an update failure without its host-side recovery command.
+// Update controls are lazy; toast and terminal guidance stay in en.ts so a retired
+// action chunk cannot hide update progress or its host-side recovery command.
 const enUpdateActions = {
   updates: {
     adminRequired: "You need admin access to change update settings or start an update.",
@@ -22,15 +22,7 @@ const enUpdateActions = {
     reviewUpdate: "Review update",
     run: {
       title: "Update progress",
-      toast: {
-        preparing: "Preparing OpenClaw update…",
-        processing: "Updating OpenClaw…",
-        succeeded: "OpenClaw updated",
-        failed: "OpenClaw update failed",
-        skipped: "OpenClaw update skipped",
-        "rolled-back": "OpenClaw update rolled back",
-        details: "View update details",
-      },
+      toast: en.updates.run.toast,
       phases: "Update phases",
       steps: "Installation steps",
       details: "Step details",
@@ -40,18 +32,9 @@ const enUpdateActions = {
       servingTarget: "The Gateway is now serving the update target.",
       report: "Update report",
       restarting: "Gateway restarting…",
-      reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
+      reconnecting: en.updates.run.reconnecting,
       progress: "{completed} of {total} phases complete",
-      phase: {
-        requested: "Requested",
-        staging: "Staging",
-        validating: "Validating",
-        repairing: "Repairing",
-        activating: "Activating",
-        restarting: "Restarting",
-        verifying: "Verifying",
-        finished: "Finished",
-      },
+      phase: en.updates.run.phase,
       step: {
         completed: "Complete",
         in_progress: "In progress",
@@ -123,7 +106,7 @@ const enUpdateActions = {
       blockedWaiting: "Blocked · waiting for active work · {target}",
     },
     dialog: {
-      reconnecting: "Reconnecting…",
+      reconnecting: en.updates.dialog.reconnecting,
       restarting:
         "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",

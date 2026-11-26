@@ -95,9 +95,9 @@ describe("chat history pagination", () => {
     };
     const container = renderChatView(props);
     const thread = requireElement(container, ".chat-thread", "chat thread");
-    const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
+    const boundary = requireElement(container, ".chat-history-boundary", "history boundary");
 
-    expect(sentinel.querySelector("button")).toBeNull();
+    expect(boundary.querySelector("button")).toBeNull();
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
@@ -106,13 +106,13 @@ describe("chat history pagination", () => {
       ...props,
       messages: [...props.messages, { role: "assistant", content: "Updated history" }],
     });
-    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
-    expect(thread.contains(sentinel)).toBe(true);
+    expect(container.querySelector(".chat-history-boundary")).toBe(boundary);
+    expect(thread.contains(boundary)).toBe(true);
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(3);
 
     renderChatInto(container, { messages: props.messages, onHistoryIntent });
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
-    expect(thread.contains(sentinel)).toBe(false);
+    expect(container.querySelector(".chat-history-boundary")).toBeNull();
+    expect(thread.contains(boundary)).toBe(false);
   });
 });

@@ -647,3 +647,69 @@ it("loads deletion copy with the action without replacing translated session lab
   expect(manager.getLocale()).toBe("de");
   expect(en.sessionsView).toBe(sessions);
 });
+
+it("keeps update receipts readable before the optional action catalog and preserves its namespaces", async () => {
+  const coldCatalog = vi.fn(() => {
+    throw new Error("optional update actions are not available");
+  });
+  vi.doMock("./locales/en-update-actions.ts", coldCatalog);
+  try {
+    const { en, manager } = await loadI18n({
+      updates: { run: { toast: { processing: "Wird aktualisiert" } } },
+    });
+    await manager.setLocale("en");
+    const copy = [
+      ["updates.run.toast.preparing", "Preparing OpenClaw update…"],
+      ["updates.run.toast.processing", "Updating OpenClaw…"],
+      ["updates.run.toast.succeeded", "OpenClaw updated"],
+      ["updates.run.toast.failed", "OpenClaw update failed"],
+      ["updates.run.toast.skipped", "OpenClaw update skipped"],
+      ["updates.run.toast.rolled-back", "OpenClaw update rolled back"],
+      ["updates.run.toast.details", "View update details"],
+      ["updates.run.phase.requested", "Requested"],
+      ["updates.run.phase.staging", "Staging"],
+      ["updates.run.phase.validating", "Validating"],
+      ["updates.run.phase.repairing", "Repairing"],
+      ["updates.run.phase.activating", "Activating"],
+      ["updates.run.phase.restarting", "Restarting"],
+      ["updates.run.phase.verifying", "Verifying"],
+      ["updates.run.phase.finished", "Finished"],
+      [
+        "updates.run.reconnecting",
+        "Reconnecting automatically. Update progress is saved on the gateway.",
+      ],
+      ["updates.dialog.reconnecting", "Reconnecting…"],
+    ] as const;
+    await import("../app/update-toast.ts");
+    expect(coldCatalog).not.toHaveBeenCalled();
+    for (const [key, value] of copy) {
+      expect(manager.t(key)).toBe(value);
+    }
+    expect(manager.t("updates.run.title")).toBe("updates.run.title");
+    const run = en.updates.run;
+    const toast = run.toast;
+    const phase = run.phase;
+    const dialog = en.updates.dialog;
+    await manager.setLocale("de");
+    expect(manager.t("updates.run.toast.processing")).toBe("Wird aktualisiert");
+
+    vi.doUnmock("./locales/en-update-actions.ts");
+    const { registerUpdateActionsEnglish } = await import("./locales/en-update-actions.ts");
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    registerEnglishCatalog(registerUpdateActionsEnglish);
+    expect(en.updates).toMatchObject(registerUpdateActionsEnglish.catalog.updates);
+    expect(en.updates.run).toBe(run);
+    expect(en.updates.run.toast).toBe(toast);
+    expect(en.updates.run.phase).toBe(phase);
+    expect(en.updates.dialog).toBe(dialog);
+    expect(manager.t("updates.run.title")).toBe("Update progress");
+    for (const [key, value] of copy) {
+      expect(manager.t(key)).toBe(
+        key === "updates.run.toast.processing" ? "Wird aktualisiert" : value,
+      );
+    }
+    expect(manager.getLocale()).toBe("de");
+  } finally {
+    vi.doUnmock("./locales/en-update-actions.ts");
+  }
+});

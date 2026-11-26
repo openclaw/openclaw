@@ -6,6 +6,7 @@ import {
   projectChatRowDisplay,
 } from "../../lib/chat/row-display-facts.ts";
 import {
+  chatHistoryTrimOrder,
   trimmedChatHistoryPagination,
   type ChatHistoryPagination,
 } from "./chat-history-pagination.ts";
@@ -21,9 +22,10 @@ export type CachedChatSessionSnapshot = {
 };
 
 export function boundChatSessionSnapshot(
-  snapshot: ChatSessionSnapshot,
+  incoming: ChatSessionSnapshot,
 ): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
+  let snapshot = incoming;
+  let messageWeights: number[] = [];
   for (const message of snapshot.messages) {
     const weight = serializedArrayItemWeight(message);
     if (weight === null) {
@@ -35,13 +37,7 @@ export function boundChatSessionSnapshot(
   let start = 0;
   // Before the display window, only loss of the intrinsic source changes the
   // trimmed envelope. Prepare both canonical variants instead of rescanning each cut.
-  const lastIntrinsicIndex = snapshot.pagination.intrinsicSource
-    ? snapshot.messages.findLastIndex(
-        (message) =>
-          nativeHistoryMessageSourceIdentity(message) === snapshot.pagination.intrinsicSource,
-      )
-    : -1;
-  const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination, snapshot.messages, 1);
+  let trim = prepareChatSnapshotTrim(snapshot);
   const trimmedWithoutIntrinsic = trimmedChatHistoryPagination(
     snapshot.pagination,
     snapshot.messages,
@@ -61,8 +57,8 @@ export function boundChatSessionSnapshot(
     const pagination =
       start === 0
         ? snapshot.pagination
-        : start <= lastIntrinsicIndex
-          ? trimmedPagination
+        : start <= trim.lastIntrinsicIndex
+          ? trim.pagination
           : trimmedWithoutIntrinsic;
     const shared = start > 0 && start <= lastSharedTrim;
     const envelope =
@@ -94,6 +90,17 @@ export function boundChatSessionSnapshot(
     if (start >= snapshot.messages.length) {
       return null;
     }
+    if (start === 0) {
+      const order = chatHistoryTrimOrder(snapshot.messages);
+      if (order) {
+        snapshot = {
+          ...incoming,
+          messages: Array.from(order, (index) => incoming.messages[index]),
+        };
+        messageWeights = Array.from(order, (index) => messageWeights[index]!);
+        trim = prepareChatSnapshotTrim(snapshot);
+      }
+    }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
@@ -106,6 +113,19 @@ export function boundChatSessionSnapshot(
       readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
     );
   }
+}
+
+function prepareChatSnapshotTrim(snapshot: ChatSessionSnapshot) {
+  const lastIntrinsicIndex = snapshot.pagination.intrinsicSource
+    ? snapshot.messages.findLastIndex(
+        (message) =>
+          nativeHistoryMessageSourceIdentity(message) === snapshot.pagination.intrinsicSource,
+      )
+    : -1;
+  return {
+    lastIntrinsicIndex,
+    pagination: trimmedChatHistoryPagination(snapshot.pagination, snapshot.messages, 1),
+  };
 }
 
 function measureChatSnapshotEnvelope(

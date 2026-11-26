@@ -1,0 +1,5 @@
+# Keep Update receipts and MCP runtime errors readable before optional views load.
+# Covers immediate labels, cold catalog boundaries and registration order,
+# stable namespaces, early page warm-up, and active-locale/fallback parity.
+# 66 + 24 regression LF, minus 9 typed-fixture LF, plus 5 file-cap fixture LF.
+86

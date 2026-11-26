@@ -44,6 +44,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-composer-context-retention.test.tsx",
   // A failed optional icon import must not poison the shared module registry.
   "ui/src/pages/chat/chat-provider-icon-lazy.test.tsx",
+  // Retired wire bodies must collect while the cold progress import is still held.
+  "ui/src/pages/chat/chat-history-progress-loading.test.ts",
   // Holds the live dispatcher import before another chat suite can preload it.
   "ui/src/pages/chat/chat-live-events.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery-owner.test.ts",

@@ -434,22 +434,7 @@ it("keeps a scroll key's native input until its own scroll goes idle", () => {
   const state = new TranscriptOffsetState();
   onTestFinished(
     observeTranscriptOffset(
-      {
-        state,
-        getScrollElement: () => element,
-        endAnchor: new TranscriptEndAnchor(() => {}),
-        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-        canFollowEnd: () => false,
-        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-        cancelScroll: vi.fn(),
-        onLayoutCorrection: vi.fn(),
-        invalidate: vi.fn(),
-        onOffset: vi.fn(),
-        onReaderScroll: vi.fn(),
-        onRequestEnd: vi.fn(),
-        onComposerLayout: vi.fn(),
-        onNativeScroll: vi.fn(),
-      },
+      offsetOwner(state, element, { onRequestEnd: vi.fn(), onNativeScroll: vi.fn() }),
       virtualizer,
       vi.fn(),
     ),

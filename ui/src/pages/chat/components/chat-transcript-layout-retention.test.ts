@@ -20,7 +20,9 @@ import {
   phases,
   scheduledCallbacks,
 } from "./chat-transcript-layout.test-support.ts";
-import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
+import { chainFor, indexFor } from "./chat-transcript-message-index.test-support.ts";
+import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import { CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES } from "./chat-transcript-session.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
@@ -63,6 +65,49 @@ describe("transcript layout lifetime", () => {
     expect(layout.rowMinimum(0)).toBe(300);
   });
 
+  it("releases the idle-gap reader settlement frame when its owner resets", async () => {
+    const scheduled = scheduledCallbacks(true);
+    const retire = () => {
+      const { layout } = footprintLayout();
+      const mounted = mountedVirtualizer(layout);
+      const virtualizer = mounted.instance;
+      const viewport = virtualizer.scrollElement!;
+      viewport.scrollTop = 500;
+      virtualizer.scrollOffset = 500;
+      const offsetState = new TranscriptOffsetState();
+      offsetState.nativeInputActive = true;
+      offsetState.inputAwaitingScroll = false;
+      const host = {
+        virtualizer,
+        layout,
+        offsetState,
+        renderer: { columnElement: document.createElement("div"), queueAfterCommit: () => false },
+        initialRange: { pending: false },
+        prependAnchor: { messageKey: null, retainReader: () => false },
+        headerHeight: 0,
+        scrollElement: viewport,
+        contentElement: null,
+      };
+      const anchor = new TranscriptReaderAnchor(host, () => {});
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = anchor.landSize;
+      virtualizer.setOptions({ ...virtualizer.options, onChange: () => anchor.flush() });
+      expect(scheduled.frames.size).toBe(0);
+      virtualizer.resizeItem(0, 120);
+      expect(scheduled.frames.size).toBe(1);
+      anchor.reset();
+      expect(scheduled.frames.size).toBe(0);
+      layout.disconnect();
+      mounted.dispose();
+      return [anchor, host, virtualizer].map((owner) => new WeakRef(owner));
+    };
+    const obsolete = retire();
+    const control = new WeakRef({ unowned: true });
+    await collectGarbageForTest();
+    expect(hasLiveTarget(control)).toBe(false);
+    expect(obsolete.map(hasLiveTarget)).toEqual([false, false, false]);
+    expect(scheduled.frames.size + scheduled.idleCallbacks.size).toBe(0);
+  });
+
   it("retains only geometry identities when a rendered host disconnects", async () => {
     scheduledCallbacks(true);
     const host = new ChatSessionVirtualizerHost(() => {});
@@ -77,24 +122,37 @@ describe("transcript layout lifetime", () => {
         timestamp: 10,
         __openclaw: { id: "retired-row", seq: 1 },
       };
-      const props = threadProps("layout-retirement", undefined, [message]);
+      const neighbor = {
+        role: "user",
+        content: [{ type: "text", text: "obsolete neighboring body" }],
+        __openclaw: { id: "retired-neighbor", seq: 2 },
+      };
+      const messages = [message, neighbor];
+      const props = threadProps("layout-retirement", undefined, messages);
       const items = buildChatItems(props);
-      const chain = projectTranscriptChain(items, {
-        sessionKey: props.sessionKey,
-        runWorking: false,
-        searchActive: false,
-      });
-      const index = projectTranscriptIndex(chain, new Map(), props);
+      const index = indexFor(chainFor(items, { sessionKey: props.sessionKey }), new Map(), props);
       const rows = index.rows.filter((row) => row.kind === "item");
-      expect(index.rows).toHaveLength(1);
-      expect(rows).toHaveLength(1);
+      expect(index.rows).toHaveLength(2);
+      expect(rows).toHaveLength(2);
       expect(rows[0]!.revision).toEqual(expect.any(String));
       const content = document.createElement("div");
       content.textContent = "obsolete content row";
+      host.syncMessageRows(index.messageRowKeysById, index.transcriptMessageKeys, {
+        messages,
+        search: null,
+      });
       host.render([...rows, { kind: "content", key: "content", content }], () => null, null, false);
       host.disconnect();
       return {
-        obsolete: [new WeakRef(message), new WeakRef(items[0]!), new WeakRef(content)],
+        obsolete: [
+          messages,
+          message,
+          neighbor,
+          message.content,
+          neighbor.content,
+          ...items,
+          content,
+        ].map((source) => new WeakRef(source)),
         geometry: [
           ...rows.map(({ key, revision }) => ({ key, revision })),
           { key: "content", revision: undefined },
@@ -106,7 +164,7 @@ describe("transcript layout lifetime", () => {
     try {
       await collectGarbageForTest();
       expect(hasLiveTarget(control)).toBe(false);
-      expect(obsolete.map(hasLiveTarget)).toEqual([false, false, false]);
+      expect(obsolete.map(hasLiveTarget)).toEqual(obsolete.map(() => false));
       expect(host.layout.rows).toEqual(geometry);
       expect(host.layout.rowMinimum(0)).toBe(300);
     } finally {
@@ -154,7 +212,7 @@ describe("transcript layout lifetime", () => {
           );
         }
       };
-      let current: ReturnType<typeof projectTranscriptIndex> | undefined;
+      let current: ReturnType<typeof indexFor> | undefined;
       let sources: ReturnType<typeof makeMessage>[] = [];
       let queued = false;
       let disposed = false;
@@ -215,12 +273,8 @@ describe("transcript layout lifetime", () => {
         threadProps(paneId, "agent:main:fragment-lifetime", messages);
       const project = (messages: unknown[]) => {
         const input = props(messages);
-        return projectTranscriptIndex(
-          projectTranscriptChain(buildCachedChatItems(input), {
-            sessionKey: input.sessionKey,
-            runWorking: false,
-            searchActive: false,
-          }),
+        return indexFor(
+          chainFor(buildCachedChatItems(input), { sessionKey: input.sessionKey }),
           new Map(),
           input,
         );

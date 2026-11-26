@@ -1,10 +1,6 @@
 import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  readTranscriptDisplayPosition,
-  type TranscriptDisplayPosition,
-} from "../../../../src/chat/transcript-display-position.ts";
+import type { TranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.ts";
 import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
@@ -13,7 +9,10 @@ import {
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-merge.ts";
 import { prepareChatHistoryAdmission } from "./chat-history-admission.ts";
 import { intrinsicChatHistorySource } from "./chat-history-cost.ts";
-import { advanceChatHistoryNavigation } from "./chat-history-pagination.ts";
+import {
+  advanceChatHistoryNavigation,
+  nativeHistoryMessagePosition,
+} from "./chat-history-pagination.ts";
 import type {
   ChatHistoryPagination,
   ChatHistorySegment,
@@ -44,12 +43,6 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | nu
   }
   const start = totalMessages - retainedDepth + 1;
   return asSafeIntegerInRange(start, { min: 1 }) ?? null;
-}
-
-export function nativeHistoryMessagePosition(message: unknown) {
-  return readTranscriptDisplayPosition(
-    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
-  );
 }
 
 /** Display order can relocate activity; cursor coverage follows physical rows. */

@@ -1,9 +1,12 @@
 import { expect, it } from "vitest";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { message, nativeMessage, pendingText } from "./chat-thread-fixtures.test-support.ts";
-import { buildItems } from "./chat-thread.test-support.ts";
+import { buildItems, createProps } from "./chat-thread.test-support.ts";
+import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
+import { chainFor, indexFor } from "./components/chat-transcript-message-index.test-support.ts";
 
 function marker(id: string, runId?: string, itemId?: string, timestamp = 2000) {
   return { role: "system", timestamp, __openclaw: { kind: "compaction", id, runId, itemId } };
@@ -154,4 +157,70 @@ it("renders a legacy context event without changing adjacent messages", () => {
   expect(items.map((item) => item.kind)).toEqual(["group", "group", "group"]);
   expect(rows(items)).toMatchObject([{ label: "Compacted context" }]);
   expect(items.at(-1)).toMatchObject({ messages: [{ message: { content: "All done." } }] });
+});
+
+it("refreshes cached compaction rows and native revisions across phase, savings and duration", () => {
+  const paneId = "compaction-revisions";
+  const base = createProps({ paneId, sessionKey: paneId });
+  const status = {
+    runId: "manual-operation",
+    manualOperation: true as const,
+    startedAt: 1000,
+    completedAt: null,
+    phase: "active" as const,
+  };
+  const persisted = marker("persisted", status.runId, undefined, status.startedAt);
+  const withSavings = (tokensBefore: number, tokensAfter: number) => ({
+    ...persisted,
+    __openclaw: { ...persisted.__openclaw, tokensBefore, tokensAfter },
+  });
+  const complete = { ...status, phase: "complete" as const, completedAt: 2000 };
+  const cases = [
+    { compactionStatus: status, expected: { phase: "active" } },
+    { compactionStatus: complete, expected: { phase: "complete", durationMs: 1000 } },
+    {
+      compactionStatus: complete,
+      messages: [withSavings(800, 100)],
+      expected: { phase: "complete", durationMs: 1000, tokensBefore: 800, tokensAfter: 100 },
+    },
+    {
+      compactionStatus: complete,
+      messages: [withSavings(900, 200)],
+      expected: { phase: "complete", durationMs: 1000, tokensBefore: 900, tokensAfter: 200 },
+    },
+    {
+      compactionStatus: { ...complete, completedAt: 3000 },
+      messages: [withSavings(900, 200)],
+      expected: { phase: "complete", durationMs: 2000, tokensBefore: 900, tokensAfter: 200 },
+    },
+  ];
+  const retained: Array<{ items: ReturnType<typeof buildCachedChatItems>; expected: object }> = [];
+  let rowKey: string | undefined;
+  let revision: string | undefined;
+  try {
+    for (const { expected, ...next } of cases) {
+      const props = { ...base, ...next };
+      const items = buildCachedChatItems(props);
+      expect(rows(items)).toMatchObject([expected]);
+      expect(items).toEqual(buildChatItems(props));
+      const index = indexFor(chainFor(items, { sessionKey: props.sessionKey }), new Map(), {
+        assistantName: "Assistant",
+        ...props,
+      });
+      const row = index.rows.find((candidate) => candidate.kind === "item");
+      expect(row).toBeDefined();
+      if (rowKey !== undefined) {
+        expect(row!.key).toBe(rowKey);
+        expect(row!.revision).not.toBe(revision);
+      }
+      rowKey = row!.key;
+      revision = row!.revision;
+      retained.push({ items, expected });
+    }
+    for (const { items, expected } of retained) {
+      expect(rows(items)).toMatchObject([expected]);
+    }
+  } finally {
+    resetChatThreadState(paneId);
+  }
 });

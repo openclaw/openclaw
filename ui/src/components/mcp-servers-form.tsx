@@ -1,12 +1,12 @@
 import { createSignal, Show } from "solid-js";
-import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../i18n/locales/en-mcp-management.ts";
 import type { McpServerTransport } from "../lib/config/mcp-servers.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
 import { SettingsSegmented } from "./solid/settings-ui.tsx";
 import "../styles/mcp-server-form.css";
 
-registerMcpEnglish();
+registerMcpManagementEnglish();
 
 export function McpServersForm(props: {
   busy: boolean;

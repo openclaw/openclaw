@@ -275,14 +275,8 @@ export async function hydrateChatHistory(
         preparePages: recovered.preparePages,
       };
     }
-    const inFlightEvents =
-      isHistoryCursor(response) && response.kind === "reset"
-        ? undefined
-        : response.inFlightRun?.events;
-    const inFlightRunId =
-      isHistoryCursor(response) && response.kind === "reset"
-        ? undefined
-        : response.inFlightRun?.runId?.trim();
+    const inFlightEvents = response.inFlightRun?.events;
+    const inFlightRunId = response.inFlightRun?.runId?.trim();
     const liveHistory =
       inFlightEvents?.length || inFlightRunId
         ? await subscribeToSharedRequest(
@@ -291,7 +285,6 @@ export async function hydrateChatHistory(
             read.signal,
           )
         : undefined;
-    const replayAgentEvent = liveHistory?.handleAgentEvent;
     const run = runResponse.inFlightRun;
     // Race the module alone: a pending import continuation must not retain wire bodies.
     const progress =
@@ -371,7 +364,6 @@ export async function hydrateChatHistory(
         runProjectionsBeforeApply,
         currentRunProjections,
         resetStream,
-        replayAgentEvent,
         observedRunActivity,
       });
     const commitSnapshot = () =>

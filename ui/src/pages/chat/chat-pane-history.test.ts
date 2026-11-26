@@ -26,6 +26,7 @@ import {
   pagination,
   sparsePrefetchRequest,
   createCapacityHistoryPages,
+  createRelocatedHistorySource,
   type CapacityHistoryRequest,
   createNativeShowEarlierPane,
   createRefreshChatPane,
@@ -713,22 +714,7 @@ it.each([false, true])(
 it.each(["disk", "memory"] as const)(
   "recovers every source row after reopening a %s-trimmed display projection",
   async (tier) => {
-    const text = tier === "memory" ? "x".repeat(160 * 1024) : "message";
-    const physical = Array.from({ length: 82 }, (_, index) => {
-      const seq = index + 1;
-      return {
-        ...nativeHistoryMessage(seq, text),
-        __openclaw: {
-          id: `source-${seq}`,
-          seq,
-          transcriptPosition: {
-            source: "history",
-            rawSeq: seq,
-            ...(seq === 8 ? { activity: { afterRawSeq: 1, scopeId: "tool", startOrder: 0 } } : {}),
-          },
-        },
-      };
-    });
+    const physical = createRelocatedHistorySource(tier);
     const snapshot = {
       messages: composeTranscriptDisplay(physical),
       sessionId: "current",

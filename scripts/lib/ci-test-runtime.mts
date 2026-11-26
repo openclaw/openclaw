@@ -123,6 +123,8 @@ const nodeRequiredFiles = new Set([
   "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-database-retention.test.ts",
   "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
+  "ui/src/pages/chat/chat-history-inflight-loading.test.ts",
+  "ui/src/pages/chat/chat-history-progress-loading.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-pane-resident-navigation.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",

@@ -3,8 +3,8 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
-import "./chat-pane.tsx";
 import { dispatchChatSlashCommand } from "./chat-commands.ts";
+import "./chat-pane.tsx";
 import { readChatTranscriptAttachmentSource } from "./chat-history-state.ts";
 import { loadChatHistory, reloadChatHistoryWindow } from "./chat-history.ts";
 import type { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
@@ -21,6 +21,7 @@ import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems } from "./chat-thread.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { createTranscriptActions } from "./components/chat-transcript-actions.ts";
+import { chainFor, indexFor } from "./components/chat-transcript-message-index.test-support.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
@@ -33,9 +34,15 @@ async function olderPages(pane: ReturnType<typeof residentPane>["pane"], count: 
   }
 }
 
+async function residentAt(pages = 0) {
+  const fixture = residentPane();
+  await loadChatHistory(fixture.state, { deferBranches: true });
+  await olderPages(fixture.pane, pages);
+  return fixture;
+}
+
 it("accepts off-window persistence before retiring its exact stream and run owners", async () => {
-  const { state } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
+  const { state } = await residentAt();
   const held = state.chatMessages;
   state.chatRunId = "finishing";
   state.chatStream = "later reply";
@@ -82,8 +89,7 @@ it("accepts off-window persistence before retiring its exact stream and run owne
 });
 
 it("rebuilds visible and unfiltered search views without resurrecting retired sources", async () => {
-  const { pane, state } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
+  const { pane, state } = await residentAt();
   const props = () =>
     createProps({
       paneId: pane.paneId,
@@ -208,9 +214,7 @@ it("reuses complete survivor turns across real older and newer residency cuts", 
 });
 
 it("recovers every evicted newer page through its exact opaque edge", async () => {
-  const { pane, state, requests } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 6);
+  const { pane, state, requests } = await residentAt(6);
   expectNativeHistoryRange(state.chatMessages, 81, 400);
   expect(state.chatHistoryPagination.newerCursor).toBe("after-480");
   const before = requests.length;
@@ -227,9 +231,7 @@ it("recovers every evicted newer page through its exact opaque edge", async () =
 it.each([2_000, 400])(
   "continues newer at a clamped %i-pixel window without scroll movement",
   async (height) => {
-    const { pane, state, requests } = residentPane();
-    await loadChatHistory(state, { deferBranches: true });
-    await olderPages(pane, 6);
+    const { pane, state, requests } = await residentAt(6);
     expect(state.chatHistoryPagination.newerCursor).toBe("after-480");
     const thread = pane.transcript.scrollElement!;
     Object.defineProperty(thread, "scrollHeight", { configurable: true, value: height });
@@ -264,9 +266,7 @@ it("bounds sparse response segments independently from visible entry count", asy
 });
 
 it("reopens a refreshed partial segment before recovering its discarded successor", async () => {
-  const { pane, state, requests, append } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 4);
+  const { pane, state, requests, append } = await residentAt(4);
   append(40);
   await loadChatHistory(state, { deferBranches: true });
   expect(nativeHistorySeq(state.chatMessages.at(-1))).toBe(680);
@@ -283,9 +283,7 @@ it("reopens a refreshed partial segment before recovering its discarded successo
 });
 
 it("keeps a detached reader on background refresh and restores the durable tail for Latest", async () => {
-  const { pane, state, append } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 6);
+  const { pane, state, append } = await residentAt(6);
   const held = state.chatMessages;
   append(40);
   await loadChatHistory(state, { deferBranches: true });
@@ -299,9 +297,7 @@ it("keeps a detached reader on background refresh and restores the durable tail 
 it.each(["older", "newer"] as const)(
   "records a retryable %s read interrupted by a same-session refresh",
   async (direction) => {
-    const { pane, state, requests, holdNextCursor } = residentPane();
-    await loadChatHistory(state, { deferBranches: true });
-    await olderPages(pane, 6);
+    const { pane, state, requests, holdNextCursor } = await residentAt(6);
     const loadPage = () =>
       direction === "older" ? pane.loadOlderMessages() : pane.loadNewerMessages();
     const cursor =
@@ -332,9 +328,7 @@ it.each(["older", "newer"] as const)(
 it.each(["success", "failure"])(
   "preserves reader ownership when a held Latest reload settles with %s",
   async (outcome) => {
-    const { pane, state, requests, holdNextTail } = residentPane();
-    await loadChatHistory(state, { deferBranches: true });
-    await olderPages(pane, 6);
+    const { pane, state, requests, holdNextTail } = await residentAt(6);
     const held = state.chatMessages;
     const pagination = state.chatHistoryPagination;
     const before = requests.length;
@@ -396,9 +390,7 @@ it.each(["session", "agent", "connection"])(
 );
 
 it("keeps observed source-reset authority when a reader cancels Latest", async () => {
-  const { pane, state, requests, holdNextTail } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 6);
+  const { pane, state, requests, holdNextTail } = await residentAt(6);
   let before = requests.length;
   const failRecovery = holdNextTail(new Error("recovery failed"));
   const recovery = reloadChatHistoryWindow(state);
@@ -425,9 +417,7 @@ it("keeps observed source-reset authority when a reader cancels Latest", async (
 });
 
 it("keeps attachment coverage partial at the oldest source while newer history is evicted", async () => {
-  const { pane, state } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 7);
+  const { pane, state } = await residentAt(7);
   expect(state.chatHistoryPagination.hasMore).toBe(false);
   expect(state.chatHistoryPagination.hasNewer).toBe(true);
   expect(readChatTranscriptAttachmentSource(state).coverage).toBe("partial");
@@ -453,8 +443,7 @@ it.each([
 ])(
   "replaces disjoint or shrinking tail coverage with $start..$end",
   async ({ start, end, complete }) => {
-    const { pane, state, replaceTail } = residentPane();
-    await loadChatHistory(state, { deferBranches: true });
+    const { pane, state, replaceTail } = await residentAt();
     await pane.loadOlderMessages(false);
     replaceTail(start, end, complete);
     await loadChatHistory(state, { deferBranches: true });
@@ -468,8 +457,7 @@ it.each([
 );
 
 it("uses the refreshed segment's own older edge after its retained prefix is evicted", async () => {
-  const { pane, state, requests, append } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
+  const { pane, state, requests, append } = await residentAt();
   await pane.loadOlderMessages(false);
   await pane.loadOlderMessages(false);
   for (let refresh = 0; refresh < 8; refresh++) {
@@ -489,9 +477,7 @@ it("uses the refreshed segment's own older edge after its retained prefix is evi
 });
 
 it("keeps the visible reader's segment contiguous when a growing tail exceeds the budget", async () => {
-  const { pane, state, append } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 4);
+  const { pane, state, append } = await residentAt(4);
   const held = state.chatMessages[0];
   mountHistoryReader(pane, {
     thread: pane.transcript.scrollElement!,
@@ -512,9 +498,7 @@ function isAlive(reference: WeakRef<object>): boolean {
 }
 
 it("does not advance a rejected held page and retries its exact edge after the reader moves", async () => {
-  const { pane, state, requests, holdNextCursor } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
-  await olderPages(pane, 4);
+  const { pane, state, requests, holdNextCursor } = await residentAt(4);
   const before = requests.length;
   const release = holdNextCursor();
   const load = pane.loadOlderMessages();
@@ -544,8 +528,7 @@ it("does not advance a rejected held page and retries its exact edge after the r
 });
 
 it("collects an evicted local command outcome while the same pane and newest output stay alive", async () => {
-  const { pane, state } = residentPane();
-  await loadChatHistory(state, { deferBranches: true });
+  const { pane, state } = await residentAt();
   const firstOutput = async () => {
     expect(await dispatchChatSlashCommand(state, "help", "")).toBe("completed");
     return {
@@ -646,8 +629,19 @@ it("collects retired concrete bodies and dormant projections while the pane and 
       sessionKey: state.sessionKey,
       messages: state.chatMessages,
     });
-    buildCachedChatItems(input, "visible");
+    const items = buildCachedChatItems(input, "visible");
     buildCachedChatItems(input, "unfiltered");
+    const index = indexFor(chainFor(items, { sessionKey: input.sessionKey }), new Map(), {
+      assistantName: "Assistant",
+      ...input,
+    });
+    pane.transcript.renderSession(state.sessionKey, (transcript) => {
+      transcript.syncMessageRows(index.messageRowKeysById, index.transcriptMessageKeys, {
+        messages: state.chatMessages,
+        search: null,
+      });
+      transcript.preserveReaderPosition();
+    });
     const actionContext: Parameters<typeof createTranscriptActions>[0] = {};
     const onFocusComposer = vi.fn();
     const actionProps = threadProps(pane.presentationId, state.sessionKey, state.chatMessages, {
@@ -674,19 +668,27 @@ it("collects retired concrete bodies and dormant projections while the pane and 
     };
     expect(catalog.read(catalogInput)?.entries.length).toBeGreaterThan(0);
     catalog.read({ ...catalogInput, workspacePresented: false });
-    return { control: new WeakRef({ unowned: true }), actionContext, actions, onFocusComposer };
+    return {
+      control: new WeakRef({ unowned: true }),
+      projection: new WeakRef(state.chatMessages),
+      actionContext,
+      actions,
+      onFocusComposer,
+    };
   };
-  const { control, actionContext, actions, onFocusComposer } = populateDormantOwners();
+  const { control, projection, actionContext, actions, onFocusComposer } = populateDormantOwners();
   await collectGarbageForTest();
   expect(isAlive(control)).toBe(false);
   expect(isAlive(retired!.content)).toBe(true);
   expect(isAlive(pinned!.media)).toBe(true);
+  expect(isAlive(projection)).toBe(true);
 
   await olderPages(pane, 6);
   const run = getChatSessionProjection(state).runs["settled"]!;
   expect(run.message).toBeUndefined();
   expect(JSON.stringify(run).length).toBeLessThan(1_000);
   await collectGarbageForTest();
+  expect(isAlive(projection)).toBe(false);
   expect(isAlive(retired!.message)).toBe(false);
   expect(isAlive(retired!.content)).toBe(false);
   expect(isAlive(retired!.media)).toBe(false);

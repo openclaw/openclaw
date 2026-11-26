@@ -7,7 +7,7 @@ import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.t
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { prepareCheckpointReplay } from "./chat-history-progress.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
   getChatSessionProjection,
@@ -21,7 +21,6 @@ import {
   setChatRunError,
 } from "./run-lifecycle.ts";
 import { materializeVisibleStreamState } from "./stream-reconciliation.ts";
-import type { handleAgentEvent } from "./tool-stream.ts";
 
 export function materializeVisibleAssistantStreamMessages(
   messages: unknown[],
@@ -107,7 +106,7 @@ export function readRunProjections(
 }
 
 export type ChatHistoryRunApplication = {
-  state: ChatState;
+  state: ChatHistoryHost;
   run: ChatHistoryResult["inFlightRun"];
   messages?: ChatHistoryResult["messages"];
   replayProgress?: Awaited<ReturnType<typeof prepareCheckpointReplay>>;
@@ -118,7 +117,6 @@ export type ChatHistoryRunApplication = {
   runProjectionsBeforeApply: RunObservations;
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
-  replayAgentEvent: typeof handleAgentEvent | undefined;
 };
 
 export function hasOtherSendingRun(state: ChatState, runId: string): boolean {

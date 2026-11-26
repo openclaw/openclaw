@@ -604,7 +604,26 @@ const startupEnglish = {
     },
 
     run: {
-      phase: {},
+      toast: {
+        preparing: "Preparing OpenClaw update…",
+        processing: "Updating OpenClaw…",
+        succeeded: "OpenClaw updated",
+        failed: "OpenClaw update failed",
+        skipped: "OpenClaw update skipped",
+        "rolled-back": "OpenClaw update rolled back",
+        details: "View update details",
+      },
+      reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
+      phase: {
+        requested: "Requested",
+        staging: "Staging",
+        validating: "Validating",
+        repairing: "Repairing",
+        activating: "Activating",
+        restarting: "Restarting",
+        verifying: "Verifying",
+        finished: "Finished",
+      },
     },
     confirm: {},
     target: {
@@ -613,7 +632,9 @@ const startupEnglish = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {},
-    dialog: {},
+    dialog: {
+      reconnecting: "Reconnecting…",
+    },
     channel: {},
     installKind: {},
     page: {},

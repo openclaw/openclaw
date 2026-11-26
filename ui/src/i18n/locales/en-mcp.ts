@@ -1,18 +1,10 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Keep the composer form and runtime errors available without the Settings
-// catalog. Register the MCP page namespace here to preserve locale warm-up.
+// Submission and config validation run before the optional editors load.
+// Keep their errors and early MCP page labels available during locale warm-up.
 export const mcpRuntimeCopy = {
   mcpServers: {
-    add: "Add server",
-    adding: "Adding…",
-    nameLabel: "Name",
-    transportLabel: "Transport",
-    transportStreamableHttp: "Streamable HTTP",
-    transportSse: "SSE",
-    transportStdio: "Stdio",
-    targetLabel: "URL or command",
     nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
     targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
     sessionEnableFailed:
@@ -24,19 +16,9 @@ export const mcpRuntimeCopy = {
     configUnavailable: "Couldn’t load settings. Refresh and try again.",
   },
   mcpPage: {
-    servers: "Servers",
     settings: "Settings",
     apps: "MCP Apps",
-    noServers: "No MCP servers yet.",
-    setUpFirstServer: "MCP server setup guide",
     operatorCommands: "Command line",
-    operatorCommandsHint: "Status, diagnostics, and runtime reload.",
-    serversHelp: "About MCP servers",
-    runtimeHint: "With automatic reload enabled, connections rebuild on next use.",
-    toolFilter: "Tool filter",
-    parallel: "Parallel",
-    tlsVerifyOff: "TLS verification off",
-    mtls: "mTLS",
   },
 } satisfies TranslationMap;
 

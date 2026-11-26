@@ -1,6 +1,7 @@
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatGuardianNotice, ChatItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import type { AutomationProjection } from "./chat-automation-projection-loader.ts";
+import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import type { ChatInputPlacementProps } from "./chat-thread-inputs.ts";
 import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
@@ -30,6 +31,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps &
     /** Invalidates cached display copy when the active UI language changes. */
     locale?: string;
     messages: unknown[];
+    messageRecovery?: ChatMessageRecovery;
     toolMessages: unknown[];
     projectAutomations?: AutomationProjection;
     guardianNotices?: ChatGuardianNotice[];

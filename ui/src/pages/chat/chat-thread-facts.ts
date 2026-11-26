@@ -88,6 +88,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     previous.visibleContent === next.visibleContent &&
     previous.startsActivityGroup === next.startsActivityGroup &&
     previous.runId === next.runId &&
+    sameFields(previous.compaction, next.compaction, CHAT_ITEM_FIELDS.compaction) &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -115,15 +116,17 @@ export const CHAT_ITEM_FIELDS = {
     "systemEvent",
     "repeatCount",
   ],
-  divider: [
-    "compaction",
+  compaction: [
+    "phase",
     "compactionId",
     "label",
-    "metric",
-    "description",
+    "tokensBefore",
+    "tokensAfter",
+    "durationMs",
     "timestamp",
-    "systemEvent",
+    "runId",
   ],
+  divider: ["label", "metric", "description", "timestamp", "systemEvent"],
   question: ["questionId", "startedAt"],
   senderSession: ["sessionKey", "agentId", "label"],
 } as const;
@@ -145,6 +148,10 @@ export function sameChatItem(previous: RenderChatItem, next: RenderChatItem): bo
       );
     case "divider":
       return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
+    case "compaction":
+      return (
+        previous.kind === "compaction" && sameFields(previous, next, CHAT_ITEM_FIELDS.compaction)
+      );
     case "stream":
       return (
         previous.kind === "stream" &&

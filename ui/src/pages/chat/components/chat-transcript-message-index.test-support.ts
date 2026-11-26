@@ -53,7 +53,11 @@ export function chainFor(
 ) {
   return projectTranscriptChain(items, { ...chainOptions, ...options });
 }
-export function indexFor(chain: Chain, expanded = new Map<string, boolean>(), props = labels) {
+export function indexFor(
+  chain: Chain,
+  expanded = new Map<string, boolean>(),
+  props: Parameters<typeof projectTranscriptIndex>[2] = labels,
+) {
   return projectTranscriptIndex(chain, expanded, props);
 }
 export function projectHistory(

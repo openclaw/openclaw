@@ -285,7 +285,7 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   private recordReaderDirection(upward: boolean): void {
     if (!upward) {
       this.historyReaderIntent = false;
-    } else if (this.consumeHistoryIntent()) {
+    } else if (this.hasOlderMessages() && this.consumeHistoryIntent()) {
       this.historyAutoLoadBlocked = false;
       this.historyReaderIntent = true;
     }
