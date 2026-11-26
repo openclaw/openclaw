@@ -10,6 +10,7 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 function mediaConfig(audio: { enabled?: boolean; maxBytes?: number }): OpenClawConfig {
   return {
+    channels: { discord: { token: "test-token", voice: { enabled: true } } },
     commands: { ownerAllowFrom: ["discord:100000000000000001"] },
     tools: { media: { audio } },
   };
@@ -66,7 +67,9 @@ defineDiscordVoiceTests((harness) => {
     setRuntimeConfigSnapshot(enabled);
     try {
       const f = await fixture("agent-proxy", false, enabled);
-      await startTranscripts(f.manager, f.sink, "notes", "1001", "default", enabled);
+      expect(
+        await startTranscripts(f.manager, f.sink, "notes", "1001", "default", enabled),
+      ).toMatchObject({ ok: true });
       setRuntimeConfigSnapshot(mediaConfig({ enabled: false }));
       await f.audio("100000000000000001", 1);
       await harness.emitFinalRealtimeUserTranscript(
@@ -106,7 +109,9 @@ defineDiscordVoiceTests((harness) => {
     setRuntimeConfigSnapshot(original);
     try {
       const f = await fixture("stt-tts", false, original);
-      await startTranscripts(f.manager, f.sink, "notes", "1001", "default", original);
+      expect(
+        await startTranscripts(f.manager, f.sink, "notes", "1001", "default", original),
+      ).toMatchObject({ ok: true });
       const uploads: Array<{ marker: number; bytes: number; processing?: string }> = [];
       harness.transcribeAudioFileMock.mockImplementation(async (request) => {
         const wav = await readFile(request.filePath);
