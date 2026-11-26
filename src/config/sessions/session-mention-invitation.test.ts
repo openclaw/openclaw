@@ -168,6 +168,38 @@ it("keeps each first-session message's own watermark when invitations are deferr
   });
 });
 
+it("persists prepared mention access without changing an existing member's grant", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    replaceSessionEntrySync(f.scope, f.entry);
+    for (const [index, access] of (["read", "send"] as const).entries()) {
+      const invitation = f.invitation("bob");
+      invitation.profiles = invitation.profiles.map((profile) => ({ ...profile, access }));
+      await persistSessionTranscriptTurn(f.scope, {
+        expectedSessionId: f.scope.sessionId,
+        messages: [
+          {
+            message: {
+              ...f.message("bob"),
+              timestamp: index + 1,
+              idempotencyKey: `grant:${index}`,
+            },
+            workerPreparation: {
+              prepareMentionInvitation: () => ({ invitation, assertCurrent() {} }),
+            },
+          },
+        ],
+        updateMode: "none",
+      });
+      expect(await f.members()).toEqual([
+        expect.objectContaining({ identityId: "bob", addedBy: "alice", access: "read" }),
+      ]);
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    expect((await f.members())[0]?.access).toBe("read");
+  });
+});
+
 it("does not grant access when a message hook removes the selected token", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();

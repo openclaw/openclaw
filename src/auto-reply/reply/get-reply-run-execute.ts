@@ -40,6 +40,7 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { getCommandSenderAuthority } from "../command-sender-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -402,10 +403,7 @@ export async function executePreparedReplyRun(
     InputProvenance: inputProvenance,
   });
   const channelOwnerAuthority = getCommandOwnerAuthority(ctx);
-  const senderIsOwner =
-    providedReplyOperation && channelOwnerAuthority
-      ? channelOwnerAuthority.isCurrent()
-      : command.senderIsOwner;
+  const { senderIsOwner } = command;
   const authorityRunId =
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
@@ -545,6 +543,10 @@ export async function executePreparedReplyRun(
       // they do not rewrite the sender identity used by command/action auth.
       senderIsOwner,
       gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
+      mcpRequesterProfileId:
+        !ctx.InternalTurnSource && (!inputProvenance || inputProvenance.kind === "external_user")
+          ? getCommandSenderAuthority(ctx)?.()
+          : undefined,
       traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,

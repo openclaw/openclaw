@@ -1196,14 +1196,11 @@ async function runCliWithPreparedOutputMode(
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
-    const { createCliProgress } = await import("./progress.js");
-    const startupProgress = createCliProgress({
-      label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
-      ...(suppressStartupProgress ? { enabled: false } : {}),
-    });
+    const machineOutput = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
+    const startupProgress =
+      process.stderr.isTTY && !machineOutput
+        ? (await import("./progress.js")).createCliProgress({ label: "Loading OpenClaw CLI…" })
+        : undefined;
     try {
       const [
         { buildProgram },
@@ -1259,7 +1256,7 @@ async function runCliWithPreparedOutputMode(
           const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
-            jsonOutputMode: suppressStartupProgress,
+            jsonOutputMode: machineOutput,
           });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
@@ -1283,7 +1280,7 @@ async function runCliWithPreparedOutputMode(
             resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
         },
       );
-      startupProgress.done();
+      startupProgress?.done();
 
       let completedHelpOrVersion = false;
       try {
@@ -1315,7 +1312,7 @@ async function runCliWithPreparedOutputMode(
         requestExitAfterOneShotOutput();
       }
     } finally {
-      startupProgress.done();
+      startupProgress?.done();
     }
   } finally {
     pluginCliSession?.close();

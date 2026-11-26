@@ -13,6 +13,7 @@ import {
 } from "./workspace-manifest.js";
 import { expectWorkspaceFiles } from "./workspace-recovery.test-support.js";
 import {
+  adoptStagedWorkerWorkspaceHistory,
   applyStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
   preparedWorkerWorkspaceResultRef,
@@ -112,6 +113,40 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
+  it("retains unavailable Git history when file bytes were already reconciled", async () => {
+    const root = tempDirs.make("openclaw-unavailable-history-");
+    await requireGit(root, ["init", "--quiet"]);
+    await fs.writeFile(path.join(root, "result.txt"), "kept file\n");
+    const baseCommit = await commitFixture(root);
+    const base = await captureWorkspaceManifest({ root, baseCommit });
+    const ref = workerWorkspaceResultRef("unavailable-history");
+    const record = vi.fn();
+    const reconcile = await prepare(root, base.manifestRef, {
+      journal: emptyJournal(),
+      stagedResult: { ref, record },
+    });
+    const reconciliation = await reconcile({
+      ...manifestPair(base),
+      stagingRoot: root,
+      manifestRef: () => base.manifestRef,
+      publishAcceptedManifest: async () => {},
+      verifyStable: async () => {},
+      gitHistory: {
+        baseCommit,
+        headCommit: baseCommit,
+        descendsFromBase: false,
+        unavailableReason: "worker Git repository is not a standalone checkout",
+      },
+    });
+    await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
+    expect(record).toHaveBeenCalledExactlyOnceWith(ref);
+    await expect(adoptStagedWorkerWorkspaceHistory({ root, stagedResultRef: ref })).resolves.toBe(
+      "Cloud worker commits were not adopted: worker Git repository is not a standalone checkout. File changes were reconciled and kept for review.",
+    );
+    expect(await requireGit(root, ["rev-parse", "HEAD"])).toBe(baseCommit);
+    await expect(fs.readFile(path.join(root, "result.txt"), "utf8")).resolves.toBe("kept file\n");
+  });
+
   it("retains published host additions across accepted replay and a later worker deletion", async () => {
     const root = tempDirs.make("openclaw-accepted-host-recovery-");
     const worker = tempDirs.make("openclaw-accepted-host-worker-");

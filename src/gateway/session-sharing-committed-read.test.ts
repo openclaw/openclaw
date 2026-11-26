@@ -134,6 +134,38 @@ async function withoutSql<T>(
   return result;
 }
 
+it("retains sessions.send access during a worker writer update and rejects a visibility change", async () => {
+  await withSharingState(async ({ seed }) => {
+    const { scope, shared, capture } = seed("agent:main:worker-send", "worker-send");
+    const auth = await capture("sessions.send");
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable worker session");
+    }
+    for (const visibility of ["shared", "draft"] as const) {
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: scope.agentId,
+        storePath: database.path,
+        databaseIdentity: identity,
+      });
+      try {
+        const next = { ...shared, activeWriterRunId: "worker-run", visibility };
+        publication.beginChanges(
+          [scope.sessionKey],
+          undefined,
+          undefined,
+          undefined,
+          new Map([[scope.sessionKey, next]]),
+        );
+        expectCurrent(auth, visibility === "draft" ? "session changed" : undefined);
+      } finally {
+        publication.settle(undefined, false);
+      }
+    }
+  });
+});
+
 function inWriterTransaction(connection: EngineConnection, check: () => void) {
   const db = requireNativeSqliteDatabase(connection);
   db.exec("BEGIN IMMEDIATE");

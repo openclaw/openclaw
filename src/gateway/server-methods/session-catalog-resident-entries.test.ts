@@ -292,6 +292,46 @@ it("keeps catalog order and adoption stable across unchanged notifications and e
     expect(ordered.entries("all").map(([sessionKey]) => sessionKey)).toEqual([key, secondKey]);
   }));
 
+it("preserves other agents' planning entries when one agent commits a change", () =>
+  withCatalog(
+    async ({ list, setList }) => {
+      const workKey = "agent:work:adopted";
+      replace({ label: "Original" });
+      replaceSessionEntrySync(
+        { agentId: "work", sessionKey: workKey },
+        { ...original, sessionId: "work-instance", label: "Work" },
+      );
+      const snapshots: unknown[] = [];
+      setList(async ({ sessionEntries }) => {
+        const entries = sessionEntries!.entriesForCatalog!();
+        snapshots.push(entries.find((entry) => entry.sessionKey === workKey));
+        return hosts([
+          session({ name: entries.find((entry) => entry.sessionKey === key)?.entry.label }),
+          session({ threadId: "work-thread", sessionKey: workKey }),
+        ]);
+      });
+      const before = await list();
+      expect(snapshots[0]).toMatchObject({ agentId: "work", sessionKey: workKey });
+      expect(firstHost(before).sessions[1].sessionKey).toBe(workKey);
+      expect(JSON.stringify(payload(await list()))).toBe(JSON.stringify(payload(before)));
+      replace({ updatedAt: 2, label: "Renamed" });
+      const after = await list();
+      const expected = payload(before);
+      const expectedHost = {
+        ...expected.catalogs[0].hosts[0],
+        sessions: [
+          { ...firstHost(before).sessions[0], name: "Renamed" },
+          firstHost(before).sessions[1],
+        ],
+      };
+      expect(JSON.stringify(payload(after))).toBe(
+        JSON.stringify({ catalogs: [{ ...expected.catalogs[0], hosts: [expectedHost] }] }),
+      );
+      expect(snapshots[2]).toBe(snapshots[0]);
+    },
+    { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
+  ));
+
 it.each(["planning", "delivery"])(
   "serves catalog %s without draining unrelated display invalidations",
   async (phase) => {

@@ -412,6 +412,51 @@ it("retries loopback close errors in --follow mode instead of tailing fallback f
   expect(stdout).not.toContain("local fallback line");
 });
 
+it("reuses one Gateway connection for --follow polls and keeps the --timeout deadline", async () => {
+  const untilAborted = (signal: AbortSignal) => {
+    const pending = Promise.withResolvers<never>();
+    signal.addEventListener("abort", () => pending.reject(signal.reason));
+    return pending.promise;
+  };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(logPage(["second poll"], 2))
+    .mockImplementationOnce((_method, _params, options) => untilAborted(options.signal));
+  callGatewayFromCli
+    .mockImplementationOnce(async (_method, _opts, _params, extra) => {
+      await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+    })
+    .mockImplementationOnce((_method, _opts, _params, extra) => untilAborted(extra.signal))
+    .mockRejectedValueOnce(new Error("stop after reconnect"));
+
+  const { stdout, stderr } = await runFailure([...follow, "--timeout", "5"]);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenNthCalledWith(
+    1,
+    "logs.tail",
+    expect.objectContaining({ cursor: 1 }),
+    expect.any(Object),
+  );
+  expectText(stdout, ["first poll", "second poll"]);
+  expect(stderr.match(/gateway disconnected/g)).toHaveLength(2);
+  expectText(stderr, ["stop after reconnect"]);
+});
+
+it("stops --follow when the reused connection closes for auth", async () => {
+  const message = "gateway closed (4001): client invalidated";
+  const request = vi.fn().mockRejectedValueOnce(new Error(message));
+  callGatewayFromCli.mockImplementationOnce(async (_method, _opts, _params, extra) => {
+    await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+    throw createGatewayCloseError({ code: 4001, reason: "client invalidated", message });
+  });
+
+  const { stderr } = await runFailure(follow);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  expectText(stderr, [message], ["gateway disconnected"]);
+});
+
 it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
   const rawUrl =
     "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";

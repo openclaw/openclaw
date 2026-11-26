@@ -47,15 +47,30 @@ export const handedOffDashboardSession = {
   spawnDepth: 1,
 } as const;
 
-/** `local: "resumed"` sends the Control UI reconnect marker; admission matches a fresh send. */
+/**
+ * `local: "resumed"` sends the Control UI reconnect marker; admission matches a fresh send.
+ * A remote `operator.admin` turn is a management turn (no configured-MCP capture), so the
+ * remote and resumed cases use `operator.write`.
+ */
 export const lazyChatCronAuthorityCases = [
   [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", true],
   [NAMES.CLI, MODES.CLI, "darwin", "operator.admin", true],
-  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", false],
   [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", true],
   [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.cron", false],
-  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", "resumed"],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", "resumed"],
 ] as const;
+
+/** A client carrying its turn's admitted authority; the grant decides automations. */
+export function admittedInternal(scope: string, internal: Record<string, unknown> = {}) {
+  return {
+    ...internal,
+    operatorRunAuthority: createTestOperatorAuthority({
+      profileId: "gateway-owner",
+      scopes: [scope],
+    }),
+  };
+}
 
 export const deniedChatCronAuthorityCases = [
   {

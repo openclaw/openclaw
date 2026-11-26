@@ -6,6 +6,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentV19Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { createDanglingSkillWorkshopReviewIndex } from "../state/openclaw-state-db-corruption.test-support.js";
@@ -62,10 +63,7 @@ it("preserves known damaged state before backing up and migrating an older agent
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     executeSql(
       agentPath,
-      `${fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
-        "utf8",
-      )}
+      `${agentV19Schema()}
       PRAGMA user_version = 19;
       INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)

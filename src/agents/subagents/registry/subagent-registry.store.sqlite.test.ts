@@ -56,6 +56,11 @@ function writePayload(runId: string, payload: string) {
     .run(payload, runId);
 }
 
+type ReleasedRetireShape = {
+  requesterSettleWake?: Record<string, unknown>;
+  retireAfterRequesterTurn?: boolean;
+};
+
 function reopen() {
   closeOpenClawStateDatabaseForTest();
   return openOpenClawStateDatabase();
@@ -448,6 +453,52 @@ describe("subagent registry sqlite store", () => {
     expectCanonical(JSON.parse(stored.payload_json));
     closeOpenClawStateDatabaseForTest();
     expectCanonical(loadSubagentRegistryFromSqlite().get(run.runId));
+  });
+
+  it("upgrades v2026.11.10 retire intent from either location to the row fact", () => {
+    const fromWake = createRun({
+      runId: "run-wake-retire",
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const fromTurn = createRun({
+      runId: "run-turn-retire",
+      childSessionKey: "agent:main:subagent:two",
+      requesterTurnRunId: "requester-turn",
+    });
+    saveRuns(fromWake, fromTurn);
+    // v2026.11.10 kept the intent on the wake or on the row; the current type has neither.
+    const writeReleasedShape = (runId: string, edit: (payload: ReleasedRetireShape) => void) => {
+      const stored = readPayload(runId) as { payload_json: string };
+      const payload = JSON.parse(stored.payload_json);
+      edit(payload);
+      writePayload(runId, JSON.stringify(payload));
+    };
+    writeReleasedShape(fromWake.runId, (payload) => {
+      payload.requesterSettleWake!.retireAfterSettle = true;
+    });
+    writeReleasedShape(fromTurn.runId, (payload) => {
+      payload.retireAfterRequesterTurn = true;
+    });
+    reopen();
+
+    const restored = loadSubagentRegistryFromSqlite();
+    const wakeRow = restored.get(fromWake.runId)!;
+    const turnRow = restored.get(fromTurn.runId)!;
+    expect(wakeRow.retireAfterSettle).toBe(true);
+    expect(wakeRow.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+    expect(wakeRow.delivery).toEqual(fromWake.delivery);
+    expect(turnRow.retireAfterSettle).toBe(true);
+    expect(turnRow).not.toHaveProperty("retireAfterRequesterTurn");
+    expect(turnRow.delivery).toEqual(fromTurn.delivery);
+
+    saveSubagentRegistryToSqlite(restored);
+    reopen();
+    for (const runId of [fromWake.runId, fromTurn.runId]) {
+      const stored = JSON.parse((readPayload(runId) as { payload_json: string }).payload_json);
+      expect(stored.retireAfterSettle).toBe(true);
+      expect(stored).not.toHaveProperty("retireAfterRequesterTurn");
+      expect(stored.requesterSettleWake ?? {}).not.toHaveProperty("retireAfterSettle");
+    }
   });
 
   it("uses the last duplicate JSON key: terminal then invalid", () => {

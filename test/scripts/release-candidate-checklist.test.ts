@@ -24,11 +24,14 @@ import { normalizePublicationIntent } from "../../scripts/full-release-publicati
 import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils.mts";
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import {
-  candidateCumulativeShippedPullRequests,
-  loadCandidateShippedBaseline,
+  inspectCandidateChangelogRange,
   validateCandidateChangelogProvenance,
   validateCandidateReleaseNotes,
 } from "../../scripts/lib/release-candidate-changelog.mts";
+import {
+  cumulativeShippedPullRequests,
+  loadChangelogShippedBaseline,
+} from "../../scripts/lib/release-changelog-baseline.mts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
@@ -606,7 +609,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       "CHANGELOG.md": `${section("2026.7.1", 12)}\n${section("2026.6.1", 11)}`,
     });
     git("tag", "v2026.7.1-beta.1");
-    expect(loadCandidateShippedBaseline("v2026.7.1-beta.1", root).pullRequests).toEqual(
+    expect(loadChangelogShippedBaseline("v2026.7.1-beta.1", root).pullRequests).toEqual(
       new Set([12, 11]),
     );
     splitChangelog({ rootDir: root });
@@ -617,7 +620,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
     git("add", ".");
     git("commit", "-m", "docs: replace visible prose");
     git("tag", "v2026.7.1-beta.2");
-    expect(loadCandidateShippedBaseline("v2026.7.1-beta.2", root).pullRequests).toEqual(
+    expect(loadChangelogShippedBaseline("v2026.7.1-beta.2", root).pullRequests).toEqual(
       new Set([12, 11]),
     );
   });
@@ -746,6 +749,12 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             }),
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
+      const recordedTarget = git("rev-parse", "HEAD");
+      if (tagPublished) {
+        writeFileSync(join(targetRoot, "product.ts"), "export const enabled = true;");
+        git("add", "product.ts");
+        git("commit", "-m", "fix: ship a product change after notes freeze");
+      }
       const targetSha = git("rev-parse", "HEAD");
       // The target ref is authoritative even if another checkout has prepared a newer pin.
       if (pin !== null) {
@@ -968,6 +977,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
           parsePluginReleaseSelection,
           isRecord,
           requireString: (value: string) => value,
+          inspectCandidateChangelogRange,
           validateCandidateChangelog: () => {
             if (changelogFailure) {
               throw new Error("candidate changelog rejected");
@@ -975,7 +985,12 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             return {
               releaseNotesText: "Fixture notes.",
               releaseNotesCheck: { status: "passed" },
-              releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
+              releaseNotesProvenance: {
+                status: "passed",
+                target: recordedTarget,
+                shippedBaselines: [],
+              },
+              changelogPaths: ["CHANGELOG.md"],
             };
           },
           runLocalGeneratedCheckIfNeeded: generatedChecks,
@@ -1253,10 +1268,23 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       expect(waitedRuns).toEqual(["111"]);
       // A pushed tag is read from GitHub instead of reported as still planned.
       expect(preflight.mock.calls[0]?.[1]).toMatchObject({ allowPlannedTag: !tagPublished });
-      expect(
-        readFileSync(join(options.outputDir, "release-candidate-evidence.md"), "utf8"),
-      ).toContain(tag);
+      const markdown = readFileSync(
+        join(options.outputDir, "release-candidate-evidence.md"),
+        "utf8",
+      );
+      expect(markdown).toContain(tag);
       const output = log.mock.calls.map(([line]) => line).join("\n");
+      if (tagPublished) {
+        const compareUrl = `https://github.com/openclaw/openclaw/compare/${recordedTarget}...${targetSha}`;
+        expect(evidence.releaseNotesProvenance.candidateRange).toMatchObject({
+          candidate: targetSha,
+          commitCount: 1,
+          latestChangeOutsideChangelog: targetSha,
+          compareUrl,
+        });
+        expect(markdown).toContain(compareUrl);
+        expect(output).toContain(compareUrl);
+      }
       if (workflowSha) {
         // A resumed candidate keeps its recorded tag even though a newer tag exists at the SHA.
         const reusedToolingTag =
@@ -1777,7 +1805,24 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       ).replace("## 2026.7.1", `## ${version}`);
     const changelog = `${section("Unreleased", 99, "- **PR #1** fix: not shipped.")}\n\n${section("2026.6.11", 0, "- **PR #2** fix: shipped.")}`;
 
-    expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+    const diagnostics: string[] = [];
+    expect([
+      ...cumulativeShippedPullRequests(changelog, "test baseline", undefined, diagnostics),
+    ]).toEqual([2]);
+    expect(diagnostics).toEqual([
+      "test baseline section 2026.6.11 has a stale legacy PR count; using explicit rows, not its declared total.",
+    ]);
+    expect(() =>
+      cumulativeShippedPullRequests(
+        changelog.replace(
+          "base..HEAD history: 0 merged PRs.",
+          "base.." +
+            "a".repeat(40) +
+            " history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.",
+        ),
+        "test baseline",
+      ),
+    ).toThrow("contribution record row count 1 != 0");
   });
 
   it("validates cumulative shipped baseline exclusion metadata", () => {

@@ -45,11 +45,12 @@ type PublishComposerInput = (
   wrap?: (edit: ComposerInputEdit, emit: () => void, next: string) => void,
 ) => void;
 
-/** Native CodeMirror extensions own decoration semantics. These two hooks bridge
+/** Native CodeMirror extensions own decoration semantics. These hooks bridge
  * external draft state and input metadata without teaching the editor a token kind. */
 export type ComposerEditorOptions = {
   extensions: Extension;
   sync?: (view: EditorView, previous: string) => readonly StateEffect<unknown>[];
+  restoresAtomicRanges?: (effect: StateEffect<unknown>) => boolean;
   onEdit?: (update: ViewUpdate, publish: PublishComposerInput) => void;
 };
 
@@ -436,6 +437,12 @@ export function mountComposerEditor(
       const next = input.value;
       const previous = view.state.doc.toString();
       let effects = options.sync?.(view, previous) ?? [];
+      // History replays without selection filters. Validate the mapped selection when
+      // the owner restores atomic ranges, including when only their identities change.
+      const selection =
+        options.restoresAtomicRanges && effects.some(options.restoresAtomicRanges)
+          ? view.state.selection
+          : undefined;
       const nextAttributes = JSON.stringify([
         attributes(),
         input.disabled,
@@ -466,13 +473,15 @@ export function mountComposerEditor(
           oldEnd--;
           newEnd--;
         }
+        const changes = view.state.changes({ from, to: oldEnd, insert: next.slice(from, newEnd) });
         view.dispatch({
-          changes: { from, to: oldEnd, insert: next.slice(from, newEnd) },
+          changes,
+          selection: selection?.map(changes),
           effects,
           userEvent: "input.complete",
         });
       } else if (effects.length) {
-        view.dispatch({ effects, userEvent: "input.complete" });
+        view.dispatch({ effects, selection, userEvent: "input.complete" });
       }
       if (!next && previous) {
         // An owner clear (send, discard) ends the draft; undo must not restore it,

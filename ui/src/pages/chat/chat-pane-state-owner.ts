@@ -2,6 +2,7 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogProfileRelation,
+  SessionsCatalogReadResult,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -582,6 +583,7 @@ export abstract class ChatPaneStateOwner {
   readonly collaboration: {
     sharingStates: Map<string, ChatSessionSharingState>;
     suggestions: SessionSuggestion[];
+    liveResolutions: Map<string, boolean>;
     role: SessionSharingRole | undefined;
     busyIds: Set<string>;
     addOperation: symbol | undefined;
@@ -592,6 +594,7 @@ export abstract class ChatPaneStateOwner {
   } = {
     sharingStates: new Map(),
     suggestions: [],
+    liveResolutions: new Map(),
     role: undefined,
     busyIds: new Set(),
     addOperation: undefined,
@@ -664,6 +667,7 @@ export abstract class ChatPaneStateOwner {
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
   readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
+    catalogPreviewImage: SessionsCatalogReadResult["previewImage"];
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
@@ -672,6 +676,7 @@ export abstract class ChatPaneStateOwner {
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
   }>({
+    catalogPreviewImage: undefined,
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
@@ -732,7 +737,7 @@ export abstract class ChatPaneStateOwner {
   protected abstract reconcileWaitingApprovalSnapshot(
     approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
-  protected abstract publishHeaderError(error: unknown, owner?: string): void;
+  protected abstract publishHeaderError(error: unknown, owner?: string, expected?: boolean): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
   protected abstract initialProgressCardTarget():
     | ReturnType<typeof resolveUiConversationIdentity>

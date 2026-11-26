@@ -101,6 +101,7 @@ export function registerRequesterIdentityTests({
                   agentToolCaller: caller,
                   operatorRunAuthority: authority!.operatorAuthority,
                 }),
+                senderIsOwner: authority!.operatorAuthority!.grant.owner,
                 request: { message: "continue", idempotencyKey: "retained-owner-test" },
                 runId: "retained-owner-test",
                 admittedSessionId: "requester",

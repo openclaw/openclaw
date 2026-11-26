@@ -4,6 +4,7 @@ import type {
   NodeWorkerWorkspaceTransferInput,
   NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import type { NodeWorkerPreparedWorkspaceTransfer } from "./node-worker-prepared-workspace-transfer.js";
 import type { NodeWorkerTransferHttpRequest } from "./node-worker-transfer-http.js";
 
@@ -16,6 +17,9 @@ export type WorkspaceTransferContext = {
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
+  /** Node-owned command environment, never supplied by the workspace request. */
+  baseEnv?: NodeJS.ProcessEnv;
+  isolation?: NodeWorkerCommandIsolation;
   transfer: NodeWorkerWorkspaceTransferInput;
   assertCurrent?: () => void;
   prepared?: NodeWorkerPreparedWorkspaceTransfer;

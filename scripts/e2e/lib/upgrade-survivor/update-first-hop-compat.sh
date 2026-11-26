@@ -431,12 +431,13 @@ run_positive_hops() {
 
 run_missing_path_admission() {
   local started=$SECONDS
-  local lane=admission-missing-load-path
+  local lane=admission-missing-load-path route
   if [ "$SCENARIO" != "missing-load-path" ]; then
     reset_lane positive
   fi
   setup_lane "$lane" 18793 "$CANDIDATE_PACKAGE" 1
   run_update "$lane-update" "$FUTURE_PACKAGE"
+  route="$(update_restart_route "$lane-update")" || return "$?"
   local assert_started=$SECONDS
   assert_admission "$lane-update" candidate configured-plugin-path-unavailable
   assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-build-info.json"
@@ -459,7 +460,7 @@ run_missing_path_admission() {
   # Standalone Doctor can restart an offline service; join it before hashing profile artifacts.
   systemctl --user stop openclaw-gateway.service
   node scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs \
-    "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json"
+    "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json" "$route"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   stop_lane

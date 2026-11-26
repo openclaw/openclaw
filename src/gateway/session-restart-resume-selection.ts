@@ -62,6 +62,7 @@ export type SessionIdentity = {
   storePath: string;
   sessionId?: string;
   needsResume: boolean;
+  sourceRunId?: string;
   scheduledAutomation?: boolean;
   parked?: boolean;
   directChat?: boolean;
@@ -185,15 +186,22 @@ export async function selectLiveRestartResumeSessions(
         !hasCommittedReplyOperationOutcome(operation),
     });
   }
+  const liveSources = new Map<string, string | null>();
+  const sourceKey = (agentId: string, sessionKey: string, sessionId: string) =>
+    JSON.stringify([agentId, sessionKey, sessionId]);
   for (const runId of listLiveAgentRunIds()) {
     if (!hasAgentRunContextExecutionOwner(runId)) {
       continue;
     }
-    const operation = findSessionControllerOperationByRunId(runId);
-    if (operation) {
+    const run = getAgentRunContext(runId);
+    if (run?.agentId && run.sessionKey && run.sessionId) {
+      // Several executions can share one incarnation. A shutdown snapshot cannot choose among them.
+      const key = sourceKey(run.agentId, run.sessionKey, run.sessionId);
+      liveSources.set(key, liveSources.has(key) ? null : runId);
+    }
+    if (findSessionControllerOperationByRunId(runId)) {
       continue;
     }
-    const run = getAgentRunContext(runId);
     if (run?.sessionKey && (!run.cronRunsByJobId?.size || run.acceptedUserReply)) {
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
@@ -209,6 +217,14 @@ export async function selectLiveRestartResumeSessions(
         error,
       });
     });
+  }
+  for (const session of sessions.values()) {
+    // A promoted child has no requester incarnation of its own and cannot donate its tool receipts.
+    if (session.sessionId) {
+      session.sourceRunId =
+        liveSources.get(sourceKey(session.agentId, session.sessionKey, session.sessionId)) ??
+        undefined;
+    }
   }
   return sessions;
 }
