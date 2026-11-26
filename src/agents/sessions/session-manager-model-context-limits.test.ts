@@ -861,14 +861,16 @@ it("reads past only host-marked completion reports to the turn that started the 
     await withSessionState(`fork-turn-${label}`, async ({ scope }) => {
       const source = SessionManager.open(scope);
       // SAFETY: fixtures follow the stored user-turn shape the transcript owner accepts.
-      source.appendMessage({
+      await source.appendMessageAsync({
         role: "user",
         content: "Owner message",
         timestamp: 1,
         __openclaw: { senderIsOwner: true, senderId: "owner-1" },
       } as never);
-      source.appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: "ok" }] }));
-      source.appendMessage(row as never);
+      await source.appendMessageAsync(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "ok" }] }),
+      );
+      await source.appendMessageAsync(row as never);
       const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "noted" }], timestamp: 3 }),
       );
@@ -881,7 +883,7 @@ it("keeps a lone host completion report's own facts when no earlier input is in 
   await withSessionState("fork-turn-report-only", async ({ scope }) => {
     const source = SessionManager.open(scope);
     // SAFETY: fixtures follow the stored user-turn shape the transcript owner accepts.
-    source.appendMessage({
+    await source.appendMessageAsync({
       role: "user",
       content: "[subagent completion] child finished.",
       timestamp: 1,
