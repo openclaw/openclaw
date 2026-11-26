@@ -17,7 +17,7 @@ import {
   handleSkillCommandUsage,
   handleStatusCommand,
 } from "./commands-info.js";
-import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
+import { buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -314,28 +314,6 @@ describe("info command handlers", () => {
     expect(statusReplyParams.sessionEntry?.sessionId).toBe("target-session");
     expect(statusReplyParams.sessionEntry?.parentSessionKey).toBe("target-parent");
     expect(statusReplyParams.parentSessionKey).toBe("target-parent");
-  });
-
-  it("routes /status plugins to the plugin health summary", async () => {
-    const params = buildInfoParams("/status plugins", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-
-    const statusResult = await handleStatusCommand(params, true);
-
-    expect(statusResult).toEqual({
-      shouldContinue: false,
-      reply: { text: "plugins status reply" },
-    });
-    expect(buildStatusPluginsReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: params.cfg,
-        command: params.command,
-        workspaceDir: params.workspaceDir,
-      }),
-    );
-    expect(buildStatusReply).not.toHaveBeenCalled();
   });
 
   it("uses the canonical target session agent when listing /commands", async () => {

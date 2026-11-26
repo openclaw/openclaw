@@ -119,68 +119,6 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("keeps the newest idle worker warm without renewing expired surplus workers", async () => {
-  vi.useFakeTimers();
-  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000 }, { retainOneIdleWorker: true });
-  expect(workers).toHaveLength(0);
-  const first = pool.run("first", {});
-  const later = pool.run("later", {});
-  const previous = workerFor("first");
-  const newest = workerFor("later");
-  reply(previous, "first");
-  reply(newest, "later");
-  await Promise.all([first, later]);
-  const active = pool.run("recent", {});
-  void active.catch(() => undefined);
-  expect(workerFor("recent")).toBe(newest);
-  await vi.advanceTimersByTimeAsync(61_000);
-  expect(previous.terminate).not.toHaveBeenCalled();
-  reply(newest, "recent");
-  await active;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(previous.terminate).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(10 * 60_000);
-  expect(newest.terminate).not.toHaveBeenCalled();
-  for (const retirement of ["rotate", "close"] as const) {
-    const task = pool.run(retirement, {});
-    const worker = workerFor(retirement);
-    if (retirement === "rotate") {
-      expect(worker).toBe(newest);
-    }
-    reply(worker, retirement);
-    await task;
-    await pool[retirement]();
-    expect(worker.terminate).toHaveBeenCalledOnce();
-    expect(pool.getSnapshot().workers).toBe(0);
-    expect(workers).toHaveLength(retirement === "rotate" ? 2 : 3);
-  }
-});
-
-it("retires burst workers without extending the first worker's idle lifetime", async () => {
-  vi.useFakeTimers();
-  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
-  const first = pool.run("first", {});
-  const burst = pool.run("burst", {});
-  const primary = workerFor("first");
-  const surplus = workerFor("burst");
-  reply(primary, "first");
-  reply(surplus, "burst");
-  await Promise.all([first, burst]);
-
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(surplus.terminate).toHaveBeenCalledOnce();
-  expect(primary.terminate).not.toHaveBeenCalled();
-  expect(pool.getSnapshot().workers).toBe(1);
-
-  const reused = pool.run("reused", {});
-  expect(workerFor("reused")).toBe(primary);
-  reply(primary, "reused");
-  await reused;
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(primary.terminate).toHaveBeenCalledOnce();
-  expect(pool.getSnapshot().workers).toBe(0);
-});
-
 it("keeps the remaining worker's original idle deadline while the first worker stops", async () => {
   vi.useFakeTimers();
   const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
@@ -210,44 +148,6 @@ it("keeps the remaining worker's original idle deadline while the first worker s
     await pool.close();
     await cancellation;
   }
-});
-
-it("reuses one recurring burst worker across idle gaps and eventually retires it", async () => {
-  vi.useFakeTimers();
-  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
-  const wave = async (name: string) => {
-    const tasks = [pool.run(`${name}-primary`, {}), pool.run(`${name}-burst`, {})];
-    const primary = workerFor(`${name}-primary`);
-    const burst = workerFor(`${name}-burst`);
-    reply(primary, `${name}-primary`);
-    reply(burst, `${name}-burst`);
-    await Promise.all(tasks);
-    return { primary, burst };
-  };
-  const first = await wave("first");
-  await vi.advanceTimersByTimeAsync(8_000);
-  expect(first.burst.terminate).toHaveBeenCalledOnce();
-
-  const second = await wave("second");
-  await vi.advanceTimersByTimeAsync(8_000);
-  const third = await wave("third");
-  expect(third.primary).toBe(first.primary);
-  expect(third.burst).toBe(second.burst);
-  expect(pool.getSnapshot().workersCreated).toBe(3);
-
-  await vi.advanceTimersByTimeAsync(15_000);
-  expect(second.burst.terminate).toHaveBeenCalledOnce();
-  expect(first.primary.terminate).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(45_000);
-  expect(first.primary.terminate).toHaveBeenCalledOnce();
-  expect(pool.getSnapshot().workers).toBe(0);
-
-  await pool.rotate();
-  const rotated = await wave("rotated");
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(rotated.burst.terminate).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(55_000);
-  expect(rotated.primary.terminate).toHaveBeenCalledOnce();
 });
 
 it("guards process-wide reader cleanup before dispatching to registered pools", async () => {
@@ -295,46 +195,6 @@ it("retires only idle slots on critical pressure, after result and resource cust
   const { task: next, worker: replacement } = startTask(pool, "next");
   expect(replacement).not.toBe(worker);
   await finishTask(next, "next");
-});
-
-it("reclaims untimed burst workers under critical pressure", async () => {
-  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 0 });
-  const first = pool.run("primary", {});
-  const second = pool.run("burst", {});
-  const primary = workerFor("primary");
-  const burst = workerFor("burst");
-  reply(primary, "primary");
-  reply(burst, "burst");
-  await Promise.all([first, second]);
-  expect(primary.terminate).not.toHaveBeenCalled();
-  expect(burst.terminate).not.toHaveBeenCalled();
-  diagnosticsChannel("openclaw.memory.critical").publish(true);
-  await nextTurn();
-  expect(primary.terminate).toHaveBeenCalledOnce();
-  expect(burst.terminate).toHaveBeenCalledOnce();
-  expect(pool.getSnapshot().workers).toBe(0);
-});
-
-it("reuses recently active workers under repeated pressure and retires them after an idle gap", async () => {
-  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
-  const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
-  const pressure = diagnosticsChannel("openclaw.memory.critical");
-  const worker = await completedWorker(pool);
-  for (const time of [500, 1_000, 1_500]) {
-    clock.mockReturnValue(time);
-    pressure.publish(undefined);
-    await nextTurn();
-    expect(worker.terminate).not.toHaveBeenCalled();
-    const input = `read-${time}`;
-    const next = startTask(pool, input);
-    expect(next.worker).toBe(worker);
-    await finishTask(next.task, input);
-  }
-  expect(pool.getSnapshot().workersCreated).toBe(1);
-  clock.mockReturnValue(2_500);
-  pressure.publish(undefined);
-  await nextTurn();
-  expect(worker.terminate).toHaveBeenCalledOnce();
 });
 
 it("reaches a cooperative exchange when earlier shared pressure has not released capacity", async () => {

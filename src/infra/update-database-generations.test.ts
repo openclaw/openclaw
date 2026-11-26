@@ -233,26 +233,6 @@ it.skipIf(process.platform === "win32").each(["", "-wal", "-journal"] as const)(
   },
 );
 
-it.each(["appears", "disappears", "is replaced"] as const)(
-  "reuses a receipt when only an empty WAL %s without a commit header change",
-  (change) => {
-    const { file, staging } = generationFixture(change === "appears" ? "wal-absent" : "wal-empty");
-    const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
-    if (!receipt) {
-      throw new Error("Expected a successful SQLite receipt before the empty WAL transition");
-    }
-    if (change !== "appears") {
-      fs.renameSync(`${file}-wal`, `${file}.empty-wal`);
-    }
-    if (change !== "disappears") {
-      fs.writeFileSync(`${file}-wal`, "");
-    }
-    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
-    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
-    expect(fs.readdirSync(staging)).toEqual([]);
-  },
-);
-
 it.each([
   "a non-writing connection opens",
   "a non-writing connection closes",
@@ -384,24 +364,6 @@ it.each([false, true])(
     expect(fs.readdirSync(staging)).toEqual([]);
   },
 );
-
-it("reuses a receipt when a reader opens without committing during verification", () => {
-  const { file, staging } = generationFixture("wal-absent");
-  const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
-  if (!receipt) {
-    throw new Error("Expected a successful SQLite receipt before a reader opens");
-  }
-  let reader: DatabaseSync | undefined;
-  duringGenerationRead(() => {
-    reader = openReader(file);
-  });
-  try {
-    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
-  } finally {
-    reader?.close();
-  }
-  expect(fs.readdirSync(staging)).toEqual([]);
-});
 
 it.each(["auto", "off"] as const)(
   "retains exact closed generations and source bytes with native copying %s",

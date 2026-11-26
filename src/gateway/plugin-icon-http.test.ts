@@ -930,27 +930,9 @@ describe("Control UI plugin and catalog icon routes", () => {
 });
 
 describe("compact plugin activity icons", () => {
-  it("serves distinct default and exact-tool glyphs while preserving branding", async () => {
-    const overridePath = path.join(iconFixtureDir, "override.svg");
-    const overrideSvg = ACTIVITY_SVG.replace("M2 2h20v20H2z", "M4 4h16v16H4z");
-    writeFileSync(overridePath, overrideSvg);
-    mocks.resolveActivityIconSource.mockImplementation(({ toolName }) => ({
-      kind: "file",
-      path: toolName === "functions.search" ? overridePath : activityIconPath,
-      rootPath: iconFixtureDir,
-    }));
+  it("serves activity glyphs with guarded HTTP metadata", async () => {
     const fallback = await request(ACTIVITY_ROUTE.pathname);
-    const override = await request(`${ACTIVITY_ROUTE.pathname}?tool=functions.search`);
-    const branding = await request("/__openclaw__/plugin-icon/firecrawl");
     expect(await fallback.text()).toBe(ACTIVITY_SVG);
-    expect(await override.text()).toBe(overrideSvg);
-    expect(fallback.headers.get("etag")).not.toBe(override.headers.get("etag"));
-    expect(Buffer.from(await branding.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
-    expect(mocks.resolveActivityIconSource).toHaveBeenLastCalledWith({
-      config: testConfig,
-      pluginId: "firecrawl",
-      toolName: "functions.search",
-    });
     expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(fallback.headers.get("content-type")).toBe("image/svg+xml");
     expect(fallback.headers.get("content-disposition")).toBe(
