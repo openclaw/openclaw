@@ -7,4 +7,9 @@
 # Cover source-preview parsing/cache invalidation at its owner.
 # Cover readiness-only notifications, unchanged row-tree identity, real group
 # reordering, and pending archive / pull-request side-fact invalidation.
-415
+# Preserve the 61-line original-order hello/recovery matrix: ordinary hello,
+# bootstrap token/profile retirement, and credential replacement use the
+# existing deferred probe/store fixture. Keep the recovered-summary wait too.
+# Full branch growth is 871 lines; merge CI counts 869 because main already
+# contains the two recovered-summary readiness-wait lines.
+471
