@@ -630,14 +630,16 @@ describe("sidebar attention source publication", () => {
 
   it("reads scoped failure membership without sorting display rows for each table page", async () => {
     const names = vi.fn();
-    const ids = Array.from({ length: 201 }, (_, index) => `job-${index}`);
-    const jobs = ids.map((id, index) => ({
-      ...cronPage(id, index === 200 ? "error" : "ok").jobs[0]!,
-      get name() {
-        names();
-        return id;
-      },
-    }));
+    const jobs = Array.from({ length: 201 }, (_, index) => {
+      const id = `job-${index}`;
+      const job = cronPage(id, index === 200 ? "error" : "ok").jobs[0]!;
+      return Object.defineProperty(job, "name", {
+        get() {
+          names();
+          return id;
+        },
+      });
+    });
     const offsets: number[] = [];
     const request = inventoryRequest((params) => {
       const offset = isRecord(params) ? Number(params.offset) : 0;
