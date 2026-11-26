@@ -25,6 +25,13 @@ struct RootSidebarSessionButton: View, Equatable {
             lhs.isConnected == rhs.isConnected && lhs.needsApproval == rhs.needsApproval
     }
 
+    /// The phone's second line is what the agent is doing right now, and only while it works: an idle
+    /// row is its title alone, and the repository and branch never show. The Mac keeps the shared rule.
+    nonisolated static func activityLine(for session: OpenClawChatSessionEntry, isWorking: Bool) -> String? {
+        guard isWorking else { return nil }
+        return ChatSessionSidebarModel.subtitle(for: session, workSubtitle: nil)
+    }
+
     var body: some View {
         let session = self.node.session
         let isSelected = self.isSelected
@@ -38,10 +45,7 @@ struct RootSidebarSessionButton: View, Equatable {
                         .foregroundStyle(OpenClawSidebarPalette.textStrong)
                         .lineLimit(1)
                         .modifier(RootSidebarApprovalLabel(isVisible: self.needsApproval))
-                    if let subtitle = ChatSessionSidebarModel.subtitle(
-                        for: session,
-                        workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                    {
+                    if let subtitle = Self.activityLine(for: session, isWorking: self.node.badges.runningCount > 0) {
                         Text(verbatim: subtitle)
                             .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawSidebarPalette.muted)
