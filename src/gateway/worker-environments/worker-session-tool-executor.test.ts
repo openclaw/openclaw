@@ -578,6 +578,22 @@ describe("worker session tool topology", () => {
     },
   );
 
+  it("creates a labeled worker child as an unclaimed spawn creation", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const result = await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: { toolCallId: "labeled-child", task: "review the draft", label: "r1" },
+    });
+
+    expect(result.resultJson).not.toContain('"status":"error"');
+    expect(gatewayCreate).toHaveBeenCalledOnce();
+    expect(gatewayCreate.mock.calls[0]?.[0]).toMatchObject({
+      params: { label: "r1" },
+      creation: { via: "spawn", unclaimedLabel: true },
+    });
+  });
+
   it("spawns a grandchild from the child cloud turn and communicates across both levels", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await spawn("spawn-child-for-nesting");
