@@ -47,6 +47,17 @@ struct ChatTranscriptSearchTests {
         #expect(ChatTranscriptSearchResults(rows: rows, query: "**red**").messageIDs == [user.id, code.id])
     }
 
+    @Test func `find matches phrases across inline code and link labels within one paragraph`() {
+        let code = self.message("Pick ripe `pears` today.", role: "user")
+        let link = self.message("Pick ripe [pears](#fruit) today.")
+        let separate = self.message("Pick ripe\n\n`pears` today.")
+        let rows = [code, link, separate].map(ChatTranscriptRow.message)
+
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "ripe pears").messageIDs == [code.id, link.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "`pears`").messageIDs == [code.id, separate.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "[pears](#fruit)").messageIDs == [link.id])
+    }
+
     private func message(_ text: String, role: String = "assistant") -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: role,

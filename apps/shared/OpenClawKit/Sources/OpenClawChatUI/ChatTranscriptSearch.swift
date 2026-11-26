@@ -2,6 +2,8 @@
 import SwiftUI
 
 struct ChatTranscriptSearchResults: Equatable {
+    private static let inlineMarkdownMarkers = CharacterSet(charactersIn: "*_`[<")
+
     let messageIDs: [UUID]
 
     init(rows: [ChatTranscriptRow], query: String) {
@@ -18,18 +20,13 @@ struct ChatTranscriptSearchResults: Equatable {
     private static func matches(_ message: OpenClawChatMessage, query: String) -> Bool {
         let text = ChatMessageVisibleText.visibleText(in: message)
         if text.localizedStandardContains(query) { return true }
-        guard text.contains("*") || text.contains("_") else { return false }
+        guard text.rangeOfCharacter(from: Self.inlineMarkdownMarkers) != nil else { return false }
 
         let markdown = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: text)
         guard let parsed = try? AttributedString(markdown: markdown) else { return false }
-        // Find may cross emphasis runs within a block, but never join two separate paragraphs.
+        // Find may cross inline formatting, but the renderer displays each paragraph separately.
         return parsed.runs[\.presentationIntent].contains { _, range in
-            let block = parsed[range]
-            let hasEmphasis = block.runs.contains { run in
-                let intent = run.inlinePresentationIntent ?? []
-                return !intent.isDisjoint(with: [.emphasized, .stronglyEmphasized])
-            }
-            return hasEmphasis && String(block.characters).localizedStandardContains(query)
+            String(parsed[range].characters).localizedStandardContains(query)
         }
     }
 
