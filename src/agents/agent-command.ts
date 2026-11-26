@@ -308,8 +308,10 @@ async function agentCommandInternalOwned(
         const isSessionRollover =
           isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
-        if (automaticReset) {
+        if (isSessionRollover) {
           entry.lifecycleRevision = randomUUID();
+        }
+        if (automaticReset) {
           entry.agentHarnessId = undefined;
         }
         await prepareDeliveryForRun(entry);
