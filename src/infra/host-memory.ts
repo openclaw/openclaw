@@ -74,12 +74,23 @@ export function readHostFreeMemoryBytes(): number {
   return available > 0 ? available : os.freemem();
 }
 
-/** Defer optional background work before consuming the last 20% of a process limit. */
-export function isConstrainedProcessLowOnMemory(): boolean {
+/** Defer optional background work before consuming the last 20% of process or host capacity. */
+export function isMemoryPressureHigh(): boolean {
   const limit = process.constrainedMemory();
-  return (
-    Number.isSafeInteger(limit) && limit > 0 && readProcessAvailableMemoryBytes() <= limit * 0.2
-  );
+  if (
+    Number.isSafeInteger(limit) &&
+    limit > 0 &&
+    readProcessAvailableMemoryBytes() <= limit * 0.2
+  ) {
+    return true;
+  }
+  // Node/Linux reports reclaimable host memory even without a process limit.
+  // Other runtimes retain their process-limit policy; unknown host readings do not defer work.
+  if (process.platform !== "linux" || process.versions.bun) {
+    return false;
+  }
+  const free = readHostFreeMemoryBytes();
+  return free > 0 && free <= os.totalmem() * 0.2;
 }
 
 /** Visible cgroup-v2 directories from this process's group up to the mount root. */

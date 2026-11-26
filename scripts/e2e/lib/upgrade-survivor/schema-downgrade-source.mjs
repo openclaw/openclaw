@@ -48,12 +48,32 @@ function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
     }),
   );
   assert.equal(packedBuild.commit, head, "candidate tarball is not the tested merge source");
-  receipt.candidateBuild = {
-    ...packedBuild,
-    readerFloorSupported: /export function readStateSchemaMinReader\(/u.test(
-      git("show", `${head}:src/state/openclaw-state-db-schema-version.ts`),
-    ),
-  };
+  receipt.candidateBuild = packedBuild;
+  const baselineSchema = path.join(directory, "previous-agent-schema.sql");
+  fs.writeFileSync(
+    baselineSchema,
+    execFileSync("git", ["show", `${base}:src/state/openclaw-agent-schema.sql`], { cwd: repo }),
+  );
+  execFileSync(
+    process.execPath,
+    [
+      "scripts/run-vitest.mjs",
+      "run",
+      "test/scripts/upgrade-survivor-migration-chain.test.ts",
+      "--maxWorkers=1",
+    ],
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_COMMIT: head,
+        OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA: base,
+        OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE_SCHEMA: baselineSchema,
+        OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE: String(previous.openclaw.schemaVersions.agent),
+      },
+      stdio: "inherit",
+    },
+  );
   const tree = path.join(directory, "previous-source");
   fs.mkdirSync(tree);
   const archive = path.join(directory, "previous-source.tar");

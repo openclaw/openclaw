@@ -45,7 +45,9 @@ const repositoryScriptEntries = [
   "scripts/build-iroh.mjs!",
   // The macOS packager verifies the staged app before signing.
   "scripts/lib/mac-runtime-portability.mjs!",
+  "scripts/lib/tsdown-memory-admission.mts!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/gateway-catalog-context-retention.mjs!",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   "scripts/windows-gateway-release.mjs!",
@@ -160,6 +162,8 @@ const repositoryScriptEntries = [
   "scripts/ci-build-manifest.mjs!",
   // Full release validation invokes child-evidence reuse through a shell variable.
   "scripts/find-reusable-release-child.mjs!",
+  // The release candidate checklist spawns its Parallels preflight by exact path.
+  "scripts/e2e/parallels/candidate-preflight.ts!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -478,6 +482,7 @@ const repositoryScriptEntries = [
   // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
   "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -1261,10 +1266,6 @@ const config = {
     // the full-tree audit still checks all exports against their boundary tests.
     "src/infra/database-port-recovery.ts": ["exports"],
     "src/infra/sqlite-snapshot.ts": ["exports"],
-    // Participate split part 1 stores member access levels; part 4 adds the
-    // session.members.setAccess handler that calls these writers. Remove then.
-    "src/config/sessions/session-sharing-store.ts": ["exports"],
-    "src/config/sessions/session-sharing-store.async.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.

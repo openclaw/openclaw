@@ -557,7 +557,10 @@ export const runtimeProcessSealedManifest = {
   },
   serviceChildRelay: {
     ownerSource: "src/process/supervisor/service-child-relay.ts",
-    entries: [["serviceChildGroupAnchor", "service-child-group-anchor"]],
+    entries: [
+      ["serviceChildRelay", "service-child-relay"],
+      ["serviceChildGroupAnchor", "service-child-group-anchor"],
+    ],
   },
 } as const satisfies Record<
   string,

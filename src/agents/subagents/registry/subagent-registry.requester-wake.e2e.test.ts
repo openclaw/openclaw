@@ -18,8 +18,10 @@ import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
-import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
-import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
+import {
+  announceTesting as subagentAnnounceTesting,
+  outputTesting as subagentAnnounceOutputTesting,
+} from "../announce/subagent-announce-overrides.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";

@@ -35,6 +35,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
+import { withCliFailureContext } from "./failure-context.js";
 import { resolveBareRootLaunchTarget } from "./fresh-install-config.js";
 import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
@@ -665,10 +666,11 @@ export async function runCli(
       },
     );
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
-  return !invocation.hasHelpOrVersion &&
-    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
-    ? await withDeferredDebugProxyCapture(invoke)
-    : await invoke();
+  return withCliFailureContext(() =>
+    !invocation.hasHelpOrVersion && ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+      ? withDeferredDebugProxyCapture(invoke)
+      : invoke(),
+  );
 }
 
 async function withSnapshotReuseForMaintenance<T>(
@@ -883,17 +885,17 @@ async function runCliWithPreparedOutputMode(
     ).createPluginCliLoadSession(getPluginCache());
     return pluginCliSession;
   };
-  const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
+  const { primary: cliRoot } = normalizedInvocation;
+  const commandPrimary = !isHelpOrVersionInvocation && !bareSessionInvocation && cliRoot;
+  const builtInCommand = commandPrimary && findBuiltInCommandDescriptor(commandPrimary);
+  const proxyStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
-    !(await isCurrentRuntimeSupported()) ||
-    normalizedInvocation.primary === "update" ||
-    normalizedInvocation.primary === "doctor";
+    !(await isCurrentRuntimeSupported()) || cliRoot === "update" || cliRoot === "doctor";
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
@@ -903,8 +905,9 @@ async function runCliWithPreparedOutputMode(
         const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
           // Routing must not create state before Doctor decides whether migrations are needed.
           observe: false,
-          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
-          ...(bestEffortConfigStartupPolicy.validateConfigOnly || isGatewayRunInvocation
+          ...(isGatewayRunInvocation ? { isolateEnv: true } : {}),
+          // Built-in proxy routing needs core config. Command admission owns plugin validation.
+          ...(builtInCommand || proxyStartupPolicy.validateConfigOnly || isGatewayRunInvocation
             ? { pluginValidation: "core-only" }
             : { skipPluginValidation: true }),
         };
@@ -991,12 +994,7 @@ async function runCliWithPreparedOutputMode(
         isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
       );
     }
-    if (
-      !isHelpOrVersionInvocation &&
-      !bareSessionInvocation &&
-      normalizedInvocation.primary &&
-      !findBuiltInCommandDescriptor(normalizedInvocation.primary)
-    ) {
+    if (commandPrimary && !builtInCommand) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (
         await withConsoleLogsRoutedToStderr(() =>
@@ -1188,18 +1186,15 @@ async function runCliWithPreparedOutputMode(
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
-    const { createCliProgress } = await import("./progress.js");
-    const startupProgress = createCliProgress({
-      label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
-      ...(suppressStartupProgress ? { enabled: false } : {}),
-    });
+    const machineOutput = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
+    const startupProgress =
+      process.stderr.isTTY && !machineOutput
+        ? (await import("./progress.js")).createCliProgress({ label: "Loading OpenClaw CLI…" })
+        : undefined;
     try {
       const [
         { buildProgram },
-        { handleCliUncaughtException },
+        { installCliUncaughtExceptionHandler },
         { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
@@ -1217,9 +1212,7 @@ async function runCliWithPreparedOutputMode(
         installUnhandledRejectionHandler();
       }
 
-      process.on("uncaughtException", (error) => {
-        handleCliUncaughtException(error, normalizedArgv);
-      });
+      installCliUncaughtExceptionHandler(normalizedArgv);
 
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
@@ -1251,7 +1244,7 @@ async function runCliWithPreparedOutputMode(
           const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
-            jsonOutputMode: suppressStartupProgress,
+            jsonOutputMode: machineOutput,
           });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
@@ -1275,7 +1268,7 @@ async function runCliWithPreparedOutputMode(
             resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
         },
       );
-      startupProgress.done();
+      startupProgress?.done();
 
       let completedHelpOrVersion = false;
       try {
@@ -1307,7 +1300,7 @@ async function runCliWithPreparedOutputMode(
         requestExitAfterOneShotOutput();
       }
     } finally {
-      startupProgress.done();
+      startupProgress?.done();
     }
   } finally {
     pluginCliSession?.close();

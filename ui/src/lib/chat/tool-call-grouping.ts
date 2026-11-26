@@ -76,6 +76,7 @@ export function describeToolGroup(
       "waits",
       "questions",
       "cancellations",
+      "compactions",
       "other",
       "subagents",
       "interrupted",
@@ -88,6 +89,10 @@ export function describeToolGroup(
       continue;
     }
     if (item.hideFromChannelProgress) {
+      continue;
+    }
+    if (item.kind === "compaction") {
+      groups.get("compactions")!.push(item);
       continue;
     }
     const name = item.name?.trim().toLowerCase() ?? "";

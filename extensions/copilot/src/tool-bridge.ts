@@ -500,7 +500,11 @@ function convertOpenClawToolToSdkTool(
 
   return {
     description: sourceTool.description,
-    defer: sourceTool.catalogMode === "direct-only" ? "never" : undefined,
+    // Copilot has no on-demand promotion; on-demand tools keep their direct contract here.
+    defer:
+      sourceTool.catalogMode === "direct-only" || sourceTool.catalogMode === "on-demand"
+        ? "never"
+        : undefined,
     handler: (args, invocation) =>
       scheduleToolExecution(sourceTool.executionMode, () => executeOnce(args, invocation)),
     name: sourceTool.name,

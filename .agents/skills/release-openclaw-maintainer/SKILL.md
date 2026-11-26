@@ -94,7 +94,9 @@ existing release receipt verifies GitHub approval and binds the exact packet.
 Keep the original FRV run/attempt and sealed bytes. See
 [fast-track publication](references/fast-track.md).
 Use the bounded policy only within 20 commits AND 15,000 added/deleted lines
-(package manifests and enumerated lockfiles excluded from LOC only), or the
+(package manifests and enumerated lockfiles excluded from LOC only; beta
+prereleases are exempt and need no reference release, but their stable
+promotion still needs a passing stable FRV), or the
 separate partial-FRV policy with its complete outstanding-check snapshot.
 Neither policy creates a fully validated baseline. An admitted publication may
 finish after expiry only through its original packet-bound receipt and verified
@@ -114,6 +116,11 @@ Record the exception separately from a pass, keeping raw outcomes unchanged.
 See [#204382](https://github.com/openclaw/openclaw/pull/204382): cancellation in
 [Performance 45327586533](https://github.com/openclaw/openclaw/actions/runs/45327586533)
 blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
+Before committing a grant, stage the ledger in Q. From that checkout, run
+`node "$REVIEWED_TOOLING/scripts/lib/release-validation-waivers.mjs" --check-staged`,
+where `REVIEWED_TOOLING` is the absolute path to a reviewed checkout with the current
+waiver checker. Require `Staged release waiver selectors are supported.` Older
+copies can exit silently. Check the approved scope against the observed failure separately.
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).

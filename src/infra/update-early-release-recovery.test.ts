@@ -391,16 +391,24 @@ it("gives up on a slow crash loop at the unit's restart allowance, not on a long
   }
 });
 
-it.each([0, 1])("releases only its own interrupted build lock (restarts %i)", async (restarts) => {
-  const fx = runner({ resumed: true, restarts });
-  const lock = path.join(fx.plan.checkout, ".artifacts", "dist-artifacts.lock");
-  fs.mkdirSync(lock, { recursive: true });
-  // A PID above the kernel's maximum is never alive.
-  const owner = '{"pid":99999999,"startedAt":"2026-11-24T00:00:00Z"}';
-  fs.writeFileSync(path.join(lock, "owner.json"), owner);
-  await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
-  expect(fs.existsSync(lock)).toBe(restarts === 0);
-});
+it.each([
+  { restarts: 0, ageMs: 0, kept: true },
+  { restarts: 1, ageMs: 0, kept: false },
+  { restarts: 1, ageMs: 86_400_000, kept: true },
+])(
+  "releases only its own interrupted build lock (restarts $restarts, age $ageMs ms)",
+  async ({ restarts, ageMs, kept }) => {
+    const fx = runner({ resumed: true, restarts });
+    fx.plan.plannedAt = Date.parse("2026-11-24T00:00:00Z");
+    const lock = path.join(fx.plan.checkout, ".artifacts", "dist-artifacts.lock");
+    fs.mkdirSync(lock, { recursive: true });
+    // A PID above the kernel's maximum is never alive.
+    const owner = { pid: 99999999, startedAt: new Date(fx.plan.plannedAt - ageMs).toISOString() };
+    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner));
+    await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
+    expect(fs.existsSync(lock)).toBe(kept);
+  },
+);
 
 posix("finishes the run the runner holds and removes what the early layout left", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-early-store-"));

@@ -5,8 +5,6 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.voice.TalkModeGatewayConfigParser
 import ai.openclaw.app.voice.TalkModeRoute
 import kotlinx.serialization.json.JsonArray

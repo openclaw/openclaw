@@ -44,6 +44,8 @@ import {
   heldMutationBarrier,
   request,
   expectHello,
+  expectStatus,
+  expectNegotiatedIngressArchive,
   PNG_BYTES,
   usePeer,
   expectReadWriteWithoutAdmin,
@@ -222,6 +224,7 @@ describe("remote Control UI ingress production composition", () => {
         logGateway: logger,
         broadcastVoiceWakeChanged: () => {},
         forgetConnectionAncestors: () => {},
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
         getMcpAppSandboxPort: () => 443,
         getGatewayMethodRegistry: () => methodRegistry,
         isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
@@ -415,12 +418,6 @@ describe("remote Control UI ingress production composition", () => {
     roles?: NonNullable<OpenClawConfig["gateway"]>["roles"],
   ) => configure({ ...config, gateway: { ...config.gateway, roles, auth: nextAuth } }, nextAuth);
 
-  async function expectStatus(response: Promise<Response>, status: number) {
-    const result = await response;
-    expect(result.status).toBe(status);
-    await result.body?.cancel();
-  }
-
   const personOptions = (profileId: string) => ({
     ...principalOptions,
     principal: { kind: "person" as const, profileId },
@@ -546,6 +543,10 @@ describe("remote Control UI ingress production composition", () => {
       `frame-ancestors ${PUBLIC_ORIGIN} ${FRAME_ANCESTORS.join(" ")}`,
     );
     await response.body?.cancel();
+  });
+
+  it("lets a negotiated ingress browser archive without requesting a direct-only Undo receipt", async () => {
+    await usePeer(await openRemote(), (peer) => expectNegotiatedIngressArchive(peer, SCOPES));
   });
 
   it("delivers preview resources only through the issuing ingress grant and live connection", async () => {
@@ -878,10 +879,10 @@ describe("remote Control UI ingress production composition", () => {
             expect(recovered.authority.scopes).not.toContain("operator.admin");
           } else {
             // A read-only requester's saved source starts no new work.
-            await expect(restore()).rejects.toThrow("no longer allows sending messages");
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
           }
           resumable = false;
-          await expect(restore()).rejects.toThrow("original ingress grant");
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
           resumable = true;
           await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
             "operator.admin",

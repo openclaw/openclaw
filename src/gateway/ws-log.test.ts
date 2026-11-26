@@ -8,8 +8,7 @@ import {
   type DevicePairingWaitObservation,
 } from "../infra/device-pairing-lock.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -154,7 +153,7 @@ test("keeps failures and one-second responses at info while retaining successful
     respond("failure", 0, false);
     logWs("out", "res", { connId: "log-levels", id: "unmatched", method: "health", ok: true });
     logWs("out", "parse-error", { connId: "log-levels", error: "synthetic invalid frame" });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const records = fs
       .readFileSync(file, "utf8")
       .trim()

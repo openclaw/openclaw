@@ -428,7 +428,6 @@ function CardModalContent(props: WorkboardProps) {
                 <textarea
                   class="settings-input workboard-comments__input"
                   aria-labelledby="workboard-card-comments-title"
-                  maxlength="2000"
                   disabled={draftActionsBusy()}
                   ref={commentValue}
                 />

@@ -196,8 +196,10 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  max-width: 100%;
   height: 30px;
   padding: 0 2px 0 6px;
+  white-space: nowrap;
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   color: var(--text-strong);
@@ -212,6 +214,11 @@
 .dashboards-chip__prefix {
   color: var(--muted);
   font-weight: var(--control-ui-font-weight-normal);
+}
+
+.dashboards-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dashboards-chip .session-owner-chip {
@@ -309,6 +316,12 @@
   color: var(--muted);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.dashboards-group__heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboards-group__heading > openclaw-session-owner-chip {

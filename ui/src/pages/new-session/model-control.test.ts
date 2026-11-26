@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { CyberAccessProgram, GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -41,6 +41,8 @@ function setup(
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
   return { ...state, control, changed, targetSelected, draw, find };
 }
+// Keep cold picker compilation outside the interaction readiness checks.
+beforeAll(() => import("../chat/components/chat-model-picker-panel.tsx"));
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();

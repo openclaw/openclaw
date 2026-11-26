@@ -288,6 +288,15 @@ describe("openclaw-exec-approval", () => {
     },
   );
 
+  it("allows the creator's exact request by keyboard without broad approvals", async () => {
+    const { onDecision, modal } = await renderOpenedApproval(
+      createExecRequest({ canDecide: true }),
+      { canGrant: false },
+    );
+    modal.dispatchEvent(chord("Enter"));
+    expect(onDecision).toHaveBeenCalledWith("approval-1", "allow-once");
+  });
+
   it("keeps the displayed approval pinned when an older request arrives", async () => {
     const newer = createExecRequest({ id: "approval-newer", createdAtMs: 2_000 });
     const older = createExecRequest({ id: "approval-older", createdAtMs: 1_000 });

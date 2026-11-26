@@ -1008,12 +1008,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 }
 
 .chat-pane__sharing-permission .oc-menu-item__submenu-icon {
-  color: var(--muted);
-  transform: rotate(90deg);
-}
-
-.chat-pane__sharing-permission[aria-expanded="true"] .oc-menu-item__submenu-icon {
-  transform: rotate(-90deg);
+  display: none;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {

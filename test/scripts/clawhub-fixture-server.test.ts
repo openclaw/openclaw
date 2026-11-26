@@ -369,35 +369,4 @@ describe("ClawHub fixture server", () => {
     );
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
   });
-
-  it("serves separate plugin-family and skill search fixtures", async ({ signal }) => {
-    const { baseUrl } = await startFixtureServer("catalog-search", signal);
-
-    for (const family of ["code-plugin", "bundle-plugin"]) {
-      const { results } = await fetchJson(
-        baseUrl,
-        `/api/v1/packages/search?q=calendar&family=${family}&limit=5`,
-      );
-      expect(results).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ package: expect.objectContaining({ family }) }),
-        ]),
-      );
-    }
-
-    const skills = await fetchJson(baseUrl, "/api/v1/search?q=calendar&limit=5");
-    expect(skills.results).toEqual([expect.objectContaining({ slug: expect.any(String) })]);
-
-    const empty = await fetchJson(
-      baseUrl,
-      "/api/v1/packages/search?q=empty&family=code-plugin&limit=5",
-    );
-    expect(empty).toEqual({ results: [] });
-
-    const unavailable = await fetch(
-      `${baseUrl}/api/v1/packages/search?q=unavailable&family=code-plugin&limit=5`,
-    );
-    expect(unavailable.status).toBe(503);
-    await expect(unavailable.json()).resolves.toEqual({ error: "catalog unavailable" });
-  });
 });

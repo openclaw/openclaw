@@ -173,7 +173,10 @@ export async function completeCleanupBookkeeping(
         if (draft.collect) {
           draft.requesterSettleWake = undefined;
         } else if (!cleanupParams.skipRequesterSettleWake) {
-          markRequesterSettleWakePending(draft, { retireAfterSettle });
+          if (retireAfterSettle) {
+            draft.retireAfterSettle = true;
+          }
+          markRequesterSettleWakePending(draft);
         }
       }
     },

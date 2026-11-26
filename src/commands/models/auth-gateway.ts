@@ -1,5 +1,5 @@
 import { addAbortSignal } from "node:stream";
-import type { ModelsAuthSetApiKeyParams } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelsAuthSetApiKeyParams } from "../../../packages/gateway-protocol/src/schema/models-auth.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ExitError } from "../../runtime.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";

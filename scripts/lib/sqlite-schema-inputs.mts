@@ -60,11 +60,12 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  for (const version of [41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
+  for (const version of [42, 41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
   // An already-loaded updater can read replacement catalog assets after a build swap.
-  const beforeApprovalProfile = withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL);
+  const beforeWorkerLoss = getOpenClawStatePredecessorSchema(41);
+  const beforeApprovalProfile = withLegacyApprovalProfile(beforeWorkerLoss);
   const beforeProvisionSource = withLegacyWorkerProvisionSource(beforeApprovalProfile);
   add("state-before-provision-source", "state", beforeProvisionSource);
   const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(beforeProvisionSource);
@@ -152,6 +153,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
         }),
       );
       for (const [era, schema] of [
+        ["before-v42", beforeWorkerLoss],
         ["before-v41", beforeApprovalProfile],
         ["before-provision-source", beforeProvisionSource],
         ["before-bootstrap-deferred", beforeBootstrap],

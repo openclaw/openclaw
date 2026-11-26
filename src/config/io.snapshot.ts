@@ -506,7 +506,14 @@ export async function prepareConfigRecoveryFromContext(
       if (isConfigReadFailure(snapshot)) {
         throw createConfigReadError(snapshot);
       }
-      return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
+      return snapshot.valid
+        ? {
+            snapshot,
+            pluginMetadataSnapshot,
+            assertBackupUnchanged: plan.assertBackupUnchanged,
+            apply: plan.apply,
+          }
+        : null;
     } finally {
       // The prepared writer keeps the selected environment; candidate env.vars are preview-only.
       restoreEnvChangesIfUnchanged({

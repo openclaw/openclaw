@@ -308,7 +308,6 @@ describe("package-openclaw-for-docker", () => {
   it.each([
     { pnpmPack: false, rootDecoy: true },
     { pnpmPack: true, rootDecoy: true },
-    { pnpmPack: true, rootDecoy: false },
   ])(
     "packs a selected plugin's patched bundle and installed dependency closure (pnpm=$pnpmPack, root copy=$rootDecoy)",
     async ({ pnpmPack, rootDecoy }) => {

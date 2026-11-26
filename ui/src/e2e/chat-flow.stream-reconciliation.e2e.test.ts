@@ -405,18 +405,12 @@ suite.define(() => {
     await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
     if (terminal === "error") {
       const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
-      await failure
-        .locator(".app-toast__message")
-        .getByText("Couldn't finish this reply.", { exact: true })
-        .waitFor();
-      await failure
-        .locator(".app-toast__description")
-        .getByText("Check the conversation before trying again.", { exact: true })
-        .waitFor();
-      await failure.locator("summary").click();
-      const details = failure.getByLabel("Error details", { exact: true });
-      await details.waitFor();
-      expect(await details.textContent()).toContain(errorMessage);
+      await failure.locator(".app-toast__message").waitFor();
+      expect(await failure.locator(".app-toast__message").textContent()).toContain(errorMessage);
+      expect(await failure.locator(".app-toast__description").count()).toBe(0);
+      expect(await failure.getByRole("button", { name: "Show details", exact: true }).count()).toBe(
+        0,
+      );
     }
     await emitDelta(text, text.slice(partial.length));
     await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);

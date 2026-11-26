@@ -144,12 +144,18 @@ it("models.list selects a native user-home API-key catalog through the prepared 
         try {
           await gateway.server.startupSettled;
           const registeredList = (refresh = false) =>
-            gateway.client.request<ModelsListResult>("models.list", {
-              agentId: "main",
-              view: "all",
-              refresh,
-              ...(refresh ? { provider: "openai" } : {}),
-            });
+            gateway.client.request<ModelsListResult>(
+              "models.list",
+              {
+                agentId: "main",
+                view: "all",
+                refresh,
+                ...(refresh ? { provider: "openai" } : {}),
+              },
+              // Cold native discovery and catalog publication share this RPC
+              // budget. The full case has exceeded 75s on hosted Node.
+              { timeoutMs: 90_000 },
+            );
           // Cold catalog preparation and native discovery are host-dependent; wake on owner
           // publications instead of timing the first demanded read.
           const nativeCatalogSettled = (available: boolean) =>

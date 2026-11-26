@@ -397,6 +397,9 @@ it("renders a machine-mode cron lookup miss as expected guidance, not a crash", 
     ok: false,
     error: { type: "cli_error", message },
   });
-  expectGuidance(result.stderr, message);
+  expectGuidance(
+    result.stderr,
+    "OpenClaw couldn’t find the automation “missing-job”. Run `openclaw cron list --all` to see IDs for enabled and disabled automations.",
+  );
   expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
 });
