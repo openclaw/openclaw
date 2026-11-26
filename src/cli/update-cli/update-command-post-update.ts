@@ -66,7 +66,7 @@ export async function finishUpdate(
   params: FinishUpdateParams,
   { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
-  const captured = terminal.captureUpdateFinalization(params);
+  const captured = terminal.captureUpdateFinalization(params, options);
   return await terminal.withUpdateProgressSettlement(
     params,
     beforeFinalization,
