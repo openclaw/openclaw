@@ -484,6 +484,12 @@ export function materializeSessionRow(
     ...definedSessionRowField("outputTokens", entry?.outputTokens),
     ...definedSessionRowField("usageReport", entry?.usageReport),
     ...definedSessionRowField("providerReview", projectSessionRowProviderReview(key, entry)),
+    ...definedSessionRowField(
+      "nativeRecoveryHeldRunId",
+      entry?.nativeRestartRecovery?.state === "held"
+        ? entry.nativeRestartRecovery.runId
+        : undefined,
+    ),
     ...definedSessionRowField("lastRunId", entry?.lastRunId),
     ...definedSessionRowField("hasAutomation", input.hasAutomation),
     // Navigation lineage is persisted; runtime control is exposed separately above.

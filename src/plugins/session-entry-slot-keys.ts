@@ -19,6 +19,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "clientCapabilities",
   "lifecycleRevision",
   "providerReview",
+  "nativeRestartRecovery",
   "updatedAt",
   "incognito",
   "archivedAt",

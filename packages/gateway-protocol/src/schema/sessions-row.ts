@@ -208,6 +208,8 @@ export const SessionRowSchema = Type.Object(
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
+    /** Exact interrupted run awaiting human acknowledgment before held inputs can run. */
+    nativeRecoveryHeldRunId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

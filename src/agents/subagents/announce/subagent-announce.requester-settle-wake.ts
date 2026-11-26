@@ -352,7 +352,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   try {
     const requester = await loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
     const requesterEntry = requester.entry;
-    if (!hasUsableSessionEntry(requesterEntry)) {
+    if (
+      !hasUsableSessionEntry(requesterEntry) ||
+      requesterEntry.nativeRestartRecovery?.state === "held" ||
+      requesterEntry.nativeRestartRecovery?.state === "releasing"
+    ) {
       // Startup or requester cleanup can temporarily close admission; the durable wake stays owed.
       return false;
     }

@@ -317,6 +317,21 @@ export async function runAgentHarnessAttempt(
             readRunOperatorAuthority(params),
             params.cyberAccessProgram,
           );
+          if (harness.interruptedRestartRecovery !== "explicit-resume") {
+            return harness.runAttempt(attempt);
+          }
+          const { recordNativeRestartRecovery } =
+            await import("../../config/sessions/session-native-restart-recovery.js");
+          const recorded = await recordNativeRestartRecovery(
+            params.sessionTarget,
+            params.sessionId,
+            () => attempt.hostCapabilities?.assertActive(),
+          );
+          if (!recorded) {
+            throw new AgentHarnessPreflightError(
+              "Cannot record restart recovery for this native turn. No native work started.",
+            );
+          }
           return harness.runAttempt(attempt);
         },
       );

@@ -6,6 +6,14 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    nativeRecovery: {
+      title: "Antigravity paused after a restart",
+      body: "A command may already have taken effect. Check what changed, then select Resume to release queued messages. The interrupted turn won’t retry automatically.",
+      resume: "Resume",
+      resuming: "Resuming…",
+      unconfirmed: "Couldn’t confirm Resume. Refresh chat before trying again.",
+      queued: "Resume was accepted. Queued messages are still waiting to be admitted.",
+    },
     settingErrors: {
       model: "Couldn’t change the model. Try again. {error}",
       thinking: "Couldn’t change effort. Try again. {error}",

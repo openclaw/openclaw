@@ -32,6 +32,7 @@ export function applySessionEntryWritePolicy(
     normalizedEntry.incognito
   ) {
     delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.nativeRestartRecovery;
     delete normalizedEntry.lifecycleRestartScope;
     delete normalizedEntry.mainRestartRecovery;
   } else {
@@ -43,6 +44,15 @@ export function applySessionEntryWritePolicy(
         ...(canonicalPreviousEntry.resumeAfterRestart
           ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
           : {}),
+      };
+    }
+    if (
+      !Object.hasOwn(normalizedEntry, "nativeRestartRecovery") &&
+      canonicalPreviousEntry.nativeRestartRecovery
+    ) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        nativeRestartRecovery: canonicalPreviousEntry.nativeRestartRecovery,
       };
     }
     if (

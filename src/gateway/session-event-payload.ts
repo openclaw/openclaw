@@ -184,6 +184,7 @@ export function buildGatewaySessionSnapshot(params: {
     lastRunError: sessionRow.lastRunError ?? null,
     suppressErrorNotice: sessionRow.suppressErrorNotice ?? false,
     providerReview: sessionRow.providerReview ?? null,
+    nativeRecoveryHeldRunId: sessionRow.nativeRecoveryHeldRunId ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
     backgroundProcessCount: sessionRow.backgroundProcessCount ?? null,

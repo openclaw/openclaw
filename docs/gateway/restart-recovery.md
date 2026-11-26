@@ -24,6 +24,13 @@ session's owner or another participant cannot replace it. A revoked or unavailab
 source fails recovery rather than falling back to another person. Older markers
 without a captured source keep the session-principal recovery policy.
 
+Antigravity native sessions pause when the Gateway restarts without knowing
+whether an interrupted command took effect. Check what changed, then select
+**Resume** in the Control UI chat. This does not retry the interrupted turn or
+send a new message. It releases the already accepted messages in order, subject
+to each original sender’s current access. Restarting again does not acknowledge
+the pause on your behalf.
+
 Scheduled automation retains its cron owner, even when it runs in an ordinary
 conversation. Shutdown does not turn an interrupted occurrence into an operator
 resume request or an operator-authority failure notice. The cron scheduler owns

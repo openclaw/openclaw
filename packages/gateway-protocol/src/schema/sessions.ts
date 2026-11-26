@@ -25,6 +25,7 @@ export {
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
+export * from "./sessions-native-recovery.js";
 export {
   SessionsListParamsSchema,
   SessionsSubscribeParamsSchema,

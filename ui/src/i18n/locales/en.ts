@@ -1570,6 +1570,7 @@ const startupEnglish = {
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
     providerReview: {},
+    nativeRecovery: {},
     providerPolicy: {},
     diskSpace: {},
     workerRuntimeInstall: {},

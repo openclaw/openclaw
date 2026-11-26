@@ -133,6 +133,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "sessions-goal": () => import("./sessions-goal.js").then((module) => module.sessionGoalHandlers),
   "sessions-provider-review": () =>
     import("./sessions-provider-review.js").then((module) => module.sessionProviderReviewHandlers),
+  "sessions-native-recovery": () =>
+    import("./sessions-native-recovery.js").then((module) => module.sessionNativeRecoveryHandlers),
   "sessions-messaging": () =>
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>

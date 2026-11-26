@@ -3302,7 +3302,8 @@ openclaw-chat-ci-details {
   border-inline-start: 3px solid var(--border);
 }
 
-.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
+.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span),
+.chat-native-recovery .chat-composer-neighbor-card__copy :is(strong, span) {
   white-space: normal;
 }
 

@@ -108,7 +108,7 @@ export async function prepareRestartCompletionCustody(
 ): Promise<{
   assertCurrent: () => void;
   ownsInput: (row: SessionPendingInputRow, agentId: string) => boolean;
-  resume: () => void;
+  resume: (includesSession?: (sessionKey: string) => boolean) => void;
 }> {
   const assertCurrent = () => {
     signal.throwIfAborted();
@@ -179,11 +179,14 @@ export async function prepareRestartCompletionCustody(
           }),
       );
     },
-    resume: () => {
+    resume: (includesSession) => {
       signal.throwIfAborted();
       if (!isGatewayRestartDraining()) {
         for (const owner of recovered) {
-          if (isSameSubagentRunOwner(subagentRuns.get(owner.runId), owner)) {
+          if (
+            (!includesSession || includesSession(owner.requesterSessionKey)) &&
+            isSameSubagentRunOwner(subagentRuns.get(owner.runId), owner)
+          ) {
             resumeSubagentRun(owner.runId);
           }
         }

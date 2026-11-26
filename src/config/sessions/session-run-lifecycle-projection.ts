@@ -431,7 +431,7 @@ export function projectSessionLifecyclePatch(
     return { patch: null };
   }
   const patch: Partial<PersistedLifecycleSessionShape> &
-    Pick<SessionEntry, "providerReview" | "goal" | "resumeAfterRestart"> =
+    Pick<SessionEntry, "providerReview" | "goal" | "resumeAfterRestart" | "nativeRestartRecovery"> =
     derivePersistedSessionLifecyclePatch({
       entry,
       event: params.event,
@@ -440,6 +440,15 @@ export function projectSessionLifecyclePatch(
     });
   if (providerReview && Object.keys(patch).length > 0) {
     patch.providerReview = providerReview.review;
+  }
+  // A native result can arrive before logical settlement. Retire its receipt
+  // only in the same write that records the matching successful terminal.
+  if (
+    patch.status === "done" &&
+    entry.nativeRestartRecovery?.state === "running" &&
+    entry.nativeRestartRecovery.runId === eventRunId
+  ) {
+    patch.nativeRestartRecovery = undefined;
   }
   const endedAt = patch.endedAt ?? params.event.ts;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);

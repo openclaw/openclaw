@@ -734,6 +734,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Internal receipt for an admitted native turn whose tool effects cannot be replayed blindly. */
+  nativeRestartRecovery?: { runId: string; state: "running" | "held" | "releasing" };
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */

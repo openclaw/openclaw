@@ -23,6 +23,9 @@ const ChatProviderReviewNotice = lazy(() => import("./chat-provider-review-contr
 const ChatTopbarNoticesContent = lazy(() => import("./chat-view-notices-content.tsx"), {
   export: "ChatTopbarNoticesContent",
 });
+const NativeRecoveryNotice = lazy(() => import("./chat-view-notices-content.tsx"), {
+  export: "NativeRecoveryNotice",
+});
 const ChatComposerNoticesContent = lazy(() => import("./chat-view-notices-content.tsx"), {
   export: "ChatComposerNoticesContent",
 });
@@ -55,12 +58,15 @@ export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   participantApproval?: ParticipantApprovalNotice | null;
   // Resolve after the first pane frame prepares the Solid owner's permission facts.
   readProviderReview?: () => ChatProviderReviewOwner | undefined;
+  nativeRecovery?: ChatNativeRecoveryNotice;
   runError?: ChatRunError | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   onDismissRunError?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
+
+export type ChatNativeRecoveryNotice = { key: string; onResume?: () => Promise<void> };
 
 export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   return (
@@ -83,6 +89,11 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return (
     <>
+      <Show when={props.nativeRecovery?.key} keyed>
+        <ChatLazyBoundary>
+          <NativeRecoveryNotice onResume={props.nativeRecovery?.onResume} />
+        </ChatLazyBoundary>
+      </Show>
       <Show when={props.readProviderReview?.()}>
         {(owner) => (
           <Loading>

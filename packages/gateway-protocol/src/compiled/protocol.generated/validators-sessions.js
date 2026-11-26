@@ -60,6 +60,7 @@ export {
   isSessionsGoalUpdateParams,
   isSessionsGoalClearParams,
   isSessionsProviderReviewContinueParams,
+  isSessionsNativeRecoveryResumeParams,
   isSessionsPatchManyParams,
   isSessionsPluginPatchParams,
   isSessionsResetParams,

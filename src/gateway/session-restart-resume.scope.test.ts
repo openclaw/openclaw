@@ -4,6 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadExactSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -30,11 +31,16 @@ async function crashSession(
   name: string,
   run: "chat" | "requester-settle" | "ended" | "none",
   written: string | undefined,
+  agentHarnessId?: string,
 ) {
   const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
   // Database workers copy the environment when they start: set the scope before the first write.
   setScope(written);
-  replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 100 });
+  replaceSessionEntrySync(target, {
+    sessionId: target.sessionId,
+    updatedAt: 100,
+    agentHarnessId,
+  });
   const runId =
     run === "requester-settle"
       ? `announce:requester-settle:main:${target.sessionKey}:child-run`
@@ -63,6 +69,11 @@ async function crashSession(
       sessionKey: target.sessionKey,
       event: { ...event, runId, sessionId: target.sessionId },
     });
+    if (event.data.phase === "start" && agentHarnessId === "antigravity-native") {
+      await patchSessionEntryCore(target, () => ({
+        nativeRestartRecovery: { runId, state: "running" },
+      }));
+    }
   }
   expect(loadExactSessionEntry(target)?.entry.lifecycleRestartScope).toBe(
     run === "none" ? undefined : written,
@@ -99,6 +110,59 @@ function observeAdmission() {
     .mockResolvedValue({});
   return { admission, dispatch };
 }
+
+it.for(["chat", "ended"] as const)("recovers the Antigravity queue after a $0 run", (run) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const scope = "native-unknown-outcome";
+    const { target, inputId } = await crashSession(
+      "native-unknown",
+      run,
+      scope,
+      "antigravity-native",
+    );
+    const { admission, dispatch } = observeAdmission();
+    try {
+      setScope(scope);
+      const context = createContext([], () => cfg);
+      context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
+      await resumeMarkedSessions({
+        context,
+        signal: new AbortController().signal,
+        log: { warn() {} },
+      });
+      expect(admission).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      if (run === "ended") {
+        const entry = loadExactSessionEntry(target)?.entry;
+        expect(entry?.status).toBe("done");
+        expect(entry?.nativeRestartRecovery).toBeUndefined();
+        expect((await readSessionPendingInput(target, inputId))?.state).toBe("cancelled");
+        return;
+      }
+      expect((await readSessionPendingInput(target, inputId))?.state).toBe("queued");
+      expect(loadExactSessionEntry(target)?.entry).toMatchObject({
+        sessionId: target.sessionId,
+        nativeRestartRecovery: { state: "held", runId: "native-unknown-run" },
+      });
+      const nextBoot = createContext([], () => cfg);
+      nextBoot.restartResumeWindows = { main: [] };
+      setScope("next-deployment");
+      await resumeMarkedSessions({
+        context: nextBoot,
+        signal: new AbortController().signal,
+        log: { warn() {} },
+      });
+      expect(admission).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(await readSessionPendingInput(target, inputId)).toMatchObject({ state: "queued" });
+    } finally {
+      dispatch.mockRestore();
+      admission.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  }),
+);
 
 // Crash recovery (no graceful marker) compares the scope the interrupted run started under.
 // Queued input of a session whose work is out of scope, or that has no scope evidence while a

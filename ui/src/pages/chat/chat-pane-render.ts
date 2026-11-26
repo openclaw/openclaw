@@ -29,6 +29,7 @@ import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { synchronizeChatPanePublication } from "./chat-pane-publication.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
+import { createChatPaneRecoveryActions } from "./chat-pane-recovery.ts";
 import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
   createChatPaneQueuedEditProps,
@@ -49,10 +50,8 @@ import {
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
-import { isChatQueuePaused } from "./chat-queue-pause.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
 import { readChatModelCatalogState } from "./chat-state-refresh.ts";
@@ -83,6 +82,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const selectionConnectionGeneration = this.connectionGeneration;
     const selectedSession = selectedChatSessionRow(state);
     const providerPaused = Boolean(selectedSession?.providerReview);
+    const paused = providerPaused || Boolean(selectedSession?.nativeRecoveryHeldRunId);
     const childRoster = this.projectChildRoster(this.resolveChatReadTarget());
     const progressPresentation = this.progressCardPresentation;
     const cachedSessionStatePending = Boolean(this.cachedSessionStatePending());
@@ -304,7 +304,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         (sessionParticipationBlocked ? t("chat.sessionSharing.readOnlyNotice") : null))
       : null;
     const available =
-      !selectedSession?.providerReview &&
+      !paused &&
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalog
         ? catalogCanContinue
@@ -609,7 +609,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       }),
       onUseSystemDefaultMicrophone:
         state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
-      onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => dismissChatError(state),
@@ -617,16 +616,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDismissRealtimeTalkInputNotice: () =>
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
-      onQueueRemove: state.removeQueuedMessage,
-      queuePaused: isChatQueuePaused(state),
-      onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
-      onQueueClear: () => clearChatQueue(state),
-      onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer:
-        sessionParticipationBlocked || providerPaused
-          ? undefined
-          : (id) => void state.steerQueuedChatMessage(id),
-      onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
+      ...createChatPaneRecoveryActions(
+        state,
+        selectedSessionArchived ? undefined : selectedSession,
+        {
+          paused,
+          participationBlocked: sessionParticipationBlocked,
+          canResume: hasWriteScope,
+          connectionGeneration: selectionConnectionGeneration,
+          isCurrent: () =>
+            this.state === state && this.connectionGeneration === selectionConnectionGeneration,
+        },
+      ),
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
       goalRecovery: chatGoalRecovery(state),
       onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
