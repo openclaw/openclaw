@@ -214,14 +214,15 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         "effectiveParentId" in receipt && receipt.effectiveParentId !== undefined
           ? receipt.effectiveParentId
           : entry.parentId;
-      const adoptedMessage = "messageId" in receipt && receipt.messageId !== entry.id;
+      const adoptedMessage =
+        "messageId" in receipt && receipt.messageId !== entry.id ? receipt.messageId : undefined;
       const reloadAfterAppend =
         receipt.appended &&
         (transcriptAppendNeedsReload(committed.before, loadedVersion) ||
           (initialModelParentId !== undefined && initialModelParentId !== initialModel?.parentId));
       if (
         requireReload &&
-        !this.hasNewerPublishedTranscriptView(committed.after) &&
+        !this.hasNewerPublishedTranscriptView(committed.after, adoptedMessage) &&
         (adoptedMessage || reloadAfterAppend || effectiveParentId !== entry.parentId) &&
         !reload
       ) {
@@ -243,9 +244,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           ...("anchor" in receipt && receipt.anchor ? { anchor: receipt.anchor } : {}),
           lifecycleRevision: committed.lifecycleRevision,
           effectiveParentId,
-          ...(adoptedMessage && "messageId" in receipt
-            ? { adoptedMessageId: receipt.messageId }
-            : {}),
+          ...(adoptedMessage ? { adoptedMessageId: adoptedMessage } : {}),
           ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
         },
         reload: reload?.ok ? reload.value : undefined,
