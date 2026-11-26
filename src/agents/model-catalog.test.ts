@@ -954,7 +954,7 @@ describe("catalog declaration planning", () => {
     const { load } = catalog("static", "manifest-model");
     function observe(source: ReturnType<typeof hostedPublication>) {
       const rows = withRemoteModelCatalogSnapshot(source, load);
-      expect(rows.map((row) => row.id)).toEqual(["manifest-model"]);
+      expect(rows.map((entry) => entry.id)).toEqual(["manifest-model"]);
       return { source: new WeakRef(source), rows: new WeakRef(rows), row: new WeakRef(rows[0]!) };
     }
 
