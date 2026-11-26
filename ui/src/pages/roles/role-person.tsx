@@ -39,7 +39,7 @@ export function RoleAvatar(props: { profile: RoleProfile }) {
   );
 }
 
-export function roleSourceLabel(profile: RoleProfile): string {
+function roleSourceLabel(profile: RoleProfile): string {
   switch (profile.roleSource) {
     case "githubLogin":
       return t("rolesPage.sourceGithubLogin");

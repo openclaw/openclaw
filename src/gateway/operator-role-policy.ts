@@ -523,7 +523,7 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
   );
 }
 
-export const OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE =
+const OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE =
   "This change would remove your administrator access (operator.admin), and you could no longer manage roles. Assign yourself a role that includes operator.admin first, then try again.";
 
 /**
