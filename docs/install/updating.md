@@ -202,15 +202,6 @@ requested update over RPC, local preparation refuses visibly rather than
 claiming an unidentified installation. Stop the Gateway through its existing
 owner, then rerun the update. A stopped Gateway remains updatable.
 
-Early Git source-updater recovery is a compatibility exception. Its separate CLI
-worker never enters Gateway startup. It opens a repair run after the first
-readiness check and finishes rebuilding and cleanup after the second. Neither
-startup can report that repair complete; a failed release may not reach readiness
-at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
-not in any published release. Retire `update-early-release-recovery*.ts` and its
-early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
-already-started recovery's retained code until that recovery finishes.
-
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
 before mutating live databases. A schema-version increase alone does not require

@@ -9,16 +9,13 @@ import {
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  buildMentionRegexes,
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
-  matchesMentionPatterns,
   readAgentRunTerminalOutcome,
-  resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContextAsync,
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
@@ -39,7 +36,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
   resolveChannelGroups,
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -91,7 +87,7 @@ import {
 } from "./event-handler.control-lane.js";
 import type * as SignalEvent from "./event-handler.types.js";
 import { resolveSignalInboundRoute, resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+import { renderSignalMentions, resolveSignalMentionDecision } from "./mentions.js";
 import {
   buildSignalReactionSystemEventText,
   isSignalReactionMessage,
@@ -964,42 +960,24 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         : undefined;
     const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
-    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
-    const nativeMentionFacts = resolveSignalMentionFacts(deps, rawMessage, dataMessage?.mentions);
-    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
-    const requireMention =
-      isGroup &&
-      resolveChannelGroupRequireMention({
+    const { canDetectMention, effectiveWasMentioned, shouldSkip } =
+      await resolveSignalMentionDecision({
         cfg,
-        channel: "signal",
+        account: deps,
+        agentId: route.agentId,
         groupId,
-        accountId: deps.accountId,
-        configuredGroupDefaultsToNoMention: true,
-      });
-    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
-    const mentionDecision = resolveInboundMentionDecision({
-      facts: {
-        canDetectMention,
-        wasMentioned,
-        hasAnyMention: nativeMentionFacts.hasAnyMention,
-        implicitMentionKinds: [],
-      },
-      policy: {
-        isGroup,
-        requireMention,
-        allowTextCommands: true,
+        rawMessage,
+        messageText,
+        dataMessage,
         hasControlCommand: hasControlCommandInMessage,
         commandAuthorized,
-      },
-    });
-    const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+      });
     const attachments = dataMessage.attachments ?? [];
     const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
       const contentType = attachment?.contentType ?? undefined;
       return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
     });
-    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
+    if (shouldSkip) {
       logInboundDrop({
         log: deps.runtime.log,
         channel: "signal",
