@@ -154,10 +154,13 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   const stat = await fs.stat(f.file);
   await fs.writeFile(f.file, "after!");
   await fs.utimes(f.file, stat.atime, stat.mtime);
-  expect(await f.capture()).toHaveLength(2);
-  expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
-    3,
-  );
+  // A fresh capture replaces the superseded original rather than adding to it.
+  const changed = await f.capture();
+  expect(changed).toHaveLength(1);
+  expect(changed).not.toEqual(first);
+  const full = await f.capture(true);
+  expect(full, "explicit full integrity verification does not reuse").toHaveLength(1);
+  expect(full).not.toEqual(changed);
 });
 
 it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
@@ -251,9 +254,9 @@ it("rediscovers files, declared paths, config includes, links, permissions, and 
   expect(await f.reuse(), "restored source despite timestamp drift").toBeDefined();
 });
 
-it("verifies retained payloads and seals, and leaves unusable originals intact while capturing fresh", async () => {
+it("verifies retained payloads and seals without changing them, then replaces an unusable original", async () => {
   const f = await fixture();
-  await f.capture();
+  const original = await f.capture();
   const { ref, payloadPath } = await f.capturedFile(f.file);
   const partial = `${ref.manifestPath}.partial`;
   await fs.writeFile(partial, "unfinished");
@@ -264,8 +267,10 @@ it("verifies retained payloads and seals, and leaves unusable originals intact w
   await fs.rm(path.join(ref.directory, "candidate"), { recursive: true });
   await fs.writeFile(payloadPath, "broken");
   expect(await f.reuse()).toBeUndefined();
-  expect(await f.capture()).toHaveLength(2);
   expect(await fs.readFile(payloadPath, "utf8")).toBe("broken");
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(1);
+  expect(fresh).not.toEqual(original);
 });
 
 it("accepts only exact consolidated SQLite bytes and rejects durable WAL data and changed databases", async () => {
@@ -451,7 +456,9 @@ it("treats the verification entry bound as a cache miss and still creates a fres
   for (let i = 0; i < 4096; i++) {
     await fs.mkdir(path.join(f.plugin, String(i)));
   }
-  await f.capture();
+  const first = await f.capture();
   expect(await f.reuse()).toBeUndefined();
-  expect(await f.capture()).toHaveLength(2);
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(1);
+  expect(fresh).not.toEqual(first);
 });

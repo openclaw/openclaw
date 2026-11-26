@@ -216,10 +216,11 @@ Shared database families larger than 64 MiB keep discovery copies in an isolated
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
 succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other expired Doctor captures.
-Standalone Doctor keeps the newest three sealed captures and expires captures older
-than 30 days, always preserving the newest sealed capture. Each successful standalone
-`doctor --fix` capture retires older eligible copies and reports each removal.
+that copy, and still retire other superseded Doctor captures.
+Standalone Doctor keeps only its newest sealed capture, whatever its age. Each
+successful standalone `doctor --fix` capture retires older eligible copies and names
+each removal in the debug log (`openclaw --log-level debug doctor --fix`). Manual
+recovery from an earlier Doctor repair can therefore start only from that newest copy.
 Incomplete captures, active recovery references, and real update captures stay protected;
 unreadable role or recovery records also prevent retirement. Take a verified backup
 when you need a long-term copy. Review and retire superseded captures with
@@ -1539,8 +1540,7 @@ captures through their sealed manifests; it never reads the captured payload:
   that reached repair or activation and is neither restored nor repaired forward.
   It remains that update's manual recovery source.
 - `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
-  capture outside the newest three or older than 30 days. The newest sealed copy
-  is always retained.
+  capture older than the newest one. The newest sealed copy is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
 - `protected` / `superseded-unsealed-capture`: a marked historical incomplete
