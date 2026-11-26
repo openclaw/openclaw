@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "../gateway/worker-environments/bootstrap-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
@@ -798,5 +799,58 @@ describe("device bootstrap tokens", () => {
 
     await expectVerification(baseDir, "profileless-token", false);
     await expectVerification(baseDir, "expired-token", false);
+  });
+
+  it("verifies and consumes an out-of-band setup token after admitted state lacked setup_id", async () => {
+    const initial = openDatabase(baseDir);
+    const dbPath = initial.path;
+    initial.db.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+
+    // Prime the pairing worker on the pre-setup_id layout (matching a Gateway booted before `openclaw qr`).
+    await issueDeviceBootstrapToken({ baseDir });
+    expect(tableHasColumn(openDatabase(baseDir).db, "device_bootstrap_tokens", "setup_id")).toBe(
+      false,
+    );
+
+    // Simulate a separate `openclaw qr` process adding `setup_id` and inserting a correlated setup token.
+    const setupId = "11111111-1111-4111-8111-111111111111";
+    const token = "out-of-band-setup-token";
+    const nowMs = Date.now();
+    using raw = new DatabaseSync(dbPath);
+    raw.exec("ALTER TABLE device_bootstrap_tokens ADD COLUMN setup_id TEXT;");
+    raw
+      .prepare(
+        `INSERT INTO device_bootstrap_tokens
+         (token_key, token, setup_id, ts, profile_json, issued_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        token,
+        token,
+        setupId,
+        nowMs,
+        JSON.stringify(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE),
+        nowMs,
+      );
+    raw.close();
+
+    await expectVerification(baseDir, token, true);
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[token]?.setupId).toBe(setupId);
+    await expect(
+      consumeBootstrapToken(baseDir, token, { completedAtMs: nowMs }),
+    ).resolves.toMatchObject({
+      completion: { setupId, deviceId: "device-123", access: "node" },
+    });
+    await expect(readCompletion(baseDir, setupId)).resolves.toMatchObject({
+      setupId,
+      deviceId: "device-123",
+      access: "node",
+    });
+    await expectVerification(baseDir, token, false);
+    await expect(
+      consumeBootstrapToken(baseDir, token, { completedAtMs: nowMs + 1 }),
+    ).resolves.toBeNull();
   });
 });

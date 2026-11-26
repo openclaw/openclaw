@@ -1,3 +1,5 @@
+import type { DatabaseSync } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -6,12 +8,14 @@ import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
+  refreshAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   findSqlCharacter,
   findSqlClosingParenthesis,
+  foldSqliteIdentifierCase,
   hasUnquotedSqlKeyword,
   normalizeSqlIdentifier,
   readSqlToken,
@@ -20,6 +24,31 @@ import {
 } from "../infra/sqlite-schema-sql.js";
 
 const tableColumns = new WeakMap<SqliteSchemaFacts, Map<string, Set<string>>>();
+
+function readLiveSqliteTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+function isDuplicateSqliteColumnError(error: unknown): boolean {
+  return (
+    sqlitePrimaryResultCode(error) === 1 &&
+    /\bduplicate column name\b/iu.test(coerceErrorMessage(error))
+  );
+}
+
+function unquoteSqlIdentifier(identifier: string): string {
+  if (identifier.startsWith('"') && identifier.endsWith('"')) {
+    return identifier.slice(1, -1).replaceAll('""', '"');
+  }
+  if (identifier.startsWith("`") && identifier.endsWith("`")) {
+    return identifier.slice(1, -1).replaceAll("``", "`");
+  }
+  if (identifier.startsWith("[") && identifier.endsWith("]")) {
+    return identifier.slice(1, -1);
+  }
+  return identifier;
+}
 
 function readCanonicalTableDefinition(sql: string, tableName: string) {
   if (!/^CREATE TABLE\b/iu.test(sql) || hasUnquotedSqlKeyword(sql, /\bAS\b/giu)) {
@@ -100,8 +129,7 @@ export function readTableColumns(db: EngineConnection, tableName: string): Set<s
       return columns;
     }
   }
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  return readLiveSqliteTableColumns(db, tableName);
 }
 
 /** Inspect only failed queries; native unavailability must not become a schema refusal. */
@@ -209,13 +237,32 @@ export function tableExists(db: EngineConnection, tableName: string): boolean {
 }
 
 export function ensureColumn(db: EngineConnection, tableName: string, columnSql: string): boolean {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
+  const columnToken = readSqlToken(columnSql, 0);
+  const columnName = columnToken ? unquoteSqlIdentifier(columnToken.raw) : undefined;
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
     return false;
   }
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-  return true;
+  try {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+    return true;
+  } catch (error) {
+    if (isPostgresSqlConnection(db) || !isDuplicateSqliteColumnError(error)) {
+      throw error;
+    }
+    let liveColumns: Set<string>;
+    try {
+      liveColumns = readLiveSqliteTableColumns(db, tableName);
+    } catch {
+      throw error;
+    }
+    const targetColumn = foldSqliteIdentifierCase(columnName);
+    if (![...liveColumns].some((name) => foldSqliteIdentifierCase(name) === targetColumn)) {
+      throw error;
+    }
+    refreshAdmittedSqliteSchemaFacts(db);
+    return false;
+  }
 }
 
 /** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */

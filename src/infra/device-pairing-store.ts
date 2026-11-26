@@ -9,7 +9,6 @@ import {
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
-  DeviceBootstrapTokens,
   DevicePairingPaired,
 } from "../state/openclaw-state-db.generated.js";
 import {
@@ -56,19 +55,6 @@ import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export type { DevicePairingStoreState } from "./device-pairing.types.js";
-
-const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
-  "device_id",
-  "issued_at_ms",
-  "last_used_at_ms",
-  "pending_profile_json",
-  "profile_json",
-  "public_key",
-  "redeemed_profile_json",
-  "token",
-  "token_key",
-  "ts",
-] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
 
 type DevicePairingStoreMutation<T> = {
   mutated: boolean;
@@ -401,15 +387,11 @@ export function readDeviceBootstrapTokenRecordsFromDatabase(
 ): Record<string, DeviceBootstrapTokenRecord> {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const state: Record<string, DeviceBootstrapTokenRecord> = {};
-  const hasSetupId = tableHasColumn(db, "device_bootstrap_tokens", "setup_id");
-  const rows: DeviceBootstrapTokens[] = hasSetupId
-    ? executeSqliteQuerySync(db, kysely.selectFrom("device_bootstrap_tokens").selectAll()).rows
-    : executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("device_bootstrap_tokens")
-          .select(DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP),
-      ).rows.map((row) => Object.assign(row, { setup_id: null }));
+  // Select live columns directly so an out-of-band setup_id addition is preserved even if admitted facts lag.
+  const rows = executeSqliteQuerySync(
+    db,
+    kysely.selectFrom("device_bootstrap_tokens").selectAll(),
+  ).rows;
   for (const row of rows) {
     state[row.token_key] = fromBootstrapRow(row);
   }
