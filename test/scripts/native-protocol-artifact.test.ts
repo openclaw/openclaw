@@ -16,8 +16,11 @@ describe("native protocol build artifacts", () => {
     const output = await generateNativeProtocol(root, "swift");
     assertNativeProtocolContract("swift", output);
     const swift = output["GatewayModels.swift"];
-    expect(swift).toContain("public struct UpdateRunResult: Codable, Sendable");
-    expect(swift).toContain("public struct RefusedUpdateRunResult: Codable, Sendable");
+    const updateStart = swift.indexOf("public struct UpdateRunResult: Codable, Sendable");
+    const update = swift.slice(updateStart, swift.indexOf("\n}\n", updateStart));
+    expect(update).toContain(
+      "public init(\n        runid: String,\n        ok: Bool,\n        result: AnyCodable,\n        ackdelivered: Bool? = nil,",
+    );
     expect(swift).not.toContain("UserBackgroundAssetId");
     expect(swift).toContain("public enum TemplateSkillAcknowledgement: Codable, Sendable");
     expect(swift).toContain("public let acknowledgeskillwarnings: [TemplateSkillAcknowledgement]?");

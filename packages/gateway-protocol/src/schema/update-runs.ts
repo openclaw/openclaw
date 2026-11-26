@@ -327,10 +327,10 @@ const updateRunResultFields = {
 
 export const UpdateRunResultSchema = Type.Union([
   closedObject({
-    ...updateRunResultFields,
     runId,
     ok: Type.Boolean(),
     result: Type.Unknown(),
+    ...updateRunResultFields,
   }),
   closedObject({
     ...updateRunResultFields,

@@ -428,18 +428,6 @@ function emitBoardEventParamsModels(schema: JsonSchema): string {
   return `${emitStruct("BoardEventParams", legacy)}\n${emitStruct("BoardTicketEventParams", ticket)}`;
 }
 
-function emitUpdateRunResultModels(schema: JsonSchema): string {
-  const variants = schema.anyOf ?? schema.oneOf ?? [];
-  const admitted = variants.find((variant) => variant.properties?.runId?.type === "string");
-  const refused = variants.find((variant) => variant.properties?.runId?.type === "null");
-  if (!admitted || !refused) {
-    throw new Error("UpdateRunResult must retain admitted and no-run object variants");
-  }
-  // The admitted receipt shipped as a struct before the schema became a union.
-  // Retain its source API and give pre-admission refusals their own projection.
-  return `${emitStruct("UpdateRunResult", admitted)}\n${emitStruct("RefusedUpdateRunResult", refused)}`;
-}
-
 function emitStructCustomCodable(
   name: string,
   props: Record<string, JsonSchema>,
@@ -863,7 +851,15 @@ export function generateSwiftProtocol(): string {
       continue;
     }
     if (name === "UpdateRunResult") {
-      parts.push(emitUpdateRunResultModels(schema));
+      const admitted = (schema.anyOf ?? schema.oneOf ?? []).find(
+        (variant) => variant.properties?.runId?.type === "string",
+      );
+      if (!admitted) {
+        throw new Error("UpdateRunResult must retain its admitted receipt projection");
+      }
+      // Keep the shipped admitted-receipt API. No-run refusals remain untyped in Swift,
+      // as before; do not introduce a permissive native model for the new union arm.
+      parts.push(emitStruct(name, admitted));
       continue;
     }
     if (schema.type === "object") {

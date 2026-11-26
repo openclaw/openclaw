@@ -1313,7 +1313,7 @@ var External = [
     /^[^\s\u0000-\u001f\u007f-\u009f]+$/u,
     /^[a-fA-F0-9]{40}$/u,
     /(^runId$|^createdAtMs$|^updatedAtMs$|^trigger$|^phase$|^status$|^reason$|^admission$|^origin$|^target$|^before$|^after$|^steps$|^verification$|^repair$|^confirmedAtMs$|^finishedAtMs$|^downtimeMs$)/u,
-    /(^ackDelivered$|^ackQueued$|^acknowledgement$|^externalSupervisorGuidance$|^noticeInApp$|^code$|^message$|^handoff$|^restart$|^sentinel$|^runId$|^ok$|^result$)/u,
+    /(^runId$|^ok$|^result$|^ackDelivered$|^ackQueued$|^acknowledgement$|^externalSupervisorGuidance$|^noticeInApp$|^code$|^message$|^handoff$|^restart$|^sentinel$)/u,
     /(^ackDelivered$|^ackQueued$|^acknowledgement$|^externalSupervisorGuidance$|^noticeInApp$|^code$|^message$|^handoff$|^restart$|^sentinel$|^runId$|^ok$|^result$)/u,
     /(^status$|^reason$)/u,
     /(^runId$|^expectedOwnerId$)/u,
@@ -13915,6 +13915,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1363, unique_1364) => External[690].test(unique_1363) || check_2(value[unique_1363]),
     ) &&
+    check_1920(value.runId) &&
+    check_99(value.ok) &&
+    check_307(value.result) &&
     (value.ackDelivered === void 0 || !("ackDelivered" in value) || check_64(value.ackDelivered)) &&
     (value.ackQueued === void 0 || !("ackQueued" in value) || check_64(value.ackQueued)) &&
     (value.acknowledgement === void 0 ||
@@ -13928,10 +13931,7 @@ var External = [
     (value.message === void 0 || !("message" in value) || check_277(value.message)) &&
     (value.handoff === void 0 || !("handoff" in value) || check_326(value.handoff)) &&
     (value.restart === void 0 || !("restart" in value) || check_326(value.restart)) &&
-    (value.sentinel === void 0 || !("sentinel" in value) || check_326(value.sentinel)) &&
-    check_1920(value.runId) &&
-    check_99(value.ok) &&
-    check_307(value.result),
+    (value.sentinel === void 0 || !("sentinel" in value) || check_326(value.sentinel)),
   check_2083 = (value) =>
     typeof value == "object" &&
     value !== null &&
