@@ -38,6 +38,12 @@ import { settleRunFromTrial } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
+import {
+  irohBinary,
+  irohCrate,
+  irohRepository,
+  registerIrohPreparationTests,
+} from "./prepare-iroh.test-support.js";
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
@@ -46,6 +52,25 @@ import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
+
+describe("Git prepared release iroh binding", () => {
+  it.each(["checkout", "running", "both"] as const)(
+    "copies compatible native bytes from %s without compiling",
+    async (artifact) => {
+      const target = await irohRepository({ artifact });
+      expect(await prepareGit(target)).toMatchObject({ ok: true });
+      expect(await fs.readFile(path.join(target.release, irohCrate, irohBinary), "utf8")).toBe(
+        artifact === "checkout" ? "checkout bytes" : "running bytes",
+      );
+      expect(await fs.readFile(path.join(target.release, "steps.txt"), "utf8")).not.toContain(
+        "build:iroh",
+      );
+    },
+  );
+
+  registerIrohPreparationTests();
+});
+
 describe("release preparation", () => {
   it("keeps the repository HEAD recognizable as release-aware", async () => {
     const checkout = await fs.realpath(new URL("../../", import.meta.url));
