@@ -81,6 +81,8 @@ describe("sessions tool self-snooze", () => {
     "quiet",
     "queued",
     "queued-after-rollover",
+    "write-failed",
+    "write-failed-after-rollover",
     "submitted",
     "aborted",
     "failed",
@@ -88,13 +90,20 @@ describe("sessions tool self-snooze", () => {
     "rejected-replacement",
     "accepted-replacement",
   ] as const)("settles with %s", async (scenario) => {
-    const { sessionKey, sessionId, storePath, createTool, update } =
+    const { sessionKey, sessionId, storePath, createTool, update, events } =
       await createArchiveSession("self-snooze");
+    const writeFails = scenario === "write-failed" || scenario === "write-failed-after-rollover";
     const snoozedUntil = Date.now() + 60_000;
     const patches: unknown[] = [];
     const tool = createTool(async (request) => {
       request.sessionMutationCommitGuard?.();
       patches.push(request.params);
+      if (writeFails) {
+        if (scenario === "write-failed-after-rollover") {
+          await update({ sessionId: "next-transcript", updatedAt: Date.now() });
+        }
+        throw new Error("Storage failure: /private/session/path");
+      }
       return {} as never;
     });
     const continuation = inProcessGateway.runWithGatewayToolContinuationContext;
@@ -124,7 +133,7 @@ describe("sessions tool self-snooze", () => {
           await expect(
             tool.execute("replace", { action: "patch", snoozedUntil: Date.now() - 1 }),
           ).rejects.toThrow(/future/);
-        } else if (scenario !== "quiet") {
+        } else if (scenario !== "quiet" && !writeFails) {
           const inputSessionId =
             scenario === "queued-after-rollover" ? "next-transcript" : sessionId;
           if (scenario === "queued-after-rollover") {
@@ -152,9 +161,27 @@ describe("sessions tool self-snooze", () => {
         }
       });
       operation.complete();
-      await Promise.all(pending);
+      await Promise.allSettled(pending);
+      if (writeFails) {
+        const recorded = await events(scenario === "write-failed" ? sessionId : "next-transcript");
+        if (scenario === "write-failed") {
+          expect(recorded).toContainEqual(
+            expect.objectContaining({
+              type: "custom_message",
+              customType: "session-snooze-failed",
+              display: true,
+              excludeFromContext: true,
+              content:
+                "The scheduled session snooze could not be confirmed. Check whether this session is snoozed before trying again.",
+            }),
+          );
+          expect(JSON.stringify(recorded)).not.toContain("/private/session/path");
+        } else {
+          expect(recorded).toEqual([]);
+        }
+      }
       expect(patches).toEqual(
-        scenario === "quiet" || scenario.endsWith("replacement")
+        scenario === "quiet" || scenario.endsWith("replacement") || writeFails
           ? [
               {
                 key: sessionKey,

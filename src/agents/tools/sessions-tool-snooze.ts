@@ -12,6 +12,7 @@ import { readSessionControllerOperationState } from "../../sessions/session-cont
 import { captureSelfSnooze } from "../../sessions/session-self-snooze.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import {
+  getInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
@@ -20,6 +21,7 @@ import {
   callSessionToolControl,
   prepareSessionToolControlTarget,
 } from "./sessions-tool-control.js";
+import { reportDeferredSessionVisibilityFailure } from "./sessions-tool-deferred-notice.js";
 
 const log = createSubsystemLogger("agents/sessions");
 
@@ -55,6 +57,9 @@ export async function scheduleSelfSnooze(params: {
     throw new ToolInputError("Self-snooze requires the active requesting turn");
   }
   const intent = captureSelfSnooze(target);
+  // Visibility belongs to the chat; an error notice belongs only to the requesting transcript.
+  const reportSessionId = requestingTurn.sessionId;
+  const gateway = getInProcessGatewayToolContext();
   try {
     const chat = await withSessionEntryReadOnlyInWorker(
       target,
@@ -91,17 +96,45 @@ export async function scheduleSelfSnooze(params: {
             synchronousCheck: true,
           }),
         };
-        if (control.restricted) {
-          await callSessionToolControl(control, request, callGateway);
-        } else {
-          await callGateway(request);
+        try {
+          if (control.restricted) {
+            await callSessionToolControl(control, request, callGateway);
+          } else {
+            await callGateway(request);
+          }
+        } catch (error) {
+          if (!intent.current()) {
+            return;
+          }
+          log.warn("deferred self-snooze failed for " + key + ": " + formatErrorMessage(error));
+          const access = control.restricted
+            ? await prepareSessionToolControlTarget(control)
+            : undefined;
+          try {
+            await reportDeferredSessionVisibilityFailure({
+              operation: "snooze",
+              target: { ...chat, sessionId: reportSessionId },
+              gateway,
+              assertCurrent: composeSessionSourceAssertion([
+                request.sessionMutationCommitGuard,
+                access?.assertCurrent,
+              ]),
+            });
+          } finally {
+            access?.release();
+          }
         }
       },
       { agentId },
     )
       .catch((error: unknown) => {
         if (intent.current()) {
-          log.warn("deferred self-snooze failed for " + key + ": " + formatErrorMessage(error));
+          log.warn(
+            "deferred self-snooze outcome unavailable for " +
+              key +
+              ": " +
+              formatErrorMessage(error),
+          );
         }
       })
       .finally(intent.release);

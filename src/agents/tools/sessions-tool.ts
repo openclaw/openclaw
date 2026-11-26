@@ -5,11 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
-import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -51,7 +47,6 @@ import {
 import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
 import { isSessionToolMainAlias, resolveSessionToolContext } from "./sessions-helpers.js";
 import {
-  captureSessionControlAuthority,
   hasSessionControlAuthority,
   hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
@@ -63,6 +58,7 @@ import {
   prepareSessionToolControlTarget,
   stopSessionTool,
 } from "./sessions-tool-control.js";
+import { reportDeferredSessionVisibilityFailure } from "./sessions-tool-deferred-notice.js";
 import {
   readSessionsToolPatch,
   runSessionsToolPatchMany,
@@ -638,44 +634,16 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     log.warn(
                       `deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`,
                     );
-                    const source = captureSessionControlAuthority();
-                    const target = {
-                      agentId,
-                      storePath,
-                      sessionKey: key,
-                      sessionId: expectedSessionIdentity.expectedSessionId,
-                    };
-                    // The settled model writer no longer owns this accepted outcome.
-                    // Keep the retained source and exact session generation at the report commit.
-                    const report = await runWithoutOwnedSessionTranscriptWrites(() =>
-                      withSessionTranscriptWriteAssertion(
-                        target,
-                        composeSessionSourceAssertion([source?.assertCurrent], (assertSource) => {
-                          assertSource();
-                          if (getInProcessGatewayToolContext() !== archiveGatewayContext) {
-                            throw new Error("Deferred archive Gateway owner changed");
-                          }
-                        }),
-                        () =>
-                          appendSessionTranscriptReport(target, {
-                            kind: "custom",
-                            customTypes: ["session-archive-failed"],
-                            selectReport: () => ({
-                              customType: "session-archive-failed",
-                              content:
-                                "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
-                              display: true,
-                              excludeFromContext: true,
-                              details: { operation: "archive", outcome: "unconfirmed" },
-                            }),
-                          }),
-                      ),
-                    );
-                    if (!report.ok) {
-                      log.warn(
-                        `deferred self-archive notice unavailable for ${key}: ${report.error.code}`,
-                      );
-                    }
+                    await reportDeferredSessionVisibilityFailure({
+                      operation: "archive",
+                      target: {
+                        agentId,
+                        storePath,
+                        sessionKey: key,
+                        sessionId: expectedSessionIdentity.expectedSessionId,
+                      },
+                      gateway: archiveGatewayContext,
+                    });
                   }),
               { agentId },
             ).catch((error: unknown) => {
