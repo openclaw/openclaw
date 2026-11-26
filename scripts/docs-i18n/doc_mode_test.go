@@ -2173,14 +2173,17 @@ func TestSanitizeDocChunkProtocolWrappersStripsBodyOnlyWrapperWhenSourceHasNoBod
 	t.Parallel()
 
 	source := "Regular paragraph.\n"
-	translated := "<body>\nTranslated paragraph.\n</body>\n"
-
-	got := sanitizeDocChunkProtocolWrappers(source, translated)
-	if strings.Contains(got, "<body>") || strings.Contains(got, "</body>") {
-		t.Fatalf("expected body-only wrapper to be stripped, got %q", got)
-	}
-	if strings.TrimSpace(got) != "Translated paragraph." {
-		t.Fatalf("unexpected sanitized body %q", got)
+	for _, translated := range []string{
+		"<body>\nTranslated paragraph.\n</body>\n",
+		"<BODY>\nTranslated paragraph.\n</BODY>\n",
+	} {
+		got := sanitizeDocChunkProtocolWrappers(source, translated)
+		if strings.Contains(got, "<body>") || strings.Contains(got, "</body>") {
+			t.Fatalf("expected body-only wrapper to be stripped, got %q", got)
+		}
+		if strings.TrimSpace(got) != "Translated paragraph." {
+			t.Fatalf("unexpected sanitized body %q", got)
+		}
 	}
 }
 
