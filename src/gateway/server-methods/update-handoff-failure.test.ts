@@ -383,10 +383,17 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
+          message: expect.stringContaining("⚠️ OpenClaw couldn't finish updating."),
         }),
         expect.any(Object),
       );
+      const notice = sendNotice.mock.calls.at(-1)?.[0]?.message;
+      expect(notice).toContain(`The current version (${run.before.version}) is still running.`);
+      expect(notice).toContain(
+        "Update failed before the update started (managed-service-handoff-failed).",
+      );
+      expect(notice).toContain(message);
+      expect(notice).toContain("openclaw update status");
     },
   );
 

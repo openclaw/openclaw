@@ -312,7 +312,9 @@ describe("update progress", () => {
       expect(phaseLines()).toEqual(
         present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"],
       );
-      expect(lines.join("\n")).toContain(present ? "OpenClaw is updating." : "OpenClaw updated.");
+      expect(lines.join("\n")).toContain(
+        present ? "OpenClaw update in progress: verifying." : "OpenClaw updated.",
+      );
       expect(log).not.toHaveBeenCalledWith("Phase: repairing");
     },
   );

@@ -26,6 +26,7 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -702,9 +703,11 @@ it.each([
               verifySettledHistory = () => {
                 const record = getUpdateRun(run.runId, { env });
                 assert(record);
-                expect(record.steps).toContainEqual(
-                  expect.objectContaining({ detail: expect.stringContaining(reason) }),
-                );
+                expect(record.verification.rollbackOutcome).toMatchObject({
+                  status: "not-attempted",
+                  reason: expect.stringContaining(reason),
+                });
+                expect(renderUpdateRunSummary(record)).toContain(reason);
                 if (preservesMigrated) {
                   expect(record).toMatchObject({
                     status: "failed",

@@ -186,14 +186,14 @@ describe("statusAllCommand diagnosis", () => {
     {
       status: "error",
       reason: "managed-service-handoff-failed",
-      headline: "⚠️ OpenClaw update failed: managed-service-handoff-failed.",
-      hint: "Run openclaw triage to diagnose and repair the failed update.",
+      headline: "⚠️ OpenClaw couldn't finish updating.",
+      hint: "openclaw triage",
     },
     {
       status: "skipped",
       reason: "restart-health-pending",
       headline: "⬆️ OpenClaw update in progress: restarting.",
-      hint: "Check progress with openclaw update status.",
+      hint: "openclaw update status",
     },
   ] as const)(
     "includes the shared update report for $status sentinels",
@@ -208,6 +208,9 @@ describe("statusAllCommand diagnosis", () => {
       });
       const output = await reportText();
       expectReport(output, [`Update restart: ${headline}`, hint], ["run openclaw gateway restart"]);
+      if (status === "error") {
+        expect(output).toContain("(managed-service-handoff-failed)");
+      }
     },
   );
 

@@ -315,8 +315,9 @@ it.each([true, false])(
       );
     } else {
       expect(defaultRuntime.log).toHaveBeenCalledWith(
-        expect.stringContaining("OpenClaw wasn't updated."),
+        expect.stringContaining("Doctor maintenance remains pending."),
       );
+      expect(defaultRuntime.log).toHaveBeenCalledWith(expect.stringContaining(nextAction));
     }
     const run = listUpdateRuns()[0]!;
     expect(run).toMatchObject({

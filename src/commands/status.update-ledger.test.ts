@@ -171,7 +171,11 @@ describe("status update ledger evidence", () => {
         expect(rows[0]?.Value).toContain("Last update run failed (post-update-failed)");
         expect(rows[0]?.Value).not.toContain("openclaw update");
       } else {
-        expect(rows[0]?.Value).toContain("Update failed before completion (post-update-failed).");
+        expect(rows[0]?.Value).toContain("(post-update-failed)");
+        expect(rows[0]?.Value).toContain("gateway verification");
+        expect(rows[0]?.Value).toContain(
+          "Gateway did not settle; startup phase: waiting for managed service",
+        );
         if (detail) {
           expect(rows[0]?.Value).toContain(detail);
         }

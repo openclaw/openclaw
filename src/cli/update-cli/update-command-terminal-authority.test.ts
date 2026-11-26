@@ -20,6 +20,7 @@ import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import * as sentinel from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import * as ledger from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -377,9 +378,8 @@ it
                 detail: expect.stringContaining("Package manager admission refused"),
               }),
             );
-            expect(settledRecord?.steps).toContainEqual(
-              expect.objectContaining({ detail: expect.stringContaining(childFailure.message) }),
-            );
+            expect(settledRecord?.origin.nextAction).toContain(childFailure.message);
+            expect(renderUpdateRunSummary(settledRecord!)).toContain(childFailure.message);
           }
         } else {
           expect(settledRecord).toEqual(original);

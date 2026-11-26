@@ -102,4 +102,100 @@ describe("update conversation notices", () => {
     expect(renderUpdateRunNotice(run, "finished")).toBe(text);
     expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
   });
+
+  it.each(["succeeded", "failed"] as const)("labels a standalone %s repair", (status) => {
+    const run = {
+      status,
+      phase: "finished" as const,
+      reason: status === "failed" ? "repair-failed" : null,
+      after: { version: "2.0.0" },
+      steps: [
+        {
+          step: "repairing",
+          status: status === "failed" ? ("failed" as const) : ("completed" as const),
+        },
+      ],
+    };
+    const text = renderUpdateRunSummary(run);
+    expect(text.split("\n")[0]).toBe(
+      status === "succeeded"
+        ? "✅ OpenClaw repair completed for 2.0.0."
+        : "⚠️ OpenClaw repair failed: repair-failed.",
+    );
+    expect(text).not.toContain("OpenClaw updated");
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
+
+  it("keeps the completed startup refusal's cause and remedy", () => {
+    const remedy = "Run `openclaw --profile work doctor --fix` before retrying.";
+    const text = renderUpdateRunSummary({
+      status: "failed",
+      reason: "candidate-refused-startup",
+      steps: [
+        {
+          step: "diagnostic:startup",
+          status: "completed",
+          detail: `Invalid gateway configuration.\n${remedy}`,
+        },
+      ],
+    });
+    expect(text).toContain("Invalid gateway configuration.");
+    expect(text).toContain(remedy);
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
+
+  it("preserves named facts, full tails and the compensation refusal", () => {
+    const message = "Gateway did not settle; startup phase: waiting for managed service";
+    const compensation = "restoring the backup would discard later writes";
+    const text = renderUpdateRunSummary({
+      status: "failed",
+      reason: "post-update-failed",
+      steps: [
+        {
+          step: "gateway verification",
+          status: "failed",
+          detail: "Permission denied.",
+          stderrTail: "EACCES: cannot write the update payload",
+          failureFacts: [{ check: "gateway", code: "post-update-failed", message }],
+        },
+      ],
+      verification: { rollbackOutcome: { status: "not-attempted", reason: compensation } },
+    });
+    for (const fact of [
+      "gateway verification",
+      message,
+      "EACCES",
+      compensation,
+      "openclaw triage",
+      "openclaw update status",
+    ]) {
+      expect(text).toContain(fact);
+    }
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
+
+  it("retains the initiating signal after a rollback", () => {
+    const cause = "interrupted by SIGHUP during activating";
+    const text = renderUpdateRunSummary({
+      status: "rolled-back",
+      reason: "interrupted",
+      steps: [{ step: "activating", status: "failed", stderrTail: cause }],
+    });
+    expect(text).toContain(cause);
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
+
+  it("does not repeat repair advice for acknowledged abandoned history", () => {
+    const run = {
+      status: "failed" as const,
+      reason: "abandoned",
+      steps: [{ step: "reconcile:acknowledged", status: "completed" as const }],
+      origin: { nextAction: "Run `openclaw update repair` before retrying." },
+    };
+    const text = renderUpdateRunSummary(run);
+    expect(text).toContain("abandoned update reconciled");
+    expect(text).not.toContain("openclaw update repair");
+    expect(run.status).toBe("failed");
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
 });

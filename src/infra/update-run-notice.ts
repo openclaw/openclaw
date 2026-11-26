@@ -1,5 +1,14 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import {
+  formatUpdateFailureFact,
+  selectUpdateFailureReportSteps,
+} from "./update-failure-facts-format.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
+  updateStepDiagnostics,
+  type UpdateRunRecord,
+} from "./update-run-record.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
@@ -52,38 +61,89 @@ const FAILED_PHASE_DESCRIPTIONS = new Map<string, string>([
   ["verifying", "while checking Gateway readiness"],
 ]);
 const UNKNOWN_FAILED_PHASE = "before completion";
+const UPDATE_RUN_DETAILS =
+  "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
 
-/** Chat shows the outcome; the update views keep diagnostics and recovery instructions. */
+/** One factual completion summary for the CLI, update views, and final notice. */
 export function renderUpdateRunSummary(
   run: NoticeRun,
   options: { manualCommand?: string } = {},
 ): string {
-  const headline =
-    run.status === "running" && run.phase
-      ? `⬆️ OpenClaw update in progress: ${run.phase}.`
-      : run.status !== "skipped"
-        ? UPDATE_RUN_HEADLINES.get(run.status)
-        : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
+  if (
+    run.steps &&
+    isAcknowledgedAbandonedUpdateRun({
+      status: run.status,
+      reason: run.reason,
+      steps: run.steps,
+    })
+  ) {
+    return `ℹ️ OpenClaw abandoned update reconciled.\n${UPDATE_RUN_DETAILS}`;
+  }
+  const repairRun = run.steps ? isUpdateRepairRun({ steps: run.steps }) : false;
+  const finalVersion = run.after?.version;
+  const success =
+    run.status === "succeeded"
+      ? repairRun
+        ? `OpenClaw repair completed${finalVersion ? ` for ${finalVersion}` : ""}`
+        : `OpenClaw updated${finalVersion ? ` to ${finalVersion}` : ""}`
+      : undefined;
+  const headline = success
+    ? `✅ ${success}.`
+    : repairRun && run.status === "failed"
+      ? `⚠️ OpenClaw repair failed: ${run.reason ?? "unknown reason"}.`
+      : run.status === "running" && run.phase
+        ? `⬆️ OpenClaw update in progress: ${run.phase}.`
+        : run.status !== "skipped"
+          ? UPDATE_RUN_HEADLINES.get(run.status)
+          : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
     ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
     : run.origin?.nextAction
       ? `Next: ${run.origin.nextAction}`
-      : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
-  const failedStep = run.steps?.findLast((step) => step.status === "failed");
-  const finalVersion = run.after?.version;
+      : run.status === "failed"
+        ? `Run \`openclaw triage\` to diagnose and repair the failed update. ${UPDATE_RUN_DETAILS}`
+        : UPDATE_RUN_DETAILS;
+  const selected = selectUpdateFailureReportSteps(
+    run.steps?.filter(
+      (step) =>
+        step.status === "failed" || step.step === "outcome" || step.step === "diagnostic:startup",
+    ) ?? [],
+  );
+  const failedStep =
+    selected.findLast(
+      (step) =>
+        step.status === "failed" &&
+        step.step !== "outcome" &&
+        !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
+    ) ?? selected.findLast((step) => step.status === "failed");
+  const diagnostics = new Set<string>();
+  for (const step of selected) {
+    const observed = updateStepDiagnostics(step);
+    for (const value of [
+      step.detail,
+      observed.reasonDetails,
+      ...observed.tails,
+      ...(step.failureFacts?.map(formatUpdateFailureFact) ?? []),
+    ]) {
+      const text = value?.replace(/\s+/gu, " ").trim();
+      if (text) {
+        diagnostics.add(text);
+      }
+    }
+  }
+  const rollbackReason = run.verification?.rollbackOutcome?.reason?.replace(/\s+/gu, " ").trim();
+  if (rollbackReason) {
+    diagnostics.add(rollbackReason);
+  }
+  const detail = [...diagnostics].join(" ");
   if (failedStep && (run.status === "succeeded" || run.status === "skipped")) {
     return [
-      run.status === "succeeded"
-        ? `⚠️ OpenClaw updated${finalVersion ? ` to ${finalVersion}` : ""}.`
-        : headline,
-      `Failed step: ${failedStep.step}.`,
+      success ? `⚠️ ${success}.` : headline,
+      `Failed step: ${failedStep.step}.${detail ? ` ${detail}` : ""}`,
       run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
     ].join("\n");
   }
-  if (run.status === "succeeded" && finalVersion) {
-    return `✅ OpenClaw updated to ${finalVersion}.\n${nextStep}`;
-  }
-  if (run.status === "failed" && run.steps) {
+  if ((run.status === "failed" || run.status === "rolled-back") && run.steps) {
     const phase =
       run.steps.findLast(
         (step) =>
@@ -92,12 +152,7 @@ export function renderUpdateRunSummary(
             (candidate) => candidate !== "finished" && candidate === step.step,
           ),
       )?.step ?? "unknown";
-    const reason = run.reason ?? "update-failed";
-    const detail = (
-      run.steps.findLast((step) => step.step === "outcome")?.detail ?? failedStep?.detail
-    )
-      ?.replace(/\s+/gu, " ")
-      .trim();
+    const reason = run.reason ?? (repairRun ? "repair-failed" : "update-failed");
     const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
     const recovery = run.verification?.recovery;
     // The request receipt proves continued service only before activation can stop it.
@@ -113,6 +168,7 @@ export function renderUpdateRunSummary(
           : keptServing && run.verification.serviceRunning
             ? run.verification.runningVersion
             : undefined);
+    const stepName = failedStep ? ` Failed step: ${failedStep.step}.` : "";
     return [
       headline,
       ...(serving && serving === run.before?.version
@@ -122,7 +178,7 @@ export function renderUpdateRunSummary(
               : `The previous version (${serving}) is still serving.`,
           ]
         : []),
-      `Update failed ${FAILED_PHASE_DESCRIPTIONS.get(phase) ?? UNKNOWN_FAILED_PHASE} (${reason}).${detail ? ` ${detail}` : ""}`,
+      `${repairRun ? "Repair" : "Update"} failed ${FAILED_PHASE_DESCRIPTIONS.get(phase) ?? UNKNOWN_FAILED_PHASE} (${reason}).${detail ? ` ${detail}` : ""}${stepName}`,
       run.origin?.nextAction && !options.manualCommand
         ? `Next: ${run.origin.nextAction.replace(/\s+/gu, " ")}`
         : nextStep,
@@ -135,14 +191,12 @@ export function renderUpdateRunSummary(
 export function isUpdateRunTerminalNoticeText(text: string): boolean {
   const lines = text.split("\n");
   if (
-    /^Failed step: .+\.$/u.test(lines[1] ?? "") &&
+    /^Failed step: .+\./u.test(lines[1] ?? "") &&
     (lines.slice(2).join("\n").startsWith("Next: ") ||
-      (lines.length === 3 &&
-        lines[2] ===
-          "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."))
+      (lines.length === 3 && lines[2] === UPDATE_RUN_DETAILS))
   ) {
     const headline = lines[0] ?? "";
-    if (/^⚠️ OpenClaw updated(?: to .+)?\.$/u.test(headline)) {
+    if (/^⚠️ OpenClaw (?:updated(?: to .+)?|repair completed(?: for .+)?)\.$/u.test(headline)) {
       return true;
     }
     for (const skippedHeadline of SKIPPED_UPDATE_RUN_HEADLINES.values()) {
@@ -152,15 +206,22 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
     }
     return headline === "ℹ️ OpenClaw wasn't updated.";
   }
-  if (/^✅ OpenClaw updated to .+\.$/u.test(lines[0] ?? "")) {
+  if (/^✅ OpenClaw (?:updated(?: to .+)?|repair completed(?: for .+)?)\.$/u.test(lines[0] ?? "")) {
     return (
       lines.slice(1).join("\n").startsWith("Next: ") ||
-      lines.slice(1).join("\n") ===
-        "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."
+      lines.slice(1).join("\n") === UPDATE_RUN_DETAILS
     );
   }
-  if (lines[0] === UPDATE_RUN_HEADLINES.get("failed") && lines.length >= 3 && lines.length <= 4) {
+  const repairFailure = /^⚠️ OpenClaw repair failed: .+\.$/u.test(lines[0] ?? "");
+  if (
+    (lines[0] === UPDATE_RUN_HEADLINES.get("failed") ||
+      lines[0] === UPDATE_RUN_HEADLINES.get("rolled-back") ||
+      repairFailure) &&
+    lines.length >= 3 &&
+    lines.length <= 4
+  ) {
     const failure = (lines.length === 4 ? lines[2] : lines[1]) ?? "";
+    const operation = failure.startsWith("Repair failed ") ? "Repair" : "Update";
     if (
       (lines.length === 3 ||
         /^(?:The previous version \(.+\) is still serving|The current version \(.+\) is still running)\.$/u.test(
@@ -168,12 +229,15 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
         )) &&
       [...FAILED_PHASE_DESCRIPTIONS.values(), UNKNOWN_FAILED_PHASE].some(
         (description) =>
-          failure.startsWith(`Update failed ${description} (`) &&
-          /\([a-z0-9-]+\)\.(?: .+)?$/u.test(failure),
+          failure.startsWith(`${operation} failed ${description} (`) &&
+          /\)\.(?: .+)?$/u.test(failure),
       )
     ) {
       return true;
     }
+  }
+  if (text === `ℹ️ OpenClaw abandoned update reconciled.\n${UPDATE_RUN_DETAILS}`) {
+    return true;
   }
   // Previously stored completion notices keep their original wording on replay.
   const currentText = text.replace(
@@ -183,7 +247,9 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
   return (
     [...UPDATE_RUN_HEADLINES.keys()].some(
       (status) =>
-        status !== "running" && currentText === renderUpdateRunSummary({ status, reason: null }),
+        status !== "running" &&
+        (currentText === renderUpdateRunSummary({ status, reason: null }) ||
+          currentText === `${UPDATE_RUN_HEADLINES.get(status)}\n${UPDATE_RUN_DETAILS}`),
     ) ||
     [null, ...SKIPPED_UPDATE_RUN_HEADLINES.keys()].some(
       (reason) => currentText === renderUpdateRunSummary({ status: "skipped", reason }),

@@ -1,10 +1,15 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { formatDurationPrecise } from "../../../src/infra/format-time/format-duration.ts";
 import {
   projectUpdateRunHistory,
   type UpdateRunServingIdentity,
 } from "../../../src/infra/update-run-history-projection.ts";
 import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.ts";
+import {
+  formatUpdateOwedStep,
+  listUpdateOwedSteps,
+} from "../../../src/infra/update-run-owed-step.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
   isUpdateRepairRun,
@@ -12,6 +17,7 @@ import {
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
 import { resolveUpdateRunIdentity } from "../../../src/infra/update-run-report.ts";
+import { updateRunWarningMessages } from "../../../src/infra/update-run-step.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
@@ -78,7 +84,18 @@ export function projectUpdateRun(
       : historical
     : renderUpdateRunSummary(run);
   const [headline = summary, ...summaryLines] = summary.split("\n");
-  const report = { headline, lines: summaryLines.filter(Boolean), markdown: summary };
+  const report = {
+    headline,
+    lines: [
+      ...summaryLines.filter(Boolean),
+      ...updateRunWarningMessages(visibleSteps),
+      ...listUpdateOwedSteps(run).map(formatUpdateOwedStep),
+      ...(run.downtimeMs == null
+        ? []
+        : [`Gateway downtime: ${formatDurationPrecise(run.downtimeMs)}.`]),
+    ],
+    markdown: summary,
+  };
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = visibleSteps.find((step) => step.step === phase);

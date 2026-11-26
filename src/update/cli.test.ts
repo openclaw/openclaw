@@ -117,7 +117,7 @@ vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
   getUpdateRunAsync: async () =>
-    createUpdateRunRecordFixture(gatewayRunId, {
+    createUpdateRunRecordFixture("run-cli", {
       ...localRun,
       before: { version: "2026.11.8" },
       reason: "already-current",

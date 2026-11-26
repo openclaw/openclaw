@@ -328,7 +328,7 @@ it("shows plugin failure and the recorded recovery without failing the core upda
     origin: { nextAction },
     steps: [makeStep("plugin updates", "failed", "Plugin download failed.")],
   });
-  expect(text('[aria-label="Update report"]')).toContain("2026.9.2 is serving");
+  expect(text('[aria-label="Update report"]')).toContain("OpenClaw updated to 2026.9.2.");
   expect(text('[aria-label="Update report"]')).toContain("Failed step: plugin updates.");
   expect(text('[aria-label="Update report"]')).toContain(`Next: ${nextAction}`);
   expect(output()).toBe("Plugin download failed.");

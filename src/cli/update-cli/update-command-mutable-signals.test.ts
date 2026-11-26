@@ -14,6 +14,7 @@ import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtim
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
@@ -432,8 +433,11 @@ it.skipIf(process.platform === "win32").for([
             expect(readRun(message.runId)?.steps).toContainEqual(
               expect.objectContaining({
                 step: "activating",
-                detail: expect.stringContaining(`interrupted by ${signal} during activating`),
+                stderrTail: expect.stringContaining(`interrupted by ${signal} during activating`),
               }),
+            );
+            expect(renderUpdateRunSummary(readRun(message.runId)!)).toContain(
+              `interrupted by ${signal} during activating`,
             );
             expect(stderr).toContain("openclaw update repair");
             return;
