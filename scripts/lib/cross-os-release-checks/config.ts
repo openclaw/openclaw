@@ -162,7 +162,7 @@ const providerConfig = {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
-    model: "minimax/MiniMax-M2.7",
+    model: "minimax/MiniMax-M3",
     requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
@@ -663,7 +663,8 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
   if (platform !== "win32") {
     return false;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  // Child diagnostics can mention another command; only the runner's headline identifies this one.
+  const message = (error instanceof Error ? error.message : String(error)).split("\n", 1)[0] ?? "";
   return (
     /\bCommand timed out:/u.test(message) &&
     /[/\\]openclaw\.mjs update(?: --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz)? --yes --json(?: --no-restart)? --timeout \d+/u.test(

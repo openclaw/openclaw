@@ -38,17 +38,17 @@ describe("CommandPalette lifecycle", () => {
       onTestFinished(subscribeNativeOverlayOcclusion(changes, () => null));
       await openPalette(palette);
       await query("openclaw-modal-dialog")?.updateComplete;
-      expect(changes.mock.calls).toEqual([[false], [true]]);
+      expect(changes.mock.calls).toEqual([["live"], ["backdrop"]]);
       pressKey(paletteInput(palette), "Escape", { cancelable: true });
       await palette.updateComplete;
-      expect(changes).toHaveBeenLastCalledWith(false);
+      expect(changes).toHaveBeenLastCalledWith("live");
       await searchPalette(palette, "old");
       await query("openclaw-modal-dialog")?.updateComplete;
-      expect(changes).toHaveBeenLastCalledWith(true);
+      expect(changes).toHaveBeenLastCalledWith("backdrop");
       expect(palette.textContent).toContain("Old chat");
       const dialog = query("openclaw-modal-dialog")?.querySelector("dialog");
       palette.remove();
-      expect(changes).toHaveBeenLastCalledWith(false);
+      expect(changes).toHaveBeenLastCalledWith("live");
       expect([palette.isOpen, dialog?.open]).toEqual([false, false]);
       provider.append(palette);
       await palette.updateComplete;
@@ -120,7 +120,7 @@ describe("CommandPalette lifecycle", () => {
   );
 
   it.each(["reconnect", "config.changed", "chat.metadata.changed", "agent"])(
-    "keeps prompt searches stopped through %s and resumes when shortened",
+    "keeps Compose searches stopped through %s and resumes in Search",
     async (change) => {
       const request = vi.fn(async (method: string) =>
         method === "sessions.search"
@@ -131,7 +131,10 @@ describe("CommandPalette lifecycle", () => {
       const harness = await mountSearch({ methods: ["sessions.search"], request }, list);
       const { palette, context } = harness;
       const prompt = "needle\nSummarize the discussion and prepare a follow-up task.";
-      await searchPalette(palette, prompt);
+      await openPalette(palette);
+      pressKey(paletteInput(palette), "Tab", { cancelable: true });
+      setInputValue(paletteInput(palette), prompt);
+      await settlePalette(palette);
       expect([list.mock.calls, request.mock.calls]).toEqual([[], []]);
 
       if (change === "reconnect") {
@@ -151,6 +154,7 @@ describe("CommandPalette lifecycle", () => {
       expectPalettePromptMode(palette);
 
       setInputValue(input, "needle");
+      pressKey(input, "Tab", { cancelable: true });
       await settlePalette(palette);
       expect(findPaletteOption(palette, "Needle session")).toBeDefined();
       expect(findPaletteOption(palette, "Needle model")).toBeDefined();

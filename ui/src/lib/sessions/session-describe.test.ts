@@ -53,6 +53,23 @@ describe("session descriptor reads", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("keeps descriptors and roster reads warm across browser profile create and removal", async () => {
+    await h.sessions.refresh({ agentId: "main" });
+    const first = await h.sessions.describe({ key });
+    h.list.mockClear();
+    h.read.mockClear();
+    for (const path of ["browser.profiles.temporary", "browser.profiles"]) {
+      h.event("config.changed", { changedPaths: [path] });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await h.sessions.describe({ key })).toEqual(first);
+    }
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.list).not.toHaveBeenCalled();
+    h.event("config.changed", { changedPaths: ["agents.defaults.model"] });
+    await h.sessions.describe({ key });
+    expect(h.read).toHaveBeenCalledOnce();
+  });
+
   it("reuses concurrent implied-agent descriptors and their runtime sample, isolating other agents", async () => {
     const running: GatewaySessionRow = { ...initial, runtimeMs: 500, status: "running" };
     h.setRow(running);

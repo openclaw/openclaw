@@ -5,11 +5,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
-import {
-  formatCostUsageCachePrefix,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
+import { formatCostUsageCachePrefix, formatUsd } from "../../utils/usage-format.js";
 
 export async function formatSessionUsageCostSummary(params: {
   cfg: OpenClawConfig;

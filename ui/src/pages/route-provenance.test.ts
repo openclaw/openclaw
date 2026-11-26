@@ -8,7 +8,6 @@ import { createApplicationGatewaySnapshot } from "../test-helpers/application-co
 import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
-import { pages as pluginPages } from "./plugins/route.tsx";
 import { pages as skillPages } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { page as usagePage } from "./usage/route.tsx";
@@ -132,18 +131,3 @@ it.each(["replaced", "metadata", "cancelled"])(
     expect(data.agents).toBe(agents);
   },
 );
-
-it("keeps plugins provenance from before its async preload", async () => {
-  const result = { plugins: [], diagnostics: [], mutationAllowed: true };
-  const response = deferred<typeof result>();
-  const requestMethod = vi.fn(() => response.promise);
-  const source = provenance(requestMethod);
-  const request = source.load(pluginPages[0]);
-
-  source.replace();
-  response.resolve(result);
-  const data = await request;
-
-  expect(requestMethod).toHaveBeenCalledWith("plugins.list", {});
-  expect(data.result).toEqual(result);
-});

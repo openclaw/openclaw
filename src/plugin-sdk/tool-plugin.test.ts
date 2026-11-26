@@ -59,7 +59,7 @@ describe("defineToolPlugin", () => {
     const result = await firstTool(captured).execute("call-1", { input: "OPEN" });
     expect(result).toEqual({
       details: { input: "OPEN", configured: true },
-      content: [{ type: "text", text: '{\n  "input": "OPEN",\n  "configured": true\n}' }],
+      content: [{ type: "text", text: '{"input":"OPEN","configured":true}' }],
     });
   });
 

@@ -115,3 +115,39 @@ it.each([
   }
   expect(page.messagesBytes).toBeLessThan(512 * 1024);
 });
+
+it("only measures the selected history window and its boundary group", () => {
+  let reads = 0;
+  let activityReads = 0;
+  const messages = Array.from({ length: 2_000 }, (_, index) => ({
+    role: "toolResult",
+    timestamp: index,
+    get content() {
+      reads++;
+      return "x".repeat(4_000);
+    },
+    __openclaw: { id: `message-${index}`, seq: index + 1 },
+  }));
+  const activity = messages.map((message) => ({
+    messageId: message["__openclaw"].id,
+    get items() {
+      activityReads++;
+      return [];
+    },
+  }));
+  for (const messageId of [undefined, "message-1000"]) {
+    reads = activityReads = 0;
+    const page = prepareChatHistoryResponsePage(
+      { messages, activity },
+      { entry: undefined, maxHistoryBytes: 34_000, messageId },
+    );
+    expect(page.messages).toHaveLength(8);
+    expect(reads).toBeLessThanOrEqual(page.messages.length + 2);
+    expect(activityReads).toBeLessThanOrEqual(page.messages.length + 2);
+    expect(page.messages).toMatchObject(
+      Array.from({ length: 8 }, (_, index) => ({
+        __openclaw: { id: `message-${index + (messageId ? 996 : 1992)}` },
+      })),
+    );
+  }
+});

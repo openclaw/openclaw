@@ -42,17 +42,44 @@ const rename = fs.renameSync; fs.renameSync = (from, to) => { const result = ren
   untouched(f);
 });
 
-for (const effect of ["origin", "lifecycle", "live", "digest"]) test("prebuild retirement refuses changed " + effect + " evidence", t => {
+test("prebuild captured before the first adoption retires through that adoption's incumbent", t => {
+  const f = retirementFixture(t, undefined, { beforeAdoption: true });
+  assert.equal(JSON.parse(readFileSync(f.retirementRequest.buildIntent.path)).adoption, undefined);
+  const inspected = retire(f, "inspect-build");
+  assert.equal(inspected.status, 0, inspected.stderr);
+  const retired = retire(f);
+  assert.equal(retired.status, 0, retired.stderr);
+  assert.equal(JSON.parse(retired.stdout).phase, "BUILD_RETIRED");
+  for (const file of f.retirementOriginals) {
+    const path = join(f.archive, basename(file.path));
+    assert.equal(existsSync(file.path), false);
+    assert.deepEqual(descriptor(path), { ...file.descriptor, path });
+    assert.deepEqual(readFileSync(path), file.bytes);
+  }
+  untouched(f);
+});
+
+for (const effect of ["origin", "lifecycle", "live", "digest", "witness", "original", "adoption", "missing adoption"]) test("prebuild retirement refuses changed " + effect + " evidence", t => {
   const f = retirementFixture(t);
   let request = f.retirementRequest;
   if (effect === "origin") build(f, "origin");
   if (effect === "lifecycle") writeFileSync(f.prefix + ".lifecycle-bound.json", "{}\n", { mode: 0o600 });
   if (effect === "live") { f.native.unit.MainPID = "99999"; f.saveNative(); }
   if (effect === "digest") request = { ...request, buildIntent: { ...request.buildIntent, sha256: "0".repeat(64) } };
+  if (effect === "witness") writeFileSync(f.prefix + ".build-witness.json", "[]\n");
+  if (effect === "original") writeFileSync(f.prefix + ".build-original.json", "{}\n");
+  if (effect === "adoption" || effect === "missing adoption") {
+    const captured = JSON.parse(readFileSync(request.buildIntent.path));
+    if (effect === "missing adoption") delete captured.adoption;
+    else captured.adoption.operation = randomUUID();
+    writeFileSync(request.buildIntent.path, JSON.stringify(captured) + "\n");
+    request = { ...request, buildIntent: descriptor(request.buildIntent.path) };
+  }
+  const before = f.retirementOriginals.map(file => descriptor(file.path));
   const result = retire(f, "retire-build", request);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, effect === "live" ? /native|owner|incumbent/ : effect === "digest" ? /intent changed/ : /origin, build or lifecycle effects/);
+  assert.match(result.stderr, effect === "live" ? /native|owner|incumbent/ : effect === "digest" ? /intent changed/ : effect === "witness" ? /RETAINED_BUILD_WITNESS/ : effect === "original" ? /RETAINED_BUILD_ORIGINAL/ : effect.endsWith("adoption") ? /RETAINED_BUILD_ADOPTION|RETAINED_BUILD_CLOSURE/ : /origin, build or lifecycle effects/);
   assert.equal(existsSync(f.archive), false);
-  for (const original of f.retirementOriginals) assert.deepEqual(descriptor(original.path), original.descriptor);
+  for (const file of before) assert.deepEqual(descriptor(file.path), file);
   untouched(f);
 });

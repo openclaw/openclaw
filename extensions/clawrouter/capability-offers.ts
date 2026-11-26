@@ -32,6 +32,7 @@ const UNIFIED_ROUTES: Record<string, string> = {
   "openai.responses": "/v1/responses",
   "openai.embeddings": "/v1/embeddings",
   "openai.images_generations": "/v1/images/generations",
+  "openai.images_edits": "/v1/images/edits",
   "openai.audio_speech": "/v1/audio/speech",
 };
 

@@ -151,3 +151,24 @@ control bundle options. Retain at least 20 rotated pairs plus A/A across the
 required engines and viewports before accepting a performance change. Record
 host load, median, p95 and spread; do not interpret an effect smaller than A/A
 variation as a win. Keep reports under `.artifacts/`, outside committed source.
+
+The synchronous owner diagnostic runs separately from browser presentation:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
+  scripts/perf/session-held-list-measure.ts --mode capability
+```
+
+It retains two overlapping lists at 1,000 and 5,000 rows. Its full and patch
+events include the browser producer's `permissionMode: null` clearing receipt;
+omitting that field skips permission reconciliation and understates owner cost.
+Initial list rows stay canonical. Parsing, row reconstruction and synchronous
+owner timings exclude socket delivery, sidebar and Sessions-page projections,
+and Solid/DOM work. These diagnostics cannot replace browser acceptance.
+
+For native keyboard correctness during the full foreground stream, use
+`--steps event-load-end,event-load-pageup`. These separate, untimed fixtures
+release half of the 200 tool results through typing, then overlap the remaining
+results with real keyboard input. End must hold the completed transcript's bottom;
+PageUp must hold its visible message anchor. Both also verify result order,
+Latest, and retained tool results after the stream settles.

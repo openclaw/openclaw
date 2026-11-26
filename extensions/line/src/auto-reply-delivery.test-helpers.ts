@@ -7,10 +7,9 @@ import * as media from "./outbound-media.js";
 import * as send from "./send.js";
 import * as templates from "./template-messages.js";
 
-export type LineAutoReplyDeps = Pick<
-  typeof send,
-  "replyMessageLine" | "pushMessagesLine" | "createFlexMessage" | "createLocationMessage"
-> & {
+export type LineAutoReplyDeps = Pick<typeof send, "replyMessageLine" | "pushMessagesLine"> & {
+  createFlexMessage: typeof templates.createFlexMessage;
+  createLocationMessage: typeof templates.createLocationMessage;
   buildTemplateMessageFromPayload: typeof templates.buildTemplateMessageFromPayload;
   processLineMessage: typeof markdown.processLineMessage;
   chunkMarkdownText: typeof replyRuntime.chunkMarkdownText;
@@ -84,9 +83,9 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     vi.spyOn(replyRuntime, "chunkMarkdownText").mockImplementation(deps.chunkMarkdownText),
     vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine),
     vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine),
-    vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage),
+    vi.spyOn(templates, "createFlexMessage").mockImplementation(deps.createFlexMessage),
     vi.spyOn(media, "buildLineMediaMessage").mockImplementation(deps.buildMediaMessage),
-    vi.spyOn(send, "createLocationMessage").mockImplementation(deps.createLocationMessage),
+    vi.spyOn(templates, "createLocationMessage").mockImplementation(deps.createLocationMessage),
   );
 
   return { replyMessageLine, buildMediaMessage, pushMessagesLine };

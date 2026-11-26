@@ -90,8 +90,14 @@ export function mountSkills(
     ],
   });
   onTestFinished(() => router.stop());
-  const runtimeConfig: SkillsState["runtimeConfig"] = {
-    runExternalMutation: async (task) => ({
+  // Also read by the skill dialog: a loaded config with no stored skill keys.
+  const runtimeConfig = {
+    state: { configSnapshot: { config: {} }, lastError: null },
+    subscribe: () => () => undefined,
+    ensureDisplayLoaded: async () => undefined,
+    runExternalMutation: async (
+      task: Parameters<SkillsState["runtimeConfig"]["runExternalMutation"]>[0],
+    ) => ({
       ok: true,
       value: await task(client),
       refresh: { ok: true },
@@ -111,7 +117,20 @@ export function mountSkills(
       undefined,
       { requireConfiguredAgent: true },
     ),
-    navigate: vi.fn(),
+    // Skill pages are addresses: navigation moves the fixture router like the app's.
+    navigate: vi.fn(
+      (routeId: "skills" | "skill-settings", options?: { pathname?: string; search?: string }) =>
+        void router.navigate(
+          routeId,
+          context,
+          {},
+          {
+            pathname: options?.pathname ?? (routeId === "skills" ? "/skills" : "/settings/skills"),
+            search: options?.search ?? "",
+            hash: "",
+          },
+        ),
+    ),
   } as unknown as ApplicationContext;
   const selection =
     surface === "settings" ? context.settingsAgentSelection : context.agentSelection;

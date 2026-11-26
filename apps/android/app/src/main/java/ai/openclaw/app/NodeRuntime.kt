@@ -16,6 +16,7 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.PERSONAL_SESSION_PINS_CAPABILITY
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -28,6 +29,7 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -348,6 +350,19 @@ internal fun operatorScopesAllowWrite(scopes: Collection<String>): Boolean = sco
 
 internal fun operatorScopesAllowAdmin(scopes: Collection<String>): Boolean = OperatorAdminScope in scopes
 
+internal sealed interface PersonalSessionPinAccess {
+  data object Unsupported : PersonalSessionPinAccess
+
+  data object ReadOnly : PersonalSessionPinAccess
+
+  data class Verified(
+    val ownSessionsOnly: Boolean,
+    val savedKeys: Set<String> = emptySet(),
+  ) : PersonalSessionPinAccess
+
+  fun canEdit(sharingRole: String?): Boolean = this is Verified && (!ownSessionsOnly || sharingRole == "owner")
+}
+
 internal fun sessionCatalogAvailableFor(
   methods: Set<String>,
   scopes: Collection<String>,
@@ -555,6 +570,9 @@ internal class NotificationNodeEventOutbox(
     pending.clear()
   }
 }
+
+/** Distinguishes a stalled TLS probe from a WebSocket connect timeout; only the former can offer manual pin entry. */
+internal const val GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON = "tls-handshake-timeout"
 
 data class GatewayConnectionProblem(
   val code: String?,
@@ -1187,6 +1205,7 @@ class NodeRuntime internal constructor(
   private var providerModelCatalogNeedsStatusRefresh = true
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
+  private val talkSetupRefreshGuard = LatestGatewayRefreshGuard()
   private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unverified())
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
@@ -1241,6 +1260,10 @@ class NodeRuntime internal constructor(
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+
+  @Volatile private var pinGrantIfProfileVerified: PersonalSessionPinAccess.Verified? = null
+  private val personalSessionPinAccessState = MutableStateFlow<PersonalSessionPinAccess>(PersonalSessionPinAccess.Unsupported)
+  internal val personalSessionPinAccess = personalSessionPinAccessState.asStateFlow()
   private val _sessionDiffAvailable = MutableStateFlow(false)
   val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
@@ -1386,6 +1409,9 @@ class NodeRuntime internal constructor(
     var waitingForAdmission = true
     var deadlineExpired = false
 
+    // Set by the timeout recovery action: open manual pin entry instead of re-probing a handshake that stalls.
+    var manualTlsTrust = false
+
     override fun invoke(): Boolean = isCurrent()
   }
 
@@ -1409,7 +1435,7 @@ class NodeRuntime internal constructor(
         )
         synchronized(gatewayDataScopeLock) { appearancePreferenceScopeOwner = null }
         replaceGatewayMethods(hello.methods)
-        replaceGatewayCapabilities(hello.capabilities)
+        replaceGatewayCapabilities(hello.capabilities, personalPinGrant(hello, operatorScopes))
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
@@ -1751,6 +1777,7 @@ class NodeRuntime internal constructor(
     _providerModelCatalogRefreshing.value = false
     _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
+    talkSetupRefreshGuard.invalidate()
     _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
     voiceWakeWordsSaveSeq.incrementAndGet()
     _voiceWakeWordsSaving.value = false
@@ -2186,6 +2213,9 @@ class NodeRuntime internal constructor(
 
   val talkModeEnabled: StateFlow<Boolean>
     get() = talkMode.isEnabled
+
+  val talkMicrophoneMuted: StateFlow<Boolean>
+    get() = talkMode.isMicrophoneMuted
 
   val talkModeListening: StateFlow<Boolean>
     get() = talkMode.isListening
@@ -3455,6 +3485,7 @@ class NodeRuntime internal constructor(
    * Reconnect a live node only when Android authority changed since its last connect.
    */
   fun refreshNodePermissionSurface() {
+    refreshVoiceWakePermission()
     val permissions = connectionManager.buildPermissions()
     if (permissions == lastNodeConnectOptions?.permissions) return
     refreshAcceptedGatewayConnection(refreshOperator = false)
@@ -3565,6 +3596,8 @@ class NodeRuntime internal constructor(
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
   fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+
+  fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -4252,8 +4285,12 @@ class NodeRuntime internal constructor(
       }
     }
 
-  fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
+  fun refreshGatewayConnection(
+    isCurrent: () -> Boolean = { true },
+    manualTlsTrust: Boolean = false,
+  ) {
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return
+    intent.manualTlsTrust = manualTlsTrust
     intent.handedOff = true
     launchGatewayLifecycle(intent) {
       val endpoint = connectedEndpoint
@@ -4593,6 +4630,23 @@ class NodeRuntime internal constructor(
     if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
+      if (intent.manualTlsTrust && storedFingerprint == null) {
+        launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+          finishGatewayConnectionOperation(intent)
+          setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT), operation = intent)
+          publishGatewayTrustPromptIfCurrent(
+            connectAttemptId = connectAttemptId,
+            prompt =
+              GatewayTrustPrompt(
+                endpoint = endpoint,
+                fingerprintSha256 = null,
+                auth = auth,
+                probeFailure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT,
+              ),
+          )
+        }
+        return
+      }
       tlsProbeJob =
         scope.launch {
           val tlsProbe =
@@ -4663,10 +4717,10 @@ class NodeRuntime internal constructor(
               is GatewayTlsTrustDecision.Failed -> {
                 clearAcceptedConnectAttempt()
                 val problem =
-                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
-                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
-                  } else {
-                    null
+                  when (decision.reason) {
+                    GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                    GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> gatewayConnectionProblem(gatewayNetworkConnectError(timedOut = true).copy(message = gatewayTlsTimeoutText.source), false, endpoint).copy(reason = GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON)
+                    GatewayTlsProbeFailure.TLS_UNAVAILABLE -> null
                   }
                 setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem, operation = intent)
               }
@@ -5456,6 +5510,12 @@ class NodeRuntime internal constructor(
       // the gateway to connections bound to our own profile.
       scope.launch { refreshBrandingFromGateway() }
     }
+    if (event == "config.changed") {
+      // Drop the cached Talk route before any in-flight catalog read can republish it.
+      talkSetupRefreshGuard.invalidate()
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      if (operatorConnected) refreshTalkSetupReadiness()
+    }
     if (event == "sessions.catalog.host") {
       val owner = sessionCatalogProgressOwner.get()
       val progress =
@@ -6042,7 +6102,6 @@ class NodeRuntime internal constructor(
       val sessionKey = parseSessionCatalogContinueResult(response, json)
       return withCurrentGatewayData(gatewayScope) {
         if (sessionCatalogContinueSeq.get() != requestSeq) return@withCurrentGatewayData false
-        _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
         if (!chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) return@withCurrentGatewayData false
         stopMessageSpeech()
         chat.switchSession(sessionKey, entry.agentId)
@@ -6055,12 +6114,18 @@ class NodeRuntime internal constructor(
         if (sessionCatalogContinueSeq.get() == requestSeq) {
           _sessionCatalogState.value =
             _sessionCatalogState.value.copy(
-              continuingEntryId = null,
               errorText = nativeString("Could not open this session."),
             )
         }
       }
       return false
+    } finally {
+      // The Activity's ViewModel can be cleared while this process runtime stays connected.
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() == requestSeq) {
+          _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+        }
+      }
     }
   }
 
@@ -6163,6 +6228,9 @@ class NodeRuntime internal constructor(
     val refreshGeneration = appearancePreferenceRefreshGuard.begin()
     try {
       val revisionSnapshot = appearancePreferenceKeys.associateWith(prefs::appearancePreferenceRevision)
+      // A pin writer need not be able to read Gateway configuration. Use the ordinary
+      // preference read as the sole profile verdict, including on subsequent refreshes.
+      val pinProfileRead = pinGrantIfProfileVerified?.let { fetchProfileAppearancePreferences(gatewayScope, lease, refreshGeneration) }
       val res = requestAppearancePreference(gatewayScope, lease, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
@@ -6174,7 +6242,7 @@ class NodeRuntime internal constructor(
             resolveGatewaySourcePreviewConfig(config, gatewayControlPageBaseUrl(endpoint), gatewayScope.generation)
           }
       }
-      val profileRead = fetchProfileAppearancePreferences(gatewayScope, lease)
+      val profileRead = pinProfileRead ?: fetchProfileAppearancePreferences(gatewayScope, lease, refreshGeneration)
       if (profileRead is GatewayAppearancePreferencesRead.Unavailable) return
       val profile =
         (profileRead as? GatewayAppearancePreferencesRead.Available)
@@ -6260,12 +6328,16 @@ class NodeRuntime internal constructor(
   private suspend fun fetchProfileAppearancePreferences(
     gatewayScope: GatewayDataScope,
     lease: GatewaySession.RequestLease,
+    refreshGeneration: Long,
   ): GatewayAppearancePreferencesRead {
     val method = GatewayMethod.UsersPrefsGet.rawValue
     if (gatewayAdvertisesMethod(method) == false) return GatewayAppearancePreferencesRead.Unsupported
 
+    val pinGrant = pinGrantIfProfileVerified
+    var verifiedPins: PersonalSessionPinAccess.Verified? = null
     return try {
-      val keys = JsonArray(appearancePreferenceKeys.map(::JsonPrimitive))
+      val requestedKeys = if (pinGrant == null) appearancePreferenceKeys else appearancePreferenceKeys + "ui.railShortcuts"
+      val keys = JsonArray(requestedKeys.map(::JsonPrimitive))
       val res =
         requestAppearancePreference(
           gatewayScope,
@@ -6277,6 +6349,21 @@ class NodeRuntime internal constructor(
       when ((root?.get("status") as? JsonPrimitive)?.contentOrNull) {
         "ok" -> {
           val entries = root.get("entries").asObjectOrNull() ?: return GatewayAppearancePreferencesRead.Unavailable
+          if (pinGrant != null) {
+            val saved = entries["ui.railShortcuts"]
+            if (saved == null || saved is JsonArray) {
+              val keys =
+                saved.orEmpty().mapNotNullTo(mutableSetOf()) { item ->
+                  item
+                    .asStringOrNull()
+                    ?.takeIf { it.startsWith("session:") }
+                    ?.substringAfter(':')
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
+                }
+              verifiedPins = pinGrant.copy(savedKeys = keys)
+            }
+          }
           val profileId = refreshCurrentProfileId(gatewayScope, lease)
           // Writable values without an authenticated owner must not replace a
           // previous profile's appearance while its offline edits remain queued.
@@ -6313,6 +6400,28 @@ class NodeRuntime internal constructor(
       }
     } catch (_: Throwable) {
       GatewayAppearancePreferencesRead.Unavailable
+    } finally {
+      publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
+        if (pinGrant != null) personalSessionPinAccessState.value = verifiedPins ?: PersonalSessionPinAccess.ReadOnly
+      }
+    }
+  }
+
+  private fun personalPinGrant(
+    hello: GatewayHelloSummary,
+    scopes: List<String>,
+  ): PersonalSessionPinAccess.Verified? {
+    if (hello.authRole != "operator" || PERSONAL_SESSION_PINS_CAPABILITY !in hello.capabilities.orEmpty() ||
+      !hello.methods.orEmpty().containsAll(setOf(GatewayMethod.SessionsPatch.rawValue, GatewayMethod.UsersPrefsGet.rawValue))
+    ) {
+      return null
+    }
+    // A session-only writer also needs a named operator, not the shared Gateway owner.
+    val namedOperator = hello.authSessionCap != null || hello.profileActivityViewerId?.let { it.isNotBlank() && it != "gateway-owner" } == true
+    return when {
+      operatorScopesAllowWrite(scopes) -> PersonalSessionPinAccess.Verified(ownSessionsOnly = false)
+      "operator.sessions.write" in scopes && namedOperator -> PersonalSessionPinAccess.Verified(ownSessionsOnly = true)
+      else -> null
     }
   }
 
@@ -6692,18 +6801,34 @@ class NodeRuntime internal constructor(
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
+    val refreshGeneration = talkSetupRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
-      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      talkSetupRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      }
       return
     }
     val readiness =
       try {
-        parseGatewayTalkSetupReadiness(requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
+        val catalog = requestGatewayObject(gatewayScope, "talk.catalog", "{}")
+        // talk.config selects native stt-tts versus realtime. A failed read must not
+        // fall back to the realtime catalog gate; Talk Mode loads the same config itself.
+        val talkConfig =
+          try {
+            requestGatewayObject(gatewayScope, "talk.config", "{}")?.get("config").asObjectOrNull()
+          } catch (error: CancellationException) {
+            throw error
+          } catch (_: Throwable) {
+            null
+          }
+        talkSetupReadinessFromGateway(catalog, talkConfig)
       } catch (_: Throwable) {
         GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
-    publishGatewayData(gatewayScope) { _talkSetupReadiness.value = readiness }
+    talkSetupRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+      _talkSetupReadiness.value = readiness
+    }
   }
 
   private suspend fun refreshCronFromGateway() {
@@ -8080,9 +8205,16 @@ class NodeRuntime internal constructor(
 
   private fun gatewayAdvertisesMethod(method: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
 
-  private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
+  private fun replaceGatewayCapabilities(
+    capabilities: Set<String>?,
+    pinGrant: PersonalSessionPinAccess.Verified? = null,
+  ) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
+      pinGrantIfProfileVerified = pinGrant
+      // A new hello advertises the row contract, not a verified profile on this socket.
+      personalSessionPinAccessState.value =
+        if (PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()) PersonalSessionPinAccess.ReadOnly else PersonalSessionPinAccess.Unsupported
       chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }

@@ -177,11 +177,10 @@ const ownerRoutedUnitTestPatterns = [
   "src/infra/update-managed-service-handoff-triage.test.ts",
   // Command compaction tests need the scoped runtime registry even when their
   // mocks live in a shared helper.
-  // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
-  "src/agents/agent-harness-completion-delivery.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/agent-command.operator-direct-root.test.ts",
+  "src/agents/agent-command.sessions-send-system-events.test.ts",
   // Source plugin workers retain the agent runtime owner after test extraction.
   "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
@@ -276,12 +275,12 @@ const disqualifyingPatterns = [
   {
     code: "runtime-singleton-state",
     pattern:
-      /\b(?:drainGlobalSingletonLifecycleState|setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
+      /\b(?:drainGlobalSingletonLifecycleState|createPluginRegistryOwner|setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
   },
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.(?:test|e2e)-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {

@@ -11,6 +11,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakModelSwitch } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildCatalogDisplayLookup,
   buildQualifiedChatModelValue,
@@ -303,6 +304,37 @@ export function switchChatSetting(
   );
 }
 
+export function reconcileChatAccessProgram(
+  host: ChatModelSettingsHost,
+  row: GatewaySessionRow,
+  sessionKey: string,
+): Promise<boolean> | undefined {
+  if (!row.model) {
+    return undefined;
+  }
+  const entry = resolveModelRuntimeEntry(
+    host.chatModelCatalog.find(
+      (candidate) =>
+        candidate.provider === row.modelProvider &&
+        (candidate.id === row.model ||
+          buildQualifiedChatModelValue(candidate.id, candidate.provider) === row.model),
+    ),
+    row.agentRuntime?.id,
+  );
+  // A discovery failure also omits the list. Keep saved intent until discovery confirms it is stale.
+  if (!entry?.availableAccessPrograms || entry.available === false) {
+    return undefined;
+  }
+  const program = resolveDaybreakModelSwitch(
+    entry.availableAccessPrograms.cyber,
+    row.cyberAccessProgram,
+    row.cyberAccessProgram,
+  );
+  return program === undefined
+    ? undefined
+    : switchChatSetting(host, { kind: "cyberAccessProgram", value: program }, sessionKey);
+}
+
 export type ChatModelSelection = ReturnType<typeof claimChatModelSelection>;
 
 export function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: string) {
@@ -386,8 +418,39 @@ export async function switchChatModel(
   const ownsModelOverride = () =>
     !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
     resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
+  const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
+  const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
+  const nextEntry = host.chatModelCatalog.find(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
+  );
+  const nextRuntime = resolveModelRuntimeEntry(
+    nextEntry,
+    runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
+      ? activeRow?.agentRuntime?.id
+      : runtimeSelection,
+  );
+  let remap: CyberAccessProgram | null | undefined;
+  if (nextRuntime && (nextValue !== currentValue || !runtimeUnchanged)) {
+    const currentEntry = resolveModelRuntimeEntry(
+      host.chatModelCatalog.find(
+        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
+      ),
+      activeRow?.agentRuntime?.id,
+    );
+    const preview = host.sessions.settingsPreview(targetSessionKey, agentScope.agentId);
+    const storedProgram =
+      preview && "cyberAccessProgram" in preview
+        ? preview.cyberAccessProgram
+        : activeRow?.cyberAccessProgram;
+    remap = resolveDaybreakModelSwitch(
+      nextRuntime.availableAccessPrograms?.cyber,
+      storedProgram ?? currentEntry?.cyberAccessProgramDefault,
+      storedProgram,
+    );
+  }
   const patch: SessionPatch = {
     model: nextModel || null,
+    ...(remap !== undefined ? { cyberAccessProgram: remap } : {}),
     ...(runtimeSelection !== undefined ? { agentRuntime: runtimeSelection } : {}),
   };
   const canDispatch = () =>
@@ -405,17 +468,6 @@ export async function switchChatModel(
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const nextValue = splitTrailingAuthProfile(nextModel).model || defaultModel;
-      const currentValue = splitTrailingAuthProfile(currentOverride).model || defaultModel;
-      const nextEntry = host.chatModelCatalog.find(
-        (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === nextValue,
-      );
-      const nextRuntime = resolveModelRuntimeEntry(
-        nextEntry,
-        runtimeSelection === undefined && isSessionRuntimePinned(activeRow?.agentRuntime)
-          ? activeRow?.agentRuntime?.id
-          : runtimeSelection,
-      );
       const hasHistory = host.chatMessages?.some((message) => {
         const role = asOptionalRecord(message)?.role;
         return role === "user" || role === "assistant";
@@ -429,6 +481,7 @@ export async function switchChatModel(
             buildCatalogDisplayLookup(host.chatModelCatalog),
           );
         const confirmed = await showConfirmDialog({
+          compact: true,
           title: t("chat.modelControls.switchTitle", { new: nextLabel }),
           message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
@@ -459,14 +512,7 @@ export async function switchChatModel(
       }
       try {
         const { recoverChatModelSwitch } = await import("./chat-model-recovery.runtime.ts");
-        return await recoverChatModelSwitch(
-          host,
-          err,
-          targetSessionKey,
-          nextModel,
-          runtimeSelection,
-          selection,
-        );
+        return await recoverChatModelSwitch(host, err, targetSessionKey, patch, selection);
       } catch (error) {
         if (ownsSelection()) {
           setChatError(host, t("chat.settingErrors.model", { error: formatUiError(error) }));

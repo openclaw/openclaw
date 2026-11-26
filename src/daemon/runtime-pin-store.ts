@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import type { DatabaseEngineId } from "../infra/database-engine/types.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
@@ -14,14 +15,14 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "./runtime-pin-schema.js";
 
@@ -181,6 +182,18 @@ function admitDaemonRuntimePinStore<T>(
   return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);
 }
 
+/** A different spelling can reuse a completed receipt only for the same existing source. */
+export function daemonRuntimePinMigrationSourcesMatch(recorded: string, current: string): boolean {
+  if (recorded === current) {
+    return true;
+  }
+  try {
+    return fs.realpathSync.native(recorded) === fs.realpathSync.native(current);
+  } catch {
+    return false;
+  }
+}
+
 /** The versioned receipt is independent of pin-data admission until a pin is used. */
 export function readDaemonRuntimePinMigrationReceipt(env: NodeJS.ProcessEnv) {
   return withDaemonRuntimePinDatabase(env, false, (db) => {
@@ -218,8 +231,11 @@ export function readDaemonRuntimePinValue(db: DatabaseSync, key: string): unknow
 
 const unshippedMigrations = new Set<string>();
 
-function pendingUnshippedRuntimePinMigration(env: NodeJS.ProcessEnv): false | string | undefined {
-  if (!getDatabaseEngineInput("state")) {
+function pendingUnshippedRuntimePinMigration(
+  env: NodeJS.ProcessEnv,
+  stateEngine: DatabaseEngineId = getDatabaseEngineInput("state") ? "postgres" : "sqlite",
+): false | string | undefined {
+  if (stateEngine !== "postgres") {
     return false;
   }
   const pathname = resolveDaemonRuntimePinStorePath(env);
@@ -241,8 +257,11 @@ function completeUnshippedReceipt(db: DatabaseSync): void {
   );
 }
 
-export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): boolean {
-  const pending = pendingUnshippedRuntimePinMigration(env);
+export function completeUnshippedDaemonRuntimePinMigration(
+  env: NodeJS.ProcessEnv,
+  stateEngine?: DatabaseEngineId,
+): boolean {
+  const pending = pendingUnshippedRuntimePinMigration(env, stateEngine);
   if (pending === false) {
     return false;
   }

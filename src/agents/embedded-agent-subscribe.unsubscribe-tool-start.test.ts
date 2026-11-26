@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { describe, expect, it } from "vitest";
+import { forceFullGc } from "../test-utils/retention.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
 
@@ -21,7 +21,7 @@ describe("subscribeEmbeddedAgentSession unsubscribe tool cleanup", () => {
     const completed = Array.from({ length: 20 }, completedSubscription);
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ session }) => session.deref())).toHaveLength(0);
     completed[0]!.setTerminalLifecycleMeta({ replayInvalid: true, livenessState: "blocked" });

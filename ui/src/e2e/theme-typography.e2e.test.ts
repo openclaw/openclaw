@@ -65,6 +65,12 @@ suite.define(() => {
           code: font("code"),
         };
       });
+    const pickerWidths = () =>
+      page
+        .locator("#settings-appearance-typography .picker-select__trigger")
+        .evaluateAll((pickers) => pickers.map((picker) => picker.getBoundingClientRect().width));
+    const widths = await pickerWidths();
+    expect(widths).toEqual([widths[0], widths[0], widths[0]]);
     const initial = await families();
     expect(initial).toEqual({
       ui: expect.stringContaining("DM Sans"),
@@ -80,6 +86,7 @@ suite.define(() => {
     await expect.poll(async () => (await families()).chat).toContain("Geist");
     await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
+    expect(await pickerWidths()).toEqual(widths);
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -97,6 +104,23 @@ suite.define(() => {
     await selectPickerValue(ui, "theme");
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
+  });
+
+  // macOS stem darkening keeps light sans chat faces from rendering thin; app
+  // chrome keeps the body's antialiased smoothing.
+  it.each(["claw", "absolutely"])("keeps auto smoothing on %s chat prose only", async (theme) => {
+    const { page } = await openThemedChat(theme, "dark", {
+      historyMessages: [historyMessage("assistant", "Readable chat prose", Date.now())],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const prose = page.locator(".chat-thread .chat-text").first();
+    await expect.poll(() => prose.textContent()).toContain("Readable chat prose");
+    const smoothing = (locator: Locator) =>
+      locator.evaluate((element) =>
+        getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+      );
+    expect(await smoothing(prose)).toBe("auto");
+    expect(await smoothing(page.locator("body"))).toBe("antialiased");
   });
 
   // #137473: compare incremental input pixels with a whole-value assignment.
@@ -322,7 +346,9 @@ suite.define(() => {
     await expectChrome(pageColor);
     await navigationDrawerToggle(page).click();
     await expectChrome(dimmed);
-    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
+    await page
+      .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+      .click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(canvasColor);
 

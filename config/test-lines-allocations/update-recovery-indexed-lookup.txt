@@ -1,2 +1,0 @@
-# Named recovery lookup row and payload bounds.
-35

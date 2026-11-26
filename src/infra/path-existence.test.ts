@@ -103,3 +103,40 @@ it("preserves uncertainty for inaccessible paths", () => {
   });
   expect(paths.pathMayExistSync("unreadable-path")).toBe(true);
 });
+
+it.each([true, false])("resolves ancestor identity with a reachable ancestor: %s", (reachable) => {
+  const aliasRoot = path.resolve("identity-alias");
+  const targetPath = path.join(aliasRoot, "locked", "leaf");
+  const canonicalRoot = path.resolve("identity-real");
+  vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+    const resolved = path.resolve(String(candidate));
+    if (reachable && resolved === aliasRoot) {
+      return canonicalRoot;
+    }
+    throw new Error("simulated realpath failure");
+  });
+
+  expect(paths.resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(
+    reachable ? path.join(canonicalRoot, "locked", "leaf") : targetPath,
+  );
+});
+
+it.each([true, false])(
+  "resolves runtime ancestor identity asynchronously with a reachable ancestor: %s",
+  async (reachable) => {
+    const aliasRoot = path.resolve("identity-alias");
+    const targetPath = path.join(aliasRoot, "locked", "leaf");
+    const canonicalRoot = path.resolve("identity-real");
+    const synchronous = vi.spyOn(fs.realpathSync, "native");
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) => {
+      if (reachable && path.resolve(String(candidate)) === aliasRoot) {
+        return canonicalRoot;
+      }
+      throw new Error("simulated realpath failure");
+    });
+    expect(await paths.resolveIdentityPathViaExistingAncestor(targetPath)).toBe(
+      reachable ? path.join(canonicalRoot, "locked", "leaf") : targetPath,
+    );
+    expect(synchronous).not.toHaveBeenCalled();
+  },
+);

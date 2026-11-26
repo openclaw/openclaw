@@ -1,5 +1,6 @@
 import path from "node:path";
 import { root } from "../infra/fs-safe.js";
+import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { createConfigIoContext } from "./io.context.js";
 import { captureConfigHealthStateStore } from "./io.health-state.js";
 import { loadConfigFromContext, loadConfigFromContextAsync } from "./io.load.js";
@@ -27,7 +28,7 @@ import type {
 } from "./io.types.js";
 import { chmodConfigBestEffort } from "./io.write-safety.js";
 import type { writeConfigFileFromContext } from "./io.write.js";
-import { resolveIsConfigReadOnly } from "./paths.js";
+import { resolveConfigPath, resolveIsConfigReadOnly } from "./paths.js";
 import { collectPollutedSecretPlaceholders } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { withConfigWriteLock } from "./write-lock.js";
@@ -168,4 +169,24 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       );
     },
   };
+}
+
+/** Resolve the final config target without observing or opening its storage. */
+export async function readConfigSnapshotBeforeEngineSelection(
+  env: NodeJS.ProcessEnv = process.env,
+  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
+): Promise<ConfigFileSnapshot> {
+  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
+  const read = () =>
+    createConfigIO({
+      env: readEnv,
+      observe: false,
+      pluginValidation: "core-only",
+    }).readConfigFileSnapshot({ onSourceEnvApplied: options.onSourceEnvApplied });
+  let snapshot = await read();
+  // One-shot config env may select another target before storage becomes process-stable.
+  while (snapshot.path !== resolveConfigPath(readEnv)) {
+    snapshot = await read();
+  }
+  return snapshot;
 }

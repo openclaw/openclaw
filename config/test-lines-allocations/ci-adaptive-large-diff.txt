@@ -1,2 +1,0 @@
-# Prove complete bounded tree comparison when GitHub's file list is capped.
-114

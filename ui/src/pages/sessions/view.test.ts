@@ -80,6 +80,29 @@ function dropOn(row: Element | null, types: string[], data: Record<string, strin
 }
 
 describe("sessions view", () => {
+  it("retains accepted empty controls during refresh but retires them with the query", async () => {
+    document.body.append(container);
+    const result = buildMultiResult([]);
+    const initial = { searchQuery: "missing", roster: Promise.resolve(null) };
+    renderView(result, initial);
+    await vi.waitFor(() => expect(query(".data-table-empty-state button")).not.toBeNull());
+    const button = getButton(".data-table-empty-state button")!;
+    button.focus();
+    const pending = createDeferred<null>();
+    onTestFinished(() => pending.resolve(null));
+    renderView(result, { ...initial, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    renderView(result, { ...initial, roster: pending.promise, error: "Access denied" });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    renderView(result, { ...initial, result: null, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    expect(queryAll(".session-skeleton-row")).toHaveLength(4);
+  });
+
   it.each(["bulk", "empty"] as const)(
     "uses current callbacks on retained %s buttons",
     async (kind) => {
@@ -347,13 +370,63 @@ describe("sessions view", () => {
     expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
-  it("keeps pinned sessions above newer unpinned sessions", async () => {
+  it("does not import a historical shared pin into an empty personal layout", async () => {
     await renderSettled([
       createRow("newer", { updatedAt: 200 }),
       createRow("pinned", { updatedAt: 100, pinned: true, pinnedAt: 300 }),
     ]);
 
-    expectTexts("tbody .session-data-row .session-key-cell__primary", ["pinned", "newer"]);
+    expectTexts("tbody .session-data-row .session-key-cell__primary", ["newer", "pinned"]);
+  });
+
+  it("keeps eligible personal pins in sidebar order before column sorting, including after a reorder", async () => {
+    const rows = [
+      createRow("rail", { updatedAt: 100 }),
+      createRow("a", { updatedAt: 50 }),
+      createRow("z", { updatedAt: 1 }),
+      createRow("archived", { updatedAt: 30, archived: true }),
+    ];
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(rows, {
+      personalSidebarEntries: [
+        "session-rail:rail",
+        "session:missing",
+        "session:archived",
+        "session:z",
+        "session:a",
+      ],
+    });
+    expectTexts(selector, ["z", "a", "rail", "archived"]);
+    await renderSettled(rows, {
+      personalSidebarEntries: ["session:a", "session:z"],
+      sortColumn: "key",
+      sortDir: "asc",
+    });
+    expectTexts(selector, ["a", "z", "archived", "rail"]);
+  });
+
+  it("returns two snoozed pins to their saved positions on successive deadlines without new inputs", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(1_000);
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(
+      [
+        createRow("ordinary", { updatedAt: 100 }),
+        createRow("second", { updatedAt: 50, snoozedUntil: 2_000 }),
+        createRow("first", { updatedAt: 1, snoozedUntil: 3_000 }),
+      ],
+      { personalSidebarEntries: ["session:first", "session:second"] },
+    );
+    expectTexts(selector, ["ordinary", "second", "first"]);
+    vi.advanceTimersByTime(1_001);
+    flush();
+    expectTexts(selector, ["second", "ordinary", "first"]);
+    vi.advanceTimersByTime(1_000);
+    flush();
+    expectTexts(selector, ["first", "second", "ordinary"]);
   });
 
   it("keeps session filters in the header popover without a count badge", async () => {
@@ -483,7 +556,7 @@ describe("sessions view", () => {
 
     const details = expectDefined(query(".session-details-panel"), "session details");
     expect(text(".session-details-panel__eyebrow", details)).toBe("Session details");
-    expect(text(".session-details-panel__title", details)).toBe("agent:main:main");
+    expect(text(".session-details-panel__title", details)).toBe("Main session");
     expect(
       texts(".session-details-panel__badges > *", details).map((s) => s?.replace(/\s+/g, " ")),
     ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);
@@ -716,10 +789,8 @@ describe("sessions transcript search view", () => {
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
-      expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(trigger?.getAttribute("aria-label")).toBe(
-        available ? "Search transcripts" : unavailable,
-      );
+      expect(rosterFilter?.getAttribute("aria-label")).toBe("Search sessions…");
+      expect(trigger?.getAttribute("aria-label")).toBe(available ? "Search chats" : unavailable);
       expect(trigger?.disabled).toBe(!available);
       expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
       expect(connectionStatus()?.textContent).toBe(available ? undefined : unavailable);
@@ -860,7 +931,7 @@ describe("sessions view at phone width", () => {
     expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
     expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
     const search = getInput(".sessions-search input");
-    expect(search?.placeholder).toBe("Search sessions");
+    expect(search?.placeholder).toBe("Search sessions…");
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");

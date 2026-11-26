@@ -1,4 +1,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { assert, describe, expect, it, vi } from "vitest";
 import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 import { buildGoogleProvider } from "./provider-registration.js";
@@ -114,6 +116,49 @@ describe("buildGoogleProvider createStreamFn", () => {
   ] as const)("strips inherited video for %s routes", (providerId, api) => {
     const normalized = normalizeVideo({ provider: providerId, api });
     expect(normalized?.input).toEqual(["text", "image"]);
+  });
+
+  it("publishes every listed model id, including hidden non-chat rows", async () => {
+    clearLiveCatalogCacheForTests();
+    const row = (id: string, methods: string[]) => ({
+      name: `models/${id}`,
+      inputTokenLimit: 1_048_576,
+      outputTokenLimit: 65_536,
+      supportedGenerationMethods: methods,
+    });
+    const fetchGuard = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockImplementation(async ({ url }) => ({
+        response: Response.json({
+          models: [
+            row("gemini-3.8-flash", ["generateContent"]),
+            row("gemini-embedding-001", ["embedContent"]),
+          ],
+        }),
+        finalUrl: url,
+        release: async () => undefined,
+      }));
+    try {
+      const result = await provider.catalog?.run({
+        providerIds: ["google"],
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "fixture-google-key", profileId: "google:key" }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      } as never);
+      assert(result && "providers" in result);
+      expect(result.providers.google?.models.map(({ id }) => id)).toEqual(["gemini-3.8-flash"]);
+      expect(result.outcomes).toEqual([
+        {
+          provider: "google",
+          profileId: "google:key",
+          status: "ready",
+          listedModelIds: ["gemini-3.8-flash", "gemini-embedding-001"],
+        },
+      ]);
+    } finally {
+      fetchGuard.mockRestore();
+    }
   });
 
   it("does not resolve AI Studio credentials for Vertex-only catalog scope", async () => {

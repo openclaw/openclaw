@@ -25,7 +25,6 @@ export type Entry<Row> = {
 };
 export type Inventory = {
   hello: GatewayHelloOk | null;
-  supported: boolean;
   version: number;
   compact: Map<string, Entry<CronCompactJob>>;
   full: Map<string, Entry<CronJob>>;
@@ -34,18 +33,7 @@ export type Inventory = {
   debounce?: { promise: Promise<void>; resolve: () => void; timer: ReturnType<typeof setTimeout> };
 };
 
-export function hasCronInventoryEvents(snapshot: { hello?: GatewayHelloOk | null }): boolean {
-  return snapshot.hello?.features?.events?.includes(INVENTORY_CHANGED) === true;
-}
-
-export function usesCronInventoryEvents(client: GatewayBrowserClient): boolean {
-  return inventories.get(client)?.supported === true;
-}
-
-export function isCronInventoryInvalidation(
-  event: GatewayEventFrame,
-  snapshot: { hello?: GatewayHelloOk | null },
-): boolean {
+export function isCronInventoryInvalidation(event: GatewayEventFrame): boolean {
   return (
     event.event === INVENTORY_CHANGED ||
     event.event === "config.changed" ||
@@ -53,8 +41,7 @@ export function isCronInventoryInvalidation(
       isRecord(event.payload) &&
       ["sharing", "profile-identity", "delete", "reset", "archive"].includes(
         String(event.payload.reason),
-      )) ||
-    (event.event === "cron" && !hasCronInventoryEvents(snapshot))
+      ))
   );
 }
 
@@ -66,7 +53,6 @@ export function bindCronInventory(client: GatewayBrowserClient, hello: GatewayHe
   clearCronInventory(client);
   inventories.set(client, {
     hello,
-    supported: hasCronInventoryEvents({ hello }),
     version: 0,
     compact: new Map(),
     full: new Map(),
@@ -94,7 +80,7 @@ function invalidateCronInventory(client: GatewayBrowserClient): void {
   }
   owner.version += 1;
   owner.runtime.clear();
-  if (owner.supported && !owner.debounce) {
+  if (!owner.debounce) {
     const { promise, resolve } = Promise.withResolvers<void>();
     const timer = setTimeout(() => {
       owner.debounce = undefined;
@@ -104,30 +90,42 @@ function invalidateCronInventory(client: GatewayBrowserClient): void {
   }
 }
 
+/** Only the authenticated cron publisher supplies runtime state; it cannot change membership. */
+function readCronRuntimeEvent(payload: unknown): Omit<Runtime, "revision"> | undefined {
+  if (
+    !isRecord(payload) ||
+    !["started", "finished", "scheduled"].includes(String(payload.action)) ||
+    !isRecord(payload.job) ||
+    !isRecord(payload.job.state) ||
+    typeof payload.job.id !== "string" ||
+    payload.jobId !== payload.job.id ||
+    typeof payload.job.updatedAtMs !== "number"
+  ) {
+    return undefined;
+  }
+  // SAFETY: The authenticated cron publisher owns these bounded runtime fields.
+  const event = payload as Omit<Runtime, "revision">;
+  return {
+    ...event,
+    error: typeof event.error === "string" ? event.error : undefined,
+    durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
+  };
+}
+
 /** Called once by the Gateway event owner, before events reach view subscribers. */
 export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: GatewayEventFrame) {
   const owner = inventories.get(client);
   if (!owner) {
     return;
   }
-  if (isCronInventoryInvalidation(event, { hello: owner.hello })) {
+  if (isCronInventoryInvalidation(event)) {
     invalidateCronInventory(client);
-  } else if (owner.supported && event.event === "cron") {
-    const payload = event.payload;
-    if (
-      !isRecord(payload) ||
-      !["started", "finished", "scheduled"].includes(String(payload.action)) ||
-      !isRecord(payload.job) ||
-      !isRecord(payload.job.state) ||
-      payload.jobId !== payload.job.id
-    ) {
+  } else if (event.event === "cron") {
+    const parsed = readCronRuntimeEvent(event.payload);
+    if (!parsed) {
       return;
     }
-    const runtime = {
-      // SAFETY: The authenticated cron publisher owns this bounded runtime projection.
-      ...(payload as Omit<Runtime, "revision">),
-      revision: ++owner.runtimeRevision,
-    };
+    const runtime = { ...parsed, revision: ++owner.runtimeRevision };
     owner.runtime.delete(runtime.jobId);
     owner.runtime.set(runtime.jobId, runtime);
     // Keep only recent run facts for responses crossing an event; definitions retire them.

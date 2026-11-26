@@ -91,6 +91,7 @@ The standard runner applies these defaults **per handler**:
 | Hooks                                                                                                          | Default timeout                     | On thrown error or timeout                                       |
 | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
 | `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Block the run, tool call, or install                             |
+| `before_model_request`                                                                                         | 10 seconds                          | Fail the model request; the original payload is not sent         |
 | `before_channel_ingress`                                                                                       | 15 seconds                          | Refuse durable intake without logging policy exception contents  |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
 | `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`                                          | 30 seconds                          | Log and continue                                                 |
@@ -131,10 +132,15 @@ contracts above; a modifying hook is not an observation hook.
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
 | `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
+| `before_model_request`          | Modify  | Rewrite or withhold the final provider request body, or the prompt text handed to a CLI runtime                                 |
 | `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
 | `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
 | `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
 | `heartbeat_prompt_contribution` | Modify  | Add context for receipt-owned proactive automation jobs; retains its historical public name                                     |
+
+`before_model_request` can also screen injected instructions or leaked credentials before
+they reach the provider; see
+[Screening the final model request](/gateway/security/prompt-injection#screening-the-final-model-request).
 
 **Conversation observation**
 
@@ -241,7 +247,7 @@ Return quickly or keep finalization bounded and persistence crash-consistent.
 If the budget expires, OpenClaw logs `shutdown session-end drain timed out`
 and continues shutdown, so unfinished plugin work can be interrupted.
 
-For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
+For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases when the parent is idle. An ordinary parallel child created while its parent is active skips those parent reset hooks and leaves the parent run alive; forks and worktree creation retain their existing active-parent restrictions.
 
 ### Explicit Stop
 

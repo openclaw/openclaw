@@ -30,11 +30,14 @@ const materializationChanges = vi.hoisted<{
 const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
   () => import("../plugins/plugin-metadata-empty.test-support.js"),
 );
+const { createIndexFixture } = await vi.hoisted(
+  () => import("../plugins/test-helpers/installed-plugin-index-fixture.js"),
+);
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
     pluginIds: [],
-    index: { plugins: [] },
+    index: createIndexFixture({}),
     get registryIndex() {
       return this.index;
     },
@@ -387,10 +390,17 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) =>
+// Lifecycle fixtures own persistence timing; real database admission is covered by Gateway tests.
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
+// mock-isolation: Lifecycle fixtures control model planning/publication timing and failures without initializing real persistence state.
+vi.mock("./models-config.core.js", () => ({
+  ensureOpenClawModelsJsonWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),
-  planOpenClawModelsJsonSource: (...args: unknown[]) =>
+  planOpenClawModelsJsonSourceWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 

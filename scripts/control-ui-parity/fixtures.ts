@@ -57,6 +57,7 @@ const totals = {
   cacheReadCost: 0.035,
   cacheWriteCost: 0,
   missingCostEntries: 0,
+  cacheUnmeasuredInput: 0,
 };
 const daily = Array.from({ length: 7 }, (_, index) => ({
   date: new Date(fixedTime - (6 - index) * 86_400_000).toISOString().slice(0, 10),
@@ -71,6 +72,7 @@ const daily = Array.from({ length: 7 }, (_, index) => ({
   cacheReadCost: 0.005,
   cacheWriteCost: 0,
   missingCostEntries: 0,
+  cacheUnmeasuredInput: 0,
 }));
 const usage = {
   updatedAt: fixedTime,

@@ -305,23 +305,47 @@ it("replaces trusted retention gauges and clears them on retirement", () => {
     entries: 25600,
     estimatedBytes: 24985600,
   } as const;
+  const projection = {
+    type: "sessions.projection.retention",
+    projections: 2,
+    entries: 700,
+    estimatedBytes: 59040000,
+    truncatedProjections: 1,
+  } as const;
   metrics.record(list);
   metrics.record(rows);
+  metrics.record(projection);
   const retained = metrics.render();
   expectMetrics(retained)(`openclaw_session_event_rows_retained_bytes 24985600
 openclaw_session_event_rows_retained_entries 25600
+openclaw_session_projection_owners 2
+openclaw_session_projection_rows_retained_entries 700
+openclaw_session_projection_rows_retained_bytes 59040000
+openclaw_session_projection_rows_estimate_truncated 1
 openclaw_sessions_list_retained_bytes 3504
 openclaw_sessions_list_retained_refs 17
 openclaw_sessions_list_retained_views 3`);
   for (const metadata of [untrusted, { trusted: false, internal: true }]) {
     metrics.record({ ...list, views: 99 }, metadata);
     metrics.record({ ...rows, entries: 99 }, metadata);
+    metrics.record({ ...projection, entries: 99 }, metadata);
   }
   expect(metrics.render()).toBe(retained);
   metrics.record({ ...list, views: 0, refs: 0, estimatedBytes: 0 });
   metrics.record({ ...rows, entries: 0, estimatedBytes: 0 });
+  metrics.record({
+    ...projection,
+    projections: 0,
+    entries: 0,
+    estimatedBytes: 0,
+    truncatedProjections: 0,
+  });
   expectMetrics(metrics.render())(`openclaw_session_event_rows_retained_bytes 0
 openclaw_session_event_rows_retained_entries 0
+openclaw_session_projection_owners 0
+openclaw_session_projection_rows_retained_entries 0
+openclaw_session_projection_rows_retained_bytes 0
+openclaw_session_projection_rows_estimate_truncated 0
 openclaw_sessions_list_retained_bytes 0
 openclaw_sessions_list_retained_refs 0
 openclaw_sessions_list_retained_views 0`);
@@ -499,6 +523,11 @@ it("exports production-shaped worker, WebSocket, and late RPC populations withou
       heapSizeLimitBytes: 1000,
       externalBytes: 20,
       arrayBuffersBytes: 10,
+      sqliteReaderMetrics: Array.from({ length: 257 }, (_, index) => ({
+        operation: index === 256 ? "other" : `synthetic.operation.${index}`,
+        count: 1,
+        readBytes: 4096,
+      })),
       workerCount: 39,
       workerHeaps: Array.from({ length: 39 }, (_, index) => ({
         script: `worker-${index}.js`,
@@ -514,7 +543,7 @@ it("exports production-shaped worker, WebSocket, and late RPC populations withou
     },
   };
   metrics.record(sample);
-  // Rebuilding gauges must not donate their reserved slots to cumulative worker counters.
+  // Rebuilding gauges releases only their entries; cumulative reader snapshots do not add twice.
   metrics.record(sample);
   for (const kind of [
     "scavenge",
@@ -564,6 +593,8 @@ openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thr
     ["gateway_rpc_handler_seconds_count", 170],
     ["worker_heap_space_used_bytes", 390],
     ["gc_duration_seconds_count", 250],
+    ["sqlite_reader_operations_total", 257],
+    ["sqlite_reader_read_bytes_total", 257],
   ] as const) {
     expect(core.split("\n").filter((line) => line.startsWith(`openclaw_${name}{`))).toHaveLength(
       count,
@@ -578,6 +609,8 @@ openclaw_tool_catalog_total{mode="code-mode",source="client"} 2
 openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22
 openclaw_gateway_http_cancelled_total{source="client"} 2
 openclaw_gateway_http_cancelled_total{source="shutdown"} 1`);
+  expectMetrics(core)(`openclaw_sqlite_reader_operations_total{reader_operation="other"} 1
+openclaw_sqlite_reader_read_bytes_total{reader_operation="other"} 4096`);
 });
 
 it("exports bounded family drop counts and warns once per process across exporter restarts", () => {

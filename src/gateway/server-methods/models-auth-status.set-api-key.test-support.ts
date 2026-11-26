@@ -53,21 +53,26 @@ export function registerModelAuthSetApiKeyTests({
     expect(firstRespondCall(opts)?.[1]?.warning).toContain("openclaw gateway restart");
   });
 
-  it("models.authSetApiKey stops the save once the requester loses authority", async () => {
+  it("models.authSetApiKey finishes an admitted save after the requester loses authority", async () => {
     mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
     mocks.listAgentIds.mockReturnValue(["main"]);
     let authorized = true;
     mocks.saveModelProviderApiKey.mockImplementationOnce(async ({ assertCurrent }) => {
-      assertCurrent?.();
+      assertCurrent();
+      // Authority is checked once at admission; revocation applies to the next request.
       authorized = false;
-      assertCurrent?.();
+      assertCurrent();
       return { profileId: "sample:manual" };
     });
     const opts = Object.assign(createOptions({ provider: "sample", apiKey: "test-key" }), {
       hasCurrentClientAuthority: () => authorized,
     });
     await setApiKeyHandler(opts);
-    expect(firstRespondCall(opts)?.[0]).toBe(false);
-    expect(firstRespondCall(opts)?.[2]?.message).toContain("Gateway requester authority changed");
+    expect(authorized).toBe(false);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.saveModelProviderApiKey.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.refreshActiveProviderAuthRuntimeSnapshot.mock.invocationCallOrder[0] ?? 0,
+    );
+    expectSuccess(opts, { provider: "sample", profileId: "sample:manual" });
   });
 }

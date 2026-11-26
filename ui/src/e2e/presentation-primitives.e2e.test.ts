@@ -281,6 +281,11 @@ suite.define(() => {
                 expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
                 expect(styles.overflow).toBe("hidden");
                 expect(styles.radius).toBeGreaterThan(0);
+                await assertShadowParentStyles(
+                  page,
+                  "openclaw-panel-loading-skeleton",
+                  ".skeleton.line",
+                );
               }
             }
           },

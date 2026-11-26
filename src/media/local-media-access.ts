@@ -4,7 +4,10 @@ import path from "node:path";
 import { assertNoWindowsNetworkPath, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { resolveInboundPathRoot } from "@openclaw/media-core/inbound-path-policy";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
-import { realpathViaExistingPrefix } from "../infra/path-existence.js";
+import {
+  canonicalizeContainmentRoot,
+  canonicalizeForContainment,
+} from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
@@ -49,16 +52,10 @@ type LocalMediaBoundaryOptions = {
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
-/**
- * Owns path spelling for every containment comparison in this module: allowlist roots, inbound
- * anchors, and requested media paths all canonicalize through their longest existing prefix, so a
- * missing descendant of a symlinked state dir compares in the same spelling as its root (#194406).
- */
-async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
-  // Configured roots are trusted spellings; fold ".." lexically before canonicalizing.
-  const resolved = path.resolve(root);
-  return (await realpathViaExistingPrefix(resolved)) ?? resolved;
-}
+// Roots, inbound anchors, and requested media paths share one canonical spelling owner
+// (src/infra/path-containment.ts), so a missing descendant of a symlinked state dir compares in
+// the same spelling as its root (#194406).
+const resolveCanonicalBoundaryPath = canonicalizeContainmentRoot;
 
 /** Reports absence only for paths that already passed containment, so it reveals nothing outside. */
 export function localMediaNotFoundError(mediaPath: string, cause: unknown): LocalMediaAccessError {
@@ -98,21 +95,39 @@ export async function resolveLocalMediaRoots(
   );
 }
 
-async function resolveLocalMediaPathForContainment(mediaPath: string): Promise<string> {
-  // Missing files (for example, staged outbound media supplied by host-read callbacks) still
-  // need symlink-aware containment, in the same spelling as the roots. Existence is reported
-  // later by the reader, and only for paths that passed containment.
-  const resolved = await realpathViaExistingPrefix(mediaPath);
-  if (!resolved) {
-    // A ".." after a missing folder, or a dangling or unreadable link, has no canonical target.
-    throw pathNotAllowedError(mediaPath);
-  }
-  return resolved;
+/**
+ * Missing files (for example, staged outbound media supplied by host-read callbacks) still need
+ * symlink-aware containment in the roots' spelling; the reader reports existence later, and only
+ * for paths that passed containment. Dangling links are judged by the location they name.
+ */
+async function resolveLocalMediaPathForContainment(
+  mediaPath: string,
+): Promise<{ path: string; danglingLink?: string } | undefined> {
+  const resolved = await canonicalizeForContainment(mediaPath);
+  // A ".." after a missing folder, or an unreadable or looping link, has no canonical target.
+  return resolved.kind === "resolved"
+    ? {
+        path: resolved.path,
+        ...(resolved.danglingLink ? { danglingLink: resolved.danglingLink } : {}),
+      }
+    : undefined;
+}
+
+function brokenLinkError(mediaPath: string, link: string, cause: unknown): LocalMediaAccessError {
+  // Only reached when the link's target lies inside an allowed root, so naming it is safe.
+  return new LocalMediaAccessError(
+    "not-found",
+    `Local media file not found: ${mediaPath}. ${link} is a symbolic link to a target that does ` +
+      "not exist; fix the link or use the file's real path.",
+    { cause },
+  );
 }
 
 type ResolvedLocalMediaBoundary = {
   rejectHardlinks: boolean;
   roots: readonly string[] | "any";
+  /** In-root dangling link on the path; a not-found open names it instead of the bare path. */
+  danglingLink?: string;
 };
 
 type ManagedReferenceErrorPolicy = "ignore" | "reject";
@@ -170,10 +185,14 @@ async function resolveLocalMediaBoundary(
     };
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
-  const [resolved, resolvedRoots] = await settleCurrentReadPreparations([
+  const [containment, resolvedRoots] = await settleCurrentReadPreparations([
     resolveLocalMediaPathForContainment(mediaPath),
     options?.resolveRoots?.() ?? resolveLocalMediaRoots(roots),
   ] as const);
+  if (!containment) {
+    throw pathNotAllowedError(mediaPath);
+  }
+  const resolved = containment.path;
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {
@@ -202,7 +221,11 @@ async function resolveLocalMediaBoundary(
       );
     }
     if (isPathInside(resolvedRoot, resolved)) {
-      return { rejectHardlinks: false, roots: resolvedRoots };
+      return {
+        rejectHardlinks: false,
+        roots: resolvedRoots,
+        ...(containment.danglingLink ? { danglingLink: containment.danglingLink } : {}),
+      };
     }
   }
 
@@ -235,7 +258,12 @@ export async function openLocalMediaFile(
     options.excludedRoots?.length ? resolveLocalMediaRoots(options.excludedRoots) : [],
   ] as const);
   readScope?.assertCurrent();
-  const opened = await openLocalFileSafely({ filePath: mediaPath });
+  const opened = await openLocalFileSafely({ filePath: mediaPath }).catch((error: unknown) => {
+    if (boundary.danglingLink && error instanceof FsSafeError && error.code === "not-found") {
+      throw brokenLinkError(mediaPath, boundary.danglingLink, error);
+    }
+    throw error;
+  });
   try {
     if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
       throw new LocalMediaAccessError(

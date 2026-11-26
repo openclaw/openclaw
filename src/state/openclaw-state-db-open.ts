@@ -25,7 +25,7 @@ import {
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -46,7 +46,7 @@ import {
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -270,7 +270,18 @@ function* openNativeStateDatabase(
     setSqliteBusyTimeout(db, busyTimeoutMs);
     const engine = stateEngineInput();
     let credentialCustody: ClientCredentialCustody | null | undefined;
-    const openSelected = () => {
+    const initializeSqliteSchema = () => {
+      params.ensureSchema(db, initialization, credentialCustody);
+      ensureOpenClawStatePermissions(params.pathname, params.env);
+      assertSameFile();
+    };
+    const openSelected = (prepareJournalOnly = false) => {
+      if (sqlite) {
+        runWithSqliteBusyTimeout(db, busyTimeoutMs, initializeSqliteSchema, {
+          lockFailureReporting,
+        });
+        return db;
+      }
       admitStateSchemaFacts(db, params.pathname);
       if (engine && isNativeClientCredentialBootstrap(db)) {
         throw new Error(
@@ -395,22 +406,31 @@ function* openNativeStateDatabase(
                 foreignKeys: true,
                 synchronous: "NORMAL",
               });
-              params.ensureSchema(db, initialization, credentialCustody);
+              if (!prepareJournalOnly) {
+                initializeSqliteSchema();
+              }
               return walMaintenance;
             },
             { lockFailureReporting },
           );
-          ensureOpenClawStatePermissions(params.pathname, params.env);
-          assertSameFile();
           sqlite = { db, path: params.pathname, walMaintenance: maintenance };
         },
       });
     };
+    // A writer that first enters WAL under EXCLUSIVE uses a private WAL index
+    // and cannot release that lock while it stays open for the lease worker.
+    const beforeExclusive = params.existingSchema
+      ? undefined
+      : () => {
+          assertSameFile();
+          openSelected(true);
+        };
     yield {
       run() {
         selected = engine
           ? openSelected()
           : runUpdateSqliteMigration(db, params.pathname, openSelected, {
+              beforeExclusive,
               created: original === undefined,
             });
       },
@@ -475,6 +495,7 @@ function* openNativeStateDatabase(
                 return openSelected();
               },
               {
+                beforeExclusive,
                 created: original === undefined,
                 companions: custody
                   ? [{ database: custody.database, path: custody.path, created: custody.created }]

@@ -7,6 +7,7 @@ import {
   createMemo,
   createSignal,
   isPending,
+  latest,
   onSettled,
 } from "solid-js";
 import {
@@ -60,12 +61,12 @@ export function AgentTools(
     Pick<AgentsPageView, "readData"> & {
       agentId: string;
       configForm: Record<string, unknown> | null;
+      canReadConfig: boolean;
     },
 ) {
-  const toolGroups = new Map<
-    HTMLDetailsElement,
-    { readonly tools: AgentToolEntry[]; open: () => void }
-  >();
+  const [toolGroups, setToolGroups] = createSignal<
+    { element: HTMLDetailsElement; readonly tools: AgentToolEntry[]; open: () => void }[]
+  >([]);
   const toolTargets = new Map<
     HTMLElement,
     {
@@ -75,30 +76,31 @@ export function AgentTools(
       group: HTMLDetailsElement;
     }
   >();
-  const jumpToTool = (event: Event, anchorId: string) => {
-    // Closed groups have no rows yet. Open the matching live group before resolving its row.
-    const group = Array.from(toolGroups).find(
-      ([element, entry]) =>
-        element.isConnected && entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
+  const resolveJump = (anchorId: string) => {
+    // Only offer a jump when the catalog has a row for this preview tool.
+    const group = toolGroups().find((entry) =>
+      entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
     );
     if (!group) {
-      return;
+      return undefined;
     }
-    event.preventDefault();
-    group[1].open();
-    const nextUrl = new URL(window.location.href);
-    nextUrl.hash = anchorId;
-    window.history.replaceState(null, "", nextUrl);
-    onSettled(() => {
-      const target = Array.from(toolTargets.values()).find(
-        (entry) => entry.anchorId() === anchorId && entry.group === group[0],
-      );
-      if (target?.details.isConnected) {
-        target.details.open = true;
-        target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
-        target.summary.focus();
-      }
-    });
+    return (event: Event) => {
+      event.preventDefault();
+      group.open();
+      const nextUrl = new URL(window.location.href);
+      nextUrl.hash = anchorId;
+      window.history.replaceState(null, "", nextUrl);
+      onSettled(() => {
+        const target = Array.from(toolTargets.values()).find(
+          (entry) => entry.anchorId() === anchorId && entry.group === group.element,
+        );
+        if (target?.details.isConnected) {
+          target.details.open = true;
+          target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
+          target.summary.focus();
+        }
+      });
+    };
   };
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
   const agentTools = () => config().entry?.tools ?? {};
@@ -118,12 +120,9 @@ export function AgentTools(
     const tools = globalTools();
     return Array.isArray(tools.allow) && tools.allow.length > 0;
   };
-  const editable = () =>
-    params.canUpdateConfig &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving &&
-    !hasAgentAllow();
+  const hasConfig = () => params.canReadConfig && params.configForm !== null;
+  const canEdit = () => hasConfig() && params.canUpdateConfig && !hasAgentAllow();
+  const editable = () => canEdit() && !params.configLoading && !params.configSaving;
   const alsoAllow = createMemo(() => {
     const tools = agentTools();
     return hasAgentAllow() ? [] : Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
@@ -154,13 +153,28 @@ export function AgentTools(
       denied,
     };
   };
-  const effectivePreviewTools = createMemo(() => resolvePreviewTools(params.readEffective()));
+  // Admission and retirement must not wait behind the async preview they replace.
+  const effectiveScope = createMemo(() =>
+    latest(() => params.effectiveRequest?.scope ?? params.agentId),
+  );
+  const effectivePreviewTools = createMemo(() =>
+    resolvePreviewTools(latest(() => params.effectivePreview)),
+  );
 
-  function EffectiveBoundary(props: { children: (preview: EffectivePreview) => JSX.Element }) {
-    const ready = (): EffectivePreview => {
-      const result = params.readEffective();
-      if (isPending(() => params.readEffective())) {
-        return { result: null, status: "previewLoading", empty: "loadingPreview" };
+  function EffectiveBoundary(props: {
+    children: (preview: () => EffectivePreview) => JSX.Element;
+  }) {
+    const ready = createMemo((): EffectivePreview => {
+      const readEffective = params.readEffective.bind(params);
+      readEffective();
+      const result = latest(() => params.effectivePreview);
+      if (isPending(readEffective)) {
+        return {
+          result,
+          facts: effectivePreviewTools(),
+          status: "previewLoading",
+          empty: "loadingPreview",
+        };
       }
       return {
         result,
@@ -168,31 +182,35 @@ export function AgentTools(
         status: result ? null : "previewNotLoaded",
         empty: result ? null : "previewNotLoaded",
       };
-    };
+    });
     return (
       <Show
         when={params.runtimeSessionMatchesSelectedAgent}
-        fallback={props.children({ status: "otherAgent", empty: "switchAgent", result: null })}
+        fallback={props.children(() => ({
+          status: "otherAgent",
+          empty: "switchAgent",
+          result: null,
+        }))}
       >
-        <Show when={params.effectiveRequest ?? params.agentId} keyed>
+        <Show when={effectiveScope()} keyed>
           <Errored
             fallback={(_error) =>
-              props.children({
+              props.children(() => ({
                 status: "previewUnavailable",
                 empty: "previewError",
                 result: null,
-              })
+              }))
             }
           >
             <Loading
-              on={params.effectiveRequest}
-              fallback={props.children({
+              on={effectiveScope()}
+              fallback={props.children(() => ({
                 status: "previewLoading",
                 empty: "loadingPreview",
                 result: null,
-              })}
+              }))}
             >
-              {props.children(ready())}
+              {props.children(ready)}
             </Loading>
           </Errored>
         </Show>
@@ -239,7 +257,6 @@ export function AgentTools(
         <For
           each={
             [
-              [!params.configForm, "agentTools.loadConfig", undefined],
               [
                 hasAgentAllow(),
                 "agentTools.explicitAllowlist",
@@ -288,59 +305,66 @@ export function AgentTools(
                   onClick={() => params.onRetryCatalog()}
                 />
               </Show>
-              <For each={[true, false]}>
-                {(enabled) => (
-                  <AgentPanelAction
-                    label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
-                    disabled={!editable() || (props.pending ?? false)}
-                    onClick={() => handleToolsUpdate(toolIds(), enabled)}
-                  />
-                )}
-              </For>
+              <Show when={canEdit()}>
+                <For each={[true, false]}>
+                  {(enabled) => (
+                    <AgentPanelAction
+                      label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
+                      disabled={!editable() || (props.pending ?? false)}
+                      onClick={() => handleToolsUpdate(toolIds(), enabled)}
+                    />
+                  )}
+                </For>
+              </Show>
             </>
           }
         >
-          {renderAgentPanelFacts([
-            ["agentTools.profile", <code>{profile()}</code>],
-            ["agentTools.source", profileSource()],
+          {renderAgentPanelFacts(
             [
-              "agentTools.enabled",
-              <code>
-                {enabledCount()}/{toolIds().length}
-              </code>,
+              ["agentTools.profile", <code>{profile()}</code>],
+              ["agentTools.source", profileSource()],
+              [
+                "agentTools.enabled",
+                <code>
+                  {enabledCount()}/{toolIds().length}
+                </code>,
+              ],
+              [
+                "agentTools.listed",
+                <EffectiveBoundary>
+                  {(preview) => <ToolListed preview={preview()} />}
+                </EffectiveBoundary>,
+              ],
             ],
-            [
-              "agentTools.listed",
-              <EffectiveBoundary>
-                {(preview) => <ToolListed preview={preview} />}
-              </EffectiveBoundary>,
-            ],
-          ])}
-          <SettingsRow
-            title={t("agentTools.quickPresets")}
-            stackedOnNarrow
-            control={
-              <div class="agent-tools-buttons">
-                <SettingsSegmented
-                  mode="buttons"
-                  ariaLabel={t("agentTools.quickPresets")}
-                  value={profile()}
-                  options={profileOptions().map((option) => ({
-                    value: option.id,
-                    label: option.label,
-                  }))}
-                  disabled={!editable() || props.pending}
-                  onChange={(id) => params.onProfileChange(params.agentId, id, true)}
-                  onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
-                />
-                <AgentPanelAction
-                  label={t("agentTools.inherit")}
-                  disabled={!editable() || (props.pending ?? false)}
-                  onClick={() => params.onProfileChange(params.agentId, null, false)}
-                />
-              </div>
-            }
-          />
+            "agent-tool-access-facts",
+          )}
+          <Show when={canEdit()}>
+            <SettingsRow
+              title={t("agentTools.quickPresets")}
+              stackedOnNarrow
+              control={
+                <div class="agent-tools-buttons">
+                  <SettingsSegmented
+                    mode="buttons"
+                    ariaLabel={t("agentTools.quickPresets")}
+                    value={profile()}
+                    options={profileOptions().map((option) => ({
+                      value: option.id,
+                      label: option.label,
+                    }))}
+                    disabled={!editable() || props.pending}
+                    onChange={(id) => params.onProfileChange(params.agentId, id, true)}
+                    onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
+                  />
+                  <AgentPanelAction
+                    label={t("agentTools.inherit")}
+                    disabled={!editable() || (props.pending ?? false)}
+                    onClick={() => params.onProfileChange(params.agentId, null, false)}
+                  />
+                </div>
+              }
+            />
+          </Show>
         </SettingsSection>
       </>
     );
@@ -368,7 +392,8 @@ export function AgentTools(
                 }
               };
               onSettled(() => {
-                toolGroups.set(group, {
+                const entry = {
+                  element: group,
                   get tools() {
                     return section().tools;
                   },
@@ -376,8 +401,9 @@ export function AgentTools(
                     group.open = true;
                     setExpanded(true);
                   },
-                });
-                return () => toolGroups.delete(group);
+                };
+                setToolGroups((current) => [...current, entry]);
+                return () => setToolGroups((current) => current.filter((item) => item !== entry));
               });
               // Name order, so a row never moves when its toggle or the preview changes.
               const sortedTools = createMemo(() =>
@@ -477,7 +503,7 @@ export function AgentTools(
                               <EffectiveBoundary>
                                 {(preview) => (
                                   <ToolPreview
-                                    preview={preview}
+                                    preview={preview()}
                                     tool={tool()}
                                     configDirty={params.configDirty}
                                     part={partProps.part}
@@ -502,23 +528,27 @@ export function AgentTools(
                                     {tool().description}
                                   </div>
                                 </div>
-                                <span
-                                  class="agent-tool-toggle"
-                                  onClick={(event: Event) => event.stopPropagation()}
-                                  onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
-                                >
-                                  <SettingsToggle
-                                    checked={resolved().allowed}
-                                    disabled={!editable()}
-                                    ariaLabel={t(
-                                      resolved().allowed
-                                        ? "agentTools.disableNamed"
-                                        : "agentTools.enableNamed",
-                                      { name: tool().label },
-                                    )}
-                                    onChange={(checked) => handleToolsUpdate([tool().id], checked)}
-                                  />
-                                </span>
+                                <Show when={canEdit()}>
+                                  <span
+                                    class="agent-tool-toggle"
+                                    onClick={(event: Event) => event.stopPropagation()}
+                                    onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
+                                  >
+                                    <SettingsToggle
+                                      checked={resolved().allowed}
+                                      disabled={!editable()}
+                                      ariaLabel={t(
+                                        resolved().allowed
+                                          ? "agentTools.disableNamed"
+                                          : "agentTools.enableNamed",
+                                        { name: tool().label },
+                                      )}
+                                      onChange={(checked) =>
+                                        handleToolsUpdate([tool().id], checked)
+                                      }
+                                    />
+                                  </span>
+                                </Show>
                               </summary>
                               <div class="agent-tool-details">
                                 {renderAgentPanelFacts([
@@ -559,7 +589,17 @@ export function AgentTools(
 
   return (
     <>
-      <Show when={params.catalogRequest ?? params.agentId} keyed>
+      <Show
+        when={hasConfig() && (params.catalogRequest ?? params.agentId)}
+        keyed
+        fallback={
+          params.canReadConfig && params.configLoading ? (
+            <SettingsSection title={t("agentTools.title")}>
+              <SettingsLoadingSkeleton label={t("common.loading")} />
+            </SettingsSection>
+          ) : undefined
+        }
+      >
         <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
           <Loading fallback={<Configuration catalog={null} pending />}>
             <Configuration catalog={params.readCatalog()} />
@@ -569,9 +609,9 @@ export function AgentTools(
       <EffectiveBoundary>
         {(preview) => (
           <ToolRuntime
-            preview={preview}
+            preview={preview()}
             sessionKey={params.runtimeSessionKey}
-            onJump={jumpToTool}
+            resolveJump={resolveJump}
           />
         )}
       </EffectiveBoundary>
@@ -579,7 +619,7 @@ export function AgentTools(
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
-      <Show when={params.catalogRequest ?? params.agentId} keyed>
+      <Show when={hasConfig() && (params.catalogRequest ?? params.agentId)} keyed>
         <Errored fallback={(_error) => <Catalog catalog={null} />}>
           <Loading
             fallback={

@@ -77,6 +77,7 @@ export type CodexAppServerStartOptions = {
   cwd?: string;
   url?: string;
   authToken?: string;
+  tlsPeerCertificate?: string;
   headers: Record<string, string>;
   env?: Record<string, string>;
   clearEnv?: string[];
@@ -90,7 +91,6 @@ export type CodexAppServerRuntimeOptions = {
   remoteWorkspaceRoot?: string;
   nativeHookRelay?: { url: string; credentialDirectory: string };
   codeModeOnly: boolean;
-  loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexSandboxMode;

@@ -266,7 +266,8 @@
 }
 
 .chat-workspace-mobile__name {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
   min-width: 0;
   line-height: 20px;
 }
@@ -279,7 +280,9 @@
 }
 
 .chat-workspace-mobile__extension {
-  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-workspace-mobile__directory {

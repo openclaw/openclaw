@@ -35,6 +35,7 @@ import {
   updatePreflightDetailMessage,
   UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
 } from "./update-preflight-details.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -48,7 +49,11 @@ import {
   updateRunReportInputFromResult,
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
-import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
+import {
+  isFailedUpdateStep,
+  projectUpdateRunResultSteps,
+  updateRunWarningMessages,
+} from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -244,6 +249,12 @@ async function renderBoundedDiagnostics(
     `Result: ${input.result.status}`,
     `Update mode: ${sanitizeReportField(resolveUpdateMode(input), context)}`,
     `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
+    // A closed enum: the one diagnostic line that redaction never hides.
+    `Cause: ${classifyUpdateRunCause({
+      status: input.result.status === "error" ? "failed" : "succeeded",
+      reason: input.result.reason,
+      facts: steps.flatMap((step) => step.failureFacts ?? []),
+    })}`,
   ];
   if (input.error?.trim()) {
     diagnostics.push(
@@ -458,10 +469,9 @@ export async function prepareUpdateFailureReport(
           return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
         }),
       )),
-      ...updateRunWarningMessages([
-        ...(recordedRun?.steps ?? []),
-        ...updateRunReportInputFromResult(input.result).steps,
-      ])
+      ...updateRunWarningMessages(
+        projectUpdateRunResultSteps({ steps: recordedRun?.steps ?? [] }, input.result.steps).steps,
+      )
         .slice(-3)
         .map((message) => redactPublicSupportDiagnosticLine(message, context)),
     ]),

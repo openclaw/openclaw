@@ -42,8 +42,8 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
+import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/terminal-resolution.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -338,6 +338,35 @@ describe("registered message action source completion", () => {
       }
     },
   );
+});
+
+it("preserves literal folder names and their order in a poll", async ({ onTestFinished }) => {
+  onTestFinished(resetPluginRuntimeStateForTest);
+  const received: unknown[] = [];
+  registerMessageChannel({
+    ...workspaceTestPlugin,
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      handleAction: async ({ params }) => {
+        received.push({ question: params.pollQuestion, options: params.pollOption });
+        return jsonResult({ ok: true });
+      },
+    },
+  });
+  setRuntimeConfigSnapshot(workspaceConfig);
+  const tool = createMessageTool({ config: workspaceConfig });
+  const folder = String.raw`C:\notes`;
+  const question = `Choose a folder under ${folder}`;
+  const prefix = String.raw`Reasoning:\n_Comparing folders_\n`;
+  const options = [String.raw`C:\nest`, String.raw`C:\rest`, String.raw`C:\nest`];
+  await tool.execute("poll-folders", {
+    action: "poll",
+    channel: "workspace",
+    target: "C123",
+    pollQuestion: prefix + question + "\n",
+    pollOption: [...options, prefix + folder + String.raw`\n`],
+  });
+  expect(received).toEqual([{ question, options: [...options, folder] }]);
 });
 
 function createFailingMessageTool(error: Error) {
@@ -839,7 +868,7 @@ describe("message tool group thread replies", () => {
           await send({ message: "Progress", final: false });
           await send({ message: "Original before hook" });
           await send({ message: "Other room before hook", target: "999" });
-          await send({ message: "Pass-through hook" });
+          await send({ message: `${"a".repeat(3_986)}🥐 Pass-through hook` });
           await send({ message: "Cancelled by hook" });
           await send({ message: "Other room", target: "999" });
           await send({ message: "Other thread", target: "123", threadId: "99" });
@@ -869,7 +898,7 @@ describe("message tool group thread replies", () => {
         "Nested rewritten notification",
         "**Reviewer**\nRewritten visible final",
         "Rewritten visible final",
-        "**Reviewer**\nPass-through hook",
+        `**Reviewer**\n${"a".repeat(3_986)}🥐 Pass-through hook`,
         "Other room",
         "Other thread",
         "Top-level send",
@@ -882,7 +911,7 @@ describe("message tool group thread replies", () => {
       expect(recordReply.mock.calls).toEqual([
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
-        [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: `**Reviewer**\n${"a".repeat(3_986)}` }],
         [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],

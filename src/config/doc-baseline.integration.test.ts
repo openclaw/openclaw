@@ -80,6 +80,14 @@ describe("config doc baseline integration", () => {
     const gatewayToken = requireEntry(byPath, "gateway.auth.token");
     expect(gatewayToken.kind).toBe("core");
     expect(gatewayToken.sensitive).toBe(true);
+    for (const entryPath of [
+      "gateway.auth.trustedProxy.gitCoauthor",
+      "gateway.auth.trustedProxy.gitCoauthor.nameHeader",
+      "gateway.auth.trustedProxy.gitCoauthor.emailHeader",
+      "gateway.auth.trustedProxy.gitCoauthor.emailVerifiedHeader",
+    ]) {
+      expect(requireEntry(byPath, entryPath).kind).toBe("core");
+    }
 
     const telegramToken = requireEntry(byPath, "channels.telegram.botToken");
     expect(telegramToken.kind).toBe("channel");

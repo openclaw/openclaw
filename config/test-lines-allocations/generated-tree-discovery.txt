@@ -1,3 +1,0 @@
-57
-# Prove that filesystem fallback prunes generated trees before reading them,
-# while retaining real fixtures, UI/browser TSX tests and explicit suffixes.

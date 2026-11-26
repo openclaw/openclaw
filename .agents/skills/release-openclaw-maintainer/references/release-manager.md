@@ -154,3 +154,5 @@ retro/ledger PR, repair PR disposition, cleanup, and deferred-hotfix owner.
 Deduplicate shared lessons and follow-ups; per-release retrospectives retain
 their own evidence. Do not report the campaign complete while a release is
 merely dispatched, waiting for approval, or awaiting an unacknowledged handoff.
+
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).

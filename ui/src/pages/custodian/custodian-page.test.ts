@@ -71,9 +71,7 @@ describe("custodian page", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Choose a channel.",
-        action: "none",
+        ...chatReply("Choose a channel.", { sessionId: "rich-wizard-session" }),
         wizardInputPending: true,
         step: {
           id: "channel",
@@ -86,9 +84,7 @@ describe("custodian page", () => {
         },
       })
       .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Choose features.",
-        action: "none",
+        ...chatReply("Choose features.", { sessionId: "rich-wizard-session" }),
         wizardInputPending: true,
         step: {
           id: "features",
@@ -102,9 +98,7 @@ describe("custodian page", () => {
         },
       })
       .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Enter the secret.",
-        action: "none",
+        ...chatReply("Enter the secret.", { sessionId: "rich-wizard-session" }),
         sensitive: true,
         wizardInputPending: true,
         step: {
@@ -261,11 +255,11 @@ describe("custodian page", () => {
     });
     await waitForFast(() => expect(page.textContent).toContain("System check completed"));
     expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.chat.history",
       "openclaw.chat",
+      "openclaw.chat.history",
     ]);
-    expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({ sessionId: "custodian-session" });
-    expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    expect(replacementRequest.mock.calls[0]?.[1]).toMatchObject({ sessionId: "custodian-session" });
+    expect(replacementRequest.mock.calls[0]?.[1]).not.toHaveProperty("message");
     expect(page.querySelector('[role="alert"]')).toBeNull();
     pending.resolve(chatReply("Stale old-client reply."));
     await pending.promise;
@@ -783,27 +777,33 @@ describe("custodian page", () => {
     );
   });
   it.each([
-    { pathname: "/settings/channels", expectedPage: "channels" },
-    { pathname: "/not-an-openclaw-route", expectedPage: undefined },
-  ])(
-    "adds resolved page context only to user turns at $pathname",
-    async ({ pathname, expectedPage }) => {
-      window.history.replaceState({}, "", pathname);
-      const request = vi.fn().mockResolvedValue(chatReply("Ready."));
-      const { page } = await mount(request);
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("context");
-      await fill(page, "textarea", "What about this page?");
-      button(page, ".chat-send-btn").click();
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-      expect(request.mock.calls[1]?.[1]?.message).toBe("What about this page?");
-      if (expectedPage) {
-        expect(request.mock.calls[1]?.[1]?.context).toEqual({ page: expectedPage });
-      } else {
-        expect(request.mock.calls[1]?.[1]).not.toHaveProperty("context");
-      }
-    },
-  );
+    { pathname: "/settings/channels", expectedPage: "channels", sensitive: false },
+    { pathname: "/not-an-openclaw-route", expectedPage: undefined, sensitive: false },
+    { pathname: "/settings/channels", expectedPage: "channels", sensitive: true },
+  ])("keeps IME drafts local at $pathname ($sensitive)", async (test) => {
+    window.history.replaceState({}, "", test.pathname);
+    const request = vi.fn().mockResolvedValue(chatReply("Ready.", { sensitive: test.sensitive }));
+    const { page } = await mount(request);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("context");
+    const selector = test.sensitive ? 'input[type="password"]' : "textarea";
+    const box = await fill(page, selector, "检查配置");
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
+    box.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.updateComplete;
+    expect(request).toHaveBeenCalledOnce();
+    expect(box.value).toBe("检查配置");
+    box.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await page.updateComplete;
+    const params = request.mock.calls[1]?.[1];
+    expect(params?.message).toBe("检查配置");
+    expect(params?.context).toEqual(test.expectedPage ? { page: test.expectedPage } : undefined);
+    expect(Object.hasOwn(params, "context")).toBe(test.expectedPage !== undefined);
+    expect(box.value).toBe("");
+  });
 
   it("hides typed cancel when the Gateway does not advertise it", async () => {
     const request = vi.fn().mockResolvedValue(

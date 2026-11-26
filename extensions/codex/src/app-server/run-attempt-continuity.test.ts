@@ -86,9 +86,10 @@ it("retains a protected parent through private completion and owner reentry", as
       expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-1");
       const request = harness.requests.findLast(({ method }) => method === "turn/start")?.params;
       const instructions = continuity.readManagedInstructions(harness.client, request);
-      expect(instructions).toContain(
-        text ?? "No additional conversation instructions for this turn.",
-      );
+      const conversation = instructions.match(
+        /## OpenClaw conversation instructions\n\n[^\n]+\n\n<conversation_instructions>\n\n([\s\S]*?)\n\n### Tool Bindings\n\nCurrent OpenClaw tool bindings for this turn[^\n]*\n\n<\/conversation_instructions>$/,
+      )?.[1];
+      expect(conversation).toBe(text ?? "No additional conversation instructions for this turn.");
       expect(instructions).not.toContain(
         index === 2 ? "Owner conversation context." : "Private completion context.",
       );
@@ -109,12 +110,11 @@ it("retains a protected parent through private completion and owner reentry", as
         "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
     });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
-    expect(harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual([]);
-    expect(
-      harness.requests
-        .filter(({ method }) => ["thread/start", "thread/resume"].includes(method))
-        .map(({ method }) => method),
-    ).toEqual(["thread/start"]);
+    const methods = harness.requests.map(({ method }) => method);
+    expect(methods).not.toContain("thread/unsubscribe");
+    expect(methods.filter((method) => ["thread/start", "thread/resume"].includes(method))).toEqual([
+      "thread/start",
+    ]);
   } finally {
     release();
     harness.close();

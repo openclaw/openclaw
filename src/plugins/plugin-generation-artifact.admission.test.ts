@@ -25,6 +25,7 @@ import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lo
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
+  nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
@@ -476,6 +477,65 @@ it.each(["npm", "clawhub"] as const)(
   },
 );
 
+it("readmits a retained native capture after a package swap strands its host link", async () => {
+  await withOpenClawTestState({ label: "native-host-package-swap" }, async (state) => {
+    await using resources = captureResources();
+    const fixture = createFixture(state.path("installed"), true);
+    const firstHost = createSdkHost(state.path(".pnpm/openclaw@1/node_modules/openclaw"), "first");
+    const nextHost = createSdkHost(state.path(".pnpm/openclaw@2/node_modules/openclaw"), "next");
+    const logicalHost = state.path("node_modules/openclaw");
+    fs.mkdirSync(path.dirname(logicalHost), { recursive: true });
+    fs.symlinkSync(firstHost, logicalHost, "junction");
+
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const firstCache = resources.cache();
+    preparePluginNativeAdmissions(fixture.index, firstCache);
+    const original = resources.capture(firstCache, fixture.root);
+    original.linkHost(logicalHost);
+    const originalNative = fs.realpathSync(original.resolve(fixture.filename));
+    await settlePluginNativeAdmissions(firstCache);
+
+    const nextCache = resources.cache();
+    const persisted = (await readIndex(nextCache, state.stateDir))!;
+    const originalReceipt = onlyReceipt(persisted);
+    const originalHostLink = path.join(
+      originalReceipt.nativeArtifacts[fixture.filename]!.namespace,
+      "node_modules/openclaw",
+    );
+    expect(fs.realpathSync(originalHostLink)).toBe(fs.realpathSync(firstHost));
+    const heldHost = state.path("package-rollback");
+    fs.renameSync(firstHost, heldHost);
+    fs.unlinkSync(logicalHost);
+    fs.symlinkSync(nextHost, logicalHost, "junction");
+    expect(() => fs.statSync(originalHostLink)).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+
+    preparePluginNativeAdmissions(persisted, nextCache);
+    const successor = resources.capture(nextCache, fixture.root);
+    successor.linkHost(logicalHost);
+    const nextNative = fs.realpathSync(successor.resolve(fixture.filename));
+    expect(nextNative).not.toBe(originalNative);
+    expectBytes(nextNative, fixture.bytes);
+    await settlePluginNativeAdmissions(nextCache);
+    const nextReceipt = onlyReceipt(await readIndex(resources.cache(), state.stateDir));
+    expect(nextReceipt.nativeArtifacts[fixture.filename]!.capturedPath).toBe(nextNative);
+    const nextHostLink = path.join(
+      nextReceipt.nativeArtifacts[fixture.filename]!.namespace,
+      "node_modules/openclaw",
+    );
+    expect(fs.realpathSync(nextHostLink)).toBe(fs.realpathSync(nextHost));
+
+    // Restoring the original package must recover the previous generation without relinking it.
+    fs.unlinkSync(logicalHost);
+    fs.symlinkSync(firstHost, logicalHost, "junction");
+    fs.renameSync(heldHost, firstHost);
+    expect(fs.realpathSync(originalHostLink)).toBe(fs.realpathSync(firstHost));
+    expect(fs.realpathSync(original.resolve(fixture.filename))).toBe(originalNative);
+    expectBytes(originalNative, fixture.bytes);
+  });
+});
+
 it.each([false, true])(
   "admits native source with an unavailable persisted capture (unrelated=%s)",
   async (unrelated) => {
@@ -727,3 +787,33 @@ it("snapshots a mutable native edit once while retained generations keep their p
     }
   });
 });
+
+it.each(["companion", "source-path"] as const)(
+  "keeps only the current namespace after a %s edit releases retired generations",
+  async (change) => {
+    await withOpenClawTestState({ label: "native-admission-retention" }, async (state) => {
+      await using resources = captureResources();
+      const fixture = createFixture(state.path("source"), false);
+      const helper = path.join(fixture.root, "helper.cjs");
+      fs.writeFileSync(helper, "module.exports = 0;");
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = resources.cache();
+      preparePluginNativeAdmissions(fixture.index, cache);
+      let filename = fixture.filename;
+      for (let edit = 1; edit <= 4; edit += 1) {
+        const generation = resources.capture(cache, fixture.root);
+        await generation.disposeAsync();
+        if (change === "source-path") {
+          const next = path.join(fixture.root, `native-${edit}.so`);
+          fs.renameSync(filename, next);
+          filename = next;
+        }
+        fs.writeFileSync(helper, `module.exports = ${edit};`);
+      }
+      const current = resources.capture(cache, fixture.root);
+      expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
+      expect([...nativeAdmissionStateFor(cache).files.keys()]).toEqual([filename]);
+      expectBytes(current.resolve(filename), fixture.bytes);
+    });
+  },
+);

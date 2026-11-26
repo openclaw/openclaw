@@ -15,7 +15,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { buffer } from "node:stream/consumers";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import {
@@ -48,7 +48,6 @@ import {
   waitForInitialProbe,
   writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
-import { generateTeamShapeFixture, parseTeamShapeOptions } from "./perf/team-shape-fixture.ts";
 
 const { values } = parseArgs({
   options: {
@@ -57,7 +56,10 @@ const { values } = parseArgs({
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
     "compare-entry": { type: "string" },
+    "fixture-source-root": { type: "string" },
+    "compare-fixture-source-root": { type: "string" },
     "restart-gateway-per-sample": { type: "boolean", default: false },
+    "fresh-browser": { type: "boolean", default: false },
     "fixture-now": { type: "string" },
     "cold-only": { type: "boolean", default: false },
     controlled: { type: "boolean", default: false },
@@ -71,6 +73,7 @@ const { values } = parseArgs({
     profile: { type: "string", default: "local" },
     "idle-ms": { type: "string", default: "5000" },
     trace: { type: "boolean", default: false },
+    "server-profile": { type: "boolean", default: false },
     "no-rpc-observer": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "prepare-ms": { type: "string", default: "0" },
@@ -102,6 +105,7 @@ assert(["1", "4"].includes(values["cpu-throttle"]));
 if (values["first-run"]) {
   values["restart-gateway-per-sample"] = true;
 }
+assert(!values["server-profile"] || values["first-run"], "Server profiles require --first-run");
 assert(
   !values["empty-plugin-installation"] || values["first-run"],
   "Empty plugins require --first-run",
@@ -126,8 +130,47 @@ const routes = (
     return selectedRoute;
   });
 const output = path.resolve(values.output);
-await mkdir(output, { recursive: false });
 const entry = path.resolve(values.entry);
+// Offline writers must use the schema owners that built this arm's Gateway.
+const fixtureSourceRoot = path.resolve(
+  values["fixture-source-root"] ?? path.dirname(path.dirname(entry)),
+);
+const fixtureSourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: fixtureSourceRoot,
+  encoding: "utf8",
+}).trim();
+const runtimeBuildInfo: { commit?: unknown } = JSON.parse(
+  await readFile(path.join(path.dirname(entry), "build-info.json"), "utf8"),
+);
+assert.equal(
+  fixtureSourceCommit,
+  runtimeBuildInfo.commit,
+  "Fixture source HEAD must match the selected runtime build-info commit",
+);
+const fixtureModule = (relativePath: string) =>
+  pathToFileURL(path.join(fixtureSourceRoot, relativePath)).href;
+const {
+  generateTeamShapeFixture,
+  parseTeamShapeOptions,
+}: typeof import("./perf/team-shape-fixture.ts") = await import(
+  fixtureModule("scripts/perf/team-shape-fixture.ts")
+);
+const {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+}: {
+  OPENCLAW_AGENT_SCHEMA_VERSION: number;
+  OPENCLAW_STATE_SCHEMA_VERSION: number;
+} = await import(fixtureModule("src/state/openclaw-schema-versions.ts"));
+const fixtureSource = {
+  root: fixtureSourceRoot,
+  commit: fixtureSourceCommit,
+  schemaVersions: {
+    agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    state: OPENCLAW_STATE_SCHEMA_VERSION,
+  },
+};
+await mkdir(output, { recursive: false });
 const port = await getFreePort();
 const proxyPort = await getFreePort();
 const providerPort = await getFreePort();
@@ -160,8 +203,9 @@ const fixtureOptions = parseTeamShapeOptions([
   String(fixtureNow),
 ]);
 const configPath = path.join(root, "openclaw.json");
-await mkdir(root, { recursive: true });
-if (!values["first-run"]) {
+if (values["first-run"]) {
+  await mkdir(root);
+} else {
   await generateTeamShapeFixture(fixtureOptions);
 }
 const config = values["first-run"]
@@ -181,7 +225,10 @@ config.gateway = {
   trustedProxies: ["127.0.0.1"],
   controlUi: { enabled: true, root: path.resolve(values["bundle-dir"]), allowedOrigins: [url] },
 };
-config.diagnostics = { enabled: true };
+config.diagnostics = {
+  enabled: true,
+  ...(values["server-profile"] ? { flags: ["timeline", "profiler"] } : {}),
+};
 if (values["empty-plugin-installation"]) {
   values["first-run-plugins"] = true;
   // Activate the on-demand X UI without credentials or a configured account.
@@ -261,6 +308,15 @@ const env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
     OPENCLAW_BENCH_RPC_PARENT: String(process.pid),
     OPENCLAW_BENCH_RPC_ENTRY: entry,
     OPENCLAW_GATEWAY_TOKEN: token,
+    // Fresh homes must not discover the checkout containing the proof directory.
+    ...(values["first-run"] ? { GIT_CEILING_DIRECTORIES: output } : {}),
+    ...(values["server-profile"]
+      ? {
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path.join(output, "gateway-timeline.jsonl"),
+          OPENCLAW_DIAGNOSTICS: "timeline,profiler",
+          OPENCLAW_BENCH_SERVER_PROFILE: "1",
+        }
+      : {}),
   },
 });
 const seed = createHash("sha256").update("synthetic-rpc-payloads-device").digest();
@@ -280,8 +336,11 @@ const identity = {
 const previousEnv = process.env;
 try {
   process.env = env;
-  const { requestDevicePairing } = await import("../src/infra/device-pairing.js");
-  const { approveDevicePairing } = await import("../src/infra/device-pairing-approval.js");
+  const { requestDevicePairing }: typeof import("../src/infra/device-pairing.js") = await import(
+    fixtureModule("src/infra/device-pairing.ts")
+  );
+  const { approveDevicePairing }: typeof import("../src/infra/device-pairing-approval.js") =
+    await import(fixtureModule("src/infra/device-pairing-approval.ts"));
   const scopes = [
     "operator.admin",
     "operator.read",
@@ -301,8 +360,12 @@ try {
     "approved",
   );
   // Keep host account names and portraits out of synthetic first-run captures.
-  const { ensureCanonicalGatewayOwnerProfile, setCanonicalUserProfileAvatar } =
-    await import("../src/state/user-profile-writes.js");
+  const {
+    ensureCanonicalGatewayOwnerProfile,
+    setCanonicalUserProfileAvatar,
+  }: typeof import("../src/state/user-profile-writes.js") = await import(
+    fixtureModule("src/state/user-profile-writes.ts")
+  );
   const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic RPC operator", { env });
   await setCanonicalUserProfileAvatar(
     owner.id,
@@ -313,13 +376,24 @@ try {
     "image/png",
     { env },
   );
-  const { closeOpenClawStateDatabaseAsync, runOpenClawStateWriteTransaction } =
-    await import("../src/state/openclaw-state-db.js");
+  const {
+    closeOpenClawStateDatabaseAsync,
+    runOpenClawStateWriteTransaction,
+  }: typeof import("../src/state/openclaw-state-db.js") = await import(
+    fixtureModule("src/state/openclaw-state-db.ts")
+  );
   if (!values["first-run"]) {
-    const { recordCronRunInDatabase } = await import("../src/cron/store/run-history.kernel.js");
-    const { cronRunLogEntryToDetail, cronRunStorageStatus } =
-      await import("../src/cron/run-history-detail.js");
-    const { cronStoreKey } = await import("../src/cron/store/key.js");
+    const { recordCronRunInDatabase }: typeof import("../src/cron/store/run-history.kernel.js") =
+      await import(fixtureModule("src/cron/store/run-history.kernel.ts"));
+    const {
+      cronRunLogEntryToDetail,
+      cronRunStorageStatus,
+    }: typeof import("../src/cron/run-history-detail.js") = await import(
+      fixtureModule("src/cron/run-history-detail.ts")
+    );
+    const { cronStoreKey }: typeof import("../src/cron/store/key.js") = await import(
+      fixtureModule("src/cron/store/key.ts")
+    );
     const storeKey = cronStoreKey(path.join(root, "cron", "jobs.json"));
     // Exclusive offline fixture custody; the compiled Gateway has not started.
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -444,7 +518,11 @@ const proxy = createServer((socket) => {
   up.connect(socket, target, () => {});
   down.connect(target, socket, () => {});
 });
-async function control(action: "begin" | "end") {
+async function control(
+  action: "begin" | "end" | "profile-start" | "profile-stop",
+  profilePath?: string,
+  captureProcesses = false,
+) {
   assert(child, "Gateway is not running");
   const activeChild = child;
   const id = randomUUID();
@@ -467,7 +545,14 @@ async function control(action: "begin" | "end") {
       }
     }
     activeChild.on("message", receive);
-    activeChild.send({ channel: "gateway-ui-rpc-measure", action, id, countOps: false });
+    activeChild.send({
+      channel: "gateway-ui-rpc-measure",
+      action,
+      id,
+      countOps: false,
+      ...(captureProcesses ? { captureProcesses: true } : {}),
+      ...(profilePath ? { path: profilePath } : {}),
+    });
   });
 }
 const selectors: Partial<Record<RouteId, string>> = {
@@ -723,8 +808,11 @@ const report: {
   fixture: unknown;
   profile: string;
   entry: string;
+  fixtureSource: typeof fixtureSource;
   rpcObserver: boolean;
+  serverProfile: boolean;
   restartGatewayPerSample: boolean;
+  freshBrowser: boolean;
   fixtureNow: number;
   observations: unknown[];
   journeys: unknown[];
@@ -742,8 +830,11 @@ const report: {
     : JSON.parse(await readFile(path.join(root, "team-shape-summary.json"), "utf8")),
   profile: values.profile,
   entry,
+  fixtureSource,
   rpcObserver: !values["no-rpc-observer"],
+  serverProfile: values["server-profile"],
   restartGatewayPerSample: values["restart-gateway-per-sample"],
+  freshBrowser: values["fresh-browser"],
   fixtureNow,
   observations: [],
   journeys: [],
@@ -770,14 +861,16 @@ try {
       "CPU throttle requires Chromium",
     );
     const engineName = engine;
-    const browser = await (engine === "webkit"
-      ? webkit.launch({ headless: true })
-      : engine === "firefox"
-        ? firefox.launch({ headless: true })
-        : chromium.launch({
-            headless: true,
-            executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-          }));
+    const launchBrowser = () =>
+      engine === "webkit"
+        ? webkit.launch({ headless: true })
+        : engine === "firefox"
+          ? firefox.launch({ headless: true })
+          : chromium.launch({
+              headless: true,
+              executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+            });
+    let browser = await launchBrowser();
     activeBrowser = browser;
     try {
       for (let sample = 0; sample < Number(values.samples); sample++) {
@@ -791,6 +884,11 @@ try {
             break;
           }
           assert.equal(command.value, "sample");
+        }
+        if (values["fresh-browser"] && sample > 0) {
+          await browser.close();
+          browser = await launchBrowser();
+          activeBrowser = browser;
         }
         if (values["restart-gateway-per-sample"]) {
           await startGateway();
@@ -929,7 +1027,7 @@ try {
           selector: string,
         ) {
           activePhase = name;
-          await control("begin");
+          await control("begin", undefined, values["server-profile"] && name === "first-load");
           const documentBefore = await page.evaluate(() => performance.timeOrigin);
           await resetControlUiPageObserver(page);
           const providerStart = providerRequests.length;
@@ -941,6 +1039,14 @@ try {
           }, selector);
           const startedAt = performance.now();
           let error: string | undefined;
+          const serverProfilePath =
+            values["server-profile"] &&
+            ["first-load", "first-message-reply", "second-message-reply"].includes(name)
+              ? path.join(output, `${engine}-${sample}-${name}.cpuprofile`)
+              : undefined;
+          if (serverProfilePath) {
+            await control("profile-start");
+          }
           try {
             await action();
             await page.waitForFunction(
@@ -955,6 +1061,10 @@ try {
             );
           } catch (cause) {
             error = String(cause);
+          } finally {
+            if (serverProfilePath) {
+              await control("profile-stop", serverProfilePath);
+            }
           }
           await finishControlUiPageObserver(page);
           const readiness = await page.evaluate(() => {
@@ -1000,6 +1110,7 @@ try {
             cpuThrottle: Number(values["cpu-throttle"]),
             sample,
             name,
+            ...(serverProfilePath ? { serverProfilePath } : {}),
             readyMs: readiness.readyAt === null ? null : readiness.readyAt - readiness.startedAt,
             applicationMs:
               readiness.readyAt === null || readiness.inputAt === null
@@ -1315,6 +1426,11 @@ async function compare() {
   process.on("SIGTERM", interruptWorkers);
   try {
     for (const side of sides) {
+      const selectedFixtureSourceRoot =
+        side === "head"
+          ? values["fixture-source-root"]
+          : (values["compare-fixture-source-root"] ??
+            (values["compare-entry"] ? undefined : values["fixture-source-root"]));
       const childArgs = [
         "--output",
         path.join(destination, side),
@@ -1324,6 +1440,9 @@ async function compare() {
         path.resolve(side === "head" ? values.entry : (values["compare-entry"] ?? values.entry)),
         "--fixture-now",
         comparisonFixtureNow,
+        ...(selectedFixtureSourceRoot
+          ? ["--fixture-source-root", path.resolve(selectedFixtureSourceRoot)]
+          : []),
         "--engines",
         values.engines,
         "--routes",
@@ -1358,6 +1477,7 @@ async function compare() {
         ...(values["empty-plugin-installation"] ? ["--empty-plugin-installation"] : []),
         ...(values.screenshots ? ["--screenshots"] : []),
         ...(values.trace ? ["--trace"] : []),
+        ...(values["server-profile"] ? ["--server-profile"] : []),
         ...(values.stream ? ["--stream"] : []),
         ...(values["routes-only"] ? ["--routes-only"] : []),
         ...(values["cold-only"] ? ["--cold-only"] : []),
@@ -1367,6 +1487,7 @@ async function compare() {
         "--prepare-ms",
         values["prepare-ms"],
         ...(values["restart-gateway-per-sample"] ? ["--restart-gateway-per-sample"] : []),
+        ...(values["fresh-browser"] ? ["--fresh-browser"] : []),
       ];
       const worker = spawn(
         process.execPath,

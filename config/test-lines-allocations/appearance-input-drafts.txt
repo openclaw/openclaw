@@ -1,2 +1,0 @@
-# Preserve terminal font and message-width drafts through late translation catalog registration.
-9

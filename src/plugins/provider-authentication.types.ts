@@ -1,4 +1,8 @@
-import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type {
+  ApiKeyCredential,
+  AuthProfileCredential,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type {
   ModelProviderConfig,
@@ -9,9 +13,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginManifestOnboardingScope } from "./manifest-types.js";
-import type { SecretInputMode } from "./provider-auth-types.js";
-import type { ProviderAuthOptionBag } from "./provider-external-auth.types.js";
+import type {
+  ProviderAuthOptionBag,
+  ProviderNonInteractiveApiKeyCredentialParams,
+  ProviderNonInteractiveApiKeyResult,
+  ProviderResolveNonInteractiveApiKeyParams,
+  SecretInputMode,
+} from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 export type ProviderAuthProfile = {
   profileId: string;
@@ -106,6 +116,19 @@ export type ProviderAuthContext = {
   allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  /**
+   * Paired nodes, present only when sign-in runs inside the Gateway (absent in offline CLI login).
+   * Invocations go through Gateway `node.invoke` policy with the sign-in caller's authority.
+   */
+  nodes?: {
+    list: PluginRuntime["nodes"]["list"];
+    invoke: (
+      params: Omit<
+        Parameters<PluginRuntime["nodes"]["invoke"]>[0],
+        "scopes" | "sessionKey" | "assertCurrent"
+      >,
+    ) => Promise<unknown>;
+  };
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
     authorize?: (params: {
@@ -114,29 +137,6 @@ export type ProviderAuthContext = {
       buildAuthorizationUrl: (redirectUrl: string) => string;
     }) => Promise<{ code: string; state: string; iss?: string }>;
   };
-};
-
-export type ProviderNonInteractiveApiKeyResult = {
-  key: string;
-  source: "profile" | "env" | "flag";
-  envVarName?: string;
-};
-
-export type ProviderResolveNonInteractiveApiKeyParams = {
-  provider: string;
-  flagValue?: string;
-  flagName: `--${string}`;
-  envVar: string;
-  envVarName?: string;
-  allowProfile?: boolean;
-  required?: boolean;
-};
-
-export type ProviderNonInteractiveApiKeyCredentialParams = {
-  provider: string;
-  resolved: ProviderNonInteractiveApiKeyResult;
-  email?: string;
-  metadata?: Record<string, string>;
 };
 
 export type ProviderAuthMethodNonInteractiveContext = {
@@ -184,6 +184,15 @@ export type ProviderAppGuidedSetup = {
   ) => Promise<ProviderAuthResult | null>;
 };
 
+/** Context passed to an auth method's `revoke` hook for one saved sign-in. */
+export type ProviderAuthRevokeContext = {
+  profileId: string;
+  credential: OAuthCredential;
+  config: OpenClawConfig;
+  /** Aborts when the Gateway's revoke deadline passes. */
+  signal: AbortSignal;
+};
+
 export type ProviderAuthMethod = {
   id: string;
   label: string;
@@ -210,6 +219,13 @@ export type ProviderAuthMethod = {
     credential: AuthProfileCredential,
     existing: AuthProfileCredential,
   ) => boolean;
+  /** Match a shared-store reconnect; defaults to matchesPersonalAccount when absent. */
+  matchesSharedAccount?: ProviderAuthMethod["matchesPersonalAccount"];
+  /** Whether shared login may replace an occupied generated profile ID when no reconnect matched. */
+  canReplaceGeneratedProfile?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
@@ -220,6 +236,19 @@ export type ProviderAuthMethod = {
   ) => Promise<boolean>;
   /** Provider-owned local model discovery for the shared guided setup ladder. */
   appGuidedSetup?: ProviderAppGuidedSetup;
+  /**
+   * Revoke a saved OAuth sign-in's grant at the provider. Its presence enables the
+   * Disconnect action. Resolve when the grant is revoked or already invalid; OpenClaw
+   * then deletes the saved profile. Throw an Error with a user-facing message when the
+   * grant may still be active; OpenClaw keeps the profile and shows that message.
+   */
+  revoke?: (ctx: ProviderAuthRevokeContext) => Promise<void>;
+  /** Disconnect action label, for example "Disconnect Example Account". Defaults to "Disconnect account". */
+  disconnectLabel?: string;
+  /** HTTPS page where the person reviews or removes apps connected to their provider account. */
+  accountManagementUrl?: string;
+  /** Link text for `accountManagementUrl`. Defaults to "Manage connected apps". */
+  accountManagementLabel?: string;
 };
 
 export type ProviderPluginWizardSetup = {

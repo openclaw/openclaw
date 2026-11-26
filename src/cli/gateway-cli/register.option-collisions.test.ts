@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
@@ -98,10 +99,6 @@ vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readSourceConfigBestEffort: async () => ({}),
 }));
 
-// mock-isolation: Prevent network discovery in CLI option tests.
-vi.mock("../../infra/bonjour-discovery.js", () => ({ discoverGatewayBeacons: async () => [] }));
-// mock-isolation: Prevent DNS discovery in CLI option tests.
-vi.mock("../../infra/widearea-dns.js", () => ({ resolveWideAreaDiscoveryDomain: () => undefined }));
 vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
@@ -119,21 +116,11 @@ vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   },
 }));
 
-vi.mock("../../utils/usage-format.js", () => ({
-  formatTokenCount: () => "0",
-  formatUsd: () => "$0.00",
-}));
-
 // mock-isolation: Keep help rendering out of the CLI routing fixture.
 vi.mock("../help-format.js", () => ({ formatHelpExamples: () => "" }));
 
 vi.mock("../progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
-}));
-
-vi.mock("./discover.js", () => ({
-  dedupeBeacons: (beacons: unknown[]) => beacons,
-  renderBeaconLines: () => [],
 }));
 
 function expectCliError(message: unknown) {
@@ -173,6 +160,18 @@ describe("gateway register option collisions", () => {
 
     expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print a gateway call reply that lands after Ctrl+C aborts the read", async () => {
+    const work = new AsyncWorkScope();
+    mocks.callGatewayCli.mockImplementationOnce(async () => {
+      work.beginClose();
+      throw new Error("gateway request aborted");
+    });
+    await work.run(() => parse("call", "system-presence", "--json"));
+    // Ctrl+C owns the exit; an aborted read neither prints a reply nor exits nonzero.
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([

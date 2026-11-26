@@ -1,4 +1,5 @@
 // Local media access tests cover workspace path authorization.
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
@@ -50,19 +51,24 @@ describe("assertLocalMediaAllowed", () => {
     await write(file);
     const roots = Promise.withResolvers<readonly string[]>();
     const excludedRoot = Promise.withResolvers<string>();
-    const originalRealpath = fs.realpath.bind(fs);
+    // Containment canonicalizes through native realpath(3); hold only the excluded root.
+    const originalRealpath = nodeFs.realpath.native;
     let pendingRealpaths = 0;
-    const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (value, options) => {
-      if (String(value) === excluded) {
-        return excludedRoot.promise;
+    type RealpathCallback = (error: NodeJS.ErrnoException | null, resolved: string) => void;
+    const realpath = vi.spyOn(nodeFs.realpath, "native").mockImplementation(((
+      value: string,
+      callback: RealpathCallback,
+    ) => {
+      if (value === excluded) {
+        void excludedRoot.promise.then((resolved) => callback(null, resolved));
+        return;
       }
       pendingRealpaths++;
-      try {
-        return await originalRealpath(value, options);
-      } finally {
+      originalRealpath(value, (error, resolved) => {
         pendingRealpaths--;
-      }
-    });
+        callback(error, resolved);
+      });
+    }) as unknown as typeof nodeFs.realpath.native);
     const opened = vi.spyOn(fs, "open");
     const resolveRoots = vi.fn(() => roots.promise);
     let settled = false;
@@ -82,7 +88,7 @@ describe("assertLocalMediaAllowed", () => {
     );
     const failure = new Error("allowed roots retired");
     try {
-      await vi.waitFor(() => expect(realpath).toHaveBeenCalledWith(excluded));
+      await vi.waitFor(() => expect(realpath).toHaveBeenCalledWith(excluded, expect.any(Function)));
       await vi.waitFor(() => expect(resolveRoots).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(pendingRealpaths).toBe(0));
       roots.reject(failure);
@@ -348,6 +354,8 @@ describe.runIf(process.platform !== "win32")(
       ["outward symlink / file exists", "P/workspace/out-link/secret.png", "deny", "deny"],
       ["outward symlink / missing below", "P/workspace/out-link/gone/p.png", "deny", "deny"],
       ["dangling outward symlink", "P/workspace/dangling/p-1.png", "deny", "deny"],
+      ["outward symlink then ..", "P/workspace/out-link/../exists.png", "deny", "deny"],
+      ["dangling in-root folder link", "P/workspace/dangling-in/p.png", "ok", "missing"],
     ];
 
     async function layout() {
@@ -361,6 +369,10 @@ describe.runIf(process.platform !== "win32")(
       await fs.symlink(
         path.join(base, "outside", "gone"),
         path.join(real, "workspace", "dangling"),
+      );
+      await fs.symlink(
+        path.join(real, "workspace", "gone-dir"),
+        path.join(real, "workspace", "dangling-in"),
       );
       await fs.symlink(real, alias);
       return { base, real, alias };
@@ -390,6 +402,14 @@ describe.runIf(process.platform !== "win32")(
         expect(await verdict(read(target, roots))).toBe(full[readVerdict]);
       });
     }
+
+    it("names an in-root broken link when the read finds nothing", async () => {
+      const { alias } = await layout();
+      const target = `${alias}/workspace/dangling-in/p.png`;
+      await expect(read(target, [path.join(alias, "workspace")])).rejects.toThrow(
+        `${alias}/workspace/dangling-in is a symbolic link to a target that does not exist`,
+      );
+    });
 
     it("does not reveal whether an outside path exists", async () => {
       const { base, alias } = await layout();

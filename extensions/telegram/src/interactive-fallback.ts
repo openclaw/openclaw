@@ -6,6 +6,7 @@ import {
   normalizeLegacyInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
+  stampAgentControls,
   type MessagePresentation,
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
@@ -41,6 +42,8 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
       maxActions: 100,
       maxActionsPerRow: 3,
       supportsStyles: false,
+      // Older clients show a message with a disabled button as unsupported, so
+      // native disabled buttons follow the same richMessages opt-in as tables.
       supportsDisabled: false,
     },
     selects: {
@@ -55,8 +58,13 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
 export function resolveTelegramPresentationCapabilities(params: {
   richMessages: boolean;
 }): typeof TELEGRAM_PRESENTATION_CAPABILITIES {
+  const { limits } = TELEGRAM_PRESENTATION_CAPABILITIES;
   return params.richMessages
-    ? { ...TELEGRAM_PRESENTATION_CAPABILITIES, tables: true }
+    ? {
+        ...TELEGRAM_PRESENTATION_CAPABILITIES,
+        tables: true,
+        limits: { ...limits, actions: { ...limits.actions, supportsDisabled: true } },
+      }
     : TELEGRAM_PRESENTATION_CAPABILITIES;
 }
 
@@ -150,12 +158,19 @@ export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
   options?: { allowWebAppButtons?: boolean; richTables?: boolean },
 ): ReplyPayload {
-  const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
         buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"];
+        typedCallbackOwner?: unknown;
       })
     | undefined;
+  // Sends queued by v2026.11.5 record agent ownership here instead of in the value. Remove
+  // this reader once queue rows written by that release have drained.
+  const owned =
+    telegramData?.typedCallbackOwner === "agent"
+      ? stampAgentControls({ presentation: payload.presentation, interactive: payload.interactive })
+      : payload;
+  const normalizedPresentation = normalizeMessagePresentation(owned.presentation);
   if (!normalizedPresentation) {
     const nativeButtons = resolveTelegramInlineButtons({ buttons: telegramData?.buttons });
     if (!buildInlineKeyboard(nativeButtons) || payload.text?.trim()) {
@@ -170,9 +185,10 @@ export function canonicalizeTelegramPresentationPayload(
     capabilities: resolveTelegramPresentationCapabilities({ richMessages: richTables }),
   });
 
-  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(owned.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
+    supportsDisabled: richTables,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
@@ -227,7 +243,7 @@ export function canonicalizeTelegramPresentationPayload(
       presentation: { blocks: nativeControlBlocks },
       capabilities: {
         limits: {
-          actions: { maxLabelLength: 64 },
+          actions: { maxLabelLength: 64, supportsDisabled: richTables },
           selects: { maxLabelLength: 64 },
         },
       },
@@ -329,6 +345,7 @@ export function resolveFinalTelegramPresentationText(params: {
   const droppedControls: TelegramDroppedControl[] = [];
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: params.allowWebAppButtons === true,
+    supportsDisabled: true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
   };
   // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.

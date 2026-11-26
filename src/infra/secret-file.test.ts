@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
   readSecretFileSync,
+  readSecretFile,
   tryReadSecretFileSync,
   writePrivateSecretFileAtomic,
 } from "./secret-file.js";
@@ -145,5 +147,37 @@ it.each(["file", "parent", "root"] as const)("rejects a symlinked %s", async (ki
   ).rejects.toThrow("must not be a symlink");
   if (kind === "root" && process.platform !== "win32") {
     expect(await mode(target)).toBe(0o777);
+  }
+});
+
+it("reads live file credentials off the main thread and preserves validation errors", async () => {
+  const file = await secret("first-placeholder");
+  const link = await symlink(file);
+  expect(await readSecretFile(file, "Credential")).toBe("first-placeholder");
+  const reads = vi.spyOn(fs, "lstatSync");
+  try {
+    await fsPromises.writeFile(file, "second-placeholder");
+    expect(await readSecretFile(file, "Credential")).toBe("second-placeholder");
+    expect(reads).not.toHaveBeenCalled();
+    await expect(readSecretFile(link, "Credential", { rejectSymlink: true })).rejects.toMatchObject(
+      { code: "symlink" },
+    );
+    await expect(readSecretFile(file, "Credential", { maxBytes: 1 })).rejects.toMatchObject({
+      code: "too-large",
+    });
+    await readSecretFile(path.join(path.dirname(file), "missing"), "Credential").then(
+      () => assert.fail("Expected a missing-file error"),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        expect(error).toHaveProperty("code", "not-found");
+        expect(error.cause).toMatchObject({
+          code: "ENOENT",
+          message: expect.stringContaining("ENOENT"),
+        });
+      },
+    );
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
   }
 });

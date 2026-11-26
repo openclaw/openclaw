@@ -1344,9 +1344,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           fixtureReceiptClientSource(receipts.endpoint),
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
           "child.once('message', () => {",
+          "process.stdout.write('discarded stdout ' + 'x'.repeat(600) + 'stdout sentinel 😀\\n', () => {",
+          "process.stderr.write('discarded stderr ' + 'y'.repeat(600) + 'stderr sentinel 😀\\n', () => {",
           "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
           "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
           "child.disconnect();",
+          "});",
+          "});",
           "});",
           "setInterval(() => {}, 1000);",
         ].join("");
@@ -1364,7 +1368,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         await withinTest(fixtureReadyBeforeSettlement(childPidPath, command), signal);
         const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
-        await expect(withinTest(releaseAndWait(), signal)).rejects.toThrow(/Command timed out:/u);
+        const settlement = withinTest(releaseAndWait(), signal);
+        await expect(settlement).rejects.toThrow(/Command timed out:/u);
+        await expect(settlement).rejects.toMatchObject({
+          message: expect.stringMatching(
+            /\nstderr tail:\n.{0,300}stderr sentinel 😀\nstdout tail:\n.{0,300}stdout sentinel 😀$/su,
+          ),
+        });
         await waitForDead(childPid, signal);
         expect(readFileSync(logPath, "utf8")).toContain("timeout command=");
       } finally {
@@ -1683,6 +1693,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error(`${error.message}\nstderr tail:\nupdater progress`),
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error(
           "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --yes --json --no-restart --timeout 1200",
         ),
@@ -1698,6 +1714,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       ),
     ).toBe(true);
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "linux")).toBe(false);
+    for (const headline of [
+      "Command timed out: powershell.exe installer.ps1",
+      "Command timeout cleanup failed: node updater",
+      "Command timed out and could not be terminated cleanly: node updater",
+    ]) {
+      expect(
+        isRecoverableWindowsPackagedUpgradeTimeoutError(
+          new Error(`${headline}\nstderr tail:\n${error.message}`),
+          "win32",
+        ),
+      ).toBe(false);
+    }
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error("Command timed out: node openclaw.mjs update --tag openclaw@beta"),

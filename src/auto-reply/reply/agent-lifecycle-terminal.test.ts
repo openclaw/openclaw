@@ -2,10 +2,12 @@ import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
+import { ProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { ProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
@@ -89,14 +91,32 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     );
     const failure = new Error("Checkout failed; retry this session.");
     preparation.failure = failure;
-    finishing(terminal, { aborted: true, stopReason: "aborted" });
-    terminal.capture("end", {}, { aborted: true, stopReason: "aborted" });
+    finishing(terminal, {
+      aborted: true,
+      stopReason: "aborted",
+      error: "provider failed",
+      errorNotice: "Your plan needs an upgrade",
+      errorObservation: { provider: "fixture", failoverReason: "billing", showSummary: true },
+    });
+    terminal.capture(
+      "end",
+      {},
+      {
+        aborted: true,
+        stopReason: "aborted",
+        errorNotice: "Your plan needs an upgrade",
+        summaryAsTitle: true,
+      },
+    );
     terminal.emit("end", {});
     terminal.emit("error", failure);
     const { data } = emitted();
     expect(data).toMatchObject({ phase: "error", error: failure.message, executionSettled: true });
     expect(data).not.toHaveProperty("aborted");
     expect(data).not.toHaveProperty("stopReason");
+    expect(data).not.toHaveProperty("errorNotice");
+    expect(data).not.toHaveProperty("summaryAsTitle");
+    expect(data).not.toHaveProperty("errorObservation");
   });
 
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
@@ -182,12 +202,26 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
   });
 
+  it("names the provider and an auth failure when a saved sign-in needs a new login", () => {
+    const terminal = createTerminal();
+
+    terminal.emit(
+      "error",
+      new ProviderAuthError("missing-provider-auth", "gemini", "The gemini sign-in has ended.", {
+        cause: new ProviderAuthFailure("refresh_rejected"),
+      }),
+    );
+
+    // Clients key their sign-in action (Control UI: Open Models) on this cause.
+    expect(emitted().data.errorObservation).toEqual({ provider: "gemini", failoverReason: "auth" });
+  });
+
   it.each(
     (["typed", "raw"] as const).flatMap((kind) => [
       [
         kind,
         "selected_auth_profile_unavailable",
-        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+        "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
       ],
       [
         kind,

@@ -27,7 +27,7 @@ export type EventLoadProducerGateway = {
   progress(value: EventLoadProgress): void;
 };
 
-export type EventLoadProgress = ReturnType<ReturnType<typeof createEventLoadProducer>["ready"]>;
+type EventLoadProgress = ReturnType<ReturnType<typeof createEventLoadProducer>["ready"]>;
 
 /** Owns synthetic server work outside the measured renderer. */
 export function createEventLoadProducer(

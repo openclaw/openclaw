@@ -64,11 +64,13 @@ export function createConfigExternalSaveStatus(state: RuntimeConfigState, publis
         return result;
       }
       const reported =
-        reporting.delete(options.saveStatus) &&
-        isCurrentConfigConnection(state, client, connectionEpoch) &&
-        // The form may have taken the status over while this write ran.
-        (state.configAutoSaveStatus === "saving" || formIsQuiet()) &&
-        report(result, options.saveStatus);
+        (reporting.delete(options.saveStatus) &&
+          isCurrentConfigConnection(state, client, connectionEpoch) &&
+          // The form may have taken the status over while this write ran.
+          (state.configAutoSaveStatus === "saving" || formIsQuiet()) &&
+          report(result, options.saveStatus)) ||
+        // An earlier edit's "Saved; waiting to apply" already describes this write.
+        (!result.ok && result.reason === "deferred" && state.configAutoSaveStatus === "deferred");
       return result.ok ? result : { ...result, reported };
     },
     /** Null when no independent write failed, so the form draft's own retry applies. */

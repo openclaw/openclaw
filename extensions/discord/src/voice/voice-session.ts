@@ -3,9 +3,8 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
-import { parseDiscordTarget } from "../target-parsing.js";
+import { formatMention, parseDiscordTarget } from "../target-parsing.js";
 import { DiscordAudioTransport } from "./audio-transport.js";
 import { stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeAgentContext } from "./ingress.js";
@@ -54,7 +53,7 @@ export class DiscordVoiceSessions {
     private readonly params: {
       accountId: string;
       botUserId?: string;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       client: Client;
       destroyed: () => boolean;
       signal: AbortSignal;
@@ -190,7 +189,7 @@ export class DiscordVoiceSessions {
     }
 
     const audioInputBudget = await getDiscordRuntime().mediaUnderstanding.resolveAudioInputBudget({
-      cfg: this.params.cfg,
+      cfg: this.params.readConfig(),
     });
     if (authority && !authority.isCurrent()) {
       return failedJoinResult("Discord voice join was cancelled.");
@@ -254,6 +253,7 @@ export class DiscordVoiceSessions {
     try {
       const routeParams = {
         ...this.params,
+        cfg: this.params.readConfig(),
         guildId,
         sessionChannelId,
         voiceConfig,
@@ -470,6 +470,7 @@ export class DiscordVoiceSessions {
   ): Promise<string | undefined> {
     const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeAgentContext({
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
     });
     const isCurrent = () =>
@@ -482,6 +483,7 @@ export class DiscordVoiceSessions {
     const { DiscordRealtimeVoiceSession } = await import("./realtime-session.runtime.js");
     const realtime = new DiscordRealtimeVoiceSession({
       ...this.params,
+      cfg: this.params.readConfig(),
       bootstrapContextInstructions,
       entry,
       getHumanParticipantCount: () =>
@@ -529,7 +531,7 @@ export class DiscordVoiceSessions {
           assertCurrent();
           const { sendMessageDiscord } = await import("../send.outbound.js");
           await sendMessageDiscord(`channel:${entry.channelId}`, text, {
-            cfg: this.params.cfg,
+            cfg: this.params.readConfig(),
             accountId: this.params.accountId,
             assertPlatformSendAuthorized: assertCurrent,
           });

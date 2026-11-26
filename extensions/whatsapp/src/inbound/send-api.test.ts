@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { WAMessage } from "baileys";
+import { generateWAMessageContent, type WAMessage } from "baileys";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -135,6 +135,23 @@ describe("createWebSendApi", () => {
   const source = "@+5511976136970";
   const line = `visible ${source}\n${code}\nagain ${source}`;
   const expectedLine = `visible ${target}\n${code}\nagain ${target}`;
+  const embedded = ["é", "霞", "𐐀"].map((word) => `${word}_${source}_${word}`).join(" ");
+  it.each([
+    [`*@+15551234567* and *${source}*`, `_@+15551234567_ and _${target}_`, [PN, LID_JID]],
+    [`*ping ${source}* and *${source} again*`, `_ping ${target}_ and _${target} again_`, [LID_JID]],
+    [`id_${source}_suffix`, `id_${source}_suffix`, []],
+    [embedded, embedded, []],
+  ] as const)("encodes recipients for rendered group text %s", async (markdown, visible, jids) => {
+    await withMentions([...phone, ...mapped]).sendMessage(GROUP_JID, markdownToWhatsApp(markdown));
+    const call = sendMessage.mock.calls[0];
+    if (!call) {
+      throw new Error("missing group send");
+    }
+    expect(call[0]).toBe(GROUP_JID);
+    const message = await generateWAMessageContent(call[1], { upload: vi.fn() });
+    expect(message.extendedTextMessage?.text ?? message.conversation).toBe(visible);
+    expect(message.extendedTextMessage?.contextInfo?.mentionedJid ?? []).toEqual(jids);
+  });
   type Participants = readonly WhatsAppOutboundMentionParticipant[];
   type MentionCase = [Participants, string, string, string[], ("image" | "document")?, string?];
   it.each<MentionCase>([
@@ -220,6 +237,10 @@ describe("createWebSendApi", () => {
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
       "voice-text-1",
+    ]);
+    expect(res.receipt?.parts).toMatchObject([
+      { platformMessageId: "voice-1", kind: "media", index: 0 },
+      { platformMessageId: "voice-text-1", kind: "text", index: 1 },
     ]);
     expectOutboundActivityOnce();
   });

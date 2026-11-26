@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
+import { getNodeTrustedWritableAncestors } from "./node-filesystem-policy.js";
 import { getSealedRuntimeSecureTempRoot } from "./sealed-runtime-registry.js";
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
@@ -21,8 +22,10 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   platform?: NodeJS.Platform;
   preferredDir?: string;
-  /** Coordination addresses must stay shared across profiles and updater versions. */
-  purpose?: "workspace" | "coordination";
+  /** Captured state fallback for filesystem work dispatched to another isolate. */
+  stateDir?: string;
+  /** Coordination roots stay shared. Worker scratch must pass the child process's strict admission. */
+  purpose?: "workspace" | "coordination" | "worker";
   tmpdir?: () => string;
   warn?: (message: string) => void;
 };
@@ -74,7 +77,17 @@ function assertSafeTempAncestors(
       : fs.realpathSync.native(root);
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
-    if (stat.mode !== undefined && (stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
+    const trustedAncestor =
+      options.purpose !== "worker" &&
+      getNodeTrustedWritableAncestors()?.includes(directory) &&
+      stat.isDirectory() &&
+      !stat.isSymbolicLink();
+    if (
+      stat.mode !== undefined &&
+      (stat.mode & 0o022) !== 0 &&
+      (stat.mode & 0o1000) === 0 &&
+      !trustedAncestor
+    ) {
       const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
       throw new Error(
         `Temp workspace ancestor ${JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod +t ${quoted} for a shared temp directory or chmod go-w ${quoted} for a private ancestor.`,
@@ -93,7 +106,8 @@ export function resolvePreferredOpenClawTmpDir(
   const resolveRoot = loadResolveSecureTempRoot();
   const rootOptions = {
     ...options,
-    preferredDir: options.preferredDir ?? DEFAULT_POSIX_TMP_ROOT,
+    preferredDir:
+      options.preferredDir ?? process.env.OPENCLAW_INTERNAL_WORKER_TMPDIR ?? DEFAULT_POSIX_TMP_ROOT,
     fallbackPrefix: "openclaw",
     warningPrefix: "[openclaw]",
     unsafeFallbackLabel: "OpenClaw temp dir",
@@ -110,7 +124,7 @@ export function resolvePreferredOpenClawTmpDir(
   } catch (error) {
     rejected = error;
   }
-  const stateDir = resolveStateDir();
+  const stateDir = options.stateDir ?? resolveStateDir();
   try {
     const fallbackRoot = resolveRoot({
       ...rootOptions,
