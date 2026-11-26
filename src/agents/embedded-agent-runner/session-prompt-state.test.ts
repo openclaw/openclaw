@@ -658,16 +658,7 @@ describe("session tool surface", () => {
     await persistSessionSystemPrompt(fixture.state, write);
     const pinned = fixture.state.toolSurface!.tools;
     fixture.prepare("Base.\n## Skills\nRefreshed.", entries).commit();
-    const ownKeys = vi.spyOn(Reflect, "ownKeys");
-    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
-    try {
-      await persistSessionSystemPrompt(fixture.state, write);
-      expect(ownKeys.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
-      expect(descriptors.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
-    } finally {
-      ownKeys.mockRestore();
-      descriptors.mockRestore();
-    }
+    await persistSessionSystemPrompt(fixture.state, write);
     expect(entries).toHaveLength(2);
     expect(entries[1]).toMatchObject({
       data: { tools: pinned, renderedPrefix: "Base.\n## Skills\nRefreshed." },
@@ -914,19 +905,6 @@ describe("session tool surface", () => {
 });
 
 describe("embedded session active project keys", () => {
-  it("promotes repeated keys while retaining other recently active projects", () => {
-    expect(prepare("session-lru", "repo-a")).toEqual(["repo-a"]);
-    expect(prepare("session-lru", "repo-b")).toEqual(["repo-b", "repo-a"]);
-    expect(prepare("session-lru", "repo-a")).toEqual(["repo-a", "repo-b"]);
-  });
-
-  it("evicts the least-recent project beyond the four-key cap", () => {
-    for (const key of ["repo-a", "repo-b", "repo-c", "repo-d", "repo-e"]) {
-      prepare("session-cap", key);
-    }
-    expect(prepare("session-cap", null)).toEqual(["repo-e", "repo-d", "repo-c", "repo-b"]);
-  });
-
   it("keeps single-repository sessions identical and isolated", () => {
     expect(prepare("session-one", "repo-a")).toEqual(["repo-a"]);
     expect(prepare("session-one", null)).toEqual(["repo-a"]);

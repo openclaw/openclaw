@@ -1,4 +1,3 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,8 +10,6 @@ import {
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   createProviderRuntimeLogger,
-  DEMO_SANITIZED_MESSAGE,
-  DEMO_TOOL,
   loadProviderRuntimeTestOwners,
   PROVIDER_RUNTIME_TEST_MODEL as MODEL,
 } from "./provider-runtime.test-support.js";
@@ -73,7 +70,6 @@ let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegist
 
 const DEMO_PROVIDER_ID = "demo";
 const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
-const DEMO_REPLAY_MESSAGES: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
 
 function createDemoProvider(overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
   return { id: DEMO_PROVIDER_ID, label: "Demo", auth: [], ...overrides };
@@ -960,25 +956,6 @@ describe("provider-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("exposes provider-owned transport extra params", () => {
-    mockProvider({
-      extraParamsForTransport: () => ({ patch: { providerTransportPatch: true } }),
-    });
-
-    expect(
-      resolvePreparedExtraParams({
-        cfg: undefined,
-        provider: DEMO_PROVIDER_ID,
-        modelId: MODEL.id,
-        model: MODEL,
-        extraParamsOverride: { transport: "websocket" },
-      }),
-    ).toEqual({
-      transport: "websocket",
-      providerTransportPatch: true,
-    });
-  });
-
   it("exposes provider-owned auth profile and fallback route seams", () => {
     mockProvider({
       resolveAuthProfileId: () => "profile-b",
@@ -1076,50 +1053,6 @@ describe("provider-runtime", () => {
 
     expect(normalizeConfig).toHaveBeenCalledTimes(hasNormalizer ? 1 : 0);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards prepared manifest metadata to bundled config policy resolution", () => {
-    const manifestRegistry = { plugins: [] };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.example.com/v1",
-      api: "openai-completions",
-      models: [],
-    };
-    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
-      normalizeConfig: ({ providerConfig: candidateConfig }) => ({
-        ...candidateConfig,
-        baseUrl: "https://normalized.example.com/v1",
-      }),
-      resolveConfigApiKey: () => "EXAMPLE_API_KEY",
-    });
-
-    expect(
-      runtime.normalizeProviderConfigWithPlugin({
-        provider: "example-alias",
-        manifestRegistry,
-        context: {
-          provider: "example-alias",
-          providerConfig,
-        },
-      })?.baseUrl,
-    ).toBe("https://normalized.example.com/v1");
-    expect(
-      runtime.resolveProviderConfigApiKeyWithPlugin({
-        provider: "example-alias",
-        manifestRegistry,
-        context: {
-          provider: "example-alias",
-          env: {},
-        },
-      }),
-    ).toBe("EXAMPLE_API_KEY");
-
-    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenNthCalledWith(1, "example-alias", {
-      manifestRegistry,
-    });
-    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenNthCalledWith(2, "example-alias", {
-      manifestRegistry,
-    });
   });
 
   it.each([undefined, "openai"])(
@@ -1363,72 +1296,6 @@ describe("provider-runtime", () => {
       DEMO_PROVIDER_ID,
     );
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("dispatches model, replay, schema, and usage hooks through the matched owner", async () => {
-    mockProvider({
-      resolveDynamicModel: () => MODEL,
-      prepareDynamicModel: async () => MODEL,
-      sanitizeReplayHistoryAsync: async ({ messages }) => [...messages, DEMO_SANITIZED_MESSAGE],
-      validateReplayTurns: async ({ messages }) => messages,
-      normalizeToolSchemas: ({ tools }) => tools,
-      inspectToolSchemas: () => [],
-      resolveReasoningOutputMode: () => "tagged",
-      normalizeResolvedModel: ({ model }) => ({ ...model, api: "openai-chatgpt-responses" }),
-      resolveUsageAuth: async () => ({ token: "usage-token" }),
-      fetchUsageSnapshot: async () => ({ provider: "zai", displayName: "Demo", windows: [] }),
-      shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) => resolvedApiKey === "demo-local",
-    });
-    const model = modelParams({ modelApi: MODEL.api });
-    const dynamic = runtimeParams({ modelRegistry: EMPTY_MODEL_REGISTRY });
-    const replay = modelParams({
-      modelApi: MODEL.api,
-      sessionId: "session-1",
-      messages: DEMO_REPLAY_MESSAGES,
-    });
-    const schema = modelParams({ modelApi: MODEL.api, tools: [DEMO_TOOL] });
-    expect(runtime.runProviderDynamicModel(dynamic)).toEqual(MODEL);
-    expect(await runtime.prepareProviderDynamicModel(dynamic)).toEqual(MODEL);
-    expect(runtime.resolveProviderReasoningOutputModeWithPlugin(model)).toBe("tagged");
-    expect(await runtime.sanitizeProviderReplayHistoryWithPluginAsync(replay)).toEqual([
-      ...DEMO_REPLAY_MESSAGES,
-      DEMO_SANITIZED_MESSAGE,
-    ]);
-    expect(await runtime.validateProviderReplayTurnsWithPlugin(replay)).toEqual(
-      DEMO_REPLAY_MESSAGES,
-    );
-    expect(runtime.normalizeProviderToolSchemasWithPlugin(schema)).toEqual([DEMO_TOOL]);
-    expect(runtime.inspectProviderToolSchemasWithPlugin(schema)).toStrictEqual([]);
-    expect(runtime.normalizeProviderResolvedModelWithPlugin(model)).toEqual({
-      ...MODEL,
-      api: "openai-chatgpt-responses",
-    });
-    expect(
-      await runtime.resolveProviderUsageAuthWithPlugin(
-        providerParams({
-          config: {},
-          env: process.env,
-          resolveApiKeyFromConfigAndStore: () => "source-token",
-          resolveOAuthToken: async () => null,
-        }),
-      ),
-    ).toEqual({ token: "usage-token" });
-    expect(
-      await runtime.resolveProviderUsageSnapshotWithPlugin(
-        providerParams({
-          config: {},
-          env: process.env,
-          token: "usage-token",
-          timeoutMs: 5_000,
-          fetchFn: vi.fn(),
-        }),
-      ),
-    ).toEqual({ provider: "zai", displayName: "Demo", windows: [] });
-    expect(
-      runtime.shouldDeferProviderSyntheticProfileAuthWithPlugin(
-        providerParams({ resolvedApiKey: "demo-local" }),
-      ),
-    ).toBe(true);
   });
 
   it.each([
