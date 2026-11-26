@@ -115,6 +115,14 @@ Only its child opens state databases, so the supervisor does not hold them open
 while the child publishes a startup migration. No launcher format change is
 needed.
 
+Read-only config inputs and inputs below retained dependency-directory symlinks
+are copied into independent private files without changing their live permissions
+or contents. If a changed config cannot be published safely, including a
+single-file mount or a path omitted by the swap under a symlinked directory,
+startup refuses before publishing the database plan and leaves live state unchanged.
+Run `openclaw doctor --fix` before retrying; a single-file mount must also allow
+the config replacement.
+
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on
 the private copy. The updater passes this destination directly to Doctor; no
