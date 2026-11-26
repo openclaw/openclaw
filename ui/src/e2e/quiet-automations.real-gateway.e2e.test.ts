@@ -27,6 +27,7 @@ import {
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
+import { captureAdditionalStateProof } from "./automation-state-proof.test-support.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
@@ -678,6 +679,16 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).toContain(fixture.name);
         await expect.poll(() => row.textContent()).toContain("Every 1 hour");
         expect(await row.textContent()).not.toContain(fixture.done);
+        if (captureUiProof && !baselineRoot) {
+          await captureAdditionalStateProof({
+            context,
+            baseUrl: suite.server.baseUrl,
+            capture: (proofPage, name, target) =>
+              screenshot(proofPage, name, "", { target, viewport: { width: 820, height: 1000 } }),
+          });
+          proof.additionalStateTransport =
+            "mock Gateway fixtures over the actual built Control UI; no DOM edits";
+        }
         proof.complete = true;
         proof.stage = "complete";
         await save();
