@@ -186,12 +186,27 @@ import shared navigation or pinned sessions, and writes nothing until you edit
 your pins or the rail. Both use the existing `ui.railShortcuts` preference; older
 `ui.sidebarEntries` values remain stored but are ignored. Shortcuts saved under
 the new preference, including an empty list, remain unchanged.
-Concurrent saves use conflict checks and preserve unrelated pin edits.
+Concurrent saves use conflict checks and preserve unrelated pin edits. Older native apps and direct RPC
+integrations that do not advertise `personal-session-pins` keep their shared pin list;
+they never receive the profile's private pin list to write back to shared configuration.
+After upgrading, pin the chats you want on your own sidebar. Historical shared pins
+have no recorded pinner and are not copied into anyone's profile. Calls without a
+verified person can still list visible sessions without a pin filter; sign in to
+filter by pins or change them. Admitted session tools always use their requester’s pins. Direct integrations
+opt in on their connection and verify Gateway support before writing a personal pin.
+Updated macOS clients show legacy pins read-only when an older Gateway does not
+advertise `personal-session-pins`; update the Gateway to edit personal pins. A Mac
+undoing an archive on an older Gateway can restore the legacy pin that the same
+archive just cleared.
 
-The browser keeps device-specific geometry and transient presentation, such as
-sidebar width and scroll position. Navigation changes on read-only connections
-or connections without a durable profile stay browser-local rather than writing
-another person’s layout or shared Gateway configuration.
+The Control UI ships with its Gateway. For a writable signed-in profile, the
+Sessions table and sidebar use each list response's Gateway time to decide when
+a snoozed pin returns. Editing pin order takes effect immediately. On read-only
+connections or without a durable profile, the browser keeps its own layout and
+uses device time. The Gateway selects those windows in ordinary session order:
+a pin saved on another device cannot displace a newer session. The browser orders
+its own pins among the loaded rows and does not upload them. Sidebar width and
+scroll position also stay on the device.
 
 While New session loads agent defaults, restores saved choices, or checks the
 workspace, **Start session** stays disabled. Trying Enter or pressing the disabled
@@ -557,7 +572,7 @@ conversations. Select the separate **Users** view in the rail to see who is
 online. Category, person, and project grouping controls remain in chip mode;
 team mode keeps empty agent rows visible.
 
-The sidebar uses a window of at most 300 sessions across agents for activity and previews. This does not limit saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside it. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions.
+The sidebar uses a window of at most 300 sessions across agents for activity and previews. For a writable signed-in profile, eligible saved pins take priority before the Gateway cuts the page. Browser-local pins do not reserve a place in that window. The window does not limit saved rail shortcuts, and the open conversation can remain visible outside it. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions.
 
 A saved session shortcut whose title has not loaded is labeled **Open session**. Selecting it looks up that session on demand. A missing session shows **Session not found**; a failed lookup asks you to try again.
 
@@ -686,7 +701,7 @@ Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned
 An ordinary conversation's **Actions** menu also offers **Move to group**.
 Existing ordinary chats that still link to Home remain top-level sessions.
 
-A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
+Pinning a session in **Pinned** is personal. With a writable signed-in profile, the `sessions_list` tool reads that same list in sidebar order, and a `sessions` pin or unpin updates it for the requester only. Read-only tools can still list the requester's saved pins; they do not read a browser's device-local layout. Dragging a session to the rail creates a separate shortcut; removing either does not remove the other. A parent dragged to the rail is a single shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
 The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark as unread/read**, **Copy link**, **Open in**, **Assign to…**, **Move to group**, and **Archive/Restore**. Assignment appears only when the eligible directory contains more than one person or agent, including yourself; online presence does not determine eligibility. The sidebar also offers **Snooze/Wake session** beside Archive. A session with children has one **Archive session** submenu with **Session only** and **Archive session and children…**; the latter still confirms the affected conversations.
 
@@ -969,6 +984,10 @@ permissions, including the admin requirement for an explicit **Full access** cho
 <a id="register-an-existing-repository" />
 
 **Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. Connections without `operator.write` see public GitHub projects plus projects their role grants; a project reached only through a [role grant](/gateway/operator-scopes#project-grants) always opens in a new Worktree. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
+
+<a id="projects-tab" />
+
+**Projects tab.** The Sessions page's **Projects** tab, between **Sessions** and **Worktrees**, lists every project the connection can see, with its type, checkout location (at `operator.write`), and the named roles it is shared with. Admins register projects from **Register project**: **Browse folders on this computer** registers a Git checkout on the Gateway host, and **Clone from GitHub** clones a repository URL into the Gateway-managed projects area. Select a project to see its source, rename it, or remove it; removing a Gateway-managed clone can also delete its checkout, which the Gateway refuses while a session or managed worktree still references it. **Shared with roles** shows one switch per role in `gateway.roles.definitions`. Admin roles and roles with `operator.write` can use every project and stay on; roles that cannot start sessions stay off; a role whose `projects` is `"*"` uses all projects. Other switches add or remove the project ID in that role's [`projects` grant](/gateway/operator-scopes#project-grants) through the same configuration write as Settings, so they are disabled when the Gateway configuration is read-only; turning off a role's last project removes its `projects` field. The switches show explicit shares only: roles without `operator.write` can also use public GitHub repositories, and a project they can use only through a share always opens in a new Worktree. Agent workspaces follow each role's `agents` list instead. Writers see the tab read-only, and the New Session project picker offers admins **Manage projects** to open it. When a restricted role has no shared projects, the picker says so; connections without `operator.write` do not see **Browse folders**, because browsing Gateway folders requires that scope.
 
 You can also register an existing checkout through the
 [Gateway CLI](/cli/gateway/query#gateway-call-%3Cmethod%3E). Registration requires

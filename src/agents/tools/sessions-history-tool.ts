@@ -150,7 +150,6 @@ function sanitizeHistoryMessage(
   for (const field of ["details", "usage", "cost"]) {
     if (field in entry) {
       delete entry[field];
-      truncated = true;
     }
   }
 

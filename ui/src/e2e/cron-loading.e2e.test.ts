@@ -166,7 +166,7 @@ suite.define(() => {
         } else {
           expect(errors.join(" ")).toContain(
             outcome === "conflict"
-              ? "This automation changed on the Gateway"
+              ? "This automation changed before your edits could be saved."
               : "Garden A save failed.",
           );
         }
@@ -174,6 +174,108 @@ suite.define(() => {
       } finally {
         await instance.dispose();
       }
+    });
+  });
+
+  it.each([false, true])("recovers a stale save (latest read fails: %s)", async (readFails) => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const initial = cronJob("garden-inventory", "Weekly garden inventory", {
+        configRevision: "revision-initial",
+        description: "Check shared stock before the Monday delivery.",
+        schedule: { kind: "cron", expr: "0 9 * * 1", tz: "America/Chicago" },
+        payload: { kind: "systemEvent", text: "Remind the garden team to check shared stock." },
+      });
+      const latest = {
+        ...initial,
+        configRevision: "revision-current",
+        name: "Monday garden inventory",
+        description: "Check shared stock and log deliveries before noon.",
+      };
+      const draft = "Monday inventory and seed order";
+      const updates: unknown[] = [];
+      let readsUnavailable = false;
+      const gateway = await installMockGateway(
+        page,
+        {
+          methodResponses: {
+            "cron.list": cronList([initial], "garden-inventory"),
+            "cron.runs": emptyRuns,
+            "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+          },
+        },
+        {
+          requestHandlers: {
+            "cron.get": () => {
+              if (readsUnavailable) {
+                return { __mockError: { code: "UNAVAILABLE", message: "Read unavailable" } };
+              }
+              return updates.length === 0 ? initial : latest;
+            },
+            "cron.update": (params) => {
+              updates.push(params);
+              if (isRecord(params) && params.expectedConfigRevision === latest.configRevision) {
+                return { ...latest, configRevision: "revision-saved", name: draft };
+              }
+              readsUnavailable = readFails;
+              return {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "The loaded definition changed",
+                  details: { code: "CRON_JOB_CHANGED" },
+                },
+              };
+            },
+          },
+        },
+      );
+      const url = `${suite.server.baseUrl}cron?job=${initial.id}`;
+      await page.goto(url);
+      const edit = page.getByRole("button", { name: "Edit", exact: true });
+      const name = page.locator("#cron-name");
+      const save = page.locator('[data-test-id="cron-submit"]');
+      const error = page.locator(".callout.danger");
+      await edit.click();
+      await expect.poll(() => name.inputValue()).toBe(initial.name);
+      const match = { id: initial.id };
+      const earlierReads = (await gateway.getRequests("cron.get", match)).length;
+      await name.fill(draft);
+      await save.click();
+      await error.waitFor();
+      expect(page.url()).toBe(url);
+      await gateway.waitForRequest("cron.get", { match, after: earlierReads });
+      expect(updates).toEqual([
+        expect.objectContaining({
+          id: initial.id,
+          expectedConfigRevision: initial.configRevision,
+          patch: expect.objectContaining({ name: draft }),
+        }),
+      ]);
+      expect(await name.inputValue()).toBe(readFails ? draft : latest.name);
+      const message = (await error.textContent())?.trim();
+      if (readFails) {
+        // The next exact read can succeed once the Gateway responds again.
+        readsUnavailable = false;
+        await page.reload();
+        await page.waitForURL(url);
+        await edit.click();
+        await gateway.waitForRequest("cron.get", { match });
+      }
+      await expect.poll(() => name.inputValue()).toBe(latest.name);
+      await name.fill(draft);
+      await save.click();
+      await edit.waitFor();
+      expect(await error.count()).toBe(0);
+      expect(updates).toHaveLength(2);
+      expect(updates[1]).toMatchObject({
+        id: initial.id,
+        expectedConfigRevision: latest.configRevision,
+        patch: { name: draft, description: latest.description },
+      });
+      expect(message).toBe(
+        readFails
+          ? "This automation changed before your edits could be saved. Copy your edits before reloading the page, then review the latest settings in Edit before reapplying them."
+          : "This automation changed before your edits could be saved. Review the latest settings shown here, then reapply your edits.",
+      );
     });
   });
 

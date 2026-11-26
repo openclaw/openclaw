@@ -21,8 +21,17 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import {
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   projectNodeWorkerWorkspaceExecResult,
+  type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
+import { AUTHENTICATED_REF_REFRESH_JS } from "../worker/workspace-git-policy.js";
+import {
+  withNodeWorkerFilesystemCommands,
+  type NodeWorkerCommandIsolation,
+} from "./node-worker-command-filesystem.js";
+import { assertWorkspaceArgv } from "./node-worker-workspace-identity.js";
+import type { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+import type { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
 
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const NODE_MANIFEST_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4096;
@@ -63,18 +72,31 @@ export async function runNodeWorkspaceManifestCapture(
   params: WorkspaceManifestComputationOperations["workspace.manifest.remote-capture"]["input"] & {
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
+    isolation?: NodeWorkerCommandIsolation;
   },
 ): Promise<string> {
-  const { env, signal, ...input } = params;
-  const commandEnv = workspaceCommandEnv(input.home, env);
+  const { env, signal, isolation, ...input } = params;
+  const commandEnv = { ...workspaceCommandEnv(input.home, env), GIT_NO_LAZY_FETCH: "1" };
   return await computeWorkspaceManifest(
     { type: "workspace.manifest.remote-capture", input },
     signal,
     {
       text: (cwd, args, options) =>
-        executeGitCommandBytes(cwd, args, { ...options, baseEnv: commandEnv, env: undefined }),
+        withNodeWorkerFilesystemCommands(
+          { isolation, workspaceDir: cwd, homeDir: input.home, env: commandEnv, signal },
+          () =>
+            executeGitCommandBytes(cwd, args, { ...options, baseEnv: commandEnv, env: undefined }),
+        ),
       buffered: (cwd, args, options) =>
-        executeGitCommandBuffered(cwd, args, { ...options, baseEnv: commandEnv, env: undefined }),
+        withNodeWorkerFilesystemCommands(
+          { isolation, workspaceDir: cwd, homeDir: input.home, env: commandEnv, signal },
+          () =>
+            executeGitCommandBuffered(cwd, args, {
+              ...options,
+              baseEnv: commandEnv,
+              env: undefined,
+            }),
+        ),
     },
   );
 }
@@ -126,18 +148,23 @@ export async function runWorkspaceCommand(params: {
   input?: string | Uint8Array;
   signal?: AbortSignal;
   maxOutputBytes?: number;
+  isolation?: NodeWorkerCommandIsolation;
+  outputDirectories?: readonly string[];
 }): Promise<string> {
   const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
-  const result = await runCommandWithTimeout(params.argv, {
-    executionIntent: "gateway-internal",
-    cwd: params.workspaceDir,
-    baseEnv: workspaceCommandEnv(params.homeDir),
-    ...(params.input === undefined ? {} : { input: params.input }),
-    timeoutMs: TRANSFER_TIMEOUT_MS,
-    signal: params.signal,
-    maxOutputBytes,
-    maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
-  });
+  const baseEnv = workspaceCommandEnv(params.homeDir);
+  const result = await withNodeWorkerFilesystemCommands({ ...params, env: baseEnv }, () =>
+    runCommandWithTimeout(params.argv, {
+      executionIntent: "gateway-internal",
+      cwd: params.workspaceDir,
+      baseEnv,
+      ...(params.input === undefined ? {} : { input: params.input }),
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      signal: params.signal,
+      maxOutputBytes,
+      maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
+    }),
+  );
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
   }
@@ -156,6 +183,7 @@ export async function captureManifest(params: {
   baseManifestRef?: string;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
+  isolation?: NodeWorkerCommandIsolation;
 }): Promise<string> {
   const priorManifestDigests = [
     ...new Set(
@@ -179,6 +207,7 @@ export async function captureManifest(params: {
       home: params.manifestHome,
       memo: input,
       maxHashMemoBytes: MAX_WORKSPACE_HASH_MEMO_BYTES,
+      isolation: params.isolation,
       signal: AbortSignal.any([
         ...(params.signal ? [params.signal] : []),
         AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
@@ -210,4 +239,71 @@ export function projectWorkspaceOperationResult(
     },
     argv,
   );
+}
+
+/** Dispatch node-owned workspace commands through the existing process and manifest owners. */
+export async function executeNodeWorkerWorkspaceCommand(params: {
+  input: NodeWorkerWorkspaceExecInput;
+  workspaceDir: string;
+  homeDir: string;
+  env: NodeJS.ProcessEnv;
+  isolation?: NodeWorkerCommandIsolation;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  assertCurrent: () => void;
+  retainWorkspace: () => () => void;
+  processes: NodeWorkerWorkspaceProcesses;
+  quiescence: NodeWorkerWorkspaceQuiescence;
+}): Promise<NodeWorkerWorkspaceExecResult> {
+  const { input, workspaceDir, homeDir, env, isolation, signal, timeoutMs } = params;
+  const trustedGitRefresh =
+    input.argv.length === 3 &&
+    input.argv[0] === "node" &&
+    input.argv[1] === "-e" &&
+    input.argv[2] === AUTHENTICATED_REF_REFRESH_JS;
+  const commandEnv = workspaceCommandEnv(homeDir, env);
+  if (trustedGitRefresh) {
+    // A model-writable HOME must not choose the program receiving a GitHub token.
+    commandEnv.PATH = env.PATH;
+  }
+  if (input.quiescence) {
+    if (input.argv[1] !== workspaceDir) {
+      throw new Error("INVALID_REQUEST: workspace quiescence root does not match its owner");
+    }
+    const stdout = await params.quiescence.execute(
+      { input, workspaceDir, env: commandEnv, retainWorkspace: params.retainWorkspace },
+      signal,
+    );
+    return projectWorkspaceOperationResult(workspaceDir, stdout);
+  }
+  assertWorkspaceArgv(workspaceDir, input.argv);
+  const capture = input.process
+    ? undefined
+    : nodeWorkspaceManifestCapture(input.argv, workspaceDir);
+  if (capture) {
+    const stdout = await runNodeWorkspaceManifestCapture({
+      ...capture,
+      home: homeDir,
+      memo: input.input,
+      env,
+      isolation,
+      signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(timeoutMs)]),
+    });
+    return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
+  }
+  const output = await params.processes.execute({
+    input: trustedGitRefresh
+      ? { ...input, argv: [process.execPath, ...input.argv.slice(1)] }
+      : input,
+    ...(trustedGitRefresh ? { temporaryHome: true as const } : {}),
+    assertCurrent: params.assertCurrent,
+    workspaceDir,
+    env: commandEnv,
+    homeDir,
+    isolation,
+    signal,
+    timeoutMs,
+    retainWorkspace: params.retainWorkspace,
+  });
+  return input.process ? output : projectNodeWorkerWorkspaceExecResult(workspaceDir, output);
 }

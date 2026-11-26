@@ -85,11 +85,11 @@ command handling is enabled for the surface.
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
-These exchanges appear in session history and later model context, except read-only
-`/status` replies: their command and reply remain visible in history but do not enter
-model context or interrupt an active turn. An exchange delivered while a turn is running
-is recorded after that turn settles, so the running answer is kept and the exchange still
-enters later model context.
+These exchanges appear in session history and later model context. Read-only
+`/status` replies and fast `/approve` exchanges stay visible in history without
+entering the agent's conversational context or interrupting an active turn. Other exchanges delivered
+while a turn is running are recorded after it settles, preserving the running
+answer and including the exchange in later model context.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.

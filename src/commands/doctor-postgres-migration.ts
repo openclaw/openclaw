@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
-import { isPrivateDoctorPostgresStore } from "../infra/update-doctor-private-store.js";
 import {
   capturePostgresBackup,
   fingerprintPostgresBackup,
@@ -16,17 +15,6 @@ export async function backupDoctorPostgresMigration(
   maintenance: { assertAdmission(): void },
 ): Promise<{ changes: string[]; generation?: string }> {
   maintenance.assertAdmission();
-  if (isPrivateDoctorPostgresStore(sourcePath)) {
-    // This namespace is already a private startup copy. Keep migration attribution
-    // for credential custody, but do not capture another recovery copy of it.
-    const generation = hasUpdateDoctorMigrationCapture()
-      ? undefined
-      : await fingerprintPostgresBackup(sourcePath, {
-          database: { engine: "postgres", postgres: input },
-        });
-    maintenance.assertAdmission();
-    return { changes: [], generation };
-  }
   const prefix = `${sourcePath}.pre-startup-migration-`;
   const captureId = randomUUID();
   const directory = doctorMigrationBackupPath(sourcePath, captureId, "postgres");

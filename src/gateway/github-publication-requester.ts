@@ -34,6 +34,7 @@ import {
   OpenClawIdPrincipalChangedError,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
@@ -135,9 +136,7 @@ export function captureGitHubPublicationActionAuthority(
     assertOperatorWrite: () => {
       requester.assertCurrent();
       if (!operatorWrite) {
-        throw new Error(
-          "Working on another person's PR needs operator write permission. Ask a Gateway admin to do it, or to give your role operator.write.",
-        );
+        throw new OperatorRefusalError("role-denies", { action: "work on another person's PR" });
       }
     },
   };

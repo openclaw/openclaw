@@ -10,6 +10,7 @@ import {
   listSkillFiles,
   readSkillFile,
   SKILL_FILE,
+  SkillAuthoringError,
 } from "openclaw/plugin-sdk/skill-authoring-runtime";
 import {
   loadUtilityCompletion,
@@ -390,7 +391,15 @@ async function readSupportMarkdown(
 ): Promise<Array<[string, string]>> {
   const markdown: Array<[string, string]> = [];
   for (const file of files.filter((entry) => entry !== SKILL_FILE && entry.endsWith(".md"))) {
-    markdown.push([file, (await readSkillFile({ ...target, filePath: file })) ?? ""]);
+    try {
+      markdown.push([file, (await readSkillFile({ ...target, filePath: file })) ?? ""]);
+    } catch (error) {
+      // The listing includes Markdown outside the support directories, which the read refuses.
+      if (error instanceof SkillAuthoringError && error.code === "invalid_path") {
+        throw new SkillDietRejected(`${file}: ${error.message}`);
+      }
+      throw error;
+    }
   }
   return markdown;
 }
@@ -450,24 +459,24 @@ async function dietWorkshopSkill(params: {
     return undefined;
   }
   const sections = splitSkillSections(liveSkillMd.slice(frontmatter.length));
-  const liveReferences = await readSupportMarkdown(
-    { config, agentId, skillName: name },
-    live.files,
-  );
-  const build = (skill: string, references: readonly ReferencePlan[]) =>
-    buildCandidate({
-      config,
-      name,
-      skillDir,
-      liveFiles: live.files,
-      liveReferences,
-      frontmatter,
-      liveSkillMd,
-      sections,
-      skill,
-      references,
-    });
   try {
+    const liveReferences = await readSupportMarkdown(
+      { config, agentId, skillName: name },
+      live.files,
+    );
+    const build = (skill: string, references: readonly ReferencePlan[]) =>
+      buildCandidate({
+        config,
+        name,
+        skillDir,
+        liveFiles: live.files,
+        liveReferences,
+        frontmatter,
+        liveSkillMd,
+        sections,
+        skill,
+        references,
+      });
     const plan = parsePlan(
       await complete({
         systemPrompt: `${DIET_RULES}\n\n${PLAN_OUTPUT}`,

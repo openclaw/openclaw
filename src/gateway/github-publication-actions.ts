@@ -24,6 +24,7 @@ import {
   prepareGitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
@@ -108,9 +109,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     !(params.action === "ready" && params.publishingSessionKey === undefined) &&
     !captureGitHubPublicationActionAuthority(admitted.requester).operatorWrite
   ) {
-    throw new Error(
-      `The ${params.action} action needs operator write permission. Ask a Gateway admin to run it, or to give your role operator.write.`,
-    );
+    throw new OperatorRefusalError("role-denies", {
+      action: `run the ${params.action} action on this PR`,
+    });
   }
   // Stop and session revision fences only; authority was admitted when the turn started.
   const assertRequester = () => {

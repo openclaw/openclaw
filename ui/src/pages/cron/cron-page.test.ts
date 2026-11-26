@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import { startCronClone } from "../../lib/cron/index.ts";
 import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
@@ -248,6 +248,47 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   expect(dom.callsFor(request, "models.list")).toHaveLength(0);
   dom.click(page, dom.testId("cron-edit"));
   await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
+});
+
+it("retries the failed history page without replacing runs or starting an automation", async () => {
+  const job = scheduledJob("garden", { name: "Garden inventory" });
+  const older = createDeferred<ReturnType<typeof cronRunsResponse>>();
+  let append = older.promise;
+  const request = cronRpc({
+    "cron.get": () => job,
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.runs": (params) => {
+      if ((params as { offset: number }).offset === 1) {
+        return append;
+      }
+      return { ...runPage(job.id, 2, "Latest inventory"), hasMore: true, nextOffset: 1 };
+    },
+  });
+  const { page } = mountCronPage(request);
+  page.routeSearch = "?job=garden";
+  await waitFor(() => expect(dom.text(page, ".cron-runs")).toContain("Latest inventory"));
+  getButtonByText(page, "Load more activity").click();
+  await expectRpc(request, "cron.runs", expect.objectContaining({ id: job.id, offset: 1 }));
+  older.reject(
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "History temporarily unavailable. Bearer abcdefghijkl",
+    }),
+  );
+  await waitFor(() =>
+    expect(dom.text(page, ".cron-runs [role=alert]") ?? "").toContain("load more"),
+  );
+  const detail = dom.text(page, ".cron-runs details:not([open]) code");
+  expect(detail).toBe("History temporarily unavailable. Bearer [redacted]");
+  append = Promise.resolve(runPage(job.id, 1, "Older inventory"));
+  const failed = dom.callsFor(request, "cron.runs").at(-1);
+  const inventoryReads = dom.callsFor(request, "cron.list").length;
+  getButtonByText(page, "Retry").click();
+  await waitFor(() => expect(dom.text(page, ".cron-runs")).toContain("Older inventory"));
+  expect(dom.text(page, ".cron-runs")).toContain("Latest inventory");
+  expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual(failed);
+  expect(dom.callsFor(request, "cron.list")).toHaveLength(inventoryReads);
+  expect(dom.callsFor(request, "cron.run")).toHaveLength(0);
 });
 
 it.each(["selecting another job", "changing agent scope", "opening another link", "disconnecting"])(

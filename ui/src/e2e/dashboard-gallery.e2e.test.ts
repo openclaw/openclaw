@@ -387,6 +387,47 @@ suite.define(() => {
     },
   );
 
+  it("keeps the remove button reachable for a long dashboard author on a phone", async () => {
+    const author = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+    const rows = dashboardRows.slice(0, 2).map((row, index) =>
+      Object.assign({}, row, {
+        hasBoard: true,
+        createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
+      }),
+    );
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, { sessions: rows });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const gallery = page.locator("openclaw-dashboards-page");
+        const cards = gallery.locator("[data-dashboard-session]");
+        await expect.poll(() => cards.count()).toBe(2);
+        await gallery.getByRole("button", { name: "Filter by author", exact: true }).tap();
+        await page
+          .locator("#dashboards-author-filter")
+          .getByRole("checkbox", { name: new RegExp(author) })
+          .check();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => cards.count()).toBe(1);
+        const remove = gallery.getByRole("button", { name: "Remove author filter" });
+        expect(
+          await remove.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return (
+              box.right <= innerWidth &&
+              button.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              )
+            );
+          }),
+        ).toBe(true);
+        await remove.tap();
+        await expect.poll(() => cards.count()).toBe(2);
+      },
+    );
+  });
+
   it("bounds mounted dashboards across list and small author groups", async () => {
     const rows = Array.from({ length: 1_000 }, (_, index) => ({
       ...dashboardRows[index % dashboardRows.length]!,
@@ -495,6 +536,50 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([2, 64])(
+    "keeps a long author heading on one line above its first dashboard (%i dashboards)",
+    async (count) => {
+      const name = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+      const rows = Array.from({ length: count }, (_, index) => ({
+        ...dashboardRows[0]!,
+        key: "agent:main:dashboard:edition-" + index,
+        displayName: "Edition " + index,
+        hasBoard: true,
+        createdActor: { type: "human", id: "studio", label: name },
+      }));
+      await suite.withPage(
+        { viewport: { width: 390, height: 844 }, hasTouch: true },
+        async ({ page }) => {
+          await installMockGateway(page, { sessions: rows });
+          await page.goto(suite.server.baseUrl + "dashboards");
+          const gallery = page.locator("openclaw-dashboards-page");
+          await gallery.getByRole("button", { name: "Display", exact: true }).tap();
+          await page.locator("#dashboards-display").getByLabel("Grouping").selectOption("author");
+          await page.keyboard.press("Escape");
+          const heading = gallery.getByRole("heading", { name: new RegExp(name) });
+          await heading.waitFor();
+          const label = heading.locator(":scope > span");
+          expect(await label.textContent()).toBe(name);
+          expect(await label.getAttribute("title")).toBe(name);
+          const measured = await label.evaluate((el) => ({
+            clipped: el.scrollWidth > el.clientWidth,
+            overflow: getComputedStyle(el).textOverflow,
+            height: el.getBoundingClientRect().height,
+            line: Number.parseFloat(getComputedStyle(el).lineHeight),
+          }));
+          expect(measured.clipped).toBe(true);
+          expect(measured.overflow).toBe("ellipsis");
+          expect(measured.height).toBeCloseTo(measured.line, 0);
+          const first = gallery.locator("[data-dashboard-session]").first();
+          const bounds = (await heading.boundingBox())!;
+          await expect
+            .poll(async () => (await first.boundingBox())!.y)
+            .toBeGreaterThanOrEqual(bounds.y + bounds.height);
+        },
+      );
+    },
+  );
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
