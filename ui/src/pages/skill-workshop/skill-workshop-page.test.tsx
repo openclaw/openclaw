@@ -632,6 +632,40 @@ it("keeps unchanged draft instructions neutral while support files still need re
   expect(request).not.toHaveBeenCalledWith("skills.workshop.discardDraft", expect.anything());
 });
 
+it("keeps standalone draft Markdown intact and strips metadata from its skill instructions", async () => {
+  const draft = draftFor("new-skill");
+  const notes = "references/notes.md";
+  const request = gateway({
+    list: { ...list, skills: [], archived: [], drafts: [draft] },
+    read: ({ filePath }: RequestParams) => ({
+      files: ["SKILL.md", notes],
+      content:
+        filePath === notes
+          ? "---\nx\n\n---"
+          : "--- \ndescription: Draft summary\n---\n    run check",
+    }),
+  });
+  const page = await mount(request, { search: `?draft=${draft.id}` });
+  const preview = ".sw-detail--draft .sw-markdown";
+  await waitForSolid(() => expect(text(page, `${preview} pre code`)).toBe("run check\n"));
+  expect(text(page, preview)).not.toContain("Draft summary");
+  await click(page, notes);
+  await waitForSolid(() => {
+    const blocks = page.querySelectorAll(`${preview} > *`);
+    expect(Array.from(blocks, (block) => [block.tagName, block.textContent])).toEqual([
+      ["HR", ""],
+      ["P", "x"],
+      ["HR", ""],
+    ]);
+  });
+  expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+    agentId: "research",
+    name: draft.skillName,
+    draftId: draft.id,
+    filePath: notes,
+  });
+});
+
 it("shows only the drafts list on the Drafts tab of an agent with no learned skills", async () => {
   const request = gateway({
     list: { ...list, skills: [], archived: [], drafts: [draftFor("new-skill")] },
