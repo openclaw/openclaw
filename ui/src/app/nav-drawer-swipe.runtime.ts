@@ -1,6 +1,7 @@
 import { listen } from "../lib/reactive/listener.ts";
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
 
+const EDGE_SWIPE_START_PX = 32;
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
 const LOCK_DISTANCE_PX = 7;
@@ -94,12 +95,18 @@ export class NavDrawerSwipeOwner {
     if (!this.canOpen() || event.touches.length !== 1) {
       return;
     }
+    const touch = event.touches[0];
+    if (!touch) {
+      return;
+    }
     const path = event.composedPath();
     const content = path.find(
       (target): target is HTMLElement =>
         target instanceof HTMLElement && target.classList.contains("content"),
     );
-    if (!content) {
+    // The reachable content edge includes the shell’s device safe-area inset.
+    // Leave gestures farther inside to content such as canvas orbit controls.
+    if (!content || touch.clientX > content.getBoundingClientRect().left + EDGE_SWIPE_START_PX) {
       return;
     }
     const blocked = path
@@ -109,8 +116,7 @@ export class NavDrawerSwipeOwner {
           target instanceof Element &&
           (target.matches(HORIZONTAL_DRAG_CONTROLS) || scrollsWithRightwardSwipe(target)),
       );
-    const touch = event.touches[0];
-    if (blocked || !touch) {
+    if (blocked) {
       return;
     }
     this.swipe = {

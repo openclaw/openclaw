@@ -39,6 +39,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../../src/infra/diagnostic-events.js";
 import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -133,12 +134,7 @@ try {
   await waitForDiagnosticEventsDrained();
   globalThis.gc?.();
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16_384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16_384);
   }
   const hostLoadBefore = loadavg();
   const initialEstimatedBytes = cacheBytes(cache);
@@ -160,6 +156,7 @@ try {
       id: identity(row),
       key,
       agentId: "main",
+      storePath: row.storeTarget.storePath,
       row: selectionRow(row),
       scope: "session-entry",
     });

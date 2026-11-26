@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input.js";
-import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
+import { createPrimaryModelExclusion } from "../lib/agents/model-options.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MultiSelect } from "./multi-select.tsx";

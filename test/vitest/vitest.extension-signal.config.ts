@@ -7,7 +7,7 @@ export function createExtensionSignalVitestConfig(
   const config = createSingleChannelExtensionVitestConfig("signal", env);
   config.test = {
     ...config.test,
-    setupFiles: [...(config.test?.setupFiles ?? []), "test/setup.signal.ts"],
+    setupFiles: [config.test?.setupFiles ?? [], "test/setup.signal.ts"].flat(),
   };
   return config;
 }

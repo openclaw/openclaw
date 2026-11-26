@@ -515,6 +515,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
               (snapshot().phase === "connecting" || snapshot().phase === "reconnecting"),
             lastErrorCode: snapshot().lastErrorCode,
             lastErrorAuthReason: snapshot().lastErrorAuthReason,
+            lastErrorPairing: snapshot().lastErrorPairing,
             hasToken: Boolean(loginToken().trim()),
             hasPassword: Boolean(loginPassword().trim()),
             gatewayUrl: loginGatewayUrl(),
@@ -537,6 +538,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
               ? () => context.navigate("connection")
               : undefined,
+            onBrowserPaired: (gatewayUrl: string) => {
+              setLoginGatePinned(true);
+              // Empty session credentials let connect select the stored device token.
+              context.gateway.connect({ gatewayUrl, token: "", password: "", bootstrapToken: "" });
+            },
             onConnect: () => {
               setLoginGatePinned(true);
               context.gateway.connect({

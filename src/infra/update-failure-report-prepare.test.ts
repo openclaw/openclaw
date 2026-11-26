@@ -582,6 +582,37 @@ it.each(["step", "plugin-summary"])(
   },
 );
 
+it.each([{ warnings: undefined }, { warnings: [] }, { warnings: ["ECONNRESET"] }])(
+  "projects current step warnings $warnings over recorded report warnings",
+  async ({ warnings }) => {
+    const recordedRun = makeRecordedRun([
+      { step: "warning:post-plugin-doctor", status: "completed", detail: "EACCES" },
+      { step: "warning:post-plugin-doctor:2", status: "completed", detail: "EPERM" },
+      { step: "warning:managed-service", status: "completed", detail: "ENOENT" },
+    ]);
+    const before = structuredClone(recordedRun);
+    const prepared = await report(
+      {
+        steps: [
+          step("post-plugin-doctor", {
+            exitCode: 0,
+            warnings,
+          }),
+          step("verifying"),
+        ],
+      },
+      { recordedRun },
+    );
+    expect(prepared.body).toContain("- Failed phase: verifying\n");
+    expect(prepared.body).toContain("- ENOENT");
+    for (const stale of ["EACCES", "EPERM"]) {
+      expect(prepared.body.includes(`- ${stale}`)).toBe(warnings === undefined);
+    }
+    expect(prepared.body.includes("- ECONNRESET")).toBe(Boolean(warnings?.length));
+    expect(recordedRun).toEqual(before);
+  },
+);
+
 type ReportCase = {
   name: string;
   result?: Partial<UpdateRunResult>;

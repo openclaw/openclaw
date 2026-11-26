@@ -38,3 +38,10 @@ export async function readPackageName(root: string): Promise<string | null> {
 export async function readPackageManagerSpec(root: string): Promise<string | null> {
   return normalizeString((await readPackageJson(root))?.packageManager);
 }
+
+export async function hasPackageScript(root: string, name: string): Promise<boolean> {
+  const scripts = asNullableRecord((await readPackageJson(root))?.scripts);
+  return (
+    scripts !== null && Object.hasOwn(scripts, name) && normalizeString(scripts[name]) !== null
+  );
+}

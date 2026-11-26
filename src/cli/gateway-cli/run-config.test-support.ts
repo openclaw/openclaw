@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type {
@@ -75,9 +77,33 @@ export function completeGatewayRunSnapshot(
   } satisfies ConfigFileSnapshot;
 }
 
-export function registerInvalidConfigResetTests(configState: {
+export function registerGatewayRunConfigGuardTests(configState: {
   snapshot: Record<string, unknown>;
 }) {
+  it("releases the selected config snapshot after startup hands off to the final config", async () => {
+    const {
+      selectGatewayRunEnvironment,
+      prepareGatewayRunBootstrap,
+      recheckGatewayRunBootstrap,
+      applyFinalGatewayRunConfigEnv,
+    } = await import("./pre-bootstrap.js");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const params = { opts: {}, runtime };
+    configState.snapshot = completeGatewayRunSnapshot({ gateway: { mode: "local" } });
+    const selected = new WeakRef(configState.snapshot);
+    expect(await selectGatewayRunEnvironment(params)).toBe(true);
+    expect(await prepareGatewayRunBootstrap(params)).toBe(true);
+
+    const finalSnapshot = completeGatewayRunSnapshot({ gateway: { mode: "local" } });
+    configState.snapshot = finalSnapshot;
+    expect(await recheckGatewayRunBootstrap({ ...params, snapshot: finalSnapshot })).toBe(true);
+    expect(await applyFinalGatewayRunConfigEnv({ runtime, snapshot: finalSnapshot })).toBe(true);
+
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(selected.deref()).toBeUndefined();
+  });
+
   it.each([null, "raw", "path"] as const)("guards invalid-config dev reset: %s", async (change) => {
     const { clearGatewayRunConfigEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunReset } =
       await import("./pre-bootstrap.js");

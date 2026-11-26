@@ -17,7 +17,10 @@ import {
   latestPromptContextMinTimestampMs,
   promptContextBoundaryOptions,
 } from "./bot-handlers.message-context.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  TelegramMediaRuntime,
+  TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramPendingInboundTarget,
@@ -54,7 +57,7 @@ export type TelegramDebounceEntry = {
   msg: Message;
   allMedia: TelegramMediaRef[];
   /** Deferred attachment download for a buffered forward; replaces `allMedia` at flush. */
-  hydrateMedia?: (abortSignals: readonly AbortSignal[]) => Promise<TelegramInboundMediaHydration>;
+  hydrateMedia?: (mediaRuntime: TelegramMediaRuntime) => Promise<TelegramInboundMediaHydration>;
   storeAllowFrom: string[];
   receivedAtMs: number;
   debounceKey: string | null;
@@ -85,6 +88,7 @@ export function createTelegramInboundBuffers({
     releaseDispatchDedupeClaims,
     settleSpooledReplayParticipants,
     processMessageWithReplyChain,
+    resolveMediaRuntime,
   } = message;
   const readConfig = createRuntimeConfigReader(cfg);
   const resolveDebounceMs = () => {
@@ -136,10 +140,13 @@ export function createTelegramInboundBuffers({
     entries: readonly TelegramDebounceEntry[],
     participants: readonly TelegramSpooledReplayDeferredParticipant[],
   ): Promise<TelegramDebounceEntry[]> => {
-    const abortSignals = participants.map((participant) => participant.abortSignal);
+    // One budget for the whole burst, like an album.
+    const mediaRuntime = resolveMediaRuntime(
+      ...participants.map((participant) => participant.abortSignal),
+    );
     const hydrated: TelegramDebounceEntry[] = [];
     for (const entry of entries) {
-      const media = await entry.hydrateMedia?.(abortSignals);
+      const media = await entry.hydrateMedia?.(mediaRuntime);
       if (media?.kind === "retry") {
         releaseDispatchDedupeClaims(
           mergeDispatchDedupeClaims(...entries.map((item) => item.dispatchDedupeClaims)),

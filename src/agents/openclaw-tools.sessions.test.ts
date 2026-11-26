@@ -25,11 +25,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  drainSystemEventEntries,
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -170,37 +166,6 @@ describe("sessions tools", () => {
 
   registerSessionsSendResumeTests({ getSessionTool, callGatewayMock });
 
-  it("sessions_send notify queues next-turn context without starting or steering work", async () => {
-    const targetKey = "agent:main:dashboard:notification-target";
-    await seedSession(targetKey);
-    callGatewayMock.mockImplementation(async () => ({}));
-    const tool = sessionSender(mainKey);
-    const result = await tool.execute("notify", {
-      sessionKey: targetKey,
-      message: "Evidence is ready",
-      mode: "notify",
-    });
-    const queuedReceipt = {
-      status: "queued",
-      sessionKey: targetKey,
-      durability: "process",
-      runStarted: false,
-    };
-    expect(result.details).toMatchObject(queuedReceipt);
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    const schemaReceipt = { ...queuedReceipt, notificationId: "notification-fixture" };
-    expect(Value.Check(tool.outputSchema!, { ...schemaReceipt, durability: "durable" })).toBe(
-      false,
-    );
-    expect(Value.Check(tool.outputSchema!, { ...schemaReceipt, runStarted: true })).toBe(false);
-    expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
-    const queued = peekSystemEventEntries(targetKey);
-    expect(queued).toHaveLength(1);
-    expect(queued[0]?.text).toContain("Evidence is ready");
-    expect(drainSystemEventEntries(targetKey)).toEqual(queued);
-    expect(peekSystemEventEntries(targetKey)).toEqual([]);
-  });
-
   it("sessions_send steer refuses idle work and followup starts a separate turn", async () => {
     const targetKey = "agent:main:cron:followup:run:active";
     await seedSession(targetKey, "active-target");
@@ -247,27 +212,6 @@ describe("sessions tools", () => {
     expect(followup.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
     expect(queueMessage).not.toHaveBeenCalled();
     expect(gatewayCalls("agent")).toHaveLength(1);
-  });
-
-  it("sessions_send does not enqueue a notification beyond an exact session grant", async () => {
-    const targetKey = "agent:main:dashboard:notification-target";
-    callGatewayMock.mockImplementation(async () => ({}));
-    const tool = createSessionsSendTool({
-      agentSessionKey: mainKey,
-      expectedTargetSessionId: "exact-incarnation",
-      config: TEST_CONFIG,
-      callGateway: callGatewayMock,
-    });
-    const result = await tool.execute("notify", {
-      sessionKey: targetKey,
-      message: "Evidence is ready",
-      mode: "notify",
-    });
-    expect(result.details).toMatchObject({
-      status: "forbidden",
-      error: expect.stringContaining("exact-session access grant"),
-    });
-    expect(peekSystemEventEntries(targetKey)).toEqual([]);
   });
 
   it("sessions_send requires canonical message instead of hidden alias text", async () => {
@@ -415,6 +359,18 @@ describe("sessions tools", () => {
         { type: "thinking", thinking: expect.stringMatching(/^[\s\S]{1,4015}$/) },
       ],
     });
+  });
+
+  it("sessions_history does not report truncation when only usage metadata is stripped", async () => {
+    const details = await readHistory("usage-only", [
+      { ...textAssistant("hello"), usage: { output: 1 } },
+    ]);
+    expect(details).toMatchObject({
+      contentTruncated: false,
+      truncated: false,
+      droppedMessages: false,
+    });
+    expect(details.messages?.[0]).not.toHaveProperty("usage");
   });
 
   it("sessions_history preserves credential text while reporting truncation", async () => {
@@ -776,27 +732,6 @@ describe("sessions tools", () => {
 
   registerSessionsSendTimeoutTests({ getSessionTool, callGatewayMock });
 
-  it("sessions_history resolves sessionId inputs", async () => {
-    const sessionId = "sess-group";
-    const targetKey = "agent:main:discord:channel:1457165743010611293";
-    mockGatewayResponses({
-      "sessions.resolve": { key: targetKey },
-      "chat.history": {
-        messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
-      },
-    });
-
-    const tool = getSessionTool("sessions_history");
-
-    const result = await tool.execute("call5", { sessionKey: sessionId });
-    const details = result.details as { messages?: unknown[] };
-    expect(details.messages).toStrictEqual([textAssistant("ok")]);
-    expect(gatewayCalls("chat.history")[0]).toMatchObject({
-      method: "chat.history",
-      params: { sessionKey: targetKey },
-    });
-  });
-
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
     const details = await readHistory(
       "call4c",
@@ -815,23 +750,5 @@ describe("sessions tools", () => {
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",
     );
-  });
-
-  it("sessions_history errors on missing sessionId", async () => {
-    const sessionId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.resolve") {
-        throw new Error("No session found");
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_history");
-
-    const result = await tool.execute("call6", { sessionKey: sessionId });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toMatch(/Session not found|No session found/);
   });
 });

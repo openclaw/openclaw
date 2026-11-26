@@ -216,13 +216,13 @@ it("delivers a committed human mention once through authenticated chat.send", as
     sessionKey: target,
     message: "@Bob Please review.",
     idempotencyKey: "mention-original",
-    // Exercise pending custody in its own turn rather than steering the seed run.
+    // Human-only followups commit without steering or dispatching another agent turn.
     queueMode: "followup",
     mentions: [{ profileId: bob.id, start: 0, end: 4 }],
   };
   const accepted = await sender.request<{ runId: string }>("chat.send", request);
   releaseProvider.resolve();
-  // A pending ACK owns input without a transcript position; wait for its committed identity.
+  // An early ACK is not a transcript commit; wait for the original message's identity.
   expect(await withinTest(committed.promise, signal)).toBeGreaterThan(0);
   await withinTest(inboxChanged.promise, signal);
   const inbox = await bobClient.request<{ items: unknown[] }>("mentions.list", {});
@@ -257,7 +257,7 @@ it("records a message addressed to people without an agent turn", async ({ signa
           await releaseFirstTurn.promise;
         }
       }
-      reply("Acknowledged.");
+      reply(agentTurns.length === 3 ? "NO_REPLY" : "Acknowledged.");
     },
   });
   const { alice, bob, bobClient, sender, target, inboxChanged } = fixture;
@@ -283,12 +283,23 @@ it("records a message addressed to people without an agent turn", async ({ signa
     }
   });
   cleanup.defer(() => releaseFirstTurn.resolve());
+  const seedMessage = "Please make poster previews. cc @Bob";
   const seed = await sender.request<{ runId: string }>("chat.send", {
     sessionKey: target,
-    message: "Start this conversation.",
+    message: seedMessage,
+    mentions: [{ profileId: bob.id, start: seedMessage.indexOf("@Bob"), end: seedMessage.length }],
     idempotencyKey: "seed",
   });
-  await withinTest(firstTurnStarted.promise, signal);
+  // A copied teammate must not suppress the very first agent turn.
+  expect(
+    await withinTest(
+      Promise.race([
+        firstTurnStarted.promise.then(() => "started"),
+        terminal(seed.runId).promise.then(() => "finished-without-starting"),
+      ]),
+      signal,
+    ),
+  ).toBe("started");
 
   // While the agent is still working, Alice talks to Bob. Interrupt mode would
   // normally abort the active run; a message to people leaves it alone.
@@ -304,12 +315,21 @@ it("records a message addressed to people without an agent turn", async ({ signa
   expect(finished.message).toBeUndefined();
   await withinTest(inboxChanged.promise, signal);
   const inbox = await bobClient.request<{ items: unknown[] }>("mentions.list", {});
-  expect(inbox.items).toHaveLength(1);
-  expect(inbox.items[0]).toMatchObject({
-    sessionKey: target,
-    senderProfileId: alice.id,
-    excerpt: "@Bob some of the stickers are cool",
-  });
+  expect(inbox.items).toHaveLength(2);
+  expect(inbox.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        sessionKey: target,
+        senderProfileId: alice.id,
+        excerpt: "Please make poster previews. cc @Bob",
+      }),
+      expect.objectContaining({
+        sessionKey: target,
+        senderProfileId: alice.id,
+        excerpt: "@Bob some of the stickers are cool",
+      }),
+    ]),
+  );
   expect(agentTurns).toHaveLength(1);
 
   releaseFirstTurn.resolve();
@@ -339,4 +359,25 @@ it("records a message addressed to people without an agent turn", async ({ signa
   expect(agentTurns).toHaveLength(2);
   expect(agentTurns[1]).toContain("put them on one sheet");
   expect(agentTurns[1]).toContain("stickers are cool");
+
+  // Incidental mentions still reach the model, but do not demand chatter.
+  const chatter = "Thanks @Bob, those stickers look good.";
+  const silent = await sender.request<{ runId: string }>("chat.send", {
+    sessionKey: target,
+    message: chatter,
+    idempotencyKey: "incidental-chatter",
+    mentions: [{ profileId: bob.id, start: 7, end: 11 }],
+  });
+  expect(await withinTest(terminal(silent.runId).promise, signal)).toEqual({
+    state: "final",
+    message: undefined,
+  });
+  expect(agentTurns).toHaveLength(3);
+  expect(agentTurns[2]).toContain("If no text reply is needed");
+  expect(agentTurns[2]).toContain("as the entire final answer, without commentary");
+  const afterSilence = await sender.request<{ messages: Array<Record<string, unknown>> }>(
+    "chat.history",
+    { sessionKey: target },
+  );
+  expect(afterSilence.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
 });

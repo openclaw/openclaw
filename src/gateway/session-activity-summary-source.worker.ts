@@ -1,7 +1,7 @@
 import type { SessionActivitySummaryBatchInput } from "../config/sessions/activity-summary-source.types.js";
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
-import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { isOnActivePathInProjection } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import {
   ACTIVITY_SUMMARY_MAX_BYTES,
   selectActivitySummaryBatch,
@@ -24,8 +24,7 @@ export function readActivitySummaryBatch(params: SessionActivitySummaryBatchInpu
           generation: projection.version.generation,
           maxSeq: projection.version.rawSeq,
         },
-        isOnActivePath: (entryId) =>
-          readActivePathEntryRelationFromProjection(projection, entryId) !== "off-path",
+        isOnActivePath: (entryId) => isOnActivePathInProjection(projection, entryId),
         readPage: (start, count, includeEarlier = false) =>
           readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
             maxBytes: ACTIVITY_SUMMARY_MAX_BYTES,

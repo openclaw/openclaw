@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { SessionEntryPatchOperation } from "../../src/config/sessions/session-entry-patch-operation.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -182,12 +183,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
     await run(8, -8);
     globalThis.gc?.();
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const gc = new GCProfiler();
     gc.start();

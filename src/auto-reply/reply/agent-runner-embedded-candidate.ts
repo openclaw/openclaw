@@ -6,7 +6,7 @@ import type {
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/preparation.types.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
@@ -113,6 +113,7 @@ export async function runEmbeddedFallbackCandidate(
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
+    onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
     getLifecycleGeneration: params.getLifecycleGeneration,
     resolveTerminationFields: (error) =>
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
@@ -166,7 +167,7 @@ export async function runEmbeddedFallbackCandidate(
           });
           return flushed.outcome;
         },
-        ...params.scheduledInference?.runParams,
+        ...params.scheduledInference?.runParams(params.provider),
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
@@ -355,7 +356,10 @@ export async function runEmbeddedFallbackCandidate(
           : undefined,
       };
       embeddedRunParams.onSuccessfulAuthProfile = (profileId) => {
-        params.scheduledInference?.runParams.onSuccessfulAuthProfile?.(profileId);
+        const scheduled = params.scheduledInference?.runParams(params.provider);
+        if (scheduled && "onSuccessfulAuthProfile" in scheduled) {
+          scheduled.onSuccessfulAuthProfile?.(profileId);
+        }
         maintenanceAuthProfile = {
           authProfileId: profileId,
           authProfileIdSource: profileId

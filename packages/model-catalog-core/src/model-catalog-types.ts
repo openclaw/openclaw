@@ -55,6 +55,8 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   /** Whether the provider honors top-level `instructions` on Responses requests. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`; false sends the system prompt as input. */
+  cachesInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;

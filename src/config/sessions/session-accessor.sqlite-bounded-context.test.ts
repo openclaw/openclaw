@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { renderConversationEntriesWithinBudget } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
+import {
+  collectConversationMessageFact,
+  collectConversationRangeDescriptors,
+  serializeConversationEntry,
+  serializeConversationWithinBudget,
+  type ConversationMessageFact,
+} from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -25,7 +33,11 @@ import {
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore as boundedContext } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptCompactionPlanInTransaction } from "./session-accessor.sqlite-active-context-read.js";
+import {
+  readSessionTranscriptBoundedActiveContextCore as boundedContext,
+  readSessionTranscriptCompactionPlan,
+} from "./session-accessor.sqlite-active-context.js";
 import {
   readRecentSessionTranscriptActiveEvents as recentEvents,
   readSessionTranscriptMessageEventPage as messagePage,
@@ -38,9 +50,13 @@ import {
   withRecentActiveTranscriptEvents as visitRecentEvents,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection as waitProjection } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
+import { observePayloadAcquisition } from "./transcript-payload-acquisition.test-support.js";
 
 const readSessionTranscriptMessageEventCount = (scope: Parameters<typeof messagePage>[0]): number =>
   messagePage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
@@ -335,70 +351,92 @@ function readHistory(scope: Scope) {
   return tailPage(scope, { maxBytes: 1024 * 1024, maxMessages: 100, offset: 0 });
 }
 
-function observePayloadAcquisition(
-  connection: ReturnType<typeof openOpenClawAgentDatabase>["db"],
-  marker: string,
-  read: () => void,
-) {
-  const db = requireNativeSqliteDatabase(connection);
-  clearNodeSqliteKyselyCacheForDatabase(db);
-  const prepare = db.prepare.bind(db);
-  const parse = JSON.parse;
-  const restoreStatements: Array<() => void> = [];
-  const pending = new Map<string, number>();
-  let acquiredBytes = 0;
-  let largestRowBytes = 0;
-  let peakPendingBytes = 0;
-  let decodedRows = 0;
-  const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    const statement = prepare(query);
-    const iterate = statement.iterate.bind(statement);
-    // Observe SQLite result acquisition, including payloads rejected before JSON.parse.
-    const iterateSpy = vi.spyOn(statement, "iterate").mockImplementation(function* (...params) {
-      for (const row of iterate(...params)) {
-        for (const value of Object.values(row)) {
-          if (typeof value === "string" && value.includes(marker)) {
-            const bytes = Buffer.byteLength(value);
-            acquiredBytes += bytes;
-            pending.set(value, bytes);
-            largestRowBytes = Math.max(largestRowBytes, bytes);
-            peakPendingBytes = Math.max(
-              peakPendingBytes,
-              [...pending.values()].reduce((a, b) => a + b, 0),
+it.for(["host", "borrowed"] as const)(
+  "collects %s range-rendering facts during the selector's sole payload decode",
+  async (owner, { scope }) => {
+    const marker = "single-compaction-decode:";
+    await persist(
+      scope,
+      Array.from({ length: 16 }, (_, index) =>
+        user(`row-${index}`, index === 0 ? null : `row-${index - 1}`, marker + "漢🦞".repeat(1024)),
+      ),
+    );
+    await waitProjection(scope);
+    const { events, ...expected } = boundedContext(scope, { compaction: true });
+    const messages = convertToLlm(
+      events
+        .filter(isIndexedSessionEntry)
+        .flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+    );
+    const facts: ConversationMessageFact[] = [];
+    let payloadRows = 0;
+    let parseBytes = 0;
+    const database = openOpenClawAgentDatabase(scope);
+    const { db } = database;
+    const resolved = resolveSqliteTranscriptReadScope(scope);
+    const readPlan = (options: Parameters<typeof readSessionTranscriptCompactionPlan>[1]) =>
+      owner === "host"
+        ? readSessionTranscriptCompactionPlan(scope, options)
+        : runSqliteReadSnapshotSync(db, () => {
+            const value = readSessionTranscriptCompactionPlanInTransaction(
+              database,
+              resolved,
+              options,
             );
+            expect(db.isTransaction).toBe(true);
+            return value;
+          });
+    if (owner === "borrowed") {
+      expect(() =>
+        readSessionTranscriptCompactionPlanInTransaction(database, resolved, { compaction: true }),
+      ).toThrow("Transcript projection lost its borrowed transaction");
+    }
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const actual = readPlan({
+        compaction: true,
+        onEntry: (event, row) => {
+          expect(db.isTransaction).toBe(true);
+          payloadRows++;
+          parseBytes += row.serializedBytes - 1;
+          if (isIndexedSessionEntry(event) && event.type === "message") {
+            for (const message of convertToLlm([event.message])) {
+              facts.push(collectConversationMessageFact(message, facts.length));
+            }
           }
-        }
-        yield row;
-      }
-      return undefined;
+        },
+      });
+      expect(actual).toEqual(expected);
     });
-    restoreStatements.push(() => iterateSpy.mockRestore());
-    return statement;
-  });
-  const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    if (typeof text === "string" && text.includes(marker)) {
-      decodedRows++;
-      pending.delete(text);
+    expect({ payloadRows, parseBytes }).toEqual({
+      payloadRows: events.length,
+      parseBytes: serializedBytes(events) - events.length,
+    });
+    expect(acquisition.decodedRows).toBe(16);
+    expect(JSON.stringify(facts)).not.toContain(marker);
+    for (const start of [0, 3, 12]) {
+      const rendered = renderConversationEntriesWithinBudget(
+        collectConversationRangeDescriptors(facts.slice(start)),
+        4000,
+        (descriptor, variant) => {
+          const message = messages[descriptor.source];
+          assert(message);
+          return serializeConversationEntry(message, descriptor, variant);
+        },
+      );
+      expect(rendered).toEqual(serializeConversationWithinBudget(messages.slice(start), 4000));
     }
-    return parse(text, reviver);
-  });
-  try {
-    read();
-  } finally {
-    parseSpy.mockRestore();
-    prepareSpy.mockRestore();
-    for (const restore of restoreStatements) {
-      restore();
-    }
-  }
-  return {
-    acquiredBytes,
-    largestRowBytes,
-    peakPendingBytes,
-    decodedRows,
-    pendingRows: pending.size,
-  };
-}
+    expect(() =>
+      readPlan({
+        compaction: true,
+        onEntry: () => {
+          expect(db.isTransaction).toBe(true);
+          throw new Error("stop extraction");
+        },
+      }),
+    ).toThrow("stop extraction");
+    expect(db.isTransaction).toBe(false);
+  },
+);
 
 it("does not acquire unrelated excluded history while selecting background dependencies", async ({
   scope,
@@ -585,6 +623,33 @@ it.for(["header", "compaction"] as const)(
   },
 );
 
+it("keeps escaped legacy IDs distinct from SQLite replacement strings", async ({ scope }) => {
+  const escaped = storedMessage("\ud800", null, "user", "Escaped ID.");
+  const replacement = storedMessage(
+    "\ufffd\ufffd\ufffd",
+    "\ud800",
+    "assistant",
+    "Literal replacement ID.",
+  );
+  await seedImportedTranscript(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    escaped,
+    replacement,
+  ]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  expect(
+    database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
+      .get(scope.sessionId),
+  ).toEqual({ count: 0 });
+  expect(historyEvent(scope, "\ud800", { currentOnly: true, maxBytes: 1024 })?.event).toEqual(
+    escaped,
+  );
+  expect(
+    historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true, maxBytes: 1024 })?.event,
+  ).toEqual(replacement);
+});
+
 it("selects imported headers and retention anchors before later indexed duplicates", async ({
   scope,
 }) => {
@@ -652,14 +717,15 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   const manager = SessionManager.open(scope);
   const appendUser = (content: string) =>
     manager.appendMessage({ role: "user", content, timestamp: 1 });
-  const settle = async () => {
+  const expectHistory = async (ids: string[]) => {
     manager.flushPendingPersistence();
     await waitProjection(scope);
-  };
-  const expectHistory = (ids: string[]) => {
     const page = readHistory(scope);
     expect(page.totalMessages).toBe(ids.length);
     expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
+    const hydrated = await prepareSessionTranscriptHydration(scope, { compaction: true }).read();
+    expect(hydrated.kind).toBe("bounded");
+    expect(hydrated.snapshot).toEqual(boundedContext(scope, { compaction: true }));
   };
   const expectContext = (messages: unknown[]) => {
     expect(manager.buildSessionContext().messages).toMatchObject(messages);
@@ -672,30 +738,28 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   manager.appendMessage(
     makeAgentAssistantMessage({ content: [{ type: "text", text: "before-reset assistant" }] }),
   );
-  manager.appendResetBoundary("new");
+  const resetId = manager.appendResetBoundary("new");
+  const abandoned = appendUser("abandoned branch");
+  manager.branch(resetId);
   const freshUserId = appendUser("fresh user");
-  await settle();
-  expectHistory([freshUserId]);
+  await expectHistory([freshUserId]);
+  expect(eventIds(boundedContext(scope, { compaction: true }).events)).not.toContain(abandoned);
 
   manager.appendCompaction("fresh-only summary", freshUserId, 100);
-  await settle();
-  expectHistory([freshUserId]);
+  await expectHistory([freshUserId]);
   expectContext([summary("fresh-only summary"), message("fresh user")]);
 
   const nextUserId = appendUser("after compaction");
-  await settle();
-  expectHistory([freshUserId, nextUserId]);
+  await expectHistory([freshUserId, nextUserId]);
   expect(activeStats(scope).eventCount).toBe(3);
 
   manager.appendResetBoundary("new", nextUserId);
   const newestUserId = appendUser("after second reset");
-  await settle();
-  expectHistory([nextUserId, newestUserId]);
+  await expectHistory([nextUserId, newestUserId]);
   expectContext([message("after compaction"), message("after second reset")]);
 
   manager.appendCompaction("newest-only summary", newestUserId, 100);
-  await settle();
-  expectHistory([nextUserId, newestUserId]);
+  await expectHistory([nextUserId, newestUserId]);
   const reopened = SessionManager.open(scope);
   expect(reopened.buildSessionContext().messages).toMatchObject([
     summary("newest-only summary"),

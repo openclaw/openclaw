@@ -1,6 +1,7 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -11,7 +12,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import * as stateWorkerStore from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { expectNoMainThreadSql as withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
@@ -44,8 +45,8 @@ function worker(databasePath?: string, revokeAtCommit = false) {
   return {
     read: (command: Parameters<typeof executeExistingOpenClawStateRead>[1]) =>
       executeExistingOpenClawStateRead(location, command, { context, current: true }),
-    run: (operation: Parameters<typeof runOpenClawStateWorkerOperation>[1]) =>
-      runOpenClawStateWorkerOperation(context, operation, {
+    run: (operation: Parameters<typeof stateWorkerStore.runOpenClawStateWorkerOperation>[1]) =>
+      stateWorkerStore.runOpenClawStateWorkerOperation(context, operation, {
         createAdmission: () => ({
           nativeLocations: [context.admission.databasePath],
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
@@ -78,6 +79,72 @@ beforeEach(() => {
     lastUsedAt: 10,
   };
 });
+
+it.each(["reserve", "retain", "ready", "release"] as const)(
+  "refuses template %s after its selected state alias changes and preserves the original owner",
+  async (operation) => {
+    const original = env.OPENCLAW_STATE_DIR!;
+    const alias = `${original}-alias`;
+    const other = `${original}-other`;
+    await fs.mkdir(original, { recursive: true });
+    await fs.mkdir(other);
+    await fs.symlink(original, alias, process.platform === "win32" ? "junction" : "dir");
+    env.OPENCLAW_STATE_DIR = alias;
+    await reserve();
+    await ready(template.id, 20);
+    await retain({ id: template.id, key: "held-reader", owner });
+    const authority = { stateOwnerPath: { path: alias, canonicalPath: await fs.realpath(alias) } };
+    const run = () => {
+      switch (operation) {
+        case "reserve":
+          return registry.reserveTemplateAsync(
+            env,
+            { ...template, id: "generation-2", cacheKey: "second-volume" },
+            guard,
+            authority,
+          );
+        case "retain":
+          return registry.retainTemplateReaderAsync(
+            env,
+            { id: template.id, key: "next-reader", owner },
+            guard,
+            authority,
+          );
+        case "ready":
+          return registry.markTemplateReadyAsync(env, template.id, 30, guard, undefined, authority);
+        default:
+          return registry.releaseTemplateReaderAsync(env, "held-reader", guard, authority);
+      }
+    };
+    const dispatch = stateWorkerStore.runOpenClawStateWorkerOperation;
+    using _ = vi
+      .spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        await fs.unlink(alias);
+        await fs.symlink(other, alias, process.platform === "win32" ? "junction" : "dir");
+        return dispatch(...args);
+      });
+    try {
+      await expect(run()).rejects.toThrow("Sandbox workspace preparation cannot run");
+    } finally {
+      await fs.unlink(alias);
+      await fs.symlink(original, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+    expect(await read()).toEqual(published());
+    expect(await registry.hasTemplateReadersAsync(env, template.id, guard, authority)).toBe(true);
+    await run();
+    if (operation === "reserve") {
+      expect(await list()).toHaveLength(2);
+    } else if (operation === "ready") {
+      expect((await read())?.lastUsedAt).toBe(30);
+    } else {
+      await release("held-reader");
+      expect(await registry.hasTemplateReadersAsync(env, template.id, guard, authority)).toBe(
+        operation === "retain",
+      );
+    }
+  },
+);
 
 it("reads absent templates without writer queueing and recovers on the first mutation", async ({
   onTestFinished,
@@ -139,6 +206,99 @@ it("reads absent templates without writer queueing and recovers on the first mut
   });
 });
 
+it("shares captures by generation, commit and policy, and forgets retired manifests", async () => {
+  const document = { rawManifest: '{"entries":[]}', manifestRef: "sha256:synthetic" };
+  const capture = vi.fn(async () => document);
+  const cached = (record = template, policy = "source-v1") =>
+    registry.readTemplateManifest(record, policy);
+  const prepare = (record = template, policy = "source-v1") =>
+    registry.prepareTemplateManifest(record, policy, capture);
+  await reserve();
+  expect(await cached()).toBeUndefined();
+  expect(await Promise.all([prepare(), prepare()])).toEqual([document, document]);
+  for (const mismatch of [
+    { id: "other" },
+    { path: `${template.path}-other` },
+    { createdAt: 11 },
+    { sourceCommit: "b".repeat(40) },
+  ]) {
+    expect(await cached({ ...template, ...mismatch })).toBeUndefined();
+  }
+  expect(await cached(template, "other")).toBeUndefined();
+  await prepare(template, "other");
+  await prepare();
+  expect(capture).toHaveBeenCalledTimes(2);
+  expect(await cached()).toEqual(document);
+  await ready(template.id, 20);
+  await retire();
+  expect(await cached()).toBeUndefined();
+  expect(await cached(template, "other")).toBeUndefined();
+  await release("retire");
+  await prepare();
+  await remove(template.id);
+  expect(await cached()).toBeUndefined();
+  await expect(
+    registry.prepareTemplateManifest(template, "source-v1", async () => {
+      throw new Error("capture failed");
+    }),
+  ).rejects.toThrow("capture failed");
+  expect(await prepare()).toEqual(document);
+  await remove(template.id);
+});
+
+it("isolates cancellation of the initiating capture and its waiting callers", async () => {
+  const document = { rawManifest: "{}", manifestRef: "synthetic" };
+  const first = new AbortController();
+  const canceled = new AbortController();
+  const initiatingError = new Error("capture canceled");
+  const started = Promise.withResolvers<void>();
+  const capture = vi.fn(async () => document);
+  const initiating = registry.prepareTemplateManifest(
+    template,
+    "cancel",
+    async () => {
+      started.resolve();
+      return new Promise<typeof document>((_resolve, reject) => {
+        first.signal.addEventListener("abort", () => reject(initiatingError), { once: true });
+      });
+    },
+    first.signal,
+  );
+  await started.promise;
+  const waiting = registry.prepareTemplateManifest(template, "cancel", capture);
+  const leaving = registry.prepareTemplateManifest(template, "cancel", capture, canceled.signal);
+  const outcomes = Promise.allSettled([initiating, waiting, leaving]);
+  canceled.abort(new Error("waiter canceled"));
+  first.abort(initiatingError);
+  expect(await outcomes).toEqual([
+    { status: "rejected", reason: first.signal.reason },
+    { status: "fulfilled", value: document },
+    { status: "rejected", reason: canceled.signal.reason },
+  ]);
+  expect(capture).toHaveBeenCalledTimes(1);
+  await remove(template.id);
+});
+
+it("evicts the least recently used compressed manifest when the byte budget fills", async () => {
+  // Incompressible synthetic bytes exceed the 64 MiB budget with only three entries.
+  const document = {
+    rawManifest: randomBytes(24 * 1024 * 1024).toString("base64"),
+    manifestRef: "x",
+  };
+  const records = [0, 1, 2].map((n) => Object.assign({}, template, { id: `${template.id}-${n}` }));
+  for (const record of records.slice(0, 2)) {
+    await registry.prepareTemplateManifest(record, "policy", async () => document);
+  }
+  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
+  await registry.prepareTemplateManifest(records[2]!, "policy", async () => document);
+  expect(await registry.readTemplateManifest(records[1]!, "policy")).toBeUndefined();
+  expect(await registry.readTemplateManifest(records[0]!, "policy")).toEqual(document);
+  expect(await registry.readTemplateManifest(records[2]!, "policy")).toEqual(document);
+  for (const record of records) {
+    await remove(record.id);
+  }
+});
+
 it("admits readers only from retained ready generations and refuses retirement until they settle", async () => {
   await reserve();
   await ready(template.id, 20);
@@ -157,6 +317,15 @@ it("admits readers only from retained ready generations and refuses retirement u
     await retain({ ...selection, selection: { ...selection.selection, contentKey: "other" } }),
   ).toBeUndefined();
   expect(await retain(selection)).toEqual(published());
+  for (const now of [10, 30, 25]) {
+    const record = await retain({
+      ...selection,
+      key: "recency",
+      selection: { ...selection.selection, now },
+    });
+    expect(record?.lastUsedAt).toBe(now === 10 ? 20 : 30);
+    await release("recency");
+  }
   expect(await retire()).toBeUndefined();
   await release("first");
   expect(await retire()).toBeUndefined();
@@ -170,6 +339,8 @@ it("admits readers only from retained ready generations and refuses retirement u
 it("rolls back ready publication when custody is revoked at worker commit", async () => {
   await reserve();
   await ready(template.id, 20);
+  const document = { rawManifest: "{}", manifestRef: "synthetic" };
+  await registry.prepareTemplateManifest(template, "policy", async () => document);
   const staged = { ...template, id: "replacement", cacheKey: "preparing:replacement" };
   await reserve(staged);
   await expect(
@@ -185,6 +356,7 @@ it("rolls back ready publication when custody is revoked at worker commit", asyn
     ),
   ).rejects.toThrow("allocation lease lost");
   expect(await read()).toEqual(published());
+  expect(await registry.readTemplateManifest(template, "policy")).toEqual(document);
   expect(await registry.readTemplateAsync(env, staged.cacheKey)).toEqual(staged);
   expect(
     await registry.markTemplateReadyAsync(env, staged.id, 30, guard, {
@@ -193,6 +365,7 @@ it("rolls back ready publication when custody is revoked at worker commit", asyn
     }),
   ).toBe(true);
   expect(await read()).toEqual({ ...published(staged, 30), cacheKey: template.cacheKey });
+  expect(await registry.readTemplateManifest(template, "policy")).toBeUndefined();
   expect(await registry.readTemplateAsync(env, staged.cacheKey)).toBeUndefined();
   expect(await registry.readTemplateAsync(env, `retired:${template.id}`)).toEqual({
     ...template,

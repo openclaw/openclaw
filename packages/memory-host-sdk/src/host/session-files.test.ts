@@ -379,6 +379,59 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("User: Actual user text");
   });
 
+  it("keeps current and historical exec completion notices out of memory", async () => {
+    const filePath = writeMessages("exec-notices-session.jsonl", [
+      makeUserMessage("Exec completed (abcd1234, code 0) :: historical output", 1),
+      makeUserMessage("Exec completed (abcd1234, code 0, 4m2s) with no output.", 2),
+      makeUserMessage("Exec failed (abcd1234, signal SIGKILL, 3ms):\nlast line\n\nmore", 3),
+      makeUserMessage(
+        "Exec completed (abcd1234, code 0, 1h2m), last 2000 of 300000 output chars (process log keeps the last 200000; earlier output was discarded):\ntail",
+        4,
+      ),
+      makeUserMessage("Actual user text", 5),
+    ]);
+
+    const entry = await buildEntry(filePath);
+    expect(entry.content).toBe("User: Actual user text");
+  });
+
+  it.each([
+    {
+      kind: "output-file footer",
+      notice:
+        "Exec completed (abcd1234, code 0, 1h2m), last 2000 of 300000 output chars:\nSYNTHETIC-SECRET\n\nFull output: /tmp/openclaw/exec-abcd1234.log",
+      exported:
+        "Exec completed (abcd1234, code 0, 1h2m), last 2000 of 300000 output chars: SYNTHETIC-SECRET Full output: /tmp/openclaw/exec-abcd1234.log",
+    },
+    {
+      kind: "lost-process notice",
+      notice:
+        "Exec failed (abcd1234, code null, 3ms):\nThis background command (started 2026-11-18T00:00:00.000Z) was stopped when the Gateway shut down, so its result will not arrive. If you still need it, check its output and side effects, then run it again.\n\nFull output: /tmp/openclaw/exec-abcd1234.log",
+      exported:
+        "Exec failed (abcd1234, code null, 3ms): This background command (started 2026-11-18T00:00:00.000Z) was stopped when the Gateway shut down, so its result will not arrive. If you still need it, check its output and side effects, then run it again. Full output: /tmp/openclaw/exec-abcd1234.log",
+    },
+  ])(
+    "excludes exec $kind from memory but preserves authored text",
+    async ({ notice, exported }) => {
+      const filePath = writeMessages("exec-provenance-session.jsonl", [
+        {
+          ...makeUserMessage(notice, 1),
+          provenance: { kind: "internal_system", sourceTool: "exec", runId: "exec-run" },
+        },
+        makeUserMessage(notice, 2),
+        {
+          role: "assistant",
+          content: notice,
+          provenance: { kind: "internal_system", sourceTool: "exec", runId: "exec-run" },
+        },
+      ]);
+
+      const entry = await buildEntry(filePath);
+      expect(entry.content).toBe(`User: ${exported}\nAssistant: ${exported}`);
+      expect(entry.lineMap).toStrictEqual([2, 3]);
+    },
+  );
+
   it("drops Date-invalid numeric message timestamps", async () => {
     const filePath = writeMessages("invalid-timestamp-session.jsonl", [
       makeUserMessage("Hello", 8_640_000_000_000_001),

@@ -5,9 +5,14 @@ import {
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -497,70 +502,117 @@ describe("legacy provider catalog retention", () => {
     expect(result.entries.map(({ id }) => id).toSorted()).toEqual(expected);
   });
 
-  it("does not treat native-first configured rows as a completed provider acquisition", async () => {
-    const configured = {
-      id: "configured",
-      name: "Configured",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 4096,
-    };
-    const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
-    mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "fixture",
-        source: "fixture",
-        harness: {
-          id: "fixture",
-          label: "Fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog: async () => [native],
-        },
+  it.each([false, true])(
+    "keeps provider acquisition ownership across native-only publication (replaced=%s)",
+    async (replaced) => {
+      const configured = {
+        id: "configured",
+        name: "Configured",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      };
+      const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
+      mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+        const registry = createEmptyPluginRegistry();
+        registry.agentHarnesses.push({
+          pluginId: "fixture",
+          source: "fixture",
+          harness: {
+            id: "fixture",
+            label: "Fixture",
+            supports: () => ({ supported: true }),
+            runAttempt: vi.fn(),
+            loadModelCatalog: async () => [native],
+          },
+        });
+        return registry;
       });
-      return registry;
-    });
-    const config: OpenClawConfig = {
-      agents: { entries: { pro: { model: "custom/configured" } } },
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://catalog.example.invalid/v1",
-            api: "openai-completions",
-            models: [configured],
+      const config: OpenClawConfig = {
+        agents: { entries: { pro: { model: "custom/configured" } } },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://catalog.example.invalid/v1",
+              api: "openai-completions",
+              models: [configured],
+            },
           },
         },
-      },
-    };
-    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
-      catalogMode: "static",
-      provenance: "standalone",
-    });
-    await owner.loadNativeModelCatalog!({
-      provider: "custom",
-      modelId: "native",
-      runtime: "fixture",
-    });
-    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
-    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-    expect(stored.catalogInventory?.providers.size).toBe(0);
-    expect(stored.catalogInventory?.catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: "custom", id: "configured" }),
-    );
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [],
-      routeVariants: [],
-      staticEntries: [starter],
-      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
-    });
-    const result = await owner.loadFullModelCatalog!({ refresh: true });
-    expect(result.entries).toContainEqual(expect.objectContaining(starter));
-    expect(result.authoritative).toBe(false);
-  });
+      };
+      const input = fixture.agentInput("pro", config);
+      let owner = await publishPreparedModelRuntimeSnapshot(input, {
+        catalogMode: "static",
+        provenance: "standalone",
+      });
+      if (replaced) {
+        const accountA = { provider: "custom", id: "account-a-only", name: "Account A" };
+        mocks.runPreparedModelCatalogWorker.mockResolvedValue(makeCatalog([accountA]));
+        expect((await owner.loadFullModelCatalog!()).entries).toContainEqual(
+          expect.objectContaining(accountA),
+        );
+        mocks.authStorage.getAll.mockReturnValue({
+          custom: { type: "api_key", key: "replacement-key" },
+        });
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        mocks.runPreparedModelCatalogWorker.mockClear();
+        await owner.loadNativeModelCatalog!({
+          provider: "custom",
+          modelId: "native",
+          runtime: "missing-fixture",
+        });
+        expect(
+          resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory?.providers.has(
+            "custom",
+          ),
+        ).toBe(true);
+      }
+      await owner.loadNativeModelCatalog!({
+        provider: "custom",
+        modelId: "native",
+        runtime: "fixture",
+      });
+      const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(stored.catalogInventory?.providers.size).toBe(0);
+      expect([...(stored.catalogInventory?.acquiredProviderIds ?? [])]).toEqual(
+        replaced ? ["custom"] : [],
+      );
+      expect(
+        stored.catalogInventory?.catalog.entries.some(({ id }) => id === "account-a-only"),
+      ).not.toBe(true);
+      expect(stored.catalogInventory?.catalog.entries).toContainEqual(
+        expect.objectContaining({ provider: "custom", id: "configured" }),
+      );
+      if (replaced) {
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        expect(
+          owner.readFullModelCatalog!()?.entries.some(({ id }) => id === "account-a-only"),
+        ).not.toBe(true);
+        expect(stored.catalogInventory?.acquiredProviderIds?.has("custom")).toBe(true);
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+        entries: [],
+        routeVariants: [],
+        staticEntries: [starter],
+        providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+      });
+      const result = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(result.entries).toContainEqual(expect.objectContaining(starter));
+      expect(result.authoritative).toBe(false);
+    },
+  );
 
   describe("failed provider discovery retry", () => {
     const unavailable = makeCatalog([], {
@@ -633,21 +685,64 @@ describe("legacy provider catalog retention", () => {
     });
     mocks.configuredAgentIds = ["pro"];
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
-      catalogMode: "static",
-    });
-    const catalog = await owner.loadFullModelCatalog!({
-      refresh: true,
-      providerIds: ["anthropic"],
-    });
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({ ...native, provider: "anthropic" }),
+    // Only the hosted catalog describes the listed ID; no bundled, static or account row does.
+    const anthropic = { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" } as const;
+    const plugins: PluginManifestRecord[] = mocks.pluginMetadataSnapshot.plugins;
+    plugins.push(
+      createPluginManifestRecordFixture({
+        id: "anthropic",
+        providers: ["anthropic"],
+        modelCatalog: {
+          providers: { anthropic: { ...anthropic, models: [] } },
+          discovery: { anthropic: "refreshable" },
+        },
+      }),
     );
-    expect(catalog.providerOutcomes).toContainEqual({
-      provider: "claude-cli",
-      status: "ready",
-      listedModelIds: [native.id],
-    });
+    try {
+      const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+        catalogMode: "static",
+      });
+      const load = () => owner.loadFullModelCatalog!({ refresh: true, providerIds: ["anthropic"] });
+      // A first start reads the catalog before the hosted download arrives.
+      const beforeHosted = await load();
+      expect(beforeHosted.entries).toContainEqual(
+        expect.objectContaining({ ...native, provider: "anthropic" }),
+      );
+      expect(
+        beforeHosted.entries.find(({ id }) => id === native.id)?.contextWindow,
+      ).toBeUndefined();
+      const catalog = await withRemoteModelCatalogSnapshot(
+        {
+          sourceUrl: resolveRemoteCatalogUrl({}),
+          generatedAt: 1,
+          revision: "fixture",
+          recommendations: {},
+          providers: {
+            anthropic: {
+              ...anthropic,
+              models: [
+                { id: native.id, contextWindow: 1_000_000, maxTokens: 128_000 },
+                { id: "claude-unlisted", contextWindow: 200_000, maxTokens: 64_000 },
+              ],
+            },
+          },
+          pricing: {},
+          upstreamPricing: {},
+        },
+        load,
+      );
+      expect(catalog.entries).toContainEqual(
+        expect.objectContaining({ ...native, provider: "anthropic", contextWindow: 1_000_000 }),
+      );
+      expect(catalog.entries.map(({ id }) => id)).not.toContain("claude-unlisted");
+      expect(catalog.providerOutcomes).toContainEqual({
+        provider: "claude-cli",
+        status: "ready",
+        listedModelIds: [native.id],
+      });
+    } finally {
+      plugins.pop();
+    }
   });
 
   it("reacquires discovered providers that a config rebuild cannot retain", async () => {
@@ -813,4 +908,37 @@ describe("captured startup inventory refresh", () => {
     expect(refreshed.routeVariants).toEqual([]);
     expect(refreshed.providerOutcomes).toEqual([{ provider: "custom", status: "ready" }]);
   });
+});
+
+it("does not publish a static catalog generation superseded while its hook is running", async () => {
+  mocks.configuredAgentIds = ["default"];
+  const refreshStatic = (config: OpenClawConfig) =>
+    refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+  const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+  const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
+  const started = createDeferred();
+  const finish = createDeferred();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async (...args) => {
+    started.resolve();
+    await finish.promise;
+    return await defaultPrepareStaticCatalog!(...args);
+  });
+
+  const stale = refreshStatic(staleConfig);
+  // Surface refresh failures before hook entry instead of waiting for the test timeout.
+  await Promise.race([
+    started.promise,
+    stale.then(() => {
+      throw new Error("static catalog refresh completed before its hook");
+    }),
+  ]);
+  const latest = refreshStatic(latestConfig);
+  finish.resolve();
+
+  await expect(stale).rejects.toThrow("superseded");
+  await latest;
+  expect(getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig))?.config).toBe(
+    latestConfig,
+  );
 });

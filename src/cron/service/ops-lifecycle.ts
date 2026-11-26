@@ -1,6 +1,7 @@
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { subscribeCronJobsStoreMutations } from "../store.js";
 import { locked } from "./locked.js";
+import { notifyCronRunQueueTurn } from "./run-queue-wake.js";
 import { stopCronRunQueue, drainCronRunQueue, waitForCronRunQueue } from "./run-queue.js";
 import { recoverCronRuns } from "./run-recovery.js";
 import { refreshCronScheduler, startCronScheduler, stopCronScheduler } from "./scheduler-actor.js";
@@ -103,6 +104,7 @@ export async function start(state: CronServiceState): Promise<void> {
 export function stop(state: CronServiceState) {
   state.lifecycleGeneration += 1;
   state.stopped = true;
+  state.handedOver = false;
   mutationSubscriptions.get(state)?.();
   mutationSubscriptions.delete(state);
   state.schedulerStarted = false;
@@ -121,6 +123,14 @@ export function stop(state: CronServiceState) {
       state.deps.log.warn({ errors }, "cron: shutdown left work for recovery");
     }
   });
+  // Fired conditions waiting for a run slot wake to end; after a handover they keep waiting.
+  notifyCronRunQueueTurn(state);
+}
+
+/** A reload's replacement takes over scheduling; runs already executing here still publish. */
+export function handOver(state: CronServiceState) {
+  stop(state);
+  state.handedOver = true;
 }
 
 export function pauseScheduling(state: CronServiceState) {

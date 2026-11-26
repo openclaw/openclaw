@@ -461,7 +461,7 @@ describe("session catalog caller visibility", () => {
     const respond = await call("continue", locator("owned-thread"));
 
     expect(continueSession).not.toHaveBeenCalled();
-    expectForbidden(respond, expect.stringContaining('cannot create sessions for agent "main"'));
+    expectForbidden(respond, expect.stringContaining('did not start a session with agent "main"'));
   });
 
   it("keeps operator.admin unrestricted despite a configured none role", async () => {

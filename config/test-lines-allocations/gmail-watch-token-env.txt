@@ -1,2 +1,0 @@
-# Gmail secure transport, legacy continuity, Homebrew ownership/upgrades, and Doctor consent regression coverage.
-714

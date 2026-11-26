@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -78,9 +79,41 @@ afterEach(() => {
   dispose = undefined;
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("running installation replacement", () => {
+  it("keeps periodic installation observations free of synchronous filesystem calls", async () => {
+    const handoff = registerReplacement();
+    await writeIdentity("2026.9.4", "build-before");
+    const counts: Record<string, number> = {};
+    const restore: Array<() => void> = [];
+    try {
+      // Linux exposes unsupported methods such as lchmodSync as undefined.
+      for (const key of Object.keys(syncFs).filter(
+        (name) => name.endsWith("Sync") && typeof Reflect.get(syncFs, name) === "function",
+      )) {
+        const descriptor = Object.getOwnPropertyDescriptor(syncFs, key)!;
+        Object.defineProperty(syncFs, key, {
+          ...descriptor,
+          value: new Proxy(descriptor.value, {
+            apply(fn, receiver, args) {
+              counts[key] = (counts[key] ?? 0) + 1;
+              return Reflect.apply(fn, receiver, args);
+            },
+          }),
+        });
+        restore.push(() => Object.defineProperty(syncFs, key, descriptor));
+      }
+      await owner.checkGatewayInstallationReplacement();
+      await owner.checkGatewayInstallationReplacement();
+    } finally {
+      restore.toReversed().forEach((undo) => undo());
+    }
+    expect(counts).toEqual({});
+    expectPending(handoff);
+  });
+
   it.each(["rebuild", "package swap", "source-only"] as const)(
     "observes %s metadata",
     async (kind) => {
@@ -118,6 +151,35 @@ describe("running installation replacement", () => {
     },
   );
 
+  it("ignores oversized, linked and non-file metadata until a complete regular file appears", async () => {
+    const handoff = registerReplacement();
+    const metadata = path.join(fixture.root, "dist", "build-info.json");
+    await fs.writeFile(
+      metadata,
+      JSON.stringify({
+        version: "2026.9.5",
+        buildId: "build-after",
+        padding: " ".repeat(16 * 1024),
+      }),
+    );
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    await fs.unlink(metadata);
+    await fs.mkdir(metadata);
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    await fs.rmdir(metadata);
+    const target = path.join(fixture.root, "identity.json");
+    await fs.writeFile(target, JSON.stringify({ version: "2026.9.5", buildId: "build-after" }));
+    await fs.symlink(target, metadata);
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    await fs.unlink(metadata);
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it("follows a replaced stable pnpm link after the running version directory is removed", async () => {
     const globalRoot = fixture.root;
     const stableRoot = path.join(globalRoot, "node_modules", "openclaw");
@@ -153,6 +215,27 @@ describe("running installation replacement", () => {
     await copiedModule.checkGatewayInstallationReplacement();
     expect(handoff).toHaveBeenCalledOnce();
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it("leaves a replaced installation to the update run that holds it", async () => {
+    // The handoff worker resolves the same coordination store from TMPDIR.
+    vi.stubEnv("TMPDIR", directories.make("openclaw-update-lease-"));
+    const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-lease.js"),
+      import("../infra/update-install-root.js"),
+    ]);
+    const store = createManagedHandoffLeaseStore();
+    const run = store.acquire(resolveUpdateInstallRoot(fixture.root), "run", { kind: "update" });
+    if (run.kind !== "acquired") {
+      throw new Error("fixture acquisition failed");
+    }
+    const handoff = registerReplacement();
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    expect(store.release(run.lease)).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
   });
 
   it("leaves installation handoff with the suspension owner from preparation until rollback", async () => {
@@ -197,9 +280,10 @@ describe("running installation replacement", () => {
   );
 
   it("coalesces reads and discards observations after registration changes", async () => {
-    const json = await import("../infra/json-files.js");
-    const pending = createDeferredCore<unknown>();
-    const read = vi.spyOn(json, "tryReadJson").mockImplementationOnce(() => pending.promise);
+    await writeIdentity();
+    const metadata = await fs.lstat(path.join(fixture.root, "dist", "build-info.json"));
+    const pending = createDeferredCore<typeof metadata>();
+    const read = vi.spyOn(fs, "lstat").mockImplementationOnce(() => pending.promise);
     const restart = registerReplacement();
     const checking = Promise.all([
       owner.checkGatewayInstallationReplacement(),
@@ -209,12 +293,12 @@ describe("running installation replacement", () => {
     try {
       dispose?.();
       const currentHandoff = registerReplacement();
-      pending.resolve({ version: "2026.9.5", buildId: "build-after" });
+      pending.resolve(metadata);
       await checking;
       expectPending(restart);
       expectPending(currentHandoff);
     } finally {
-      pending.resolve(undefined);
+      pending.resolve(metadata);
       await checking;
     }
   });

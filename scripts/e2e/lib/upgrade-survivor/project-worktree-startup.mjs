@@ -182,7 +182,12 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   try {
     for (const [role, prefix, symbol] of [
       ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["backup", "doctor-migration-backup", "captureFreshDoctorMigrationTables"],
+      ["withBackup", "update-doctor-migration-attribution", "runWithDoctorMigrationBackup"],
       ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["readConfig", "io.runtime", "readConfigFileSnapshot"],
+      ["planConfig", "automatic-config-repair", "planAutomaticConfigRepair"],
+      ["commitConfig", "automatic-config-repair", "commitAutomaticConfigRepair"],
       ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
       ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
     ]) {
@@ -201,14 +206,37 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   const { agentDb } = readJson(ctx.importReceipt);
   const errors = [];
   let result;
+  let configChanges;
   try {
     result = await doctor.api.lock({
       env: process.env,
       operation: "project worktree fixture schema preparation",
       run: () =>
-        doctor.api.migrate({
-          env: process.env,
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+        doctor.api.withBackup(doctor.api.backup, async () => {
+          const migrated = await doctor.api.migrate({
+            env: process.env,
+            configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+          });
+          // The independent published fixture missed update's config repair, but must retain its legacy workspace metadata.
+          const configSnapshot = await doctor.api.readConfig();
+          const repair = await doctor.api.planConfig(configSnapshot);
+          assert(repair, "Expected the independent fixture's legacy roster repair");
+          assert.deepEqual(repair.changes, [
+            "Moved agents.list → keyed agents.entries.",
+            "Removed retired agents.entries default marker.",
+          ]);
+          await doctor.api.commitConfig(repair, configSnapshot);
+          const configured = await doctor.api.readConfig();
+          assert.equal(configured.valid, true, "Fixture config repair did not admit startup");
+          for (const key of ["gateway", "session", "plugins"]) {
+            assert.equal(
+              hash(JSON.stringify(configured.parsed[key])),
+              hash(JSON.stringify(configSnapshot.parsed[key])),
+              `Fixture config repair changed ${key}`,
+            );
+          }
+          configChanges = repair.changes;
+          return migrated;
         }),
     });
   } catch (error) {
@@ -232,6 +260,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
     fromSchema: before.agent.schema,
     targetSchema: owner.agentSchema,
+    configChanges,
     result,
   });
   assert.deepEqual(
@@ -543,7 +572,12 @@ export function assertProjectWorktreeStartupLog(log, start) {
 }
 
 export function assertProjectWorktreeStartupPreservation(actual, original, expectedWorkspace) {
-  assert.deepEqual(actual.shared, original.shared);
+  const withWorktreeDefaults = (shared) => ({
+    ...shared,
+    // The published baseline predates the nullable worktree GC protection column.
+    worktrees: shared.worktrees.map((row) => Object.assign({ gc_protection_json: null }, row)),
+  });
+  assert.deepEqual(withWorktreeDefaults(actual.shared), withWorktreeDefaults(original.shared));
   assert.deepEqual(actual.agent.transcript, original.agent.transcript);
   assert.equal(actual.agent.sessions.length, original.agent.sessions.length);
   for (const row of actual.agent.sessions) {

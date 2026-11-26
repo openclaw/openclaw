@@ -17,6 +17,15 @@ config snapshot. Rows owned by native model selection set `nativeRuntime` to
 the harness ID and omit host `api` and `baseUrl` claims. Core does not enrich
 these rows with transport or capabilities from a host route.
 
+Set `modelCatalogProviderIds` when the providers listed by a harness differ from
+its configured execution providers. Provider-scoped refreshes use this declaration
+to select catalog owners without invoking unrelated runtimes. Without a declaration,
+OpenClaw infers providers from configured routes and probes unconfigured harnesses.
+
+When `params.providerIds` is present, restrict discovery to those providers before
+resolving credentials or contacting native services. An omitted scope requests the
+full picker inventory; `configuredModelRefs` is context, not a discovery filter.
+
 Return `{ entries, outcomes }` to report secret-free discovery outcomes alongside
 the rows. Outcomes use the provider catalog statuses `ready`, `auth-rejected`,
 and `unavailable`; a catalog-only auth rejection sets `rejectionScope: "catalog"`.
@@ -30,6 +39,11 @@ authentication. Plain row arrays remain supported for plugins built against the
 Unexpected thrown discovery errors keep the host’s generic partial-failure behavior.
 The host does not infer a provider or authentication rejection from a runtime name
 or arbitrary exception text; a harness must supply its own known provider outcome.
+
+Discovery holds a plugin only while its call into that plugin is running, so
+other plugins, including ones whose lookup already finished, reload while
+discovery continues. A call that is still running keeps its own plugin from
+reloading until it settles, so bound your own native requests with a deadline.
 
 An optional synchronous `readModelCatalogReadiness(params)` returns only
 `{ accountType: string }` for a current native account observation

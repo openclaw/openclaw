@@ -55,10 +55,10 @@ test.for(["new database", "interrupted empty database"])(
       path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
     const configuredDatabasePath = databaseAt(stateDir);
     const databasePath = databaseAt(await fs.realpath(stateDir));
+    const { ws } = await openClient();
     testState.sessionStorePath = storeAt("{agentId}");
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
     setRuntimeConfigSnapshot(loadGatewayTestConfig());
-    const { ws } = await openClient();
     if (scenario === "interrupted empty database") {
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       await fs.writeFile(databasePath, "");
@@ -82,14 +82,14 @@ test.for(["new database", "interrupted empty database"])(
       dispatched: number;
     }>();
     let observeDiscovery = false;
-    const run = vi.spyOn(sessionReaders.targetDiscoveryLane.pool, "run");
+    const run = vi.spyOn(sessionReaders.sessionStoreLane.pool, "run");
     const original = sessionReaders.withSessionHistoryWorkerReadCandidates;
     const readCandidates = vi
       .spyOn(sessionReaders, "withSessionHistoryWorkerReadCandidates")
       .mockImplementation((candidates, operation, lane, requestSignal) => {
         const observe =
           observeDiscovery &&
-          lane === sessionReaders.targetDiscoveryLane &&
+          lane === sessionReaders.sessionStoreLane &&
           candidates.some((candidate) => candidate.physicalPath === databasePath);
         return original(
           candidates,
@@ -141,7 +141,12 @@ test.for(["new database", "interrupted empty database"])(
       const result = await withinTest(creating, signal);
       // A second unadmitted path would defer dispatch even without joining schema birth.
       expect(observed.candidates).toEqual([
-        { path: configuredDatabasePath, physicalPath: databasePath },
+        {
+          path: configuredDatabasePath,
+          physicalPath: databasePath,
+          identity: undefined,
+          scope: undefined,
+        },
       ]);
       expect(result).toMatchObject({ ok: true, payload: { key, sessionId: expect.any(String) } });
       expect(observed.dispatched, "Discovery must wait for the canonical agent schema").toBe(0);

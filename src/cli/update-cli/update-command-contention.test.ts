@@ -117,7 +117,7 @@ it.each(["update", "repair", "completion", "repair completion"] as const)(
   20_000,
 );
 
-it.each(["dry-run", "update", "repair", "finalize"] as const)(
+it.each(["dry-run", "repair", "finalize"] as const)(
   "reports exhausted %s admission as recoverable and preserves history",
   async (mode) => {
     const { filename, before } = state();

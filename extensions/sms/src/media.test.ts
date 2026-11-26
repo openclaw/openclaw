@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   MediaFetchError,
+  saveRemoteMedia as saveRemoteMediaForTest,
   type unlinkIfExists as unlinkIfExistsType,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { HostedOutboundMediaMetaRecord } from "openclaw/plugin-sdk/outbound-media";
@@ -14,6 +15,7 @@ import type {
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -865,7 +867,6 @@ describe("SMS inbound MMS materialization", () => {
       expect.objectContaining({
         maxBytes: 5 * 1024 * 1024,
         requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
@@ -1000,5 +1001,44 @@ describe("SMS inbound MMS materialization", () => {
     await expect(pending).rejects.toBe(timeoutReason);
     expect(timeoutSpy).toHaveBeenCalledWith(4 * 60_000);
     timeoutSpy.mockRestore();
+  });
+
+  it("follows Twilio's media redirect to its CDN without the Twilio credentials", async () => {
+    const state = await createOpenClawTestState({ label: "sms-inbound-media-redirect" });
+    const hops: Array<{ host: string; authorization: string | null }> = [];
+    try {
+      const result = await materializeSmsInboundMedia({
+        account: createAccount(),
+        msg: createInboundMessage(),
+        mediaRuntime: {
+          media: {
+            saveRemoteMedia: async (options: Parameters<typeof saveRemoteMediaForTest>[0]) =>
+              await saveRemoteMediaForTest({
+                ...options,
+                // The guard resolves each hop before the stubbed transport runs.
+                lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+                fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  hops.push({
+                    host: new URL(input instanceof Request ? input.url : input).hostname,
+                    authorization: new Headers(init?.headers).get("authorization"),
+                  });
+                  const location = `https://mms.twiliocdn.com/${ACCOUNT_SID}/${"1".repeat(32)}`;
+                  return hops.length === 1
+                    ? new Response(null, { status: 307, headers: { location } })
+                    : new Response("jpeg", { headers: { "content-type": "image/jpeg" } });
+                },
+              }),
+          },
+        } as never,
+      });
+
+      expect(result.media).toHaveLength(1);
+      expect(hops).toEqual([
+        { host: "api.twilio.com", authorization: expect.stringMatching(/^Basic /) },
+        { host: "mms.twiliocdn.com", authorization: null },
+      ]);
+    } finally {
+      await state.cleanup();
+    }
   });
 });

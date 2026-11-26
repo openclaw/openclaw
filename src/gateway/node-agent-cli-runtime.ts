@@ -5,7 +5,7 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
 } from "../infra/node-commands.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import {
   invokeNodeClaudeSkillRuntime,
   type NodeClaudeSkillRuntime,
@@ -15,7 +15,6 @@ import type { NodeInvokeResult } from "./node-registry.js";
 
 export async function invokeNodeClaudeCliRun(params: {
   assertCurrent?: () => void;
-  assertReadable?: () => void | Promise<void>;
   nodeId: string;
   argv: string[];
   stdin: string;
@@ -34,7 +33,7 @@ export async function invokeNodeClaudeCliRun(params: {
   signal?: AbortSignal;
   skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getPluginRuntimeGatewayRequestScope()?.context;
+  const context = getInProcessGatewayRequestContext();
   if (!context) {
     return {
       ok: false,
@@ -70,7 +69,6 @@ export async function invokeNodeClaudeCliRun(params: {
     };
   }
   params.skillRuntime?.assertCurrent();
-  const assertReadable = params.assertReadable;
   const invocation: Parameters<typeof context.nodeRegistry.invoke>[0] = {
     nodeId: params.nodeId,
     expectedConnId: node.connId,
@@ -100,13 +98,6 @@ export async function invokeNodeClaudeCliRun(params: {
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
-    authorizeDispatch: assertReadable
-      ? async () => {
-          await assertReadable();
-          params.assertCurrent?.();
-          return true;
-        }
-      : undefined,
     isDispatchAuthorized: () => {
       params.assertCurrent?.();
       return true;

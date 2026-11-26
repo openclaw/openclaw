@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
@@ -40,6 +41,23 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
   "close-and-restart",
 );
+const signalObservers = resolveGlobalSet<unknown>(
+  Symbol.for("openclaw.signalExitObservers"),
+  "close-and-restart",
+);
+
+/** SIGINT/SIGTERM listeners added by `start` only redraw; the CLI owner keeps the exit. */
+export function startSignalObserver(start: () => void): () => void {
+  const before = new Set([...process.listeners("SIGINT"), ...process.listeners("SIGTERM")]);
+  start();
+  const added = [...process.listeners("SIGINT"), ...process.listeners("SIGTERM")].filter(
+    (listener) => !before.has(listener),
+  );
+  for (const listener of added) {
+    signalObservers.add(listener);
+  }
+  return () => added.forEach((listener) => signalObservers.delete(listener));
+}
 
 export function registerSignalExitGate(
   finished: Promise<void>,
@@ -142,7 +160,9 @@ function handleCliSignal(signal: CliExitSignal): void {
   }
   if (
     !cliDoctorSignalOwner &&
-    process.listeners(signal).some((existing) => existing !== cliSignalListeners[signal])
+    process
+      .listeners(signal)
+      .some((existing) => existing !== cliSignalListeners[signal] && !signalObservers.has(existing))
   ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.
@@ -217,6 +237,50 @@ export function installCliSignalExitHandlers(): () => void {
     }
   });
   return () => lifetime.dispose();
+}
+
+// Gateway run keeps its run loop's signal handling, which needs state custody. Until that
+// loop holds custody and installs its handlers, startup shares the CLI owner: a stop then
+// unwinds startup instead of taking the default action with state locks still held.
+const gatewayStartupSignals = resolveGlobalSingleton<{
+  stop?: CliExitSignal;
+  handOff?: () => void;
+}>(Symbol.for("openclaw.gatewayStartupSignals"), () => ({}));
+
+export async function withGatewayStartupSignalOwner<T>(run: () => T | Promise<T>): Promise<T> {
+  const finished = createDeferredCore();
+  const releaseSignals = installCliSignalExitHandlers();
+  const releaseGate = registerSignalExitGate(finished.promise, (signal) => {
+    gatewayStartupSignals.stop ??= signal;
+  });
+  const handOff = () => {
+    if (gatewayStartupSignals.handOff !== handOff) {
+      return;
+    }
+    gatewayStartupSignals.handOff = undefined;
+    gatewayStartupSignals.stop = undefined;
+    releaseGate();
+    releaseSignals();
+    finished.resolve();
+  };
+  gatewayStartupSignals.handOff = handOff;
+  gatewayStartupSignals.stop = undefined;
+  try {
+    return await run();
+  } finally {
+    handOff();
+  }
+}
+
+/** Exit status of a stop accepted before the Gateway run loop owned signals. */
+export function getGatewayStartupStopExitCode(): number | undefined {
+  const stop = gatewayStartupSignals.handOff ? gatewayStartupSignals.stop : undefined;
+  return stop ? cliSignalExitCodes[stop] : undefined;
+}
+
+/** Call in the same turn the run loop installs its handlers, so no stop goes unowned. */
+export function handOffGatewayStartupSignals(): void {
+  gatewayStartupSignals.handOff?.();
 }
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */

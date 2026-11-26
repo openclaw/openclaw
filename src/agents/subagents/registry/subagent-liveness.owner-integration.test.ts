@@ -28,7 +28,7 @@ import {
 } from "../../admitted-run-context.js";
 import { resolveSpawnAdmission } from "../../spawn-plan.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { settleSubagentCompletionInHistory } from "../completion/subagent-completion-admission.store.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   activateSwarmRun,
@@ -100,7 +100,7 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   return subagentRuns.get(id)!;
 }
 
-it("admits new work at the child cap when finished descendants have suspended delivery", async () => {
+it("admits new work at the child cap when finished descendants have delivered results", async () => {
   const now = Date.now();
   const completed = Array.from({ length: 5 }, (_, index) => ({
     runId: `completed-orchestrator-${index}`,
@@ -120,7 +120,7 @@ it("admits new work at the child cap when finished descendants have suspended de
       runId: `${entry.runId}-child`,
       childSessionKey: `${entry.childSessionKey}:subagent:child`,
       requesterSessionKey: entry.childSessionKey,
-      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+      delivery: { status: "delivered" },
     });
   }
   const admission = () =>
@@ -367,6 +367,9 @@ it("retains an exact queued collector reservation without calling it executor-li
   });
   const hold = holdQueuedSwarmRun(entry.runId);
   try {
+    await testing.sweepOnceForTests();
+    expect(subagentRuns.get(entry.runId)).toMatchObject({ execution: { status: "queued" } });
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion).toBeUndefined();
     expect(hold?.withdraw()).toBe(true);
     expect(captured.countActiveDescendantRuns(parent)).toBe(0);
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);
@@ -603,10 +606,10 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
   ).toEqual([{ runId: entry.runId, execution: "unknown" }]);
 });
 
-it("retains durable suspended completion debt without reporting a live executor or awaiting automatic settlement", async () => {
+it("settles durable completion debt without reporting a live executor", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  let entry = await register("suspended-debt", false, true);
-  // Restore a terminal result awaiting delivery, then use the real atomic suspension owner.
+  let entry = await register("history-settlement", false, true);
+  // Restore a terminal result awaiting delivery, then use the real atomic settlement owner.
   await mutateSubagentRuns([entry.runId], (rows) => {
     const draft = structuredClone(rows.get(entry.runId)!);
     draft.execution = {
@@ -622,18 +625,12 @@ it("retains durable suspended completion debt without reporting a live executor 
   now.mockReturnValue(olderThanCutoff);
   expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(true);
-  expect(
-    await blockSubagentCompletionDelivery({
-      subagent: entry,
-      reason: "delivery budget exhausted",
-      suspendedReason: "expiry",
-    }),
-  ).toBe(true);
-  const suspended = subagentRuns.get(entry.runId)!;
-  expect(suspended.delivery?.status).toBe("suspended");
+  expect(await settleSubagentCompletionInHistory({ subagent: entry })).toBe(true);
+  const settled = subagentRuns.get(entry.runId)!;
+  expect(settled.delivery?.status).toBe("delivered");
   expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(false);
-  expect(isSubagentRunLive(suspended)).toBe(false);
+  expect(isSubagentRunLive(settled)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(0);
   subagentRuns.clear();

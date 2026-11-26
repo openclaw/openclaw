@@ -12,7 +12,7 @@ const MESSAGE_PREVIEW_FADE_START_FRACTION = 0.24;
 export function shouldCollapseUserMessage(markdown: string): boolean {
   return (
     markdown.length > USER_MESSAGE_COLLAPSED_CHAR_LIMIT ||
-    markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
+    markdown.split(/\r\n?|\n/, USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
       USER_MESSAGE_COLLAPSED_LINE_LIMIT
   );
 }

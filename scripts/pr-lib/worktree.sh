@@ -348,12 +348,19 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_ref() {
-  local refspec="$1" root source git_dir promisor filter=""
+  local refspec="$1" root source
   shift
   root=$(repo_root) || return 1
-  source=$(pr_git -C "$root" remote get-url origin) || return 1
-  git_dir=$(pr_git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
+  source=$(pr_git -C "$root" remote get-url origin) || return 1
+  fetch_source_with_canonical_promisor "$source" "$refspec" "$@"
+}
+
+fetch_source_with_canonical_promisor() {
+  local source="$1" refspec="$2" root git_dir promisor filter=""
+  shift 2
+  root=$(repo_root) || return 1
+  git_dir=$(pr_git rev-parse --absolute-git-dir) || return 1
   # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
   # Automatic maintenance can prune unrelated worktree metadata, even on fetch.
   set -- fetch --no-auto-maintenance --no-tags --refmap= "$@" "$source" "$refspec"
@@ -362,6 +369,8 @@ fetch_canonical_ref() {
     filter=$(pr_git -C "$root" config --get remote.origin.partialclonefilter) || [ "$?" -eq 1 ] || return 1
     if [ -n "$filter" ]; then
       # Literal URLs lose origin's filter; --filter would persist a new remote.
+      # Without a filter the pack is not a promisor pack, and Git's connectivity
+      # check then parses every promisor object in the repository.
       # Project the canonical promisor settings only for this fetch.
       set -- "--config-env=remote.$source.promisor=PR_CANONICAL_FETCH_PROMISOR" \
         "--config-env=remote.$source.partialclonefilter=PR_CANONICAL_FETCH_FILTER" "$@"
@@ -457,7 +466,9 @@ provision_pr_worktree() {
     # The trusted wrapper pins installed packages; caller module-dir overrides
     # must not redirect this source loader or reconcile its dependency links.
     unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
-    TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
+    # Bind startup diagnostics and descendants as well as explicit store calls.
+    OPENCLAW_STATE_DIR="$root/.local/pr-state" \
+      TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
       node --import "$provisioner_dir/../tsx.mjs" "$provisioner_dir/worktree-provision.mts" \
         "$root" "$pr" "$seed_sha" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
   ) || return 1

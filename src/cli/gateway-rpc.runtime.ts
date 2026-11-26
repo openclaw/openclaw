@@ -67,6 +67,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
       typeof callGateway
     >[0]["requiredStoredDeviceAuthScopes"];
     requireLocalBackendSharedAuth?: boolean;
+    onResponse?: Parameters<typeof callGateway>[0]["onResponse"];
   },
 ) {
   assertGatewayCliMessageContext(method, params);
@@ -97,6 +98,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         token: opts.token,
         password: opts.password,
         method,
+        onResponse: extra?.onResponse,
         params,
         deviceIdentity: extra?.deviceIdentity,
         beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,

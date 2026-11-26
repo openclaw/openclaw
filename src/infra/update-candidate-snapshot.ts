@@ -36,8 +36,7 @@ import {
   readUpdateStateResult,
 } from "./update-candidate-state.result.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import { UpdateCaptureSpaceError } from "./update-capture-space.js";
-import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import { assessUpdateDatabaseSpace } from "./update-database-backup-space.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import {
@@ -121,8 +120,6 @@ type InitialSnapshotParams = {
   config: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  /** Volume holding activation-time database backups, independent of candidate scratch. */
-  backupDirectory?: string;
 };
 
 /** Measure known SQLite families without allocating state or reading the candidate plugin inventory. */
@@ -152,9 +149,19 @@ export async function resolveUpdateCandidateAdmissionTimeoutMs(
   return Math.min(params.stepTimeoutMs, timeoutMs);
 }
 
+export type UpdateSnapshotSpaceAssessment = {
+  step: UpdateStepResult;
+  /** The migration has no room, or the pre-migration image will be skipped. */
+  shortfall: boolean;
+};
+
+/**
+ * Before anything changes. Refuses only when the migration itself has no room;
+ * an image that does not fit is skipped later, never a reason to refuse.
+ */
 export async function assessInitialUpdateSnapshotCapacity(
-  params: InitialSnapshotParams,
-): Promise<UpdateStepResult> {
+  params: InitialSnapshotParams & { backupDirectory: string },
+): Promise<UpdateSnapshotSpaceAssessment> {
   const started = Date.now();
   const step = {
     name: "snapshot-space-preflight",
@@ -162,79 +169,48 @@ export async function assessInitialUpdateSnapshotCapacity(
     cwd: params.stateDir,
   };
   try {
-    const { capacity, size } = await measureInitialUpdateSnapshotState(params);
-    // Refuse only at the existing allocator's data-at-risk boundary: every
-    // eligible destination is known to be too small for the private state copy.
-    const refused =
-      capacity.candidates.length > 0 &&
-      capacity.candidates.every(
-        (candidate) =>
-          candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
+    const { size } = await measureInitialUpdateSnapshotState(params);
+    const diagnostics = size.families
+      .toSorted((left, right) => right.bytes - left.bytes)
+      .map(
+        (family) =>
+          `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       );
-    const diagnostics = [
-      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
-      `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
-      ...capacity.candidates.map(
-        (candidate) =>
-          `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
-      ),
-      ...size.families
-        .toSorted((left, right) => right.bytes - left.bytes)
-        .map(
-          (family) =>
-            `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
-        ),
-    ];
-    if (refused) {
+    const space = await assessUpdateDatabaseSpace(params.backupDirectory, size);
+    diagnostics.push(...space.diagnostics);
+    if (space.refusal) {
       return {
-        ...step,
-        durationMs: Date.now() - started,
-        exitCode: 1,
-        stderrTail: [
-          "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
-          ...diagnostics,
-          "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
-        ].join("\n"),
-        snapshotCapacity: capacity,
-      };
-    }
-    let warnings: string[] = [];
-    if (params.backupDirectory) {
-      try {
-        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
-        diagnostics.push(...backup.diagnostics);
-        warnings = backup.warnings;
-      } catch (error) {
-        if (!(error instanceof UpdateCaptureSpaceError)) {
-          throw error;
-        }
-        return {
+        shortfall: true,
+        step: {
           ...step,
           durationMs: Date.now() - started,
           exitCode: 1,
-          stderrTail: [
-            "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
-            error.message,
-            ...diagnostics,
-          ].join("\n"),
-        };
-      }
+          // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
+          stderrTail: [`Update refused: ${space.refusal}`, "", ...diagnostics].join("\n"),
+        },
+      };
     }
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      diagnostics,
-      ...(warnings.length ? { warnings } : {}),
+      shortfall: space.imageSkipped,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        diagnostics,
+        ...(space.warnings.length ? { warnings: space.warnings } : {}),
+      },
     };
   } catch {
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      warnings: [
-        "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
-      ],
+      shortfall: false,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        warnings: [
+          "Database backup space could not be measured before the update; activation checks it again.",
+        ],
+      },
     };
   }
 }

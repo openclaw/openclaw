@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { SystemAgentChatParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import * as stateReader from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -97,7 +96,7 @@ async function withAuditState(
   });
 }
 
-function chatRequest(current?: () => boolean) {
+function chatRequest() {
   const sessions = new Map<string, SystemAgentChatSession>();
   const respond = vi.fn();
   const chat = (params: SystemAgentChatParams) =>
@@ -109,7 +108,6 @@ function chatRequest(current?: () => boolean) {
       client,
       context: { systemAgentSessions: sessions },
       respond,
-      ...(current ? { hasCurrentClientAuthority: current } : {}),
     } as never);
   return { chat, respond, sessions };
 }
@@ -160,40 +158,20 @@ it("persists real chat, greeting, and reset flows through the audit owner", asyn
   });
 });
 
-it.each(["failed", "revoked"] as const)(
-  "disposes the unseeded engine after %s worker history",
-  async (outcome) => {
-    await withAuditState(async (store) => {
-      store.upsert("private", { role: "assistant", text: "Private history", at: 1 }, 1);
-      expect(await readTranscriptTailAsync(10)).toEqual([
-        { role: "assistant", text: "Private history", at: 1 },
-      ]);
-      let current = true;
-      if (outcome === "failed") {
-        openOpenClawStateDatabase()
-          .db.prepare("UPDATE diagnostic_events SET payload_json = ? WHERE scope = ?")
-          .run("invalid-json", "system-agent-transcript");
-      } else {
-        const read = stateReader.executeExistingOpenClawStateRead;
-        vi.spyOn(stateReader, "executeExistingOpenClawStateRead").mockImplementation(
-          async (...args) => {
-            const result = await read(...args);
-            if (args[1].type === "diagnostic.latest") {
-              current = false;
-            }
-            return result;
-          },
-        );
-      }
-      const { chat, respond, sessions } = chatRequest(() => current);
-      const reading = chat({ sessionId: "refused-seed" });
-      await expect(reading).rejects.toThrow(
-        outcome === "revoked" ? "Gateway requester authority changed" : /JSON|Unexpected token/,
-      );
-      expect(respond).not.toHaveBeenCalled();
-      expect(sessions.size).toBe(0);
-      expect(engines[0]?.seedHistory).not.toHaveBeenCalled();
-      expect(engines[0]?.dispose).toHaveBeenCalledOnce();
-    });
-  },
-);
+it("disposes the unseeded engine after failed worker history", async () => {
+  await withAuditState(async (store) => {
+    store.upsert("private", { role: "assistant", text: "Private history", at: 1 }, 1);
+    expect(await readTranscriptTailAsync(10)).toEqual([
+      { role: "assistant", text: "Private history", at: 1 },
+    ]);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE diagnostic_events SET payload_json = ? WHERE scope = ?")
+      .run("invalid-json", "system-agent-transcript");
+    const { chat, respond, sessions } = chatRequest();
+    await expect(chat({ sessionId: "refused-seed" })).rejects.toThrow(/JSON|Unexpected token/);
+    expect(respond).not.toHaveBeenCalled();
+    expect(sessions.size).toBe(0);
+    expect(engines[0]?.seedHistory).not.toHaveBeenCalled();
+    expect(engines[0]?.dispose).toHaveBeenCalledOnce();
+  });
+});

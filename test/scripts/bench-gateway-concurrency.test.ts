@@ -120,6 +120,33 @@ describe("gateway concurrency benchmark script", () => {
     },
   );
 
+  it("rejects Gateway memory caps outside the Control UI workload", () => {
+    expect(() => testing.parseOptions(["--gateway-memory-gib", "2"])).toThrow(
+      "Control UI load options require --control-ui-clients",
+    );
+  });
+
+  it.skipIf(process.platform !== "linux")("accepts only the 2 and 4 GiB capacity profiles", () => {
+    const ui = [
+      "--control-ui-clients",
+      "1",
+      "--resource-cgroup",
+      "/synthetic/cgroup",
+      "--transpiler-cache",
+      "/synthetic/cache",
+      "--runs",
+      "1",
+    ];
+    for (const gib of ["2", "4"]) {
+      expect(
+        testing.parseOptions([...ui, "--gateway-memory-gib", gib]).controlUiLoad?.memoryLimitBytes,
+      ).toBe(Number(gib) * 1024 ** 3);
+    }
+    expect(() => testing.parseOptions([...ui, "--gateway-memory-gib", "3"])).toThrow(
+      "--gateway-memory-gib must be 2 or 4",
+    );
+  });
+
   describe("passive activity-summary diagnostics", () => {
     const create = () => createActivitySummaryDiagnostics(performance.now());
     const recapLog = (error: unknown = "Activity recap timed out") =>

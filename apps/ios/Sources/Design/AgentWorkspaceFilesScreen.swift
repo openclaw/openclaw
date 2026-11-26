@@ -13,7 +13,7 @@ struct AgentWorkspaceFilesScreen: View {
         ZStack {
             OpenClawProBackground()
             VStack(alignment: .leading, spacing: 0) {
-                if let headerSidebarAction {
+                OpenClawSidebarRevealContent(action: self.headerSidebarAction) { headerSidebarAction in
                     OpenClawAdaptiveHeaderRow(
                         title: "Files",
                         subtitle: .verbatim(self.agentId),
