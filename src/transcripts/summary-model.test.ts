@@ -3,7 +3,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import "../agents/model-fallback-runner.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import { summarizeTranscriptsWithModel } from "./summary-model.js";
+import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
+import { summarizeTranscriptsWithModel as enhanceTranscriptSummary } from "./summary-model.js";
 import { summarizeTranscripts } from "./summary.js";
 import "./summary-model.runtime.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
@@ -46,6 +47,21 @@ const params = {
   session,
   utterances,
 };
+
+function summarizeTranscriptsWithModel(
+  input: Omit<Parameters<typeof enhanceTranscriptSummary>[0], "base"> & {
+    utterances: TranscriptUtterance[];
+  },
+) {
+  let hasSpeakerAliases = input.hasSpeakerAliases;
+  const base = summarizeTranscripts(
+    input,
+    createTranscriptSpeakerLabels(() => {
+      hasSpeakerAliases = true;
+    }),
+  );
+  return enhanceTranscriptSummary({ ...input, hasSpeakerAliases, base });
+}
 
 function completion(text: string, model = "gpt-5.6-luna") {
   return { text, provider: "openai", model };

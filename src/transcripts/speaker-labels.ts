@@ -1,4 +1,5 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 
 /** Assign readable names in recording order. Keep account IDs local to this transcript. */
 export function createTranscriptSpeakerLabels(onAlias?: () => void) {
@@ -30,4 +31,24 @@ export function createTranscriptSpeakerLabels(onAlias?: () => void) {
     }
     return display;
   };
+}
+
+export type TranscriptDisplayTurn = { text: string; speakerLabel: string };
+
+/** Callers resolve names before filtering so skipped speech cannot change a later attribution. */
+export function presentTranscriptTurn(
+  text: string,
+  speakerLabel: string,
+): TranscriptDisplayTurn | undefined {
+  if (isTranscriptArtifactText(text)) {
+    return undefined;
+  }
+  const speech = sanitizeTerminalText(text).trim();
+  return speech !== text && isTranscriptArtifactText(speech)
+    ? undefined
+    : { text: speech, speakerLabel };
+}
+
+export function formatTranscriptTurn(turn: TranscriptDisplayTurn): string {
+  return turn.speakerLabel ? `${turn.speakerLabel}: ${turn.text}` : turn.text;
 }

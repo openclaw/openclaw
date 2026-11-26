@@ -720,7 +720,10 @@ describe("transcript library SQLite query budgets", () => {
       for (const target of [first, later, collision]) {
         await store.writeSession(target);
       }
-      await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
+      await store.appendUtteranceForSession(later, {
+        text: "Summarize this speech",
+        metadata: { private: "x".repeat(1024 * 1024) },
+      });
       const db = database();
       seedExportBookkeeping(db);
       const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
@@ -752,7 +755,7 @@ describe("transcript library SQLite query budgets", () => {
         expect(await store.readSummarySnapshot(later, 20)).toMatchObject({
           nextSequence: 1,
           summaryRevision: "",
-          utterances: [{ text: "Summarize this speech" }],
+          turns: [{ text: "Summarize this speech" }],
         });
         expect(reads.some((read) => read.rows > 0)).toBe(true);
       }

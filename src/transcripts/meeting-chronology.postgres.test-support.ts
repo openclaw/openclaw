@@ -21,7 +21,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
-import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
+import {
+  readTranscriptSessionEntries,
+  readTranscriptSummarySnapshot,
+} from "./store-sqlite-read.js";
 import {
   writeMeetingTranscriptSessionInDatabase,
   writeMeetingTranscriptSummaryInDatabase,
@@ -191,6 +194,12 @@ if (parentPort) {
       queryTranscriptReadEntries(postgresDb, { session: speakerSession, limit: 1 }).entries[0]
         ?.participants ?? [];
     assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
+    const snapshot = readTranscriptSummarySnapshot(postgresDb, speakerSession, 2);
+    assert.deepEqual(
+      snapshot?.turns.map((turn) => turn.speakerLabel),
+      ["Sam (2)", "Sam"],
+    );
+    assert.equal(snapshot?.hasSpeakerAliases, true);
     port.postMessage({
       threadId,
       list: page({ limit: 20 }).selectors,
