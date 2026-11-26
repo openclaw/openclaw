@@ -1,8 +1,7 @@
 import { validateAgentProfile } from "agentprofiles";
 import { describe, expect, it, vi } from "vitest";
-import { BUILT_IN_AGENT_PROFILES } from "./builtins.js";
+import { BUILT_IN_AGENT_PROFILES, indexBuiltInAgentProfiles } from "./builtins.js";
 import { resolveOpenClawAgentProfileExtension } from "./openclaw-extension.js";
-import { indexBuiltInAgentProfiles } from "./resolve.js";
 
 function builtIn(id: string) {
   const profile = BUILT_IN_AGENT_PROFILES.find((candidate) => candidate.id === id);

@@ -64,3 +64,17 @@ export const BUILT_IN_AGENT_PROFILE_BINDINGS: readonly BuiltInAgentProfileBindin
   { selector: { modelSizeClass: "medium" }, profileId: "openclaw/base" },
   { selector: { modelSizeClass: "large" }, profileId: "openclaw/base" },
 ];
+
+/** Indexes profiles by id and rejects a duplicate id instead of letting a later one win. */
+export function indexBuiltInAgentProfiles(
+  profiles: readonly BuiltInAgentProfile[],
+): Map<string, BuiltInAgentProfile> {
+  const byId = new Map<string, BuiltInAgentProfile>();
+  for (const profile of profiles) {
+    if (byId.has(profile.id)) {
+      throw new Error(`Duplicate built-in Agent Profile id: ${profile.id}`);
+    }
+    byId.set(profile.id, profile);
+  }
+  return byId;
+}
