@@ -361,6 +361,15 @@ export function resolveInitialDoctorHealthContributions(params: {
           ).map(pluginRegistryIssueToRepairEffect);
         }, "legacy doctor plugin registry contribution owns registry repairs"),
       },
+      async pending(ctx) {
+        const { checkPluginRegistryRepairPending } =
+          await import("../commands/doctor-plugin-registry.js");
+        return checkPluginRegistryRepairPending({
+          config: ctx.cfg,
+          env: process.env,
+          prompter: ctx.prompter,
+        });
+      },
       async run(ctx) {
         const { maybeRepairPluginRegistryState } =
           await import("../commands/doctor-plugin-registry.js");
