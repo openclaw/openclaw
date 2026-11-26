@@ -76,3 +76,17 @@ describe("createCliExitFailoverError resume rejection", () => {
     expect(error.reason).toBe("unknown");
   });
 });
+
+describe("createCliExitFailoverError Claude Code login", () => {
+  it("classifies a Claude Code login that reached its time limit as an auth failure", () => {
+    const error = createCliExitFailoverError({
+      context: { ...context, provider: "claude-cli" },
+      candidates: [
+        "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs",
+      ],
+      retryEmptyFailure: false,
+    });
+    expect(error.reason).toBe("auth");
+    expect(error.status).toBe(401);
+  });
+});
