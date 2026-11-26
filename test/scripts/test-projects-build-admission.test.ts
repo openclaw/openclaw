@@ -534,9 +534,7 @@ describe("full-suite timing metadata", () => {
     }
     const inheritedFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
     fs.writeFileSync(inheritedFile!, "{}");
-    await expect(runTestProjects(noExit, [files[0]!])).rejects.toThrow(
-      "must point to a JSON array",
-    );
+    await expect(runTestProjects(noExit, [config])).rejects.toThrow("must point to a JSON array");
     expect(commands.reader).toHaveBeenCalledTimes(2);
     fs.writeFileSync(inheritedFile!, JSON.stringify([files[1]]));
     await runTestProjects(noExit, [files[0]!]);
