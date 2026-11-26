@@ -41,7 +41,9 @@ When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
 structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
-surface. Direct-only tools remain visible alongside the controls.
+surface. Direct-only tools remain visible alongside the controls. On the default
+OpenClaw runner, an admitted `progress_card` also appears with its full schema
+in the first model request, so the agent can update the card without searching.
 
 The directory scales with the active model's context window. When space is tight,
 descriptions shorten before tool names are omitted; every authorized catalog

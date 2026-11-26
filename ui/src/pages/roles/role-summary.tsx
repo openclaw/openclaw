@@ -9,7 +9,7 @@ export const PERMISSION_KEYS = {
   full: "full",
 } as const;
 
-export function othersLabel(definition: RoleDefinition) {
+function othersLabel(definition: RoleDefinition) {
   return t("rolesOptions.others." + definition.sessions.others + ".label");
 }
 

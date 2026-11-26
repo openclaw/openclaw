@@ -1895,7 +1895,14 @@ when nothing needs an operator:
   that store, the update instead checks the boot each of that update's
   processes recorded. If every one ran on this same Linux or macOS machine in an
   earlier boot, none of them can still be running, and the update claims the
-  installation as usual before it settles anything.
+  installation as usual before it settles anything. When the store exists but no
+  longer holds that lease, the update settles the recovery only if that update
+  recorded its candidate verified serving and that same version and build is
+  still installed. An updater releases its lease only after its own processes
+  have ended, and any command that claimed the installation since then proved the
+  same. This is how 2026.11.10 ends an update after it loses its plugin lifecycle
+  lease: the new version is installed and serving, but the run stays recorded as
+  running with its recovery reserved.
 
 It settles the plugin and configuration changes the way repair does. When the
 version from before that update is still installed they are rolled back, and
@@ -1952,10 +1959,11 @@ repair can settle the recovery, the message adds the reason and the command:
 - **An update is still recorded as running** and its process is not known to
   have exited, or another updater holds the installation. Wait for it; run
   `openclaw update repair` if it has stopped.
-- **The update lease store no longer holds the killed update's lease.** The
-  store was removed or replaced, or another command already claimed the
-  installation. That includes an earlier `openclaw update` that claimed it and
-  then refused for one of the reasons above, so a second attempt reports this
+- **The update lease store no longer holds the killed update's lease**, and
+  the store itself is missing or the version and build that update verified
+  serving is not the one installed. The store was removed or replaced, or
+  another command already claimed the installation. That includes an earlier
+  `openclaw update` that claimed it and then refused for one of the reasons above, so a second attempt reports this
   reason. After a restart the update also refuses this way when the boot record
   cannot show the killed update's processes gone: the killed update ran an
   older version that did not record its boot, the machine has no stable

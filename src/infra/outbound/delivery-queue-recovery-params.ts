@@ -1,7 +1,7 @@
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
-} from "../../auto-reply/command-auth.js";
+} from "../../auto-reply/command-owner-facts.js";
 import {
   assertSessionWriterDeliveryAuthorized,
   prepareSessionWriterDeliveryAuthority,

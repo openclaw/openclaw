@@ -3,7 +3,7 @@ import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/in
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { showConfirmChoiceDialog } from "../../components/confirm-dialog.ts";
+import { showConfirmChoiceDialog, showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import type { ConfigPatchOptions } from "../../lib/config/config-gateway-operations.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
@@ -365,6 +365,44 @@ describe("ProjectsPage", () => {
     );
     expect(page.model.operation).toBeNull();
     expect(page.button("Rename", page.dialog()!)!.disabled).toBe(false);
+  });
+
+  it.each([SITE, DOCS])("closes only the removed project with $id open", async (selected) => {
+    const removal = createDeferred();
+    const refreshed = createDeferred<{ projects: ProjectRecord[] }>();
+    let lists = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.remove") {
+        return removal.promise;
+      }
+      if (method === "projects.list" && ++lists === 2) {
+        return refreshed.promise;
+      }
+      return { projects: [SITE, DOCS] };
+    });
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
+    const page = createProjectsPage(request);
+    await page.ready();
+    await openDetails(page, SITE.displayName);
+    page.button("Remove", page.dialog()!)!.click();
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("projects.remove", { id: SITE.id }),
+    );
+    if (selected.id === DOCS.id) {
+      page.dialog()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+      await waitForSolid(() => expect(page.dialog()).toBeNull());
+      await openDetails(page, DOCS.displayName);
+      expect(page.dialog()?.textContent).toContain(DOCS.repoRoot);
+    }
+
+    removal.resolve();
+    await waitForSolid(() => expect(lists).toBe(2));
+    const title = () => page.dialog()?.querySelector("h2")?.textContent;
+    const expectedTitle = selected.id === DOCS.id ? DOCS.displayName : undefined;
+    expect(title()).toBe(expectedTitle);
+    refreshed.resolve({ projects: [DOCS] });
+    await waitForSolid(() => expect(page.rowText(SITE.displayName)).toBeUndefined());
+    expect(title()).toBe(expectedTitle);
   });
 
   it("surfaces the Gateway refusal to delete a referenced clone", async () => {

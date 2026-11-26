@@ -8,6 +8,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -126,12 +127,7 @@ if (values.mode === "retention") {
   observer.observe({ entryTypes: ["gc"] });
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const before = process.cpuUsage();
   const started = performance.now();

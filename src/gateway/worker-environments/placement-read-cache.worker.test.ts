@@ -12,14 +12,18 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { placementAuthorityOwnerFor } from "./placement-authority-owner.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { sessionIdentity } from "./placement-suite.test-support.js";
+import { placementTransition, sessionIdentity } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
-import { capturePlacementReplicaRead } from "./placement-turn-authority.js";
+import {
+  capturePlacementReplicaRead,
+  stagePlacementWorkspaceJournalWorkerPublication,
+} from "./placement-turn-authority.js";
 
 describe("worker placement authority existing coverage", () => {
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
@@ -170,6 +174,86 @@ describe("worker placement authority existing coverage", () => {
       }
     });
 
+    it("keeps a failed attachment after an empty targeted lookup", async () => {
+      const active = await advancePlacementFixtureToActive(
+        writer,
+        database,
+        sessionIdentity("failed"),
+      );
+      const binding = placementTransition(active);
+      const draining = await writer.startDrain(binding);
+      const reconciling = await writer.startReconcile({
+        ...binding,
+        expectedGeneration: draining.generation,
+      });
+      const failed = await writer.fail({
+        sessionId: active.sessionId,
+        expectedGeneration: reconciling.generation,
+        recoveryError: "synthetic failure",
+      });
+      expect(failed.environmentId).toBe(active.environmentId);
+      expect(await reader.getAsync("missing")).toBeUndefined();
+      expect(await reader.listForReconcileAsync("agent:main:missing")).toEqual([]);
+      expect(await reader.listAsync()).toEqual([failed]);
+      const inventory = await reader.prepareMaintenancePlacements();
+      try {
+        expect([...inventory.placements]).toEqual([failed]);
+      } finally {
+        inventory.release();
+      }
+    });
+
+    it("does not publish an empty full scan that predates a dispatch", async () => {
+      const run = stateWorker.runOpenClawStateWorkerOperation;
+      const identity = sessionIdentity("overlapping-inventory");
+      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+        (context, request, options) =>
+          run(context, request, options).then(async (records) => {
+            // The database returned its snapshot, but the earlier read has not published it.
+            await writer.startDispatch(identity);
+            return records;
+          }),
+      );
+      expect(await reader.listAsync()).toEqual([]);
+      const inventory = await reader.prepareMaintenancePlacements();
+      try {
+        expect([...inventory.placements]).toMatchObject([{ ...identity, state: "requested" }]);
+      } finally {
+        inventory.release();
+      }
+    });
+
+    it("cannot certify emptiness across a pending native receipt", async () => {
+      const publication = stagePlacementWorkspaceJournalWorkerPublication(
+        requireOpenClawStateDatabaseIdentity(database),
+        "uncertain-journal",
+      );
+      const run = stateWorker.runOpenClawStateWorkerOperation;
+      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+        (context, request, options) =>
+          run(context, request, options).then((records) => {
+            // This receipt already reserved its sequence before the inventory read.
+            publication.invalidate();
+            return records;
+          }),
+      );
+      try {
+        expect(await reader.listAsync()).toEqual([]);
+        const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        const inventory = await reader.prepareMaintenancePlacements();
+        try {
+          expect([...inventory.placements]).toEqual([]);
+          expect(reads.mock.calls.map(([, command]) => command.type)).toEqual([
+            "workers.placementPreservation",
+          ]);
+        } finally {
+          inventory.release();
+        }
+      } finally {
+        publication.rollback();
+      }
+    });
+
     it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
       const runWorkspaceCommand = vi.fn(async () =>
         createCommandResult({
@@ -203,8 +287,10 @@ describe("worker placement authority existing coverage", () => {
       });
       const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
       try {
-        await monitor.sweep();
+        // Gateway startup reads all placements for recovery before it starts the disk sweep.
+        expect(await reader.listAsync()).toEqual([]);
         const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        await monitor.sweep();
         await monitor.sweep();
         expect(reads).not.toHaveBeenCalled();
         expect(runWorkspaceCommand).not.toHaveBeenCalled();
