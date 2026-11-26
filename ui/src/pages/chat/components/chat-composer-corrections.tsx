@@ -23,7 +23,7 @@ export function ChatComposerCorrections(props: {
           <ChatLazyBoundary
             recovery={
               <ComposerCorrectionRecovery
-                original={review().result.original}
+                original={review().original}
                 canKeepOriginal={review().canKeepOriginal}
                 onKeepOriginal={() => props.context.resolveCorrection("original")}
                 onCancel={() => props.context.resolveCorrection("cancel")}
@@ -31,27 +31,10 @@ export function ChatComposerCorrections(props: {
             }
           >
             <ComposerCorrectionReview
-              original={review().result.original}
-              candidate={review().result.plan ? review().result.candidate : null}
-              correctionCount={
-                new Set(
-                  review().result.plan?.edits.map(
-                    (edit) => `${edit.triggerRange.start}:${edit.triggerRange.end}`,
-                  ),
-                ).size
-              }
-              changes={
-                review().result.plan?.edits.map((edit) => ({
-                  id: edit.id,
-                  original: review().result.original.slice(edit.range.start, edit.range.end),
-                  replacement: edit.replacement,
-                })) ?? []
-              }
-              reason={review().invalidated ? "source-changed" : review().result.reasons[0]}
-              canAccept={review().canAccept}
+              original={review().original}
+              reason={review().invalidated ? "source-changed" : "corrections-unavailable"}
               canKeepOriginal={review().canKeepOriginal}
               onKeepOriginal={() => props.context.resolveCorrection("original")}
-              onAcceptCorrection={() => props.context.resolveCorrection("correction")}
               onCancel={() => props.context.resolveCorrection("cancel")}
             />
           </ChatLazyBoundary>

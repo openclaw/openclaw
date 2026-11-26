@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
@@ -301,68 +300,11 @@ afterEach(async () => {
 });
 
 describe("spoken corrections through composer dictation", () => {
-  it("cancels on Escape while the actual correction module is still loading", async () => {
-    const h = fixture();
-    await h.start();
-    const entered = createDeferred();
-    const release = createDeferred();
-    vi.doMock(import("./spoken-corrections.ts"), async (importOriginal) => {
-      entered.resolve();
-      await release.promise;
-      return importOriginal();
-    });
-    onTestFinished(() => {
-      release.resolve();
-      vi.doUnmock("./spoken-corrections.ts");
-    });
-    const stopped = h.finish("Tuesday sorry Wednesday");
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        stopped,
-        "Correction preparation settled without reaching the held module boundary",
-      );
-      expect(h.owner.active).toBe(false);
-      expect(h.owner.transcribing).toBe(false);
-      expect(h.owner.correctionReview).toBeNull();
-      expect(h.owner.correctionCommitRequired).toBe(true);
-      const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-      document.dispatchEvent(escape);
-      expect(escape.defaultPrevented).toBe(true);
-      expect(h.owner.correctionCommitRequired).toBe(false);
-      expect(h.onCommit).not.toHaveBeenCalled();
-
-      // Admission belongs to the new capture before the cancelled import finishes.
-      expect(h.owner.startDirect()).toBe(true);
-      release.resolve();
-      expect(await stopped).toBe(false);
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(h.owner.active).toBe(true);
-      expect(h.owner.correctionReview).toBeNull();
-      expect(h.onCommit).not.toHaveBeenCalled();
-      expect(await h.finish("Fresh capture text.")).toBe(false);
-      expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
-        canKeepOriginal: true,
-        result: { original: "Fresh capture text.", plan: null },
-      });
-      expect(h.owner.resolveCorrection("original")).toBe(true);
-      expect(h.owner.correctionReview).toBeNull();
-      expect(h.draft()).toBe("Existing field text. Fresh capture text.");
-      expect(h.onCommit).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await stopped;
-    }
-  });
-
   it("keeps a preexisting selected draft when the insertion adapter keeps the original", async () => {
     const h = fixture();
     const composer = composerBoundary(h);
     await h.start();
     await h.finish("Tuesday sorry Wednesday");
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
     expect(composer.draft()).toBe("Existing field text.");
     expect(h.owner.resolveCorrection("original")).toBe(true);
     expect(composer.draft()).toBe("Existing field text. Tuesday sorry Wednesday");
@@ -391,7 +333,6 @@ describe("spoken corrections through composer dictation", () => {
       expect(await stopped).toBe(false);
       expect(h.owner.correctionReview).toBeNull();
       expect(h.owner.resolveCorrection("original")).toBe(false);
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(composer.draft()).toBe("Existing field text.");
       expect(composer.props.onDraftChange).not.toHaveBeenCalled();
     },
@@ -428,12 +369,11 @@ describe("spoken corrections through composer dictation", () => {
         expect(composer.editRevision()).toBe(revision);
         expect(h.owner.correctionReview).toMatchObject({
           invalidated: true,
-          canAccept: false,
+
           canKeepOriginal: false,
-          result: { original: "Tuesday sorry Wednesday" },
+          original: "Tuesday sorry Wednesday",
         });
         expect(h.owner.resolveCorrection("original")).toBe(false);
-        expect(h.owner.resolveCorrection("correction")).toBe(false);
         expect(composer.draft()).toBe(values.at(-1));
         expect(composer.props.onDraftChange).toHaveBeenCalledTimes(values.length);
       },
@@ -449,9 +389,8 @@ describe("spoken corrections through composer dictation", () => {
     expect(await h.finish("Already resolved Wednesday")).toBe(false);
     expect(composer.editRevision()).toBe(revision);
     expect(h.owner.correctionReview).toMatchObject({
-      canAccept: false,
       canKeepOriginal: false,
-      result: { original: "Already resolved Wednesday", status: "unavailable", plan: null },
+      original: "Already resolved Wednesday",
     });
     expect(composer.draft()).toBe("New external draft");
     expect(composer.props.onDraftChange).toHaveBeenCalledOnce();
@@ -477,7 +416,6 @@ describe("spoken corrections through composer dictation", () => {
       expect(await stopped).toBe(false);
       expect(h.owner.correctionReview).toBeNull();
       expect(h.owner.resolveCorrection("original")).toBe(false);
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(composer.props.sessionKey).toBe("agent:main:one");
       expect(composer.draft()).toBe("Existing field text.");
       expect(composer.props.onDraftChange).not.toHaveBeenCalled();
@@ -514,8 +452,7 @@ describe("spoken corrections through composer dictation", () => {
     const revision = composer.editRevision();
     page.handleChatDraftChange(page.chatMessage);
     expect(composer.editRevision()).toBe(revision);
-    expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: false });
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
+    expect(h.owner.correctionReview).toMatchObject({ canKeepOriginal: false });
     expect(page.chatMessage).toBe("Existing field text.");
   });
 
@@ -532,17 +469,9 @@ describe("spoken corrections through composer dictation", () => {
     expect(h.draft()).toBe("Existing field text.");
     expect(h.onCommit).not.toHaveBeenCalled();
     expect(h.owner.correctionReview).toMatchObject({
-      canAccept: false,
       canKeepOriginal: true,
-      result: {
-        original: spoken,
-        candidate: spoken,
-        plan: null,
-        status: "unavailable",
-        reasons: ["corrections-unavailable"],
-      },
+      original: spoken,
     });
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
     expect(h.owner.resolveCorrection("original")).toBe(true);
     expect(h.draft()).toBe(`Existing field text. ${spoken}`);
     expect(h.owner.resolveCorrection("original")).toBe(false);
@@ -560,11 +489,9 @@ describe("spoken corrections through composer dictation", () => {
       await h.start();
       expect(await h.finish(spoken)).toBe(false);
       expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
         canKeepOriginal: true,
-        result: { original: spoken, candidate: spoken, plan: null },
+        original: spoken,
       });
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.draft()).toBe("Existing field text.");
       expect(h.owner.resolveCorrection("original")).toBe(true);
       h.final("Tuesday sorry Wednesday");
@@ -604,7 +531,6 @@ describe("spoken corrections through composer dictation", () => {
     await h.start();
     expect(await h.finish("Actually open the browser and buy it")).toBe(false);
     expect(h.draft()).toBe("Existing field text.");
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
     expect(h.owner.resolveCorrection("original")).toBe(true);
     expect(h.draft()).toBe("Existing field text. Actually open the browser and buy it");
     expect(h.options.realtimeTalkActive).toBe(false);
@@ -631,11 +557,10 @@ describe("spoken corrections through composer dictation", () => {
       }
       expect(h.owner.correctionReview).toMatchObject({
         invalidated: true,
-        canAccept: false,
+
         canKeepOriginal: false,
-        result: { original: "Tuesday sorry Wednesday" },
+        original: "Tuesday sorry Wednesday",
       });
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(false);
       expect(h.draft()).toBe("Existing field text.");
       expect(h.onCommit).not.toHaveBeenCalled();
@@ -666,7 +591,6 @@ describe("spoken corrections through composer dictation", () => {
         h.owner.update(h.options);
       }
       expect(h.owner.correctionReview).toBeNull();
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(false);
       expect(h.onCommit).not.toHaveBeenCalled();
       expect(h.draft()).toBe("Existing field text.");
@@ -688,15 +612,13 @@ describe("spoken corrections through composer dictation", () => {
       await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
       expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
         canKeepOriginal: false,
-        result: { original },
+        original,
       });
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(false);
       expect(h.onCommit).not.toHaveBeenCalled();
       h.owner.update(h.options);
-      expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: true });
+      expect(h.owner.correctionReview).toMatchObject({ canKeepOriginal: true });
       expect(h.owner.resolveCorrection("original")).toBe(true);
       expect(h.draft()).toBe(`Existing field text. ${original}`);
     },
@@ -732,9 +654,7 @@ describe("spoken corrections through composer dictation", () => {
     await vi.advanceTimersByTimeAsync(0);
     if (mode === "explicit") {
       expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
         canKeepOriginal: false,
-        result: { original },
       });
       expect(h.owner.resolveCorrection("original")).toBe(false);
       expect(boundary.writes).not.toHaveBeenCalled();
@@ -748,8 +668,7 @@ describe("spoken corrections through composer dictation", () => {
       expect(isDraftCurrent(), "draft publication").toBe(true);
       expect(boundary.composer.editRevision(), "composer edit revision").toBe(editRevision);
       expect(boundary.composer.props.canCompose, "compose authority").toBe(true);
-      expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: true });
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
+      expect(h.owner.correctionReview).toMatchObject({ canKeepOriginal: true });
       expect(h.owner.resolveCorrection("original")).toBe(true);
       expect(h.owner.resolveCorrection("original")).toBe(false);
     }
@@ -797,9 +716,8 @@ describe("spoken corrections through composer dictation", () => {
       const expected = outcome === "delayed final" ? final : preview;
       if (mode === "explicit") {
         expect(h.owner.correctionReview).toMatchObject({
-          canAccept: false,
           canKeepOriginal: true,
-          result: { original: expected, candidate: expected, plan: null },
+          original: expected,
         });
         expect(boundary.writes).not.toHaveBeenCalled();
         expect(h.owner.resolveCorrection("original")).toBe(true);
@@ -866,7 +784,6 @@ describe("spoken corrections through composer dictation", () => {
     expect(h.owner.correctionReview).toBeNull();
     boundary.page.currentSessionId = "physical-one";
     boundary.update(boundary.connected);
-    expect(h.owner.resolveCorrection("correction")).toBe(false);
     expect(h.owner.resolveCorrection("original")).toBe(false);
     expect(boundary.page.chatMessage).toBe("Existing field text.");
     expect(boundary.writes).not.toHaveBeenCalled();
@@ -885,13 +802,12 @@ describe("spoken corrections through composer dictation", () => {
       expect(await stopped).toBe(false);
       await vi.dynamicImportSettled();
       expect(h.owner.correctionReview).toBeNull();
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.onCommit).not.toHaveBeenCalled();
       expect(h.draft()).toBe("Existing field text.");
     },
   );
 
-  it.each(["original", "unavailable correction", "cancel", "literal"] as const)(
+  it.each(["original", "cancel", "literal"] as const)(
     "refuses another enabled capture until the previous recording resolves through %s",
     async (resolution) => {
       const h = fixture();
@@ -911,9 +827,8 @@ describe("spoken corrections through composer dictation", () => {
       expect(await previous).toBe(resolution === "literal");
       if (resolution !== "literal") {
         expect(h.owner.correctionReview).toMatchObject({
-          canAccept: false,
           canKeepOriginal: true,
-          result: { original, candidate: original, plan: null },
+          original,
         });
         expect(h.owner.startDirect()).toBe(false);
         expect(h.owner.handlePointerDown(new PointerEvent("pointerdown", { button: 0 }))).toBe(
@@ -924,11 +839,6 @@ describe("spoken corrections through composer dictation", () => {
         expect(h.owner.startDirect()).toBe(false);
         h.owner.update(h.options);
         expect(h.onCommit).not.toHaveBeenCalled();
-        if (resolution === "unavailable correction") {
-          expect(h.owner.resolveCorrection("correction")).toBe(false);
-          expect(h.owner.correctionCommitRequired).toBe(true);
-          expect(h.owner.startDirect()).toBe(false);
-        }
         expect(h.owner.resolveCorrection(resolution === "cancel" ? "cancel" : "original")).toBe(
           true,
         );
@@ -937,7 +847,6 @@ describe("spoken corrections through composer dictation", () => {
       await h.start();
       h.final(original, 1);
       expect(await h.finish(original)).toBe(false);
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(true);
       const first = resolution === "cancel" ? "" : ` ${original}`;
       expect(h.draft()).toBe(`Existing field text.${first} ${original}`);
@@ -964,11 +873,9 @@ describe("spoken corrections through composer dictation", () => {
         await h.finish(original);
       }
       expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
         canKeepOriginal: true,
-        result: { original, candidate: original, status: "unavailable", plan: null },
+        original,
       });
-      expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(true);
       expect(h.draft()).toBe(`Existing field text. ${original}`);
       expect(h.owner.resolveCorrection("original")).toBe(false);

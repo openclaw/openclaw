@@ -8,7 +8,6 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "../chat-composer.test-support.ts";
-import { prepareDictationRefinement } from "../spoken-corrections.ts";
 import { getChatComposerState } from "./chat-composer-state.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -57,29 +56,10 @@ it.each([390, 1100])(
       throw new Error("expected the composer dictation owner");
     }
     const original = "I work Tuesday, no Wednesday shifts are available";
-    const result = prepareDictationRefinement(
-      {
-        captureToken: {},
-        revision: 0,
-        text: original,
-        locale: "en-US",
-        isFinal: true,
-      },
-      { mode: "explicit" },
-    );
-    expect(result).toEqual({
-      status: "unavailable",
-      original,
-      candidate: original,
-      plan: null,
-      reasons: ["corrections-unavailable"],
-    });
-    // Presentation/delegation only: these getters inject the real preparer's result.
-    // No capture was admitted, so this fixture cannot prove insertion or microphone/provider I/O.
+    // Presentation only: no capture was admitted and no audio or transport is exercised.
     vi.spyOn(dictation, "correctionCommitRequired", "get").mockReturnValue(true);
     vi.spyOn(dictation, "correctionReview", "get").mockReturnValue({
-      result,
-      canAccept: false,
+      original,
       canKeepOriginal: true,
       invalidated: false,
     });

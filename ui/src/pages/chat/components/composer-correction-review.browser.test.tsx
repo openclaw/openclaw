@@ -30,14 +30,9 @@ afterEach(async () => {
 function reviewProps(overrides: Partial<ComposerCorrectionReviewProps> = {}) {
   return {
     original: "I work Tuesday, no Wednesday shifts are available",
-    candidate: null,
-    changes: [],
-    correctionCount: 0,
     reason: "corrections-unavailable",
-    canAccept: false,
     canKeepOriginal: true,
     onKeepOriginal: vi.fn(),
-    onAcceptCorrection: vi.fn(),
     onCancel: vi.fn(),
     ...overrides,
   } satisfies ComposerCorrectionReviewProps;
@@ -84,7 +79,7 @@ it.each([
     }
     await userEvent.keyboard("{Enter}");
     expect(props[callback]).toHaveBeenCalledTimes(1);
-    for (const other of ["onCancel", "onKeepOriginal", "onAcceptCorrection"] as const) {
+    for (const other of ["onCancel", "onKeepOriginal"] as const) {
       if (other !== callback) {
         expect(props[other]).not.toHaveBeenCalled();
       }
@@ -142,65 +137,9 @@ it.each([true, false])(
     }
     await userEvent.click(view.getByRole("button", { name: /^Cancel$/ }));
     expect(props.onCancel).toHaveBeenCalledTimes(1);
-    expect(props.onAcceptCorrection).not.toHaveBeenCalled();
     expect(props.onKeepOriginal).not.toHaveBeenCalled();
   },
 );
-
-it("presents a caller-supplied candidate and delegates keyboard acceptance", async () => {
-  // Presentation contract only. The production preparer does not emit correction candidates.
-  const props = reviewProps({
-    original: "The folder is blue.",
-    candidate: "The folder is green.",
-    changes: [{ id: "color", original: "blue", replacement: "green" }],
-    correctionCount: 1,
-    reason: "review-required",
-    canAccept: true,
-  });
-  const view = mountSolid(() => <ComposerCorrectionReview {...props} />);
-  const original = view.getByRole("region", { name: "Original recognized text" });
-  const candidate = view.getByRole("region", { name: "Proposed correction" });
-  expect(original.textContent).toBe(props.original);
-  expect(candidate.textContent).toBe(props.candidate);
-  expect(view.getByRole("status").textContent).toBe("1 proposed correction is ready for review.");
-  original.focus();
-  await userEvent.tab();
-  expect(document.activeElement).toBe(candidate);
-  await userEvent.tab();
-  expect(document.activeElement).toBe(view.getByText("Inspect changed words"));
-  await userEvent.keyboard("{Enter}");
-  expect(view.container.querySelector("details")?.open).toBe(true);
-  expect(view.getByText("Before").closest("[aria-live]")).toBeNull();
-  for (const label of ["Cancel", "Keep original", "Accept correction"]) {
-    await userEvent.tab();
-    expect(document.activeElement).toBe(
-      view.getByRole("button", { name: new RegExp(`^${label}$`) }),
-    );
-  }
-  await userEvent.keyboard("{Enter}");
-  expect(props.onAcceptCorrection).toHaveBeenCalledOnce();
-  expect(props.onKeepOriginal).not.toHaveBeenCalled();
-  expect(props.onCancel).not.toHaveBeenCalled();
-});
-
-it("presents a caller-supplied empty candidate and delegates acceptance", async () => {
-  // This tests the presenter's empty-string contract, not a generated semantic retraction.
-  const props = reviewProps({
-    original: "A complete sentence.",
-    candidate: "",
-    changes: [{ id: "sentence", original: "A complete sentence.", replacement: "" }],
-    correctionCount: 1,
-    reason: "review-required",
-    canAccept: true,
-  });
-  const view = mountSolid(() => <ComposerCorrectionReview {...props} />);
-  await expect.element(view.getByRole("button", { name: "Accept correction" })).toBeEnabled();
-  expect(view.getByRole("region", { name: "Proposed correction" }).textContent).toBe(
-    "No dictated text remains after this correction.",
-  );
-  await userEvent.click(view.getByRole("button", { name: "Accept correction" }));
-  expect(props.onAcceptCorrection).toHaveBeenCalledTimes(1);
-});
 
 it("keeps recognized text recoverable by keyboard when the optional review fails", async () => {
   await page.viewport(390, 900);

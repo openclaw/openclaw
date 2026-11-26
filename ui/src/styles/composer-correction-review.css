@@ -68,36 +68,9 @@
   line-height: 1.5;
 }
 
-.composer-correction-review__text:focus-visible,
-.composer-correction-review__changes > summary:focus-visible {
+.composer-correction-review__text:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-.composer-correction-review__changes {
-  min-width: 0;
-}
-
-.composer-correction-review__changes > summary {
-  width: fit-content;
-  max-width: 100%;
-  color: var(--text-strong);
-  cursor: var(--cursor-action);
-}
-
-.composer-correction-review__change-list {
-  display: grid;
-  gap: 0.75rem;
-  max-height: min(25vh, 12rem);
-  overflow: auto;
-  margin: 0.75rem 0 0;
-  padding-inline-start: 1.5rem;
-}
-
-.composer-correction-review__change-text {
-  display: block;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .composer-correction-review__actions {

@@ -308,14 +308,8 @@ describe("renderChatComposer controls", () => {
       const review = vi.spyOn(dictation, "correctionReview", "get").mockReturnValue(
         phase === "review"
           ? {
-              result: {
-                status: "unavailable",
-                original,
-                candidate: original,
-                plan: null,
-                reasons: ["corrections-unavailable"],
-              },
-              canAccept: false,
+              original,
+
               canKeepOriginal: true,
               invalidated: false,
             }
@@ -727,14 +721,8 @@ describe("renderChatComposer controls", () => {
         expect(view.container.querySelector(".composer-correction-review")).not.toBeNull(),
       );
       expect(dictation.correctionReview).toMatchObject({
-        result: {
-          status: "unavailable",
-          original,
-          candidate: original,
-          plan: null,
-          reasons: ["corrections-unavailable"],
-        },
-        canAccept: false,
+        original,
+
         canKeepOriginal: true,
       });
       expect(dictation.active).toBe(false);
@@ -775,7 +763,7 @@ describe("renderChatComposer controls", () => {
         expect(cancel).not.toHaveBeenCalled();
         expect(onAbort).not.toHaveBeenCalled();
         expect(dictation.correctionCommitRequired).toBe(true);
-        expect(dictation.correctionReview?.result.original).toBe(original);
+        expect(dictation.correctionReview?.original).toBe(original);
         // Real input makes insertion stale, but closing its menu must not erase readable recovery.
         expect(dictation.correctionReview?.canKeepOriginal).toBe(false);
         await waitForSolid(() =>

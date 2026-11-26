@@ -12,7 +12,7 @@ export function createComposerCorrectionBindings(
 ) {
   return {
     correctionReview: dictation.correctionReview,
-    resolveCorrection: (choice: "original" | "correction" | "cancel") => {
+    resolveCorrection: (choice: "original" | "cancel") => {
       const resolved = dictation.resolveCorrection(choice);
       if (resolved && state.composerTextarea) {
         focusComposerInput(state.composerTextarea, { preventScroll: true });

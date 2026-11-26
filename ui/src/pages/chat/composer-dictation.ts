@@ -8,10 +8,6 @@ import type {
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
-import type {
-  DictationRefinementResult,
-  DictationRefinementSource,
-} from "./dictation-refinement.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -45,12 +41,10 @@ type ComposerDictationOwnerOptions = {
 };
 
 type CorrectionCapture = {
-  token: object;
-  locale: string;
   literal: boolean;
   draftRevision: number;
   isDraftCurrent?: () => boolean;
-  correctionInvalidated: boolean;
+  transportInterrupted: boolean;
 };
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
@@ -73,10 +67,7 @@ export class ComposerDictationOwner extends EventTarget {
   private disposed = false;
   private nextLiteral = false;
   private correctionCapture: CorrectionCapture | null = null;
-  private pendingCorrection: {
-    capture: CorrectionCapture;
-    result: DictationRefinementResult;
-  } | null = null;
+  private pendingOriginal: string | null = null;
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
@@ -144,45 +135,36 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get correctionReview() {
-    const pending = this.pendingCorrection;
-    if (!pending) {
+    const original = this.pendingOriginal;
+    const capture = this.correctionCapture;
+    if (original === null || !capture) {
       return null;
     }
-    const canKeepOriginal = this.isCorrectionSourceCurrent(pending.capture);
-    const invalidated = !canKeepOriginal || pending.capture.correctionInvalidated;
+    const canKeepOriginal = this.isCorrectionSourceCurrent(capture);
     return {
-      result: pending.result,
+      original,
       canKeepOriginal,
-      canAccept: canKeepOriginal && !invalidated && pending.result.plan !== null,
-      invalidated,
+      invalidated: !canKeepOriginal || capture.transportInterrupted,
     };
   }
 
   /** A review choice is consumed before the existing insertion owner is called. */
-  resolveCorrection(choice: "original" | "correction" | "cancel"): boolean {
+  resolveCorrection(choice: "original" | "cancel"): boolean {
     if (choice === "cancel") {
       this.cancel();
       return true;
     }
-    const pending = this.pendingCorrection;
-    const review = this.correctionReview;
-    if (
-      !pending ||
-      !review ||
-      !(choice === "original" ? review.canKeepOriginal : review.canAccept)
-    ) {
+    const original = this.pendingOriginal;
+    const capture = this.correctionCapture;
+    if (original === null || !capture || !this.isCorrectionSourceCurrent(capture)) {
       this.dispatchEvent(new Event("change"));
       return false;
     }
-    const text = choice === "original" ? pending.result.original : pending.result.candidate;
-    this.pendingCorrection = null;
+    this.pendingOriginal = null;
     this.correctionCapture = null;
     this.syncCancellationListeners();
-    // An empty corrected capture is a completed retraction. It cannot delete a
-    // selection that existed before the microphone started.
-    if (text) {
-      this.options.onCommit(text, true, undefined, true);
-    }
+    // The original belongs to the capture, not a selection predating it.
+    this.options.onCommit(original, true, undefined, true);
     this.dispatchEvent(new Event("change"));
     return true;
   }
@@ -214,17 +196,16 @@ export class ComposerDictationOwner extends EventTarget {
     ) {
       this.cancel();
     }
-    const correctionInvalidated = Boolean(
+    const transportInterrupted = Boolean(
       this.correctionCapture && !options.connected && this.options.connected,
     );
-    if (this.correctionCapture && correctionInvalidated) {
-      // Lost transport revokes the semantic plan but keeps recognized text for
-      // same-context recovery. Preference changes apply to the next capture;
-      // this capture retains the policy and locale sampled when it started.
-      this.correctionCapture.correctionInvalidated = true;
+    if (this.correctionCapture && transportInterrupted) {
+      // Hold the received text for same-destination recovery, even if Literal
+      // was selected before capture. The saved policy applies to the next capture.
+      this.correctionCapture.transportInterrupted = true;
     }
     this.options = options;
-    if (correctionInvalidated) {
+    if (transportInterrupted) {
       this.dispatchEvent(new Event("change"));
     }
     if (!options.connected) {
@@ -329,7 +310,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
-    this.pendingCorrection = null;
+    this.pendingOriginal = null;
     this.correctionCapture = null;
     this.nextLiteral = false;
     this.clearClickSuppression();
@@ -449,12 +430,10 @@ export class ComposerDictationOwner extends EventTarget {
     this.correctionCapture =
       corrections?.mode === "explicit"
         ? {
-            token: captureStart,
-            locale: corrections.locale,
             literal: this.nextLiteral,
             draftRevision: this.options.getDraftRevision?.() ?? 0,
             isDraftCurrent: this.options.captureDraftGuard?.(),
-            correctionInvalidated: false,
+            transportInterrupted: false,
           }
         : null;
     this.nextLiteral = false;
@@ -533,7 +512,7 @@ export class ComposerDictationOwner extends EventTarget {
     const session = this.session;
     if (!session) {
       this.correctionCapture = null;
-      this.pendingCorrection = null;
+      this.pendingOriginal = null;
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
@@ -543,7 +522,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.setPhase("idle");
     if (!options.commit) {
       this.correctionCapture = null;
-      this.pendingCorrection = null;
+      this.pendingOriginal = null;
       this.syncCancellationListeners();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
@@ -571,7 +550,23 @@ export class ComposerDictationOwner extends EventTarget {
         return false;
       }
       if (correctionCapture) {
-        return this.prepareCorrection(correctionCapture, session, lateTranscript);
+        if (this.correctionCapture !== correctionCapture) {
+          return false;
+        }
+        if (
+          correctionCapture.literal &&
+          !correctionCapture.transportInterrupted &&
+          this.isCorrectionSourceCurrent(correctionCapture)
+        ) {
+          this.correctionCapture = null;
+          this.syncCancellationListeners();
+          this.options.onCommit(lateTranscript, true, undefined, true);
+          this.dispatchEvent(new Event("change"));
+          return true;
+        }
+        this.pendingOriginal = lateTranscript;
+        this.pendingCommitsChanged();
+        return false;
       }
       if (this.active) {
         this.options.onCommit(lateTranscript, true, true);
@@ -598,56 +593,6 @@ export class ComposerDictationOwner extends EventTarget {
       draftRevision === capture.draftRevision &&
       (capture.isDraftCurrent?.() ?? true)
     );
-  }
-
-  private async prepareCorrection(
-    capture: CorrectionCapture,
-    session: ComposerDictationSession,
-    text: string,
-  ): Promise<boolean> {
-    if (this.correctionCapture !== capture) {
-      return false;
-    }
-    const source: DictationRefinementSource = {
-      captureToken: capture.token,
-      locale: capture.locale,
-      text,
-      ...session.refinementSnapshot(text),
-    };
-    let result: DictationRefinementResult;
-    try {
-      const { prepareDictationRefinement } = await import("./spoken-corrections.ts");
-      if (this.correctionCapture !== capture) {
-        return false;
-      }
-      result = prepareDictationRefinement(source, { mode: "explicit", literal: capture.literal });
-    } catch {
-      result = {
-        status: "unavailable",
-        original: text,
-        candidate: text,
-        plan: null,
-        reasons: ["corrections-unavailable"],
-      };
-    }
-    if (this.correctionCapture !== capture) {
-      return false;
-    }
-    if (
-      result.status === "unchanged" &&
-      !capture.correctionInvalidated &&
-      this.isCorrectionSourceCurrent(capture)
-    ) {
-      this.correctionCapture = null;
-      this.syncCancellationListeners();
-      this.options.onCommit(text, true, undefined, true);
-      this.dispatchEvent(new Event("change"));
-      return true;
-    }
-    this.pendingCorrection = { capture, result };
-    this.syncCancellationListeners();
-    this.dispatchEvent(new Event("change"));
-    return false;
   }
 
   private releasePlayback(): void {
