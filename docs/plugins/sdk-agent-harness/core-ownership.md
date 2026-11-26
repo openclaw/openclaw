@@ -209,7 +209,8 @@ profile handling for harnesses that enforce native availability independently.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using standard OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list and passes the matching names in
+or a plugin tool declared in current manifest metadata, and is also in that
+audited safe list. Core passes the matching names in
 `params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
 native equivalents for those names. Finite allowlists, undeclared or unknown
 tool names, wildcards, and groups containing any undeclared name remain
