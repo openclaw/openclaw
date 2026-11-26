@@ -19,6 +19,7 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "openClawIdRecoveryUse",
   "scopeUpgrade",
   "updateAvailable",
+  "visitorAccess",
 ] as const;
 
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];

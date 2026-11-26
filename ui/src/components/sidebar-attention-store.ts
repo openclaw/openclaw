@@ -311,6 +311,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       ],
       outbox,
       mentions: this.mentions.snapshot.items,
+      visitorAccessNotice: this.sources.visitorAccess?.notice,
       scopeUpgrade,
       update,
     });

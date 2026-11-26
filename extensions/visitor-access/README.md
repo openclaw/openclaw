@@ -337,14 +337,14 @@ for that connection (its `gatewayAccessGrant` reference). Staff, the Gateway
 owner, and anyone else without an admitted visitor grant get
 `{ status: "not_applicable" }`.
 
-| Response                                            | Meaning                                                                           |
-| --------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `{ status: "not_applicable" }`                      | The caller has no active visitor invitation, or its welcome session was deleted.  |
-| `{ status: "pending", retryAfterMs }`               | Another call is setting up this invitation's welcome session; call again.         |
-| `{ status: "ready", sessionKey, agentId, created }` | The welcome session exists; `created` is true only for the call that finished it. |
-| `{ status: "failed", retryable: true, message }`    | Setup failed; calling again resumes it. The message is short and has no secrets.  |
+| Response                                            | Meaning                                                                                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `{ status: "not_applicable" }`                      | No welcome chat is needed: no active invitation, a returning guest, or a deleted welcome session. |
+| `{ status: "pending", retryAfterMs }`               | Another call is setting up this invitation's welcome session; call again.                         |
+| `{ status: "ready", sessionKey, agentId, created }` | The welcome session exists; `created` is true only for the call that finished it.                 |
+| `{ status: "failed", retryable: true, message }`    | Setup failed; calling again resumes it. The message is short and has no secrets.                  |
 
-The first call reserves a session key in the grant's onboarding record, then
+For a first-time guest, the call reserves a session key in the grant's onboarding record, then
 creates the session as the guest, so the guest owns it and the guest role's
 agent, sandbox, and session limits apply. The session uses the configured
 default agent when the guest role permits it, otherwise the role's first
@@ -357,7 +357,11 @@ the model and records the onboarding as `ready`. Any number of calls, tabs,
 retries, reloads, or Gateway restarts yield at most one welcome session per
 grant: a retry after a failure or crash reuses the reserved key, an existing
 session is adopted, and the message is written with a stable idempotency key,
-so it is never repeated.
+so it is never repeated. Visitor Access remembers the verified profile that
+received a Welcome chat, independently of the invitation's expiry. The bounded
+history stores only profile and first-grant IDs. Existing active welcomes are
+remembered when the guest next signs in; an ended invitation from before this
+change cannot be recovered from the grant store.
 
 The welcome message greets the guest, names the inviter, includes the stored
 note, and gives the access expiry in UTC. It lists what the guest can do from
@@ -373,9 +377,10 @@ reservation held mid-setup or a failed setup, so renewal never starts a second
 welcome session. Expiry or revocation leaves the session and its transcript in
 place; the guest simply loses access. Access ending during setup ends that
 setup: the Gateway refuses the guest's remaining writes, the ready record is not
-committed, and the call answers `not_applicable`. A new invitation after that
-gets a new grant, so the guest's next sign-in creates a new welcome session; the
-earlier one remains the guest's.
+committed, and the call answers `not_applicable`. A new invitation gets a new
+grant. If the guest already received a Welcome chat, their next sign-in shows a
+**Welcome back** notice in **Inbox → System** instead of creating a new chat or
+reopening the old one, even if it was archived.
 
 A deleted welcome session, for example one an administrator removed, stays
 deleted. The record keeps its key, so setup never recreates it, and later calls
@@ -383,12 +388,18 @@ answer `not_applicable`, so the Control UI does not open it. Until setup
 completes, a retry resumes against the reserved key, so a partial session removed after a
 failed setup is created again with its welcome message.
 
-Welcome sessions belong to an invitation. A person invited by both email and
+The notice is visible only to the signed-in guest admitted by that invitation.
+It includes the current expiry (or no expiry) and any note from the inviter.
+Extending an active invitation also shows an **Access extended** notice with the
+new expiry, replacing the prior access notice rather than adding a chat message.
+The in-app notices do not require browser push permission.
+
+A person invited by both email and
 GitHub account has two grants; the Gateway admits them with the first active
-one, checking email grants before GitHub grants, so only that invitation gets a
-welcome session. If that grant ends while the other is still active, the next
-sign-in is admitted by the other grant and gets its own welcome session. Revoke
-the extra grant by `grantId` when one invitation per person is enough.
+one, checking email grants before GitHub grants. If that grant ends while the
+other is still active, the next sign-in uses the other grant and shows its access
+details to the returning guest. Revoke the extra grant by `grantId` when one
+invitation per person is enough.
 
 ## Expiry and drift
 

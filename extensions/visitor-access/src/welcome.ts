@@ -6,13 +6,14 @@ import {
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginLogger, PluginRuntime } from "../api.js";
+import type { PluginLogger, PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { VisitorAccessError } from "./errors.js";
 import type { ActiveVisitorInvitation, VisitorOnboarding } from "./grant-record.js";
 import { resolveVisitorRole } from "./roles.js";
 import type { VisitorAccessService } from "./visitors.js";
 
 export const WELCOME_ENSURE_METHOD = "visitor-access.welcome.ensure";
+export const ACCESS_NOTICE_METHOD = "visitor-access.notice.get";
 const RETRY_AFTER_MS = 1_000;
 
 /** Pinned response contract shared with the Control UI. */
@@ -25,6 +26,13 @@ export type WelcomeEnsureResult =
 type WelcomeGateway = Pick<PluginRuntime["gateway"], "request" | "appendAgentMessage">;
 type WelcomeClient = GatewayRequestHandlerOptions["client"];
 type GuestProfile = NonNullable<NonNullable<WelcomeClient>["authenticatedUserProfile"]>;
+export type VisitorAccessNotice = {
+  id: string;
+  kind: "restored" | "extended";
+  createdAt: number;
+  expiresAt: number | null;
+  note?: string;
+};
 
 /**
  * Sets up each guest invitation's welcome session once. The pull caller selects nothing:
@@ -39,7 +47,41 @@ export class VisitorWelcome {
     private readonly gateway: WelcomeGateway,
     private readonly config: () => OpenClawConfig,
     private readonly logger: Pick<PluginLogger, "warn">,
+    private readonly welcomedProfiles: Pick<
+      PluginStateKeyedStore<string>,
+      "lookup" | "registerIfAbsent"
+    >,
   ) {}
+
+  notice(client: WelcomeClient): VisitorAccessNotice | null {
+    const grant = client?.internal?.operatorAccessAuthority?.gatewayAccessGrant;
+    const profileId = client?.authenticatedUserProfile?.profileId;
+    if (grant?.pluginId !== "visitor-access" || !profileId) {
+      return null;
+    }
+    const invitation = this.service.findActiveInvitation(grant.grantId);
+    if (!invitation) {
+      return null;
+    }
+    const restoredAt =
+      invitation.onboarding?.returningProfileId === profileId
+        ? invitation.onboarding.updatedAt
+        : undefined;
+    const extendedAt = invitation.accessExtendedAt;
+    const kind =
+      extendedAt !== undefined && extendedAt > (restoredAt ?? -1) ? "extended" : "restored";
+    const createdAt = kind === "extended" ? extendedAt : restoredAt;
+    if (createdAt === undefined) {
+      return null;
+    }
+    return {
+      id: JSON.stringify([invitation.grantId, kind, createdAt, invitation.expiresAt]),
+      kind,
+      createdAt,
+      expiresAt: invitation.expiresAt,
+      ...(kind === "restored" && invitation.note ? { note: invitation.note } : {}),
+    };
+  }
 
   async ensure(client: WelcomeClient): Promise<WelcomeEnsureResult> {
     const grant = client?.internal?.operatorAccessAuthority?.gatewayAccessGrant;
@@ -51,8 +93,18 @@ export class VisitorWelcome {
     try {
       invitation = this.service.findActiveInvitation(grant.grantId);
       const recorded = invitation?.onboarding;
-      if (recorded?.state === "ready" && recorded.welcomeSessionKey) {
-        return await this.readyWelcome(recorded.welcomeSessionKey);
+      if (recorded?.state === "ready") {
+        if (recorded.returningProfileId) {
+          return { status: "not_applicable" };
+        }
+        if (recorded.welcomeSessionKey) {
+          const ready = await this.readyWelcome(recorded.welcomeSessionKey);
+          if (ready.status === "ready") {
+            // Adopt existing welcomes on upgrade without changing their transcripts.
+            await this.rememberWelcome(guest.profileId, grant.grantId);
+          }
+          return ready;
+        }
       }
     } catch (error) {
       return failed(error);
@@ -68,6 +120,15 @@ export class VisitorWelcome {
       return await this.setUp(invitation, guest, client.preparedSessionProfile?.githubLogin);
     } finally {
       this.inFlight.delete(invitation.grantId);
+    }
+  }
+
+  private async rememberWelcome(profileId: string, grantId: string): Promise<void> {
+    try {
+      await this.welcomedProfiles.registerIfAbsent(profileId, grantId);
+    } catch {
+      // History is UX only and must not prevent a welcome or change admission.
+      this.logger.warn("visitor-access: could not remember guest onboarding");
     }
   }
 
@@ -106,6 +167,20 @@ export class VisitorWelcome {
       });
     let reservation: VisitorOnboarding | undefined;
     try {
+      if (!recorded?.welcomeSessionKey) {
+        const firstGrant = await this.welcomedProfiles
+          .lookup(guest.profileId)
+          .catch(() => undefined);
+        if (firstGrant && firstGrant !== grantId) {
+          const done = await advance(recorded, {
+            state: "ready",
+            returningProfileId: guest.profileId,
+          });
+          return done.applied || done.reason === "inactive"
+            ? { status: "not_applicable" }
+            : { status: "pending", retryAfterMs: RETRY_AFTER_MS };
+        }
+      }
       const config = this.config();
       // A key reserved before a crash or failure keeps its agent; otherwise choose now.
       const reservedKey = recorded?.welcomeSessionKey;
@@ -171,6 +246,7 @@ export class VisitorWelcome {
         ...(message.mentions.length ? { mentions: message.mentions } : {}),
         idempotencyKey: `visitor-welcome:${grantId}`,
       });
+      await this.rememberWelcome(guest.profileId, grantId);
       const done = await advance(reservation, { state: "ready", welcomeSessionKey: sessionKey });
       if (done.applied) {
         return { status: "ready", sessionKey, agentId, created: true };

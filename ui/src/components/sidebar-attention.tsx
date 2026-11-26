@@ -111,6 +111,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     panelRuntime = runtime;
     setPanelPosition(runtime.sidebarAttentionPanelPosition(trigger));
+    context.sidebarAttention.refreshVisitorNotice();
     setPanelOpen(true);
     queueMicrotask(() => {
       if (isCurrentPanel(generation, scope)) {

@@ -19,6 +19,7 @@ export type VisitorOnboarding = {
   state: VisitorOnboardingState;
   welcomeSessionKey?: string;
   welcomeSessionId?: string;
+  returningProfileId?: string;
   error?: string;
   updatedAt: number;
 };
@@ -31,6 +32,7 @@ export type VisitorGrant = ({ email: string } | { githubAccountId: number }) & {
   invitedBy?: VisitorInviter;
   note?: string;
   onboarding?: VisitorOnboarding;
+  accessExtendedAt?: number;
   createdAt: number;
   expiresAt: number | null;
 };
@@ -112,13 +114,14 @@ export function compareAndSetGrantOnboarding(
   ) {
     return { applied: false, reason: "conflict", ...(recorded ? { onboarding: recorded } : {}) };
   }
-  const { state, welcomeSessionKey, welcomeSessionId, error } = next;
+  const { state, welcomeSessionKey, welcomeSessionId, returningProfileId, error } = next;
   return {
     applied: true,
     onboarding: {
       state,
       ...(welcomeSessionKey ? { welcomeSessionKey } : {}),
       ...(welcomeSessionId ? { welcomeSessionId } : {}),
+      ...(returningProfileId ? { returningProfileId } : {}),
       ...(error ? { error: error.slice(0, ONBOARDING_ERROR_MAX_CHARS) } : {}),
       // pending-to-pending reserves the session before setup; it must change the CAS token
       // even when two sign-ins arrive in the same millisecond or the clock moves backward.

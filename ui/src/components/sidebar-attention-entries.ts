@@ -38,6 +38,14 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   signature: string;
 };
 
+export type VisitorAccessNotice = {
+  id: string;
+  kind: "restored" | "extended";
+  createdAt: number;
+  expiresAt: number | null;
+  note?: string;
+};
+
 export type SidebarInboxEntry =
   | SidebarAttentionItem
   | (SidebarInboxEntryBase<"approvals"> & {
@@ -49,6 +57,10 @@ export type SidebarInboxEntry =
       state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
     })
   | (SidebarInboxEntryBase<"mentions", "neutral"> & { type: "mention"; mention: MentionInboxItem })
+  | (SidebarInboxEntryBase<"system", "neutral"> & {
+      type: "visitorAccess";
+      notice: VisitorAccessNotice;
+    })
   | (SidebarInboxEntryBase<"system"> & {
       type: "outbox";
       id: string;
@@ -87,6 +99,8 @@ function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
       return entry.approval.createdAtMs;
     case "mention":
       return entry.mention.createdAt;
+    case "visitorAccess":
+      return entry.notice.createdAt;
     case "attention":
       return entry.arrivedAtMs;
     default:
@@ -99,6 +113,7 @@ export function buildSidebarInboxEntries(params: {
   attention: readonly SidebarAttentionItem[];
   outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
   mentions: readonly MentionInboxItem[];
+  visitorAccessNotice?: VisitorAccessNotice | null;
   scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
   update: Extract<SidebarInboxEntry, { type: "update" }> | null;
 }): SidebarInboxEntry[] {
@@ -133,6 +148,16 @@ export function buildSidebarInboxEntries(params: {
     ...warnings,
     ...mentions,
   ];
+  if (params.visitorAccessNotice) {
+    entries.push({
+      type: "visitorAccess",
+      category: "system",
+      severity: "neutral",
+      notice: params.visitorAccessNotice,
+      requiresAction: true,
+      dismissal: { kind: "visitorAccess", signature: params.visitorAccessNotice.id },
+    });
+  }
   return entries.toSorted((left, right) => {
     const leftAt = inboxEntryArrivedAt(left) ?? Infinity;
     const rightAt = inboxEntryArrivedAt(right) ?? Infinity;

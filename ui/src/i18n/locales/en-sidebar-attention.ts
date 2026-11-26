@@ -71,6 +71,12 @@ const enSidebarAttention = {
       offline: "Disconnected",
       offlineHint: "Reconnect to try again.",
     },
+    visitorAccess: {
+      restored: "Welcome back — access restored",
+      extended: "Guest access extended",
+      expires: "Expires {date}",
+      noExpiry: "Your guest access does not expire.",
+    },
     modelAuthExpired: "Account needs attention: {providers}",
     authExpired: "Account needs attention",
     signInRequired: "Sign-in required",

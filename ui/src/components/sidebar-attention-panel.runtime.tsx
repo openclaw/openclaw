@@ -49,6 +49,7 @@ import {
 } from "./sidebar-issue-item.tsx";
 import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
 import { renderSidebarOutboxItem as SidebarOutboxItem } from "./sidebar-outbox-item.tsx";
+import { SidebarVisitorAccessItem } from "./sidebar-visitor-access-item.tsx";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu, type MenuItem } from "./solid/menu.tsx";
@@ -270,6 +271,9 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
+      <Match when={props.entry.type === "visitorAccess" ? props.entry : null}>
+        {(entry) => <SidebarVisitorAccessItem notice={entry().notice} onDismiss={dismiss} />}
+      </Match>
       <Match when={props.entry.type === "update"}>
         <SidebarUpdateSurface
           context={props.readContext()}
@@ -292,6 +296,8 @@ function inboxEntryIdentity(
       return JSON.stringify([entry.type, entry.approval.id]);
     case "mention":
       return JSON.stringify([entry.type, entry.mention.id]);
+    case "visitorAccess":
+      return JSON.stringify([entry.type, entry.notice.id]);
     case "attention":
       return JSON.stringify([entry.type, entry.kind, entry.signature]);
     case "outbox":
