@@ -1,3 +1,5 @@
 # PR #202421: real PostgreSQL 16/17 commit progress and timeout/rollback coverage,
 # 901-key selector/replay boundaries, and authenticated child-Gateway reads/restart.
-486
+# Canonical deadlines and PG16/17 default/zero/maintenance, GUC minima,
+# nested restore, fatal rollback, and setup-failure cleanup regressions.
+859
