@@ -46,6 +46,46 @@ function createSessions(request: ReturnType<typeof vi.fn>, scopes?: string[], me
 
 afterEach(() => vi.unstubAllGlobals());
 
+it("notifies group readiness without invalidating unchanged session rows", async () => {
+  const first = createDeferred<Groups>();
+  const second = createDeferred<Groups>();
+  onTestFinished(() => {
+    first.resolve({ groups: [] });
+    second.resolve({ groups: [] });
+  });
+  let pending = first;
+  const sessions = createSessions(
+    groupRequests({ "sessions.groups.list": () => pending.promise }),
+    ["operator.read"],
+    groupMethods(["list"]),
+  );
+  const state = sessions.state;
+  const rowRevision = sessions.rowPresentationRevision;
+  const observed: Array<[string, number, number]> = [];
+  sessions.subscribe(() =>
+    observed.push([sessions.groupsStatus(), sessions.revision, sessions.rowPresentationRevision]),
+  );
+  const firstRevision = sessions.revision;
+  const loading = sessions.groupsLoad();
+  expect(observed.at(-1)).toEqual(["loading", firstRevision + 1, rowRevision]);
+  expect(sessions.state).toBe(state);
+
+  first.reject(new Error("catalog unavailable"));
+  await expect(loading).resolves.toBeNull();
+  expect(observed.at(-1)).toEqual(["unavailable", firstRevision + 2, rowRevision]);
+  expect(sessions.state).toBe(state);
+
+  pending = second;
+  sessions.groupsInvalidate();
+  expect(observed.at(-1)).toEqual(["loading", firstRevision + 3, rowRevision]);
+  expect(sessions.state).toBe(state);
+  const reloading = sessions.groupsLoad();
+  second.resolve({ groups: [clientGroup] });
+  await reloading;
+  expect(sessions.state.groups).toEqual([clientGroup.name]);
+  expect(observed.at(-1)).toEqual(["ready", firstRevision + 4, rowRevision + 1]);
+});
+
 it.each(["disconnected", "disposed"] as const)(
   "retires automatic group loads for a %s owner",
   async (boundary) => {

@@ -97,6 +97,7 @@ export function startEarlyApplicationGateway(
     route.sessionKey,
     connection.offlineRecoveryScope ? undefined : historyFor(),
     window.location.href,
+    settings.chatInlineCommands === true,
   );
   initial.prewarmChatSnapshot();
   const entry = peekPrewarmedChatSnapshot();

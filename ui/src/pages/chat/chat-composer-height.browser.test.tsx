@@ -12,10 +12,12 @@ import {
 } from "./components/chat-composer-dom.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import mobileStyles from "../../styles/chat/composer-mobile.css?inline";
 import surfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 import layoutStyles from "../../styles/chat/layout.css?inline";
 import startupStyles from "../../styles/chat/startup-layout.css?inline";
+import componentsStyles from "../../styles/components.css?inline";
 
 const settled = () =>
   new Promise<void>((resolve) => {
@@ -71,6 +73,61 @@ describe("content-sized composer height", () => {
       input: () => container.querySelector<HTMLElement>(".agent-chat__input")!,
     };
   }
+
+  it.each([
+    { width: 1440, height: 900, floor: 88, mobile: false, draft: "" },
+    { width: 520, height: 900, floor: 92, mobile: false, draft: "" },
+    { width: 844, height: 390, floor: 112, mobile: false, draft: "" },
+    { width: 1440, height: 300, floor: 0, mobile: false, draft: "" },
+    { width: 393, height: 852, floor: 52, mobile: true, draft: "" },
+    { width: 393, height: 852, floor: 92, mobile: true, draft: "Retained draft" },
+  ])("shares the $floor px surface floor with terminal replacement", async (shape) => {
+    styles.textContent = [
+      baseStyles,
+      componentsStyles,
+      startupStyles,
+      layoutStyles,
+      surfaceStyles,
+      composerStyles,
+      mobileStyles,
+    ].join("\n");
+    await page.viewport(shape.width, shape.height);
+    const f = fixture();
+    Object.assign(f.props, { mobileComposer: shape.mobile, draft: shape.draft });
+    f.draw();
+    await settled();
+    const shell = container.querySelector(".agent-chat__composer-shell");
+    const before = f.input().getBoundingClientRect();
+    expect(getComputedStyle(f.input()).minHeight).toBe(`${shape.floor}px`);
+    f.props.disabledBanner = {
+      kind: "composer-replacement",
+      text: "Archived conversation",
+      tone: "neutral",
+      icon: "archive",
+      actionLabel: "Unarchive",
+      onAction: () => {},
+    };
+    f.draw();
+    await settled();
+    const replacement = container.querySelector<HTMLElement>(
+      ".agent-chat__disabled-banner--replacement",
+    )!;
+    expect(container.querySelector(".agent-chat__composer-shell")).toBe(shell);
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(getComputedStyle(replacement).minHeight).toBe(`${shape.floor}px`);
+    // The empty full-size surface is stable; compact or expanded content has its own height.
+    if (!shape.mobile && shape.floor > 0) {
+      expect(replacement.getBoundingClientRect().height).toBe(before.height);
+    }
+    f.props.disabledBanner = { ...f.props.disabledBanner, presentation: "compact" };
+    f.draw();
+    await settled();
+    expect(getComputedStyle(replacement).minHeight).toBe("auto");
+    f.props.disabledBanner = { ...f.props.disabledBanner, presentation: "hidden" };
+    f.draw();
+    await settled();
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+  });
 
   it.each([1440, 1600])(
     "grows beyond six lines, caps the whole footer, and shrinks at %ipx",

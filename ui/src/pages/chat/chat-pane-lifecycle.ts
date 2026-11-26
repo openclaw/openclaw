@@ -30,7 +30,6 @@ import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import type { InlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import { disposeChatLiveEvents } from "./chat-live-events.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -280,10 +279,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
   };
 
-  override start(
-    inlineCommandPresentation?: InlineCommandPresentation,
-    inlineCommandPreparationError?: string,
-  ) {
+  override start() {
     this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.start();
@@ -309,9 +305,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.context,
       chatState.createRenderLifecycle(),
       {
-        inlineCommandPresentation,
-        inlineCommandPreparationError,
-        isCurrent: () => this.isConnected && this.state === pageState,
         sessionKey: this.sessionKey,
         agentId: parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId,
         dispatchEvent: (event) => this.element.dispatchEvent(event),

@@ -51,6 +51,92 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
 it.each([false, true])(
+  "adopts the boot editor before session facts settle (archived: %s)",
+  async (archived) => {
+    installTranscriptDomMocks();
+    onTestFinished(resetTranscriptTestDom);
+    const metadata = createDeferred();
+    onTestFinished(() => metadata.resolve());
+    const sessionKey = "agent:main:chat:11111111-1111-4111-8111-111111111111";
+    const fixture = createMountedPanes(
+      [{ key: sessionKey, kind: "direct", sessionId: "boot-target", updatedAt: 1, archived }],
+      "main",
+      metadata.promise,
+    );
+    const gateway = fixture.context.gateway;
+    const disk = vi
+      .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
+      .mockResolvedValue(undefined);
+    onTestFinished(() => {
+      discardPrewarmedChatSnapshot();
+      disk.mockRestore();
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
+    });
+    await prewarmChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: fixture.context.agents.state.agentsList,
+        },
+        { sessionKey },
+      ),
+    );
+    const boot = document.createElement("textarea");
+    boot.id = "openclaw-boot-composer";
+    boot.value = "Keep the pending draft";
+    boot.setAttribute("data-focused", "");
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(boot);
+    boot.focus();
+    boot.setSelectionRange(5, 8, "backward");
+    boot.scrollTop = 43;
+    adoptBootComposer(true);
+    const request = vi.spyOn(expectDefined(gateway.snapshot.client, "client"), "request");
+    const { pane } = mountPane(fixture.context, {
+      paneId: "boot-target",
+      ownsRouteComposer: true,
+      presentationId: crypto.randomUUID(),
+      sessionKey,
+      active: true,
+      presented: true,
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    await waitForSolid(() =>
+      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(true),
+    );
+    await pane.updateComplete;
+    const editor = expectDefined(
+      pane.querySelector<HTMLTextAreaElement>(composerSelector),
+      "adopted composer before metadata",
+    );
+    const footer = pane.querySelector(".chat-footer");
+    expect(pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(editor.value).toBe(boot.value);
+    expect(document.activeElement).toBe(editor);
+    expect([editor.selectionStart, editor.selectionEnd, editor.selectionDirection]).toEqual([
+      5,
+      8,
+      "backward",
+    ]);
+    expect(editor.scrollTop).toBe(43);
+    metadata.resolve();
+    await waitForSolid(() => {
+      if (archived) {
+        expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
+        expect(pane.querySelector(composerSelector)).toBeNull();
+      } else {
+        expect(pane.querySelector(composerSelector)).toBe(editor);
+      }
+    });
+    expect(pane.querySelector(".chat-footer")).toBe(footer);
+  },
+);
+
+it.each([false, true])(
   "holds DOM completion until the yielded pane mounts or retires (retire: %s)",
   async (retire) => {
     const bootComposer = document.createElement("textarea");

@@ -5,7 +5,6 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
-import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -87,7 +86,7 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** First visible message of the containing group/frame; null means none. */
   firstBubbleKey?: string | null;
   showToolCalls?: boolean;
-  inlineCommands?: InlineCommandPresentation;
+  inlineCommands?: boolean;
   isToolMessageExplicitlyExpanded?: (messageId: string) => boolean;
   isToolMessageExpanded?: (messageId: string, card?: ToolCard) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;

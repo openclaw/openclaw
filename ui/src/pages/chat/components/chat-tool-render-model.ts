@@ -3,7 +3,6 @@ import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/contro
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
-import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -47,7 +46,7 @@ export type ToolRenderOptions = {
   mediaReadAllowed?: boolean;
   runActive?: boolean;
   interruptedRunIds?: ReadonlySet<string>;
-  inlineCommands?: InlineCommandPresentation;
+  inlineCommands?: boolean;
   toolMessageSource?: ChatToolMessageSource;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;

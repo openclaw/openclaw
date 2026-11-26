@@ -65,9 +65,7 @@ type SelectedSubscriptionScope = {
 };
 
 function requestsLiveToolOutput(state: ChatSessionMessageSubscriptionState): boolean {
-  return (
-    state.settings?.chatInlineCommands === true && state.inlineCommandPresentation !== undefined
-  );
+  return state.settings?.chatInlineCommands === true;
 }
 
 function warnSubscriptionRelease(error: unknown) {

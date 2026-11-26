@@ -21,6 +21,7 @@ type SessionGroupCatalogHost = {
   snapshot: () => SessionGateway["snapshot"];
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
+  notifyStatus: () => void;
   refreshRows: () => Promise<void>;
   retryDelayMs: (error: unknown) => number | null;
 };
@@ -63,7 +64,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   const invalidate = () => {
     dispose();
     defaultsStatus = "loading";
-    host.publish({ ...host.readState() });
+    host.notifyStatus();
   };
 
   const publishCatalog = (
@@ -86,7 +87,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
     if (defaultsStatus !== "unavailable") {
       defaultsStatus = "unavailable";
-      host.publish({ ...host.readState() });
+      host.notifyStatus();
     }
     loadedEpoch = -1;
     const delay = host.retryDelayMs(error);
@@ -177,7 +178,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
-      host.publish({ ...host.readState() });
+      host.notifyStatus();
     }
     // Concurrent catalog edits settle best effort until the next refresh or reconnect.
     const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(

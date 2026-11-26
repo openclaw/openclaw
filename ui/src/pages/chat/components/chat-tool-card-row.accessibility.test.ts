@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getByRole, getByText, isInaccessible } from "@solidjs/testing-library";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 beforeEach(() => {
@@ -30,7 +29,7 @@ it.each(rows)(
   "includes the outcome once in the focused %s disclosure's accessible name",
   async (name, args, inline, label) => {
     const container = document.createElement("div");
-    const inlineCommands = inline ? await inlineCommandPresentation() : undefined;
+    const inlineCommands = inline;
     const end = { itemId: "search", kind: "tool", title: "Search", phase: "end" } as const;
     for (const [activity, outcome] of [
       [{ ...end, status: "blocked" }, "Blocked"],
@@ -62,7 +61,7 @@ it.each(rows)(
     const card = { id: name, name, args };
     const options = {
       interrupted: true,
-      inlineCommands: inline ? await inlineCommandPresentation() : undefined,
+      inlineCommands: inline,
       onToggleExpanded: vi.fn(),
     };
     const container = await mountCard(card, { ...options, expanded: false });

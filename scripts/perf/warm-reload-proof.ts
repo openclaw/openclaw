@@ -30,6 +30,7 @@ import {
 } from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
+import { captureWarmReloadColdCpu } from "./warm-reload-cpu-profile.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
 import { analyzeReloadFrames, type ReloadFrame } from "./warm-reload-frames.ts";
 import { createWarmReloadGatewayOwner, runWarmReloadCli } from "./warm-reload-lifecycle.ts";
@@ -60,6 +61,7 @@ const { values } = parseArgs({
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "cold-cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
@@ -79,6 +81,7 @@ if (values.help) {
 Creates fresh isolated state and Chromium, records cold + warm timings, then stops both.
 Default: one unmeasured warm prime; --prime-reloads 0 measures the first warm return.
 --cpu-profile retains full visual attribution and defaults to no priming.
+--cold-cpu-profile records cold CPU/LoAF attribution without visuals; use --route chat --reloads 0 --prime-reloads 0.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
   process.exit(0);
@@ -110,12 +113,24 @@ function integer(raw: string, name: string, min: number, max: number) {
 }
 const reloads = integer(values.reloads, "--reloads", 0, 100);
 const primeReloads = integer(
-  values["prime-reloads"] ?? (values["cpu-profile"] ? "0" : "1"),
+  values["prime-reloads"] ?? (values["cpu-profile"] || values["cold-cpu-profile"] ? "0" : "1"),
   "--prime-reloads",
   0,
   10,
 );
 const visualProofs = values["visual-proofs"] || values["cpu-profile"];
+if (values["cold-cpu-profile"] && visualProofs) {
+  throw new Error("--cold-cpu-profile cannot be combined with --cpu-profile or --visual-proofs");
+}
+if (values["cold-cpu-profile"] && (reloads !== 0 || primeReloads !== 0)) {
+  throw new Error(
+    "--cold-cpu-profile requires --reloads 0 --prime-reloads 0; use --cpu-profile for warm captures",
+  );
+}
+if (values["cold-cpu-profile"] && values.route !== "chat") {
+  throw new Error("--cold-cpu-profile requires --route chat --reloads 0 --prime-reloads 0");
+}
+const profiled = values["cpu-profile"] || values["cold-cpu-profile"];
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
@@ -186,7 +201,9 @@ async function readProbe(page: Page) {
       window,
       "__warmReloadProof",
     );
+    data.finishCpuAttribution?.();
     data.stopped = true;
+    const { finishCpuAttribution: _finishCpuAttribution, ...snapshot } = data;
     const rig: { loaf: unknown[]; mut: Map<string, unknown> } | undefined = Reflect.get(
       window,
       "__perf",
@@ -197,7 +214,7 @@ async function readProbe(page: Page) {
       "__paneChrome",
     );
     return {
-      ...data,
+      ...snapshot,
       rig: rig
         ? {
             loaf: rig.loaf,
@@ -436,16 +453,30 @@ async function captureTimingReload(
   cdp.on("Network.requestWillBeSent", onDocument);
   page.on("pageerror", onError);
   try {
-    if (warm) {
-      await page.reload({ waitUntil: "domcontentloaded" });
-    } else {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
-    }
-    await page.waitForFunction((duration) => performance.now() >= duration, captureMs, {
-      timeout: captureMs + 60000,
-      polling: 250,
-    });
-    const probe = await readProbe(page);
+    const capture = async () => {
+      if (warm) {
+        await page.reload({ waitUntil: "domcontentloaded" });
+      } else {
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+      }
+      await page.waitForFunction((duration) => performance.now() >= duration, captureMs, {
+        timeout: captureMs + 60000,
+        polling: 250,
+      });
+      return await readProbe(page);
+    };
+    const { probe, attribution } =
+      !warm && values["cold-cpu-profile"]
+        ? await captureWarmReloadColdCpu(
+            cdp,
+            {
+              outputDir,
+              assetBaseUrl: new URL("/assets/", url).href,
+              assetDirectory: path.join(directory, "served-ui", "assets"),
+            },
+            capture,
+          )
+        : { probe: await capture(), attribution: undefined };
     if (
       !probe.fcpMs ||
       !probe.helloHandledMs ||
@@ -470,6 +501,7 @@ async function captureTimingReload(
       oldPage,
       url: new URL(url).pathname,
       probe,
+      ...(attribution ? { cpuAttribution: attribution } : {}),
       documents,
       errors,
       paintMilestoneMethod:
@@ -1097,10 +1129,12 @@ async function main(signal: AbortSignal) {
         }
       }
     }
-    paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
-      port: await freeProofPort(gatewayPorts),
-      directory: path.join(directory, "paint-holding-calibration"),
-    });
+    if (!values["cold-cpu-profile"]) {
+      paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
+        port: await freeProofPort(gatewayPorts),
+        directory: path.join(directory, "paint-holding-calibration"),
+      });
+    }
     const cpuBefore = os.cpus().map((cpu) => cpu.times);
     await delay(2000);
     const cpuAfter = os.cpus().map((cpu) => cpu.times);
@@ -1139,7 +1173,7 @@ async function main(signal: AbortSignal) {
               await page.addInitScript({ content: extraInitScripts.join("\n") });
             }
             await page.addInitScript({
-              content: `globalThis.__name = (fn) => fn; ${visualProofs ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);` : ""} (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]}, ${visualProofs});`,
+              content: `globalThis.__name = (fn) => fn; ${visualProofs ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);` : ""} (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]}, ${visualProofs}, ${values["cold-cpu-profile"]});`,
             });
             const cdp = await context.newCDPSession(page);
             await cdp.send("Page.enable");
@@ -1389,12 +1423,14 @@ async function main(signal: AbortSignal) {
             }
             prepared.push({ arm, context, page, cdp, result: results.at(-1)! });
           } catch (error) {
-            await diagnosticPage
-              ?.screenshot({
-                path: path.join(arm.directory, `${route}-failure.png`),
-                timeout: 5000,
-              })
-              .catch(() => {});
+            if (!values["cold-cpu-profile"]) {
+              await diagnosticPage
+                ?.screenshot({
+                  path: path.join(arm.directory, `${route}-failure.png`),
+                  timeout: 5000,
+                })
+                .catch(() => {});
+            }
             await context.close();
             throw error;
           }
@@ -1469,13 +1505,14 @@ async function main(signal: AbortSignal) {
     }
     const report = {
       revision,
-      profiled: values["cpu-profile"],
+      profiled,
       captureMode: visualProofs ? "visual" : "timing",
       harness: {
         geometrySampler: visualProofs,
         screencast: visualProofs,
         rpcCensus: visualProofs,
-        cpuProfiler: values["cpu-profile"],
+        cpuProfiler: profiled,
+        coldCpuProfiler: values["cold-cpu-profile"],
         externalInitScripts: extraInitScripts.length,
         primingReloads: reloads > 0 ? primeReloads : 0,
         firstMeasuredWarmOrdinal: reloads > 0 ? primeReloads + 1 : null,
@@ -1520,7 +1557,7 @@ async function main(signal: AbortSignal) {
       results,
     };
     await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));
-    if (values.base && !values["cpu-profile"]) {
+    if (values.base && !profiled) {
       await createWarmReloadComparison(results, directory);
     }
   } catch (error) {

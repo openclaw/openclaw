@@ -53,9 +53,7 @@ export function createChatPaneResourceProps() {
     return {
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       toolMessageSource: chatRunPresentation(state),
-      inlineCommands: state.settings.chatInlineCommands
-        ? state.inlineCommandPresentation
-        : undefined,
+      inlineCommands: state.settings.chatInlineCommands,
       fullMessageAgentId: target.agentId,
       widgetLayout: widgetLayout(state.chatMessagesBySession, state, target),
       displayFacts: createChatDisplayFacts(state.chatMessagesBySession, state, target),

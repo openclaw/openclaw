@@ -44,7 +44,6 @@ export type SessionApprovalReplayState = {
 };
 
 export type ChatState = StreamCausalBoundaryState & {
-  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;

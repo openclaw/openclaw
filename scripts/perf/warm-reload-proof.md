@@ -143,6 +143,42 @@ initial cold capture remains separate from these independently reset visits.
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
 
+For cold CPU attribution without visual instrumentation, use
+`--cold-cpu-profile --route chat --reloads 0 --prime-reloads 0`. This uses the same
+real Gateway, cold reset, browser and capture window. It cannot be combined with
+`--cpu-profile` or `--visual-proofs`; it skips PNG calibration and failure screenshots.
+The ordinary warm profiling path is unchanged. Reports set `profiled: true` and
+do not produce ordinary comparison results.
+
+Each cold capture retains the complete raw `cold.cpuprofile`, source-mapped
+`cold.mapped.cpuprofile`, `cold-cpu-clocks.json` and `cold-cpu-attribution.json`.
+Raw signed sample deltas and all mapped function/file tables remain available;
+hotspot lists are only summaries. Missing source maps stay explicitly unmapped.
+Artifacts over 16 MiB or native LoAF attribution over 8 MiB fail the capture
+instead of producing a truncated successful result. Native LoAF JSON retains
+script invokers, source locations and forced style/layout fields when Chromium
+provides them. Browser script attribution is not an exhaustive function census;
+unreported dropped-entry counts remain unknown.
+
+CPU samples use the profiler's monotonic microsecond clock, aligned through CDP
+`NavigationStart` to the existing hello and Element Timing row-paint timestamps.
+The sampled interval is hello handled → eligible row text paint. Sample weights
+are elapsed sampling time, not measured thread CPU. `Performance` duration counters
+use `threadTicks`, with raw before/after and milestone snapshots retained.
+The probe emits two `console.timeStamp` labels: Chromium snapshots counters
+synchronously at hello handled and at first-row observer delivery. Counter deltas
+therefore end at observer execution, not historical paint; the observer delay and
+snapshot offsets are explicit. Profiling and these markers add diagnostic overhead.
+Only the first hello and first eligible row in the current document emit markers.
+Missing or duplicate snapshots, navigation changes, counter resets and incomplete
+sample coverage fail attribution instead of implying zero work.
+Cold mode requires the chat route. The profile must span hello handled through the
+recorded capture end, and final counters must still name that navigation. CDP can
+restart profiling when it restores a navigation agent. Recording and chronological first/last
+sample offsets, any unprofiled navigation prefix, and full-navigation coverage are
+explicit; a missing prefix is not reported as zero work or complete navigation coverage.
+No runtime behavior or performance acceptance threshold changes in this mode.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and

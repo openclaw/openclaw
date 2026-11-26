@@ -20,7 +20,6 @@ import { chatHistoryRequests } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
-import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import {
   createTestChatPane,
   connectPaneTestView,
@@ -187,7 +186,6 @@ describe("chat pane connection lifecycle", () => {
   it("reasserts inline-output interest before recovery on reconnect without changing the draft", async () => {
     const { pane, state, request } = reconnectPane({ messages: [], sessionId: "inline-reconnect" });
     state.settings = { ...state.settings, chatInlineCommands: true };
-    state.inlineCommandPresentation = await inlineCommandPresentation();
     state.chatMessage = "Unsent reconnect draft";
     pane.connectedClient = null;
     const connected = pane.context.gateway.snapshot;

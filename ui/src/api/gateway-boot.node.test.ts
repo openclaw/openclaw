@@ -14,9 +14,15 @@ const options = { url: "ws://127.0.0.1:18789", token: "synthetic-token" };
 const initialHistory = { limit: 80, knownState: {}, maxBytes: 262144, toolResultMaxChars: 2000 };
 let boot: EarlyGateway;
 
+function startBoot(includeLiveToolOutput = false) {
+  boot?.client.stop();
+  wsInstances.length = 0;
+  boot = new EarlyGateway(options, key, initialHistory, href, includeLiveToolOutput);
+}
+
 beforeEach(() => {
   vi.stubGlobal("location", { href });
-  boot = new EarlyGateway(options, key, initialHistory, href);
+  startBoot();
 });
 afterEach(() => boot.client.stop());
 
@@ -58,43 +64,128 @@ async function acceptHello(
   return subscription;
 }
 
-it("hands off one connection, initial history, and ordered events without loss or duplication", async () => {
+it.each([false, true])(
+  "hands off history and ordered events once (live output: %s)",
+  async (live) => {
+    startBoot(live);
+    const connection = await handshake();
+    const { socket } = connection;
+    const subscription = await acceptHello(connection);
+    expect(subscription.params.includeLiveToolOutput === true).toBe(live);
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 1, seq: 1 });
+    socket.emitMessage({
+      type: "res",
+      id: subscription.id,
+      ok: true,
+      payload: { key, initialHistory: { ok: true, payload: { messages: ["snapshot"] } } },
+    });
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 2, seq: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const delivery: unknown[] = [];
+    const client = boot.adopt({
+      ...options,
+      onHello: () => delivery.push("hello"),
+      onEvent: (event) => delivery.push(event.payload),
+    });
+    expect(client).toBe(boot.client);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivery).toEqual(["hello"]);
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 3, seq: 3 });
+    const acquired = await takeEarlyGatewaySubscription(boot.client, key, {
+      initialHistory,
+      includeLiveToolOutput: live,
+    });
+    expect(acquired?.initialHistory).toEqual({ ok: true, payload: { messages: ["snapshot"] } });
+    expect(acquired?.includeLiveToolOutput === true).toBe(live);
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 4, seq: 4 });
+    expect(delivery).toEqual(["hello", 1, 2, 3, 4]);
+    expect(wsInstances).toHaveLength(1);
+    expect(
+      socket.sent
+        .map((value) => JSON.parse(value).method)
+        .filter((method) => method === "sessions.messages.subscribe"),
+    ).toHaveLength(1);
+    expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
+  },
+);
+
+it("settles a disabled inline lease before draining and leaves fresh history to the pane", async () => {
+  startBoot(true);
   const connection = await handshake();
   const { socket } = connection;
-  const subscription = await acceptHello(connection);
-  socket.emitMessage({ type: "event", event: "boot-proof", payload: 1, seq: 1 });
+  const initial = await acceptHello(connection);
   socket.emitMessage({
     type: "res",
-    id: subscription.id,
+    id: initial.id,
     ok: true,
-    payload: { key, initialHistory: { ok: true, payload: { messages: ["snapshot"] } } },
+    payload: { key, initialHistory: { ok: true, payload: { messages: ["early snapshot"] } } },
   });
-  socket.emitMessage({ type: "event", event: "boot-proof", payload: 2, seq: 2 });
+  socket.emitMessage({ type: "event", event: "boot-proof", payload: "buffered", seq: 1 });
   await vi.advanceTimersByTimeAsync(0);
-
-  const delivery: unknown[] = [];
-  const client = boot.adopt({
-    ...options,
-    onHello: () => delivery.push("hello"),
-    onEvent: (event) => delivery.push(event.payload),
+  const onEvent = vi.fn();
+  expect(boot.adopt({ ...options, onEvent })).toBe(boot.client);
+  const pending = takeEarlyGatewaySubscription(boot.client, key, { initialHistory });
+  await vi.advanceTimersByTimeAsync(0);
+  const requests = socket.sent.map((value) => JSON.parse(value));
+  const subscriptions = requests.filter((frame) => frame.method === "sessions.messages.subscribe");
+  expect(subscriptions).toHaveLength(2);
+  expect(subscriptions[1].params).toEqual({
+    key,
+    subscriptionId: initial.params.subscriptionId,
   });
-  expect(client).toBe(boot.client);
+  expect(onEvent).not.toHaveBeenCalled();
+  socket.emitMessage({ type: "res", id: subscriptions[1].id, ok: true, payload: { key } });
+  const subscription = await pending;
+  expect(subscription?.includeLiveToolOutput).not.toBe(true);
+  expect(subscription).not.toHaveProperty("initialHistory");
   await vi.advanceTimersByTimeAsync(0);
-  expect(delivery).toEqual(["hello"]);
-  socket.emitMessage({ type: "event", event: "boot-proof", payload: 3, seq: 3 });
-  const acquired = await takeEarlyGatewaySubscription(boot.client, key, { initialHistory });
-  expect(acquired?.initialHistory).toEqual({ ok: true, payload: { messages: ["snapshot"] } });
-  await vi.advanceTimersByTimeAsync(0);
-  socket.emitMessage({ type: "event", event: "boot-proof", payload: 4, seq: 4 });
-  expect(delivery).toEqual(["hello", 1, 2, 3, 4]);
-  expect(wsInstances).toHaveLength(1);
-  expect(
-    socket.sent
-      .map((value) => JSON.parse(value).method)
-      .filter((method) => method === "sessions.messages.subscribe"),
-  ).toHaveLength(1);
-  expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
+  expect(onEvent.mock.calls.map(([event]) => event.payload)).toEqual(["buffered"]);
+  expect(requests.some((frame) => frame.method === "sessions.messages.unsubscribe")).toBe(false);
 });
+
+it.each([false, true])(
+  "retires retained leases after a rejected capability change (was live: %s)",
+  async (live) => {
+    startBoot(live);
+    const connection = await handshake();
+    const { socket } = connection;
+    const initial = await acceptHello(connection);
+    socket.emitMessage({
+      type: "res",
+      id: initial.id,
+      ok: true,
+      payload: { key, initialHistory: { ok: true, payload: { messages: [] } } },
+    });
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: "retired", seq: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    const onEvent = vi.fn();
+    const reconnect = vi.spyOn(boot.client, "forceReconnect");
+    expect(boot.adopt({ ...options, onEvent })).toBe(boot.client);
+    const pending = takeEarlyGatewaySubscription(boot.client, key, {
+      initialHistory,
+      includeLiveToolOutput: !live,
+    });
+    const rejected = expect(pending).rejects.toThrow("capability change rejected");
+    await vi.advanceTimersByTimeAsync(0);
+    const change = socket.sent
+      .map((value) => JSON.parse(value))
+      .filter((frame) => frame.method === "sessions.messages.subscribe")[1];
+    expect(change.params.includeLiveToolOutput === true).toBe(!live);
+    socket.emitMessage({
+      type: "res",
+      id: change.id,
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "capability change rejected" },
+    });
+    await rejected;
+    expect(reconnect).toHaveBeenCalledExactlyOnceWith("early Gateway handoff retired");
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(socket.readyState).toBe(3);
+    expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
+  },
+);
 
 it("delivers hello once when it arrives during adoption", async () => {
   const connection = await handshake();

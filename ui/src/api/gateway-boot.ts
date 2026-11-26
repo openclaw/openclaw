@@ -35,6 +35,7 @@ export class EarlyGateway {
     private readonly sessionKey: string,
     private history: GatewaySessionMessageSubscriptionOptions["initialHistory"],
     private readonly location: string,
+    private readonly includeLiveToolOutput = false,
   ) {
     const currentOptions = () => this.owner ?? options;
     this.client = new GatewayBrowserClient({
@@ -142,6 +143,9 @@ export class EarlyGateway {
           .acquire(this.sessionKey, {
             initialHistory: history,
             includeApprovals: canSubscribeSessionApprovals(hello, this.client.instanceId),
+            // The startup FIFO retains output until the prepared pane takes this
+            // lease. Admit it before the snapshot so quiet commands have no gap.
+            includeLiveToolOutput: this.includeLiveToolOutput,
           });
       })
       .then((subscription) => {
@@ -228,23 +232,34 @@ export class EarlyGateway {
       if (!this.active || !runtime) {
         throw new Error("Early Gateway retired");
       }
-      if (options.includeLiveToolOutput) {
+      if (
+        (options.includeLiveToolOutput === true) !==
+        Boolean(subscription.includeLiveToolOutput)
+      ) {
         // The early handle already owns approvals from this connection's hello.
-        // Stdout admission needs a current snapshot, never the early history.
-        const upgraded = await runtime
-          .getGatewaySessionMessageSubscriptionCoordinator(this.client)
-          .acquire(this.sessionKey, {
-            includeApprovals: subscription.includeApprovals,
-            includeLiveToolOutput: true,
-          });
-        if (
-          !this.active ||
-          (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
-        ) {
-          throw new Error("Early Gateway connection retired");
+        // Changed presentation demand needs a matching lease and a fresh snapshot;
+        // unchanged demand transfers the already buffered history and live output.
+        try {
+          const replacement = await runtime
+            .getGatewaySessionMessageSubscriptionCoordinator(this.client)
+            .acquire(this.sessionKey, {
+              includeApprovals: subscription.includeApprovals,
+              includeLiveToolOutput: options.includeLiveToolOutput,
+            });
+          if (
+            !this.active ||
+            (replacement.approvalReplay !== undefined && !this.retain(replacement.approvalReplay))
+          ) {
+            throw new Error("Early Gateway connection retired");
+          }
+          await runtime.releaseGatewaySessionMessageSubscription(subscription);
+          return replacement;
+        } catch (error) {
+          // A failed replacement can retain both leases. Retire their connection
+          // before losing the handoff owner or delivering buffered output.
+          this.fallback();
+          throw error;
         }
-        await runtime.releaseGatewaySessionMessageSubscription(subscription);
-        return upgraded;
       }
       if (!historyMatches) {
         // The pane may learn a recovery cursor or pending input during boot.

@@ -84,6 +84,7 @@ export function installWarmReloadBrowserProbe(
   transcriptLatePaint = false,
   composerContext = false,
   sampleGeometry = true,
+  cpuAttribution = false,
 ) {
   if (window !== window.top) {
     return undefined;
@@ -197,6 +198,16 @@ export function installWarmReloadBrowserProbe(
       animation: "Only small spinner/icon rectangles; skeletons and content remain visible.",
     },
     stopped: false,
+    cpuAttribution: cpuAttribution
+      ? {
+          supported: PerformanceObserver.supportedEntryTypes.includes("long-animation-frame"),
+          overflow: false,
+          droppedEntries: null as number | null,
+          rowObservedAtMs: null as number | null,
+          loaf: [] as unknown[],
+        }
+      : undefined,
+    finishCpuAttribution: undefined as (() => void) | undefined,
   };
   Reflect.set(window, "__warmReloadProof", data);
   if (transcriptLatePaint && sampleGeometry) {
@@ -254,11 +265,26 @@ export function installWarmReloadBrowserProbe(
   });
   const observe = (type: string, handle: (entry: PerformanceEntry) => void) => {
     if (PerformanceObserver.supportedEntryTypes.includes(type)) {
-      new PerformanceObserver((entries) => entries.getEntries().forEach(handle)).observe({
+      const observer = new PerformanceObserver(
+        (entries, _observer, options?: { droppedEntriesCount?: number }) => {
+          if (
+            type === "long-animation-frame" &&
+            data.cpuAttribution &&
+            options?.droppedEntriesCount !== undefined
+          ) {
+            data.cpuAttribution.droppedEntries =
+              (data.cpuAttribution.droppedEntries ?? 0) + options.droppedEntriesCount;
+          }
+          entries.getEntries().forEach(handle);
+        },
+      );
+      observer.observe({
         type,
         buffered: true,
       });
+      return observer;
     }
+    return undefined;
   };
   observe("paint", (entry) => {
     if (entry.name === "first-contentful-paint") {
@@ -284,7 +310,13 @@ export function installWarmReloadBrowserProbe(
       element instanceof Element &&
       element.closest(".chat-virtual-row")
     ) {
-      data.firstPaintedRowsMs ??= renderTime;
+      if (data.firstPaintedRowsMs === null) {
+        data.firstPaintedRowsMs = renderTime;
+        if (data.cpuAttribution) {
+          data.cpuAttribution.rowObservedAtMs = performance.now();
+          console.timeStamp("warm-reload-cpu:rows-observed");
+        }
+      }
     }
     if (identifier === "openclaw-details") {
       data.firstDetailsPaintMs ??= renderTime;
@@ -326,11 +358,31 @@ export function installWarmReloadBrowserProbe(
     shiftValue += value;
     data.cls = Math.max(data.cls, shiftValue);
   });
-  observe("long-animation-frame", (entry) => {
+  let loafBytes = 0;
+  const recordLoaf = (entry: PerformanceEntry) => {
+    if (data.cpuAttribution && data.stopped) {
+      return;
+    }
     const blockingMs = Number(Reflect.get(entry, "blockingDuration"));
     data.loaf.push({ atMs: entry.startTime, durationMs: entry.duration, blockingMs });
     data.loafBlockingMs += blockingMs;
-  });
+    if (data.cpuAttribution && !data.cpuAttribution.overflow) {
+      // Native toJSON retains scripts/invokers/forced layout without retaining Window objects.
+      const raw = JSON.stringify(entry.toJSON());
+      loafBytes += new TextEncoder().encode(raw).length;
+      data.cpuAttribution.overflow = loafBytes > 8 * 1024 * 1024;
+      if (!data.cpuAttribution.overflow) {
+        data.cpuAttribution.loaf.push(JSON.parse(raw));
+      }
+    }
+  };
+  const loafObserver = observe("long-animation-frame", recordLoaf);
+  if (data.cpuAttribution) {
+    data.finishCpuAttribution = () => {
+      loafObserver?.takeRecords().forEach(recordLoaf);
+      loafObserver?.disconnect();
+    };
+  }
   let stopGateway: (() => void) | undefined;
   let stopPlugins: (() => void) | undefined;
   const receiveContext = (event: Event) => {
@@ -352,6 +404,9 @@ export function installWarmReloadBrowserProbe(
                 data.helloPublishedMs = performance.now();
                 queueMicrotask(() => {
                   data.helloHandledMs = performance.now();
+                  if (data.cpuAttribution) {
+                    console.timeStamp("warm-reload-cpu:hello-handled");
+                  }
                 });
               }
             });

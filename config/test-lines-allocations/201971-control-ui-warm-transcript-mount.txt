@@ -1,0 +1,29 @@
+# Preserve both restoring states, hold expiry, cancellation, and initial-submission
+# coverage through the existing real-pane warm-mount fixture.
+# Also cover delayed/failed row imports, stdout, retained composer and layout
+# across desktop/mobile warm reloads through the existing browser fixture.
+# Verify asset checks use the actual checkout base while merge-aware checks
+# retain the planning base when main advances beyond the candidate's fork.
+# Cover source-preview parsing/cache invalidation at its owner.
+# Cover readiness-only notifications, unchanged row-tree identity, real group
+# reordering, and pending archive / pull-request side-fact invalidation.
+# Preserve the 61-line original-order hello/recovery matrix: ordinary hello,
+# bootstrap token/profile retirement, and credential replacement use the
+# existing deferred probe/store fixture. Keep the recovered-summary wait too.
+# Keep the boot editor's draft, selection and scroll through delayed active/archive
+# facts, then let the canonical archived surface replace it. Verify the shared
+# replacement floor across desktop, narrow, landscape, short and native mobile modes,
+# including compact/hidden exceptions. These owner tests add 143 lines to the prior
+# 871-line branch; the invalid readiness-gate matrix has been removed.
+# Await the lazy row's actual command titles independently of its eager preview.
+# Verify the cold CPU diagnostic's signed-clock alignment, complete raw/native
+# attribution, missing/duplicate coverage and independent cleanup, while retaining
+# ordinary warm capture behavior. This adds 306 test lines. Another 25 lines
+# distinguish a recorded navigation prefix gap from missing post-hello coverage.
+# Preserve the first populated transcript budget after loading/empty receipts,
+# with cheap/cached/submission immediacy, one-yield continuity and disposal.
+# These real-pane owner cases add 125 lines using the existing mount fixture.
+# On the refreshed baseline, 39 lines cover Latest destination polling and the
+# existing deferred scroll owner across stable geometry, commit and both frames.
+# Full branch growth is 1509 lines; the shared allowance remains 400.
+1109

@@ -4,7 +4,7 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
@@ -182,8 +182,10 @@ it("shows a command once when its live activity group is expanded", async () => 
     ...liveOptions,
     isToolMessageExpanded: () => true,
   });
-  expect(query("summary")?.textContent).not.toContain(command);
-  expect(container.textContent?.split(command)).toHaveLength(2);
+  await waitForSolid(() => {
+    expect(query("summary")?.textContent).not.toContain(command);
+    expect(container.textContent?.split(command)).toHaveLength(2);
+  });
 });
 
 it("keeps the icon paired with the current action and restores the aggregate icon", async () => {
@@ -220,7 +222,6 @@ const liveOptions = {
 };
 
 it("preserves a pending headline deadline when inline presentation splits and rejoins work", async () => {
-  const inline = await inlineCommandPresentation();
   const first = { ...prepared("write-a"), name: "write" };
   const second = { ...prepared("write-b"), name: "write" };
   const draw = (includeSecond: boolean, inlineCommands: boolean) =>
@@ -234,7 +235,7 @@ it("preserves a pending headline deadline when inline presentation splits and re
           includeSecond ? [{ ...first, status: "completed", phase: "end" }, second] : [first],
         ),
       ],
-      { ...liveOptions, inlineCommands: inlineCommands ? inline : undefined },
+      { ...liveOptions, inlineCommands },
     );
   await draw(false, false);
   expectAfter(200, "Writing write-a.ts");
