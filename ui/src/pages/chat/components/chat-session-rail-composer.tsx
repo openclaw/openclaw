@@ -92,7 +92,7 @@ export function SessionRailComposer(props: {
     canCommit: () => props.connected,
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
     onError: (message) => showToast({ severity: "error", message }),
-    onSubmit: () => props.submit(),
+    onSubmit: () => send(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
   onSettled(() => {
@@ -139,11 +139,16 @@ export function SessionRailComposer(props: {
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
   const draftRef = liveValue<HTMLTextAreaElement>(visibleDraft, scheduleTextareaHeightAdjustment);
+  const send = () => {
+    if (!dictationControl.dictation?.pendingReview) {
+      props.submit();
+    }
+  };
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
     if (!active?.active) {
-      props.submit();
+      send();
       return;
     }
     if (active.finalizing) {
@@ -154,7 +159,7 @@ export function SessionRailComposer(props: {
     const sessionKey = props.sessionKey;
     void active.finishActive().then(() => {
       if (!requiresReview && props.sessionKey === sessionKey) {
-        props.submit();
+        send();
       }
     });
   };
@@ -332,6 +337,7 @@ export function SessionRailComposer(props: {
                     disabled={
                       !props.connected ||
                       props.pending ||
+                      dictation.read().dictation?.pendingReview === true ||
                       Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
                       !sessionRailQuestion(props.companion)
                     }

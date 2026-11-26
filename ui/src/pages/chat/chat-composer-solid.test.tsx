@@ -694,10 +694,11 @@ describe("dictation preview admission", () => {
     );
     const onSend = vi.fn();
     const paneId = "dictation-pending-history";
+    const before = mode === "off" ? "" : "Earlier draft";
     const { state, view } = mountOwnedComposer({
       paneId,
       gatewayClient: createClient(),
-      draft: "",
+      draft: before,
       submitPending: true,
       submitDisabledReason: "Loading earlier messages",
       onToggleRealtimeTalk: vi.fn(),
@@ -717,6 +718,7 @@ describe("dictation preview admission", () => {
     try {
       expect(loadSettings().dictationRefinement?.mode).toBe(mode === "off" ? undefined : mode);
       await waitForSolid(() => expect(composer.microphonePicker?.dictationStatus).toBe("ready"));
+      view.textarea().setSelectionRange(before.length, before.length);
       view.query<HTMLButtonElement>(".chat-send-btn--voice")!.dispatchEvent(pointer("pointerdown"));
       await vi.advanceTimersByTimeAsync(500);
       await vi.dynamicImportSettled();
@@ -724,7 +726,9 @@ describe("dictation preview admission", () => {
       await start.mock.results[0]!.value;
       expect(composer.dictation?.requiresReview).toBe(mode !== "off");
       emit({ type: "partial", text: "unfinished dictated words" });
-      await waitForSolid(() => expect(view.textarea().value).toBe("unfinished dictated words"));
+      await waitForSolid(() =>
+        expect(view.textarea().value).toBe(`${before ? `${before} ` : ""}unfinished dictated words`),
+      );
       expect(view.textarea().readOnly).toBe(true);
       view
         .textarea()
@@ -739,6 +743,14 @@ describe("dictation preview admission", () => {
         composer.dictation!.cancel();
       } else {
         const finished = composer.dictation!.finishActive();
+        await waitForSolid(() => expect(view.textarea().readOnly).toBe(false));
+        view.textarea().dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        );
+        flush();
+        expect(composer.presentation.queuedSubmit).toBeNull();
+        expect(state.chatMessage).toBe(before);
+        expect(onSend).not.toHaveBeenCalled();
         transcript("unfinished dictated words");
         emit({ type: "close", reason: "completed" });
         await finished;
@@ -750,7 +762,7 @@ describe("dictation preview admission", () => {
       expect({ ...admitted, sends: onSend.mock.calls.length }).toEqual(
         mode === "off"
           ? { draft: "unfinished dictated words", queued: "unfinished dictated words", sends: 1 }
-          : { draft: "", queued: null, sends: 0 },
+          : { draft: before, queued: null, sends: 0 },
       );
       if (mode !== "off") {
         expect(composer.dictation?.review).toMatchObject({
@@ -763,6 +775,37 @@ describe("dictation preview admission", () => {
             "unfinished dictated words",
           ),
         );
+        const send = () => view.query<HTMLButtonElement>(".chat-send-btn--send");
+        await waitForSolid(() => expect(send()?.disabled).toBe(true));
+        const newline = new KeyboardEvent("keydown", {
+          key: "Enter",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        view.textarea().dispatchEvent(newline);
+        expect(newline.defaultPrevented).toBe(false);
+        view.textarea().dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        );
+        send()!.click();
+        expect(onSend).not.toHaveBeenCalled();
+        expect(composer.presentation.queuedSubmit).toBeNull();
+
+        const onAbort = vi.fn();
+        view.update({ canAbort: true, onAbort });
+        await waitForSolid(() =>
+          expect(view.query<HTMLButtonElement>(".chat-send-btn--stop")?.disabled).toBe(false),
+        );
+        view.textarea().dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        );
+        await waitForSolid(() => expect(send()?.disabled).toBe(false));
+        expect(composer.dictation?.review).toBeNull();
+        expect(onAbort).not.toHaveBeenCalled();
+        expect(onSend).not.toHaveBeenCalled();
+        send()!.click();
+        expect(onSend).toHaveBeenCalledOnce();
       }
     } finally {
       disposeComposer(view.container);

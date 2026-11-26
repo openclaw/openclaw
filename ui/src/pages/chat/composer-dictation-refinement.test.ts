@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createComponent } from "solid-js";
 import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -147,9 +148,11 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
       canInsert: true,
       delivery: "not-attempted",
     });
+    expect(h.controller.pendingReview).toBe(true);
     expect(h.controller.insertReviewed()).toBe(true);
     expect(h.target.value).toBe("Hello world.");
     expect(h.controller.review?.delivery).toBe("committed");
+    expect(h.controller.pendingReview).toBe(false);
     expect(h.controller.insertReviewed()).toBe(false);
     expect(h.controller.chooseOriginal()).toBe(false);
     expect(h.controller.reprocess({ mode: "verbatim", explicitEnabled: false })).toBe(false);
@@ -169,6 +172,7 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     ).toBe(true);
     expect(h.controller.review).toMatchObject({ revision: 2, result: { text: "Hello, world." } });
     expect(h.controller.chooseOriginal()).toBe(true);
+    expect(h.controller.pendingReview).toBe(true);
     expect(h.controller.review).toMatchObject({
       revision: 3,
       selected: "original",
@@ -204,8 +208,54 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
       expect(h.controller.insertReviewed()).toBe(false);
       expect(h.target.value).toBe("my manual replacement");
       expect(h.commit).not.toHaveBeenCalled();
+      expect(h.controller.pendingReview).toBe(true);
+      h.controller.dismissReview();
+      expect(h.controller.pendingReview).toBe(false);
     },
   );
+
+  it.each(["empty", "edited", "revoked"])(
+    "releases pending review after a stopped capture is %s without a recoverable result",
+    async (ending) => {
+      let eligible = true;
+      const h = refinementHarness({
+        refinement: {
+          policy: { mode: "automatic", locale: "en-US", explicitEnabled: false },
+          provenance: { revision: "authorized-source-1", isEligible: () => eligible },
+        },
+      });
+      await h.start();
+      const finished = h.controller.finishActive();
+      expect(h.controller.pendingReview).toBe(true);
+      if (ending === "edited") {
+        h.target.value = "manual replacement";
+        h.target.dispatchEvent(new Event("input"));
+        h.controller.update(h.options);
+      } else if (ending === "revoked") {
+        eligible = false;
+        transcript("revoked words");
+      }
+      emit({ type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(false);
+      expect(h.controller.review).toBeNull();
+      expect(h.controller.pendingReview).toBe(false);
+      expect(h.commit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("releases pending review when Stop precedes session preparation", async () => {
+    const preparation = createDeferred<string | undefined>();
+    const h = refinementHarness({ prepareSession: () => preparation.promise });
+    h.textarea.captureSelection();
+    expect(h.controller.startDirect()).toBe(true);
+    expect(h.controller.pendingReview).toBe(true);
+    await expect(h.controller.finishActive()).resolves.toBe(false);
+    expect(h.controller.pendingReview).toBe(false);
+    preparation.resolve("prepared-session");
+    await vi.dynamicImportSettled();
+    expect(h.controller.review).toBeNull();
+    expect(h.commit).not.toHaveBeenCalled();
+  });
 
   it.each(["edit", "target"])("does not revive an A → B → A %s during review", async (kind) => {
     const h = refinementHarness();
@@ -327,22 +377,27 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     expect(h.controller.insertReviewed()).toBe(false);
     unsubscribe();
     expect(h.controller.review?.delivery).toBe("not-committed");
+    expect(h.controller.pendingReview).toBe(false);
     expect(h.target.value).toBe("newer user intent");
     expect(h.commit).not.toHaveBeenCalled();
   });
 
   it("preserves an unknown write receipt through cancellation and refuses duplicate delivery", async () => {
     const h = refinementHarness();
+    let pendingDuringCommit: boolean | undefined;
     h.commit.mockImplementationOnce((text) => {
       h.write(text);
       h.controller.cancel();
+      pendingDuringCommit = h.controller.pendingReview;
       throw new Error("receipt unavailable after the local write");
     });
     await h.start();
     await h.finish("hello world");
     expect(h.controller.insertReviewed()).toBe(false);
+    expect(pendingDuringCommit).toBe(true);
     expect(h.target.value).toBe("Hello world.");
     expect(h.controller.review?.delivery).toBe("outcome-unknown");
+    expect(h.controller.pendingReview).toBe(false);
     expect(h.controller.review?.canUndo).toBe(false);
     expect(h.controller.insertReviewed()).toBe(false);
     expect(h.controller.chooseOriginal()).toBe(false);

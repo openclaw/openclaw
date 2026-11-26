@@ -94,6 +94,11 @@ export class ComposerDictationRefinement {
   get hasState() {
     return Boolean(this.refinementPlan || this.prepared);
   }
+  get pendingReview(): boolean {
+    return this.prepared
+      ? this.prepared.delivery === "not-attempted" || this.prepared.delivery === "pending"
+      : Boolean(this.refinementPlan);
+  }
 
   load(refine: typeof refineDictation): void {
     this.refine = refine;
@@ -162,6 +167,9 @@ export class ComposerDictationRefinement {
       this.prepared = this.prepareReview(plan, text, state.isFinal, state.transcriptRevision);
     } else {
       this.retainRecognizedReview(plan);
+    }
+    if (!this.prepared) {
+      this.retireCapture(plan);
     }
     this.host.changed();
   }

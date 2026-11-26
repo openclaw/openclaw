@@ -4,4 +4,6 @@
 # owner fixture is extracted once; its removed lines are included in the net delta.
 # Follow-up regressions exercise actual pane capture admission, Side chat and
 # queued/history keyboard paths, and rich/native mention identity plus Undo.
-1222
+# Pending-review coverage holds repeated and delayed sends at all three owners,
+# retires empty captures, preserves Escape ownership, and requires a separate Send.
+1591

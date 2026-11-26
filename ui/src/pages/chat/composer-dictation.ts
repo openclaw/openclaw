@@ -118,6 +118,9 @@ export class ComposerDictationOwner extends EventTarget {
   get requiresReview(): boolean {
     return Boolean(this.refinement.currentPlan);
   }
+  get pendingReview(): boolean {
+    return this.refinement.pendingReview;
+  }
   reprocess(policy: DictationPunctuationPolicy): boolean {
     return this.refinement.reprocess(policy);
   }
@@ -175,6 +178,9 @@ export class ComposerDictationOwner extends EventTarget {
       }
       if (this.active) {
         void this.stop({ commit: false });
+      } else {
+        this.refinement.retireCapture(retired);
+        this.pendingCommitsChanged();
       }
     }
     if (!options.connected) {
@@ -471,7 +477,7 @@ export class ComposerDictationOwner extends EventTarget {
         ...session.finalTranscriptState(),
       });
     }
-    if (refinement && !options.commit) {
+    if (refinement && (!options.commit || !session)) {
       this.refinement.retireCapture(refinement);
     }
     if (!session) {
@@ -499,6 +505,10 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        if (refinement) {
+          this.refinement.retireCapture(refinement);
+          this.pendingCommitsChanged();
+        }
         return false;
       }
       if (refinement) {
