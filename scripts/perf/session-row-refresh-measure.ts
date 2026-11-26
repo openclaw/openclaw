@@ -16,6 +16,7 @@
  * --changed uses three agents and replaces no-op events with changed-row events.
  * --child-labels --sessions 2000 warms four stores, then commits one label-only
  * child update per operation. Compare refresh attempts, rebuilt rows and digests.
+ * --child-timestamps uses the same roster and updates timestamps to refresh parents.
  * --owner also replays 10,000 metadata changes through captured real row inputs.
  * --source-base overlays the changed owner modules saved by basename from the
  * baseline revision. It leaves the benchmark and dependency installation identical.
@@ -41,6 +42,7 @@ const { values } = parseArgs({
     mixed: { type: "boolean", default: false },
     changed: { type: "boolean", default: false },
     "child-labels": { type: "boolean", default: false },
+    "child-timestamps": { type: "boolean", default: false },
     owner: { type: "boolean", default: false },
     "source-base": { type: "string" },
     instrument: { type: "boolean", default: false },
@@ -68,8 +70,11 @@ const iterations = parseStrictIntegerOption({
 // Mixed owner proof: 500 resident rows, real metadata/transcript writes, no-op refreshes,
 // and archive demotion/re-promotion. Instrumentation is separate from timing/allocation.
 const childLabels = values["child-labels"];
-const residentRows = childLabels ? sessions : values.mixed || values.changed ? 500 : 64;
-const agentIds = childLabels
+const childTimestamps = values["child-timestamps"];
+assert(!(childLabels && childTimestamps), "Choose one kind of child write");
+const childWrites = childLabels || childTimestamps;
+const residentRows = childWrites ? sessions : values.mixed || values.changed ? 500 : 64;
+const agentIds = childWrites
   ? ["main", "research", "ops", "support"]
   : values.changed
     ? ["main", "research", "ops"]
@@ -94,7 +99,11 @@ const childLabelSources = [
   "src/gateway/session-row-projection-revisions.ts",
   "src/gateway/session-utils-projection.ts",
 ];
-const changedSources = childLabels ? childLabelSources : refreshSources;
+const changedSources = childTimestamps
+  ? [...childLabelSources, "src/gateway/session-utils-row.ts"]
+  : childLabels
+    ? childLabelSources
+    : refreshSources;
 assert(sessions >= residentRows);
 const work = {
   inputs: 0,
@@ -323,7 +332,7 @@ try {
         entries: Object.fromEntries(
           agentIds.map((id, index) => [
             id,
-            values.changed || childLabels
+            values.changed || childWrites
               ? {
                   workspace: path.join(root, "workspace", id),
                   reasoningDefault: index === 1 ? "on" : "off",
@@ -384,7 +393,7 @@ try {
               providerOverride: "fixture",
               modelOverride: `model-${index % entries.length}`,
               toolOverrides: { mcpToolsDeny: { synthetic: ["unchanged"] } },
-              ...(childLabels && index >= parents
+              ...(childWrites && index >= parents
                 ? { parentSessionKey: key(index % parents), spawnedBy: key(index % parents) }
                 : {}),
               ...(index >= residentRows ? { archivedAt: anchor - 1 } : {}),
@@ -424,7 +433,7 @@ try {
       );
       async function run(count: number) {
         for (let index = 0; index < count; index++) {
-          if (childLabels) {
+          if (childWrites) {
             const turn = sequence++;
             const query = queries[parents + (turn % (queries.length - parents))]!;
             const entry = projection.capture(query)?.storedEntry;
@@ -432,7 +441,9 @@ try {
             const at = performance.now();
             replaceSessionEntrySync(
               { agentId: query.agentId, sessionKey: query.key },
-              { ...entry, label: `Synthetic label ${turn}` },
+              childTimestamps
+                ? { ...entry, updatedAt: anchor + turn }
+                : { ...entry, label: `Synthetic label ${turn}` },
             );
             await projection.ensureMaterialized();
             durations.push(performance.now() - at);
@@ -555,7 +566,7 @@ try {
       }
       if (values["cpu-profile"]) {
         await inspector.post("Profiler.enable");
-        if (childLabels) {
+        if (childWrites) {
           await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
         }
         await inspector.post("Profiler.start");
@@ -691,6 +702,7 @@ try {
         mixed: values.mixed,
         changed: values.changed,
         childLabels,
+        childTimestamps,
         agents: agentIds.length,
         instrumented: values.instrument,
         work: values.instrument ? measuredWork : undefined,
