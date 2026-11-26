@@ -39,9 +39,13 @@ export async function recordWorkshopChange(change: WorkshopChange): Promise<void
 
 export async function listWorkshopChanges(
   agentId: string,
-  options: { limit?: number; beforeMs?: number; runId?: string } = {},
+  options: { limit?: number; beforeMs?: number; runId?: string; fresh?: boolean } = {},
 ): Promise<WorkshopChange[]> {
   const { context, store } = captureStore();
+  if (options.fresh) {
+    // A mutation precondition must also see changes already committed by another process.
+    store.agents.delete(agentId);
+  }
   let rows = store.agents.get(agentId);
   if (!rows) {
     if (store.agents.size >= 128) {
