@@ -474,6 +474,24 @@ function TalkCatalogRows(props: TalkViewProps) {
   );
 }
 
+function scrollToExpandedTalkContent(event: MouseEvent) {
+  const summary = event.target instanceof Element ? event.target.closest("summary") : null;
+  const disclosure = summary?.parentElement;
+  if (!(disclosure instanceof HTMLDetailsElement) || disclosure.open) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (disclosure.open && disclosure.isConnected) {
+      summary?.nextElementSibling?.scrollIntoView({
+        block: "nearest",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      });
+    }
+  });
+}
+
 export function Talk(props: TalkViewProps) {
   const chimeLabelStyle = { display: "flex", "align-items": "center", gap: "var(--space-2)" };
   const chimeCheckboxStyle = {
@@ -582,7 +600,7 @@ export function Talk(props: TalkViewProps) {
     </>
   );
   return (
-    <section class="talk-page">
+    <section class="talk-page" onClick={scrollToExpandedTalkContent}>
       <SettingsPage>
         <SettingsSection title={t("talkPage.revamp.modeSection")}>
           <SettingsSelectRow

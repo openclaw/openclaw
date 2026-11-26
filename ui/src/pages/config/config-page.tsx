@@ -173,6 +173,17 @@ function ConfigBody(props: {
     <Config
       {...config()}
       schema={schema}
+      uiHints={
+        section === "talk"
+          ? {
+              ...config().uiHints,
+              "talk.realtime.speakerVoiceId": {
+                ...config().uiHints["talk.realtime.speakerVoiceId"],
+                advanced: false,
+              },
+            }
+          : config().uiHints
+      }
       activeSection={section}
       activeSubsection={null}
       showModeToggle={false}

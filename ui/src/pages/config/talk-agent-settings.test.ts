@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createConfigRouteContext, mountConfigPage } from "./config-page.test-support.ts";
 import { createTalkMutationHarness } from "./talk.test-support.tsx";
 
 afterEach(() => {
@@ -34,3 +36,54 @@ it.each([
     });
   },
 );
+
+it.each(["realtime", "stt-tts"])("reveals the inline voice ID in %s mode", async (mode) => {
+  const context = createConfigRouteContext();
+  const config = { talk: { realtime: { mode, speakerVoiceId: "legacy-voice" } } };
+  Object.assign(context.runtimeConfig.state, {
+    configSnapshot: configSnapshot(config),
+    configForm: config,
+    configSchema: {
+      type: "object",
+      properties: {
+        talk: {
+          type: "object",
+          properties: {
+            realtime: { type: "object", properties: { speakerVoiceId: { type: "string" } } },
+          },
+        },
+      },
+    },
+    configUiHints: { "talk.realtime.speakerVoiceId": { advanced: true } },
+  });
+  const { page: container } = mountConfigPage(context, { pageId: "talk" });
+  const summary = await waitForSolid(() => {
+    const row = [...container.querySelectorAll("summary")].find(
+      (candidate) => candidate.textContent?.trim() === "Advanced",
+    );
+    expect(row).toBeDefined();
+    return row!;
+  });
+  const scroll = vi.fn();
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: mode === "realtime" })),
+  );
+  try {
+    Object.assign(summary.nextElementSibling!, { scrollIntoView: scroll });
+    summary.click();
+    await waitForSolid(() => {
+      const disclosure = summary.parentElement!;
+      expect(disclosure.querySelector(".config-advanced-disclosure")).toBeNull();
+      expect(
+        [...disclosure.querySelectorAll("input")].find((input) => input.value === "legacy-voice"),
+      ).toBeDefined();
+      expect(scroll).toHaveBeenCalledWith({
+        block: "nearest",
+        behavior: mode === "realtime" ? "instant" : "smooth",
+      });
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
