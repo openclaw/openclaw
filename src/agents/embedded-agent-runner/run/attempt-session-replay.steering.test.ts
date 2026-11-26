@@ -86,21 +86,34 @@ it("saves the answer to steering that arrives while a compacted turn is resent i
       await followUp.stageApproved!({ runId: fixture.attempt.runId, assertCurrent: () => {} });
       try {
         await withReplaySession(fixture, true, async (session, submit, sessionManager) => {
+          const fixtureOperations: Promise<PromiseSettledResult<unknown>[]>[] = [];
           streamMocks.streamSimple
             .mockImplementationOnce(() => {
               const resumed = holdAssistantResponse("Resumed work finished.");
-              void session
-                .steer("Reply with EDGE-ALIVE-PINE", undefined, followUp)
-                .finally(resumed.release);
+              fixtureOperations.push(
+                Promise.allSettled([
+                  session
+                    .steer("Reply with EDGE-ALIVE-PINE", undefined, followUp)
+                    .finally(resumed.release),
+                ]),
+              );
               return resumed.response;
             })
             .mockImplementation((model) => {
               const answer = holdAssistantResponse(() => createAssistant(model, "EDGE-ALIVE-PINE"));
               // The follow-up's ingress commits its row while the run answers it.
-              void followUp.persistApproved().finally(answer.release);
+              fixtureOperations.push(
+                Promise.allSettled([followUp.persistApproved().finally(answer.release)]),
+              );
               return answer.response;
             });
-          await submit();
+          const submission = await Promise.allSettled([submit()]);
+          const operations = (await Promise.all(fixtureOperations)).flat();
+          for (const result of [...operations, ...submission]) {
+            if (result.status === "rejected") {
+              throw result.reason;
+            }
+          }
           expect(session.getLastAssistantText()).toBe("EDGE-ALIVE-PINE");
           const entries = (
             await SessionManager.openAsync(fixture.target, fixture.attempt.workspaceDir)
