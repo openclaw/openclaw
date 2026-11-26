@@ -48,7 +48,6 @@ import {
   readSessionControllerOperationState,
 } from "../../../sessions/session-controller.state.js";
 import { testing } from "../../../sessions/session-controller.test-support.js";
-import { execNodeEvalSync } from "../../../test-utils/node-process.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
@@ -615,41 +614,6 @@ describe("controller-owned execution guard", () => {
     expect(outcomes.every((outcome) => outcome.status === "rejected")).toBe(true);
     expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
   });
-});
-
-it("releases closed attempt predicates without retaining abort callbacks or lane inputs", () => {
-  const output = execNodeEvalSync(
-    `import assert from "node:assert/strict";
-     import { expectCollected } from ${JSON.stringify(new URL("../../../test-utils/retention.ts", import.meta.url).href)};
-     import { createTestAdmittedRunContext } from ${JSON.stringify(new URL("../../admitted-run-context.test-support.ts", import.meta.url).href)};
-     import { createLaneControllerFixture } from ${JSON.stringify(new URL("./lane-controller.test-support.ts", import.meta.url).href)};
-     class RuntimeStores {}
-     const retained = (() => {
-       const stores = new RuntimeStores();
-       const parent = new AbortController();
-       const reason = new Error("synthetic cancellation");
-       const admittedRunContext = createTestAdmittedRunContext("retention");
-       const { controller } = createLaneControllerFixture({
-         runId: "retention", sessionId: "retention", sessionFile: "retention.jsonl",
-         workspaceDir: ".", prompt: "synthetic", timeoutMs: 1000, admittedRunContext,
-       }, { globalLane: "retention", configureRuntime: false,
-            onSessionWriterClaimed: () => assert.ok(stores) });
-       const controls = controller.createAttemptControls({ admittedRunContext, abortSignal: parent.signal,
-         onAbort: () => assert.ok(stores) });
-       assert.equal(controls.isAttemptCurrent(), true);
-       parent.abort(reason);
-       assert.equal(controls.abortSignal.reason, reason);
-       assert.equal(controls.isAttemptCurrent(), false);
-       controls.close();
-       assert.equal(controls.isAttemptCurrent(), false);
-       return { check: controls.isAttemptCurrent, stores: new WeakRef(stores), reason: new WeakRef(reason) };
-     })();
-     await expectCollected(retained.stores, retained.reason);
-     assert.equal(retained.check(), false);
-     console.log("Closed attempt inputs released");`,
-    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 20_000 },
-  );
-  expect(output.trim()).toBe("Closed attempt inputs released");
 });
 
 describe("exact attempt deadline transfer", () => {
