@@ -35,6 +35,7 @@ import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 import { createStageTimingTracker } from "../../src/shared/stage-timing.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
@@ -244,12 +245,7 @@ await setImmediate();
 global.gc();
 const profiler = values.allocation ? new Session() : undefined;
 if (profiler) {
-  profiler.connect();
-  await profiler.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(profiler, 32768);
 }
 const gc: { kind: number; ms: number }[] = [];
 const observer = new PerformanceObserver((list) =>

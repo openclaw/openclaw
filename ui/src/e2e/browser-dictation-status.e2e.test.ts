@@ -108,6 +108,57 @@ const expectDraft = async (textarea: Locator, value: string) => {
 };
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "keeps native microphone capture across background events in %s",
+    (route) =>
+      suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+        // Keep native getUserMedia/AudioContext: this checks that audio still reaches
+        // the Gateway boundary, not just that the listening label remains painted.
+        const gateway = await installMockGateway(page, {
+          methodResponses: createDictationMethodResponses(),
+        });
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const microphone = button(page, route === "new" ? "Dictate" : "Start voice input", true);
+        if (route === "new") {
+          await microphone.click();
+        } else {
+          await microphone.hover();
+          await page.mouse.down();
+          await gateway.waitForRequest("talk.session.create");
+          await page.mouse.up();
+        }
+        const listening = page.locator(".agent-chat__dictation-phase--listening");
+        await listening.waitFor();
+        await gateway.waitForRequest("talk.session.appendAudio");
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("blur"));
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value: "hidden",
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        // Headless Chromium cannot activate a different OS window; these are
+        // explicit platform-event fixtures, not a real window/tab-switch claim.
+        await captureComposer(page, `dictation-background-${route}.png`);
+        expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+        const appended = (await gateway.getRequests("talk.session.appendAudio")).length;
+        await expect
+          .poll(async () => (await gateway.getRequests("talk.session.appendAudio")).length)
+          .toBeGreaterThan(appended);
+        await listening.waitFor();
+        await page.evaluate(() => {
+          Reflect.deleteProperty(document, "visibilityState");
+          document.dispatchEvent(new Event("visibilitychange"));
+          window.dispatchEvent(new Event("focus"));
+        });
+        await button(page, "Stop and keep text", true).click();
+        await gateway.waitForRequest("talk.session.close");
+        expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      }),
+  );
+
   it("dictates for a session-only guest without reading operator configuration", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {

@@ -129,6 +129,7 @@ import {
 } from "./openclaw-agent-trajectory-storage-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeSqliteText } from "./openclaw-state-db-schema-repair.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -315,15 +316,12 @@ function ensureAgentSchema(
                   foundVersion: previousVersion,
                   supportedVersion: targetVersion,
                 }),
-                // These empty-table steps do not change existing relations. Only v41 adds a FK.
-                ...(previousVersion >= 40 &&
-                targetVersion <= AGENT_TOOL_USAGE_SCHEMA_VERSION &&
-                integrity.check === "quick"
+                // A schema-only step owns only its declared relations; the next start checks the rest.
+                ...(integrity.schemaOnly
                   ? {
-                      foreignKeyTables:
-                        previousVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
-                          ? ["session_transcript_active_event_facts"]
-                          : [],
+                      foreignKeyTables: (integrity.tables ?? []).filter((table) =>
+                        tableExists(db, table),
+                      ),
                     }
                   : {}),
               }

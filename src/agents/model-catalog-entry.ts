@@ -1,3 +1,4 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   MODEL_APIS,
@@ -20,6 +21,10 @@ function isCatalogModelApi(
   value: string | undefined,
 ): value is NonNullable<ModelCatalogEntry["api"]> {
   return value !== undefined && MODEL_APIS.some((api) => api === value);
+}
+
+export function copyContextWindowOption(option: ModelCatalogContextWindowOption) {
+  return { ...option };
 }
 
 /** Shared metadata projection; keep transport headers and authoring fields out of catalog entries. */
@@ -46,7 +51,7 @@ export function modelCatalogRowToEntry(
     ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
     ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),
     ...(row.contextWindows
-      ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
+      ? { contextWindows: row.contextWindows.map(copyContextWindowOption) }
       : {}),
     ...(row.contextWindowDefault ? { contextWindowDefault: row.contextWindowDefault } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),

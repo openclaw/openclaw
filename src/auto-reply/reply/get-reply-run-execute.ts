@@ -266,10 +266,7 @@ export async function executePreparedReplyRun(
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
   });
   const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) => {
-    if (sourceIndex === undefined) {
-      return undefined;
-    }
-    const promptIndex = inboundMediaIndexes.indexOf(sourceIndex);
+    const promptIndex = sourceIndex === undefined ? -1 : inboundMediaIndexes.indexOf(sourceIndex);
     return promptIndex >= 0 ? promptIndex : undefined;
   });
   const promptMediaImageLayout = buildPersistedMediaImageLayout({
@@ -351,6 +348,8 @@ export async function executePreparedReplyRun(
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          // This recorder is made after the channel input's session initialization.
+          inputAlreadyAccepted: true,
           // An unstarted occurrence may be re-admitted after a policy publication.
           // Existing completion custody permits that exact source input to resume.
           trackInputCompletion: opts?.internalEventExecution ? true : undefined,

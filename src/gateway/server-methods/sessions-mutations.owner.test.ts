@@ -700,6 +700,29 @@ describe("sessions.assignOwner", () => {
       }),
   );
 
+  it("keeps the assignment time when the current owner is assigned again", () =>
+    withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:same-owner";
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-same-owner",
+        visibility: "shared",
+        createdActor: creator,
+      });
+      await invoke({ key: sessionKey, owner: researchAgent() });
+      const assignedAt = readEntry(state.env, sessionKey)?.owner?.assignedAt;
+      expect(assignedAt).toEqual(expect.any(Number));
+      // Hold the clock past the first assignment so a refreshed time would differ.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(assignedAt! + 60_000);
+        const again = await invoke({ key: sessionKey, owner: researchAgent() });
+        expectOwnerResponse(again.responses, { actor: researchAgent(), assignedAt });
+        expect(readEntry(state.env, sessionKey)?.owner?.assignedAt).toBe(assignedAt);
+      } finally {
+        vi.useRealTimers();
+      }
+    }));
+
   it("assigns an agent-created session to a human without changing its provenance", () =>
     withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";

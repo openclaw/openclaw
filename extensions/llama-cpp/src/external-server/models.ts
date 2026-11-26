@@ -8,28 +8,26 @@ import {
   SELF_HOSTED_DEFAULT_COST,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
-type LlamaServerModelStatus =
-  | "unloaded"
-  | "loading"
-  | "loaded"
-  | "sleeping"
-  | "downloading"
-  | "unknown";
+type LlamaServerModelStatus = "unloaded" | "loading" | "loaded" | "sleeping" | "unknown";
 
 type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
   object?: unknown;
+  context_length?: unknown;
+  meta?: {
+    n_ctx?: unknown;
+    n_ctx_train?: unknown;
+    n_params?: unknown;
+  };
   status?: {
     value?: unknown;
     failed?: unknown;
   };
   architecture?: {
     input_modalities?: unknown;
-  };
-  meta?: {
-    n_params?: unknown;
   };
 };
 
@@ -58,7 +56,6 @@ function normalizeStatus(value: unknown): LlamaServerModelStatus {
     case "loading":
     case "loaded":
     case "sleeping":
-    case "downloading":
       return value;
     default:
       return "unknown";
@@ -113,11 +110,24 @@ export function mapLlamaServerModel(
   if (!id || (row.object !== undefined && row.object !== "model")) {
     return null;
   }
-  // Setup must not turn an unverified runtime fallback into an authored override.
-  const contextWindow =
+  // The router lists unfinished downloads so its UI can resume them. They cannot serve requests.
+  if (row.status?.value === "downloading" || row.status?.value === "incomplete") {
+    return null;
+  }
+  const nativeContextWindow =
+    asPositiveSafeInteger(row.context_length) ?? asPositiveSafeInteger(row.meta?.n_ctx_train);
+  const runtimeContextWindow =
     asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
     asPositiveSafeInteger(props?.n_ctx) ??
+    asPositiveSafeInteger(row.meta?.n_ctx);
+  // Setup must not turn an unverified runtime fallback into an authored override.
+  const contextWindow =
+    nativeContextWindow ??
+    runtimeContextWindow ??
     (useRuntimeDefaults ? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW : undefined);
+  // Cold router rows report native capacity, not the loaded server's effective cap.
+  const contextTokens =
+    runtimeContextWindow ?? (nativeContextWindow === undefined ? contextWindow : undefined);
   const compat = buildCompat(props, useRuntimeDefaults);
   // llama-server reports the loaded model's total parameter count in /v1/models meta.n_params.
   const parameterCount = asPositiveSafeInteger(row.meta?.n_params);
@@ -130,8 +140,11 @@ export function mapLlamaServerModel(
       input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
-      contextTokens: contextWindow,
-      maxTokens: resolveMaxTokens(props, contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW),
+      contextTokens,
+      maxTokens: resolveMaxTokens(
+        props,
+        contextTokens ?? contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      ),
       compat,
     },
     status: normalizeStatus(row.status?.value),
@@ -140,10 +153,14 @@ export function mapLlamaServerModel(
 }
 
 export function buildLlamaServerProviderConfig(params: {
+  server?: LlamaServerIdentity;
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  const baseUrl = resolveLlamaServerEndpoint(params.configured?.baseUrl).inferenceBaseUrl;
+  const baseUrl = resolveLlamaServerEndpoint(
+    params.configured?.baseUrl,
+    params.server ?? LLAMA_CPP_SERVER,
+  ).inferenceBaseUrl;
   const discoveredById = new Map(params.discoveredModels.map(({ config }) => [config.id, config]));
   const models = (params.configured?.models ?? []).map((configured) => {
     const discovered = discoveredById.get(configured.id);
@@ -161,9 +178,12 @@ export function buildLlamaServerProviderConfig(params: {
       : configured;
   });
   models.push(...discoveredById.values());
-  return normalizeLlamaServerProviderConfig({
-    ...params.configured,
-    baseUrl,
-    models,
-  });
+  return normalizeLlamaServerProviderConfig(
+    {
+      ...params.configured,
+      baseUrl,
+      models,
+    },
+    params.server ?? LLAMA_CPP_SERVER,
+  );
 }

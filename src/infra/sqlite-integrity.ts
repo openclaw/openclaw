@@ -233,8 +233,19 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   if (options.check === "quick" && options.schemaOnly) {
-    // Schema-only migrations leave existing payloads and FKs unchanged.
-    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    // A schema-only step checks the catalog and its declared tables, never other pages.
+    runSqliteCheck(database, databaseLabel, "integrity_check", "sqlite_schema");
+    const existing = new Set(
+      readSqliteSchemaObjects(database)
+        .filter((row) => row.type === "table")
+        .map((row) => row.name),
+    );
+    for (const table of options.tables ?? []) {
+      if (existing.has(table)) {
+        assertSqliteTableIntegrity(database, databaseLabel, table);
+        runSqliteForeignKeyCheck(database, databaseLabel, table);
+      }
+    }
     return { integrityCheck: "ok" };
   }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
@@ -392,7 +403,11 @@ function runSqliteCheck(
   );
 }
 
-function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
+function runSqliteForeignKeyCheck(
+  database: DatabaseSync,
+  databaseLabel: string,
+  tableName?: string,
+): void {
   let violationCount = 0;
   let repairable = true;
   let taskDeliveryForeignKeyId: bigint | undefined;
@@ -400,7 +415,9 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   try {
     // Use direct PRAGMA syntax because a real schema object can shadow the
     // table-valued pragma name and make a corrupt database appear clean.
-    const statement = database.prepare("PRAGMA foreign_key_check;");
+    const statement = database.prepare(
+      `PRAGMA foreign_key_check${tableName ? `('${tableName.replaceAll("'", "''")}')` : ""};`,
+    );
     statement.setReadBigInts(true);
     // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {

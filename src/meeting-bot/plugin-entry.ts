@@ -7,7 +7,6 @@ import {
   readPositiveIntegerParam,
   jsonResult,
 } from "../agents/tools/common.js";
-import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
@@ -15,11 +14,10 @@ import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
+import { registerMeetingPluginRuntime } from "./plugin-registration.js";
 import type { MeetingPluginJoinRequest } from "./session-types.js";
-import {
-  createMeetingTranscriptSourceProvider,
-  type MeetingTranscriptSourceRuntime,
-} from "./transcripts-bridge.js";
+import { callMeetingToolGateway } from "./tool-gateway.js";
+import type { MeetingTranscriptSourceRuntime } from "./transcripts-bridge.js";
 
 type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
@@ -86,12 +84,6 @@ export type MeetingPluginEntryOptions<
   };
   unknownActionMessage: string;
 };
-
-function readErrorDetails(error: unknown): unknown {
-  return error && typeof error === "object" && "details" in error
-    ? (error as { details?: unknown }).details
-    : undefined;
-}
 
 export function createMeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
@@ -175,36 +167,6 @@ export function createMeetingPluginEntryOptions<
       return invalidRequest(formatErrorMessage(error));
     }
   };
-  const gatewayMethod = (action: MeetingToolAction) => `${options.gatewayMethodPrefix}.${action}`;
-  const callGatewayFromTool = async (params: {
-    action: MeetingToolAction;
-    config: Config;
-    raw: Record<string, unknown>;
-    runtime?: OpenClawPluginApi["runtime"];
-  }) => {
-    try {
-      const timeoutMs = options.resolveGatewayTimeoutMs(params.config);
-      if (params.runtime) {
-        return await params.runtime.gateway.request(gatewayMethod(params.action), params.raw, {
-          timeoutMs,
-          scopes: ["operator.admin"],
-        });
-      }
-      return await callGatewayFromCli(
-        gatewayMethod(params.action),
-        { json: true, timeout: String(timeoutMs) },
-        params.raw,
-        { progress: false, scopes: ["operator.admin"] },
-      );
-    } catch (error) {
-      const details = readErrorDetails(error);
-      if (details && typeof details === "object") {
-        return details;
-      }
-      throw error;
-    }
-  };
-
   return {
     id: options.id,
     name: options.name,
@@ -212,44 +174,7 @@ export function createMeetingPluginEntryOptions<
     configSchema: options.configSchema,
     register(api: OpenClawPluginApi) {
       const config = options.configSchema.parse(api.pluginConfig) as Config;
-      let transcriptsEnabled = api.config.transcripts?.enabled !== false;
-      let runtime: Runtime | undefined;
-      const ensureRuntime = async () => {
-        if (!config.enabled) {
-          throw new Error(options.disabledMessage);
-        }
-        if (!runtime) {
-          runtime = options.createRuntime({ api, config });
-          await runtime.reconcileTranscriptPolicy?.(transcriptsEnabled);
-        }
-        return runtime;
-      };
-      if (options.transcriptSource) {
-        api.registerService({
-          id: `${options.id}-transcripts`,
-          reload: { configPrefixes: ["transcripts.enabled"] },
-          start: ({ config: current }) => {
-            transcriptsEnabled = current.transcripts?.enabled !== false;
-            return runtime?.reconcileTranscriptPolicy?.(transcriptsEnabled);
-          },
-          stop: () => {
-            transcriptsEnabled = false;
-            return runtime?.reconcileTranscriptPolicy?.(false);
-          },
-        });
-        api.registerTranscriptSourceProvider(
-          createMeetingTranscriptSourceProvider({
-            ...options.transcriptSource,
-            runtime: async () => {
-              const resolved = await ensureRuntime();
-              if (!resolved.startTranscriptSource || !resolved.stopTranscriptSource) {
-                throw new Error(`${options.name} transcript source runtime is unavailable`);
-              }
-              return resolved as MeetingTranscriptSourceRuntime;
-            },
-          }),
-        );
-      }
+      const ensureRuntime = registerMeetingPluginRuntime(api, config, options);
       const registerGatewayMethod = (
         method: string,
         run: (request: GatewayRequestHandlerOptions) => Promise<unknown>,
@@ -343,15 +268,17 @@ export function createMeetingPluginEntryOptions<
               }
               const runtimeForTool = await options.resolveToolRuntime(api, agentId);
               return jsonResult(
-                await callGatewayFromTool({
-                  action,
-                  config,
-                  raw: {
+                await callMeetingToolGateway({
+                  method: `${options.gatewayMethodPrefix}.${action}`,
+                  gateway: runtimeForTool?.gateway,
+                  timeoutMs: options.resolveGatewayTimeoutMs(config),
+                  scopes: ["operator.admin"],
+                  loadGatewayCli: () => import("../cli/gateway-rpc.js"),
+                  params: {
                     ...raw,
                     ...(requesterSessionKey ? { requesterSessionKey } : {}),
                     ...(runtimeForTool && agentId ? { agentId } : {}),
                   },
-                  runtime: runtimeForTool,
                 }),
               );
             } catch (error) {

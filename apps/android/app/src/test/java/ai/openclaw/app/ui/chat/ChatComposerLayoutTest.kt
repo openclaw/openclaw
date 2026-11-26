@@ -39,6 +39,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.ui.FoldAwareContent
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.UnifiedChatShellScreen

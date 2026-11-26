@@ -45,6 +45,7 @@ import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryForgetWorker } from "./memory-forget-worker.js";
+import { commitMemoryRewrite } from "./memory-rewrite.js";
 import {
   listWorkspaceDirectory,
   listWorkspaceMemoryFiles,
@@ -53,7 +54,7 @@ import {
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
-import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
+import { hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
@@ -484,9 +485,10 @@ async function forgetWorkspaceMemory(
     });
   }
   for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-    await commitMemoryContent({
+    await commitMemoryRewrite({
       workspaceDir,
       filePath: rewrite.absolutePath,
+      relativePath: rewrite.relativePath,
       tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
       expectedHash: hashMemoryContent(rewrite.expectedContent),
       expectedContent: rewrite.expectedContent,

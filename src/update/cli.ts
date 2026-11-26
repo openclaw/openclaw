@@ -14,7 +14,7 @@ import {
   callGateway,
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
-  isImplicitLocalGatewayTarget,
+  prepareLocalGatewayRestartConnection,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -47,6 +47,10 @@ const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
 const RETAINED_RUNTIME_MIN_TIMEOUT_MS = 10 * RETAINED_RUNTIME_BUDGET_MS;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
+
+type RestartConnection = NonNullable<
+  Awaited<ReturnType<typeof prepareLocalGatewayRestartConnection>>
+>;
 
 export type ReleaseUpdateOptions = {
   json: boolean;
@@ -310,6 +314,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   let record = request
     ? await followRun(
         request.runId,
+        request.connection,
         opts.json,
         Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
       )
@@ -326,29 +331,28 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     record = retry
       ? await followRun(
           retry.runId,
+          retry.connection,
           opts.json,
           Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
         )
       : record;
   }
-  if (
-    opts.tag &&
-    opts.restart &&
-    isPendingActivation(record) &&
-    (await requestLocalGatewayRestart(
+  if (opts.tag && opts.restart && record && isPendingActivation(record)) {
+    const connection = await requestLocalGatewayRestart(
       Math.max(1, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
-    )) &&
-    record
-  ) {
-    const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
-    record = await followRun(
-      record.runId,
-      opts.json,
-      Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
-    // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
-    if (record && releaseAdmission) {
-      record = { ...record, origin: { ...record.origin, releaseAdmission } };
+    if (connection) {
+      const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
+      record = await followRun(
+        record.runId,
+        connection,
+        opts.json,
+        Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+      );
+      // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
+      if (record && releaseAdmission) {
+        record = { ...record, origin: { ...record.origin, releaseAdmission } };
+      }
     }
   }
   report(record, opts.json);
@@ -388,12 +392,14 @@ async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<strin
   }
 }
 
-async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> {
-  if (!(await isImplicitLocalGatewayTarget({}))) {
-    return false;
+async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<RestartConnection | null> {
+  const connection = await prepareLocalGatewayRestartConnection();
+  if (!connection) {
+    return null;
   }
   try {
     const response = await callGateway<{ ok: boolean }>({
+      ...connection,
       method: "gateway.restart.request",
       params: { reason: "update.run" },
       timeoutMs: Math.min(30_000, timeoutMs),
@@ -402,10 +408,10 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
     if (!response.ok) {
       throw new Error("The Gateway refused to restart into the prepared release.");
     }
-    return true;
+    return connection;
   } catch (error) {
     if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
-      return false;
+      return null;
     }
     throw error;
   }
@@ -415,10 +421,11 @@ async function requestGatewayUpdate(
   target: { kind: "git"; upstreamRef: string; upstreamSha: string } | undefined,
   opts: ReleaseUpdateOptions,
   consentRetry?: UpdateRunRecord,
-): Promise<{ runId: string; supportsConsent: boolean } | null> {
+): Promise<{ runId: string; supportsConsent: boolean; connection: RestartConnection } | null> {
   // Only the local Gateway serves this checkout; a remote or overridden target would update
   // another installation, so this checkout prepares its release here instead.
-  if (!(await isImplicitLocalGatewayTarget({}))) {
+  const connection = await prepareLocalGatewayRestartConnection();
+  if (!connection) {
     if (consentRetry) {
       throw new Error(
         `Capability consent was not applied because the updated Gateway is no longer local. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` against that installation to retry."}`,
@@ -439,6 +446,7 @@ async function requestGatewayUpdate(
       code?: string;
       message?: string;
     }>({
+      ...connection,
       method: "update.run",
       params,
       onHelloOk: (hello) => {
@@ -468,7 +476,7 @@ async function requestGatewayUpdate(
           : "";
       throw new Error(`${response.message ?? "The Gateway refused the update."}${savedChannel}`);
     }
-    return { runId: response.runId, supportsConsent };
+    return { runId: response.runId, supportsConsent, connection };
   } catch (error) {
     if (
       !consentRetry &&
@@ -483,6 +491,7 @@ async function requestGatewayUpdate(
 /** The Gateway restarts during a run; until the deadline, its unavailability is expected. */
 async function followRun(
   runId: string,
+  connection: RestartConnection,
   json: boolean,
   budgetMs: number,
 ): Promise<UpdateRunRecord | undefined> {
@@ -494,6 +503,7 @@ async function followRun(
       record =
         (
           await callGateway<{ run: UpdateRunRecord | null }>({
+            ...connection,
             method: "update.runs.get",
             params: { runId },
             timeoutMs: 10_000,
