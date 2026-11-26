@@ -10,6 +10,8 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
+import { iterateTranscriptSpeakerObservations } from "./store-read.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -125,12 +127,36 @@ export function readTranscriptSummarySnapshot(
     return undefined;
   }
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
+  let utterances = readTranscriptUtterances(database, session, maxUtterances);
+  let hasSpeakerAliases = false;
+  if (row.next_utterance_seq > utterances.length) {
+    // A capped tail can omit the first owner of a name. Seed from the session's
+    // compact roster so later summaries cannot swap speaker suffixes.
+    const speakerLabel = createTranscriptSpeakerLabels(() => {
+      hasSpeakerAliases = true;
+    });
+    for (const speaker of iterateTranscriptSpeakerObservations(database, session)) {
+      speakerLabel(speaker.speaker_id, speaker.speaker_label);
+    }
+    utterances = utterances.map((utterance) =>
+      utterance.speaker
+        ? {
+            ...utterance,
+            speaker: {
+              ...utterance.speaker,
+              label: speakerLabel(utterance.speaker.id, utterance.speaker.label),
+            },
+          }
+        : utterance,
+    );
+  }
   return {
+    ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
     inputRevision: transcriptSummaryInputRevisionFromRow(row),
     nextSequence: row.next_utterance_seq,
     stoppedAt: row.stopped_at ?? undefined,
     summaryRevision: summaryRevision ?? "",
-    utterances: readTranscriptUtterances(database, session, maxUtterances),
+    utterances,
   };
 }
 

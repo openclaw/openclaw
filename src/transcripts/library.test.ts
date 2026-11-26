@@ -231,6 +231,52 @@ describe("transcript library SQLite reads", () => {
     });
   });
 
+  it("keeps source identities with duplicate labels separate across list and get", async () => {
+    const { download, get, list, seed, summary } = fixture();
+    const target = session("duplicate-speaker-labels");
+    const utterances = [
+      { text: "First", speaker: { id: "speaker-1", label: " Sam " } },
+      { text: "Second", speaker: { id: "speaker-2", label: "Sam" } },
+      { text: "Third", speaker: { label: "Sam" } },
+      { text: "Fourth", speaker: { id: "speaker-1", label: "Samuel" } },
+    ];
+    await seed(target, utterances);
+    await summary(target, utterances);
+
+    const expected = ["Sam", "Sam (2)", "Sam (3)"];
+    expect((await list()).sessions).toMatchObject([
+      { sessionId: target.sessionId, participants: expected },
+    ]);
+    expect((await get(target)).session.participants).toEqual(expected);
+    expect(contents(await download(target, "markdown"))).toContain(
+      "- Sam: First\n- Sam (2): Second\n- Sam (3): Third\n- Sam: Fourth",
+    );
+    expect(
+      jsonLines(await download(target, "jsonl")).map(({ speakerId, speakerLabel }) => ({
+        speakerId,
+        speakerLabel,
+      })),
+    ).toEqual([
+      { speakerId: "speaker-1", speakerLabel: " Sam " },
+      { speakerId: "speaker-2", speakerLabel: "Sam" },
+      { speakerId: undefined, speakerLabel: "Sam" },
+      { speakerId: "speaker-1", speakerLabel: "Samuel" },
+    ]);
+  });
+
+  it("does not transfer opaque speaker ids in public roster reads", async () => {
+    const { get, list, seed } = fixture();
+    const target = session("large-private-speaker-id");
+    await seed(target, [
+      { text: "Saved speech", speaker: { id: "x".repeat(2 * READ_LIMIT), label: "Sam" } },
+    ]);
+
+    expect((await list()).sessions).toMatchObject([
+      { sessionId: target.sessionId, participants: ["Sam"] },
+    ]);
+    expect((await get(target)).session.participants).toEqual(["Sam"]);
+  });
+
   it("combines literal title/source search, exact owner/account/provider filters and inclusive/exclusive dates", async () => {
     const { store, list } = fixture();
     const source = {
