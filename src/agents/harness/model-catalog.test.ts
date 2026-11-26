@@ -10,6 +10,7 @@ import {
   augmentPreparedModelCatalogWithAgentHarness,
   isPreparedNativeModelCatalogReady,
 } from "./model-catalog.js";
+import type { AgentHarness } from "./types.js";
 
 function row(id: string, fields: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return { provider: "fixture", id, name: id, ...fields };
@@ -77,7 +78,7 @@ const snapshot: ModelCatalogSnapshot = {
   ],
 };
 
-function catalogRegistry(loaders: Record<string, () => Promise<readonly ModelCatalogEntry[]>>) {
+function catalogRegistry(loaders: Record<string, NonNullable<AgentHarness["loadModelCatalog"]>>) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses = Object.entries(loaders).flatMap(
     ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog }).agentHarnesses,
@@ -125,6 +126,25 @@ function sharedRuntimes(snapshotToInspect: ModelCatalogSnapshot) {
 }
 
 describe("agent harness model catalog", () => {
+  it("passes the selected provider scope without restricting picker enumeration", async () => {
+    const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => []);
+    const input = pickerInput(pickerConfig("native-one"));
+    const registry = catalogRegistry({ "native-one": load });
+    await augmentPreparedModelCatalogWithAgentHarness({
+      input,
+      snapshot: catalog([]),
+      pluginRegistry: registry,
+      nativeSelection: { provider: "custom", modelId: "model", runtime: "native-one" },
+    });
+    expect(load).toHaveBeenLastCalledWith(expect.objectContaining({ providerIds: ["custom"] }));
+    await augmentPreparedModelCatalogWithAgentHarness({
+      input,
+      snapshot: catalog([]),
+      pluginRegistry: registry,
+    });
+    expect(load.mock.lastCall?.[0]).not.toHaveProperty("providerIds");
+  });
+
   it.each([
     { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },

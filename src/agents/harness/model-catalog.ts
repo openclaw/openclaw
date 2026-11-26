@@ -79,6 +79,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
   observationConfig?: OpenClawConfig;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
@@ -179,6 +180,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   }
   let result = params.snapshot;
   const completedRows: ModelCatalogEntry[] = [];
+  const requestedProviderIds = params.nativeSelection
+    ? [params.nativeSelection.provider]
+    : params.providerIds;
   let discovered = false;
   for (const [runtime, providers] of runtimeProviders) {
     const scopedProviders = [...providers].filter(
@@ -210,6 +214,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(requestedProviderIds ? { providerIds: requestedProviderIds } : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -397,6 +402,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;

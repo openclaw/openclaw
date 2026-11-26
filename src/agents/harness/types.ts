@@ -516,6 +516,8 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /** Requested discovery scope; omitted for unscoped picker enumeration. */
+  providerIds?: readonly string[];
 };
 
 export type AgentHarnessModelCatalogResult =
