@@ -120,6 +120,7 @@ gateway.controlUi.experimental.composerPredictions.enabled
 gateway.controlUi.experimental.composerPredictions.model
 gateway.controlUi.sessionObserver
 gateway.openclawId.enabled
+gateway.roles.default
 local.accent
 local.background.presentation
 local.background.showInSessions
@@ -199,6 +200,13 @@ profile.openclawId
 profile.prAttribution
 profile.usageStatistics
 providers.*
+role.agents
+role.sandbox
+role.scopes.*
+role.sessions.invitedPermission
+role.sessions.invitedTools
+role.sessions.maxInvitedAccess
+role.sessions.others
 search.advanced
 search.agent
 search.model

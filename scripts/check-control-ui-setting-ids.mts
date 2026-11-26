@@ -40,6 +40,7 @@ const SETTINGS_SOURCES = [
   "ui/src/pages/model-providers/",
   "ui/src/pages/plugins/",
   "ui/src/pages/profile/",
+  "ui/src/pages/roles/",
   "ui/src/pages/search/",
   "ui/src/pages/secrets/",
   "ui/src/pages/skills/",

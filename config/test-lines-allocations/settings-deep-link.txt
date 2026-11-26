@@ -2,4 +2,5 @@
 # Includes late-render browser cases for MCP, agent tools, command allowlists and provider priority.
 # Verify the painted viewport after reconnect so a delayed second scroll cannot pass.
 # Keep the live Appearance preview active while verifying its lazy renderer.
-658
+# Audit the populated Roles editor, including conditional fields and late-rendered scope checkboxes.
+674

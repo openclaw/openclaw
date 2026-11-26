@@ -20,6 +20,8 @@ export type ControlUiSettingsPage<Ids extends string = string> = {
   /** The path continues with the agent ID, then `agentPanel` when present. */
   readonly agent?: true;
   readonly agentPanel?: string;
+  /** The role editor needs the role name in the `role` query parameter. */
+  readonly role?: true;
   /**
    * Settings on the page. A row that edits one config value uses that value's path as its ID;
    * other IDs start with a name that is not a config section, such as `local.` for

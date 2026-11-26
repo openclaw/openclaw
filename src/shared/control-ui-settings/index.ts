@@ -22,6 +22,7 @@ import { MODELS_SETTINGS } from "./pages/models.js";
 import { NOTIFICATIONS_SETTINGS } from "./pages/notifications.js";
 import { PLUGINS_SETTINGS } from "./pages/plugins.js";
 import { PROFILE_SETTINGS } from "./pages/profile.js";
+import { ROLE_EDITOR_SETTINGS, ROLES_SETTINGS } from "./pages/roles.js";
 import { SEARCH_SETTINGS } from "./pages/search.js";
 import { SECRETS_SETTINGS } from "./pages/secrets.js";
 import { SECURITY_SETTINGS } from "./pages/security.js";
@@ -45,6 +46,8 @@ export const CONTROL_UI_SETTINGS_PAGES = [
   APPEARANCE_SETTINGS,
   NOTIFICATIONS_SETTINGS,
   PROFILE_SETTINGS,
+  ROLES_SETTINGS,
+  ROLE_EDITOR_SETTINGS,
   CHANNELS_SETTINGS,
   CONNECTION_SETTINGS,
   CLOUD_WORKERS_SETTINGS,

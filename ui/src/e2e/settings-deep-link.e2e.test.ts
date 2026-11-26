@@ -26,11 +26,17 @@ const models = [
   { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
   { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
 ];
+const reviewer = {
+  sessions: { others: "invited", maxInvitedAccess: "send" },
+  agents: ["main"],
+  scopes: ["operator.sessions.read"],
+};
+const rolesGateway = { roles: { definitions: { reviewer } } };
 const gatewayScenario = {
   models,
   methodResponses: {
     "config.get": sourceConfigSnapshot(
-      { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      { agents: { defaults: { model: "openai/gpt-5.5" } }, gateway: rolesGateway },
       "settings-deep-link-e2e",
     ),
     "models.list": { models },
@@ -65,7 +71,7 @@ function placeHref(id: string) {
   const path = page
     ? `${page.path}${page.agent ? `/main${page.agentPanel ? `/${page.agentPanel}` : ""}` : ""}`
     : pathForRoute(configPageForSection(id.split(".")[0]!));
-  return `${path}#${id}`;
+  return `${path}${page?.role ? "?role=reviewer" : ""}#${id}`;
 }
 const placeUrl = (id: string) => `${suite.server.baseUrl}${placeHref(id).slice(1)}`;
 
@@ -82,6 +88,8 @@ async function expectArrival(page: Page, row: Locator, title: string) {
 
 suite.define(() => {
   it.each([
+    ["gateway.roles.default", "roles", "config.get", "select"],
+    ["role.scopes.approvals", "roles?role=reviewer", "config.get", "input"],
     ["mcp.servers.docs.enabled", "mcp", "config.get", '[role="switch"]'],
     ["agent.tools.access.read", "agents/main/tools", "tools.catalog", '[role="switch"]'],
     ["devices.execApprovals.allowlist.main", "devices", "exec.approvals.get", "textarea"],
@@ -96,6 +104,7 @@ suite.define(() => {
       const config = {
         agents: { entries: { main: { name: "Main" } } },
         mcp: { servers: { docs: { command: "docs" } } },
+        gateway: rolesGateway,
       };
       const profiles = ["one", "two"].map((name) => ({
         profileId: "openai:" + name,
@@ -152,7 +161,12 @@ suite.define(() => {
       if (id === "agent.tools.access.read") {
         expect(await row.locator("..").getAttribute("id")).toBe("agent-tool-read");
       }
-      for (const method of [...WRITE_METHODS, "exec.approvals.set", "models.authOrderSet"]) {
+      for (const method of [
+        ...WRITE_METHODS,
+        "exec.approvals.set",
+        "models.authOrderSet",
+        "users.setRole",
+      ]) {
         expect(await gateway.getRequests(method)).toHaveLength(0);
       }
     });
@@ -344,6 +358,7 @@ suite.define(() => {
         group.routes.map((routeId) => pathForRoute(routeId)),
       ),
       pathForRoute("ai-agents"),
+      `${pathForRoute("roles")}?role=reviewer`,
       ...["overview", "tools", "skills", "channels", "cron", "memory"].map(
         (panel) => `/settings/agents/main/${panel}`,
       ),
@@ -395,6 +410,7 @@ suite.define(() => {
       }
       expect(failures).toEqual([]);
       expect(rows).toBeGreaterThan(300);
+      expect(linked.has("role.sessions.invitedTools")).toBe(true);
 
       // Every listed row the page drew opens from the link a message would carry.
       const missed: string[] = [];

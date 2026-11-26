@@ -50,6 +50,7 @@ export function RoleList(props: {
     <>
       <SettingsSection title={t("rolesPage.newPeople")}>
         <SettingsRow
+          setting="gateway.roles.default"
           title={t("rolesPage.defaultRole")}
           description={t("rolesPage.defaultRoleDescription")}
           stackedOnNarrow
@@ -69,6 +70,7 @@ export function RoleList(props: {
           }
         />
         <SettingsRow
+          info
           title={t("rolesPage.githubMappings")}
           description={t("rolesPage.githubMappingsDescription")}
           control={
@@ -103,6 +105,7 @@ export function RoleList(props: {
               const people = () => props.roles.people().get(role.name) ?? [];
               return (
                 <SettingsNavRow
+                  info
                   title={
                     <span class="roles-list__title">
                       {role.name}
