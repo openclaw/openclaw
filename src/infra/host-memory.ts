@@ -94,12 +94,15 @@ export function isMemoryPressureHigh(): boolean {
   return (free > 0 && free <= os.totalmem() * 0.2) || isCgroupV2AncestorPressured();
 }
 
+type CgroupV2Directory = { path: string; overmounts?: ReadonlySet<string> };
+
 /** Visible cgroup-v2 directories from this process's group up to the mount root. */
-function listCgroupV2Directories(): string[] {
+function listCgroupV2Directories({ ancestorsOnly = false } = {}): CgroupV2Directory[] {
   if (process.platform !== "linux") {
     return [];
   }
   const mount = "/sys/fs/cgroup";
+  const overmounts = new Set<string>();
   let directory: string;
   try {
     const membership = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
@@ -130,35 +133,51 @@ function listCgroupV2Directories(): string[] {
       return [];
     }
     directory = path.join(mount, relative);
+    if (ancestorsOnly) {
+      if (directory === mount) {
+        return [];
+      }
+      directory = path.dirname(directory);
+    }
     for (const [, , , , point] of views) {
       if (point === mount) {
         continue;
       }
       const child = decodeMountInfoPath(point!);
-      const shadow = path.basename(child).startsWith("memory.") ? path.dirname(child) : child;
-      if (directory === shadow || directory.startsWith(`${shadow}/`)) {
-        return [];
+      overmounts.add(child);
+      // Mask only the covered subtree. A parent can still cap the Gateway when
+      // its service leaf or one controller file is overmounted.
+      if (directory === child || directory.startsWith(`${child}/`)) {
+        directory = path.dirname(child);
       }
     }
   } catch {
     return [];
   }
-  const directories = [directory];
+  const directories = [{ path: directory, overmounts }];
   while (directory !== mount) {
     directory = path.dirname(directory);
-    directories.push(directory);
+    directories.push({ path: directory, overmounts });
   }
   return directories;
 }
 
-function readCgroupV2Number(directory: string, file: string): number | undefined {
+function readCgroupV2File(directory: CgroupV2Directory, file: string): string | undefined {
+  const pathname = path.join(directory.path, file);
+  if (directory.overmounts?.has(pathname)) {
+    return undefined;
+  }
   try {
-    const value = readFileSync(path.join(directory, file), "utf8").trim();
-    return /^\d+$/u.test(value) ? Number(value) : undefined;
+    return readFileSync(pathname, "utf8");
   } catch {
     // Missing controllers and inaccessible ancestors retain known limits.
     return undefined;
   }
+}
+
+function readCgroupV2Number(directory: CgroupV2Directory, file: string): number | undefined {
+  const value = readCgroupV2File(directory, file)?.trim();
+  return value !== undefined && /^\d+$/u.test(value) ? Number(value) : undefined;
 }
 
 /** Read cgroup-v2 limits through visible ancestors, including a namespaced mount root. */
@@ -181,7 +200,7 @@ export function findCgroupV2MemoryLimitDirectory(): string | undefined {
   for (const directory of listCgroupV2Directories()) {
     const limit = readCgroupV2Number(directory, "memory.max");
     if (limit !== undefined && (!found || limit < found.limit)) {
-      found = { directory, limit };
+      found = { directory: directory.path, limit };
     }
   }
   return found?.directory;
@@ -190,35 +209,29 @@ export function findCgroupV2MemoryLimitDirectory(): string | undefined {
 // Node's native check covers the leaf. Sibling usage belongs to each shared ancestor,
 // so compare its own charge with its own reclaim or hard limit.
 function isCgroupV2AncestorPressured(): boolean {
-  return listCgroupV2Directories()
-    .slice(1)
-    .some((directory) => {
-      const limit = Math.min(
-        readCgroupV2Number(directory, "memory.high") ?? Infinity,
-        readCgroupV2Number(directory, "memory.max") ?? Infinity,
-      );
-      if (!Number.isFinite(limit)) {
-        return false;
-      }
-      const threshold = limit * 0.8;
-      const current = readCgroupV2Number(directory, "memory.current");
-      // Reading memory.stat is unnecessary when even the full charge is below the threshold.
-      return (
-        current !== undefined &&
-        current >= threshold &&
-        cgroupV2WorkingSetBytes(directory, current) >= threshold
-      );
-    });
+  return listCgroupV2Directories({ ancestorsOnly: true }).some((directory) => {
+    const limit = Math.min(
+      readCgroupV2Number(directory, "memory.high") ?? Infinity,
+      readCgroupV2Number(directory, "memory.max") ?? Infinity,
+    );
+    if (!Number.isFinite(limit)) {
+      return false;
+    }
+    const threshold = limit * 0.8;
+    const current = readCgroupV2Number(directory, "memory.current");
+    // Reading memory.stat is unnecessary when even the full charge is below the threshold.
+    return (
+      current !== undefined &&
+      current >= threshold &&
+      cgroupV2WorkingSetBytes(directory, current) >= threshold
+    );
+  });
 }
 
-function cgroupV2WorkingSetBytes(directory: string, current: number): number {
-  let inactiveFile = 0;
-  try {
-    const stat = readFileSync(path.join(directory, "memory.stat"), "utf8");
-    inactiveFile = Number(/^inactive_file (\d+)$/mu.exec(stat)?.[1] ?? 0);
-  } catch {
-    // Without memory.stat, the whole charge counts as working set.
-  }
+function cgroupV2WorkingSetBytes(directory: CgroupV2Directory, current: number): number {
+  // Without memory.stat, the whole charge counts as working set.
+  const stat = readCgroupV2File(directory, "memory.stat");
+  const inactiveFile = Number(stat?.match(/^inactive_file (\d+)$/mu)?.[1] ?? 0);
   return Math.max(0, current - inactiveFile);
 }
 
@@ -227,8 +240,9 @@ function cgroupV2WorkingSetBytes(directory: string, current: number): number {
  * cannot cheaply reclaim. Active file cache still counts, so this overstates anon use.
  */
 export function readCgroupV2WorkingSetBytes(directory: string): number | undefined {
-  const current = readCgroupV2Number(directory, "memory.current");
-  return current === undefined ? undefined : cgroupV2WorkingSetBytes(directory, current);
+  const group = { path: directory };
+  const current = readCgroupV2Number(group, "memory.current");
+  return current === undefined ? undefined : cgroupV2WorkingSetBytes(group, current);
 }
 
 /** Hard memory allowance, not free memory or the cgroup's reclaim threshold. */

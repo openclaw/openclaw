@@ -268,3 +268,38 @@ it("maps only the service's visible cgroup controllers in a delegated mount", ()
   files.delete("/proc/self/mountinfo");
   expect(isMemoryPressureHigh()).toBe(false);
 });
+
+it("keeps higher limits when the leaf or one controller file is overmounted", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+  const mount = "/sys/fs/cgroup";
+  const parent = `${mount}/pod`;
+  const leaf = `${parent}/service`;
+  const files = new Map([
+    ["/proc/self/cgroup", "0::/pod/service"],
+    [`${parent}/memory.max`, "1000"],
+    [`${parent}/memory.current`, "800"],
+    [`${leaf}/memory.max`, "500"],
+  ]);
+  const read = mockCgroupFiles(files);
+  for (const [covered, limit] of [
+    [`${leaf}/memory.events`, 500],
+    [`${leaf}/memory.max`, 1000],
+    [leaf, 1000],
+  ] as const) {
+    files.set(
+      "/proc/self/mountinfo",
+      [
+        `30 1 0:27 / ${mount} rw - cgroup2 cgroup rw`,
+        `31 30 0:27 /elsewhere ${covered} rw - cgroup2 cgroup rw`,
+      ].join("\n"),
+    );
+    read.mockClear();
+    expect(readEffectiveMemoryLimit().memoryLimitBytes).toBe(limit);
+    expect(isMemoryPressureHigh()).toBe(true);
+    expect(read).not.toHaveBeenCalledWith(covered, "utf8");
+  }
+});
