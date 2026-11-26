@@ -77,9 +77,10 @@ struct ChatModelPickerSheet: View {
         // and turns the grouped rows gray. One opaque grouped background, as on the Pages sheet, keeps the
         // sheet and its rows the same at every height.
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
-        // A catalog that failed or came back empty loads again each time the picker opens.
+        // A catalog that failed or came back empty loads again each time the picker opens, showing the
+        // loading state rather than the old failure while it does.
         .task {
-            if self.viewModel.modelChoices.isEmpty { await self.viewModel.fetchModels() }
+            if self.viewModel.modelChoices.isEmpty { await self.viewModel.retryModelCatalog() }
         }
         // Closing the sheet ends a sign-in still running, as the old sign-in sheet's Close did.
         .onDisappear { Task { await self.accounts.close() } }
@@ -152,15 +153,22 @@ struct ChatModelPickerSheet: View {
             }
         } else if self.viewModel.modelChoices.isEmpty {
             Section {
-                Group {
-                    if let message = self.viewModel.modelCatalogMessage {
-                        Text(message).font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity)
+                if let message = self.viewModel.modelCatalogMessage {
+                    Text(message).font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("chat-model-picker-message")
+                    // As on the accounts page: the failure and the way to try again in one card.
+                    ChatModelSignInButtonRow(
+                        title: ChatModelAccountsCopy.tryAgain,
+                        isBusy: false,
+                        id: "chat-model-picker-try-again")
+                    {
+                        await self.viewModel.retryModelCatalog()
                     }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
                 }
-                self.signInRow
             }
+            Section { self.signInRow }
         } else {
             // A model can sit in two sections at once; each section keeps its own row identities.
             if !catalog.favorites.isEmpty {

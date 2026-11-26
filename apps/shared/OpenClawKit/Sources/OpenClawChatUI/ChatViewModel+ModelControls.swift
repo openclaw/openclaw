@@ -56,13 +56,20 @@ extension OpenClawChatViewModel {
         } catch {
             guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else { return }
             #if os(iOS)
-            // Opening the model picker loads the catalog again.
-            self.modelCatalogMessage = String(localized: "Couldn’t load models. Try again.")
+            // The model sheet says so with its own Try again row, and tries again when it opens.
+            self.modelCatalogMessage = String(localized: "Couldn’t load models.")
             #else
             self.modelCatalogMessage = String(localized: "Model choices could not load. Reconnect and try again.")
             #endif
             self.syncThinkingLevelOptions()
         }
+    }
+
+    /// Loads the model list again from the model sheet: the failure clears first, so the sheet shows its
+    /// loading state until the answer replaces it.
+    func retryModelCatalog() async {
+        self.modelCatalogMessage = nil
+        await self.fetchModels()
     }
 
     public static let verboseLevelOptions = ["off", "on", "full"]
@@ -369,7 +376,10 @@ extension OpenClawChatViewModel {
             selectionID
         }
         #if os(iOS)
-        guard let resolvedID else { return String(localized: "Model") }
+        // Without the model list or the chat defaults, the chat's own model still names the chip.
+        guard let resolvedID = resolvedID ?? self.currentSessionEntry()?.model?.trimmedNonEmpty else {
+            return String(localized: "Model")
+        }
         #else
         guard let resolvedID else { return "Default" }
         #endif

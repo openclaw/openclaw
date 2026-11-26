@@ -166,8 +166,8 @@ final class ChatCatalogUITests: XCTestCase {
         let failed = try await self.policyRequest(fixtureURL, path: "fail", method: "POST")
         XCTAssertTrue(failed.reads.contains { $0.phase == "held" && $0.outcome == "failed" })
         self.dismissPolicyActions(app)
-        let loadError = app.staticTexts["Model choices could not load. Reconnect and try again."]
-        XCTAssertTrue(loadError.waitForExistence(timeout: 3))
+        // The failure lives in the model sheet; nothing is drawn under the composer card.
+        XCTAssertFalse(app.staticTexts["Couldn’t load models."].waitForExistence(timeout: 3))
         self.assertGuestInlineModel(
             inlineModel, app: app, value: "Default", failureID: "guest-model-policy:failed:current-selection")
         XCTAssertEqual(input.value as? String, draft)

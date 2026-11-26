@@ -509,7 +509,7 @@ enum ChatModelSignInMetrics {
 }
 
 /// A list button whose spinner replaces its label in the same box while it works.
-private struct ChatModelSignInButtonRow: View {
+struct ChatModelSignInButtonRow: View {
     let title: String
     let isBusy: Bool
     /// Said next to the spinner when the wait is someone else's, such as the provider's.
