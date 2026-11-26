@@ -299,7 +299,12 @@ export async function resolveConfiguredRealtimeTranscriptionProvider(params: {
       `Realtime transcription provider "${params.configuredProviderId}" is not configured`,
     );
   }
-  throw new Error("No realtime transcription provider registered");
+  if (orderedProviders.length === 0) {
+    throw new Error("No realtime transcription provider registered");
+  }
+  throw new Error(
+    "No realtime transcription provider is configured; check Voice Call streaming credentials",
+  );
 }
 
 const DEFAULT_REALTIME_INSTRUCTIONS = [

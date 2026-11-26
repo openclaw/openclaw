@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => {
       throw new Error("not used");
     },
   });
-  return { providers: [provider("saved-only", 35, false), provider("keyed", 40, true)] };
+  return { provider, providers: [provider("saved-only", 35, false), provider("keyed", 40, true)] };
 });
 // mock-isolation: Two fixture providers stand in for the plugin registry.
 vi.mock("../../realtime-transcription/provider-registry.js", () => ({
@@ -38,4 +38,39 @@ it("tells a transcription provider it is named, and not during automatic selecti
     ).provider.id;
   expect(await select()).toBe("keyed");
   expect(await select("saved-only")).toBe("saved-only");
+});
+
+it("says a provider is unconfigured when registered providers have no credentials", async () => {
+  const previous = mocks.providers.splice(
+    0,
+    mocks.providers.length,
+    mocks.provider("deepgram", 10, false),
+    mocks.provider("elevenlabs", 20, false),
+  );
+  try {
+    await expect(
+      resolveConfiguredRealtimeTranscriptionProvider({
+        config: {},
+        providerConfigs: {},
+      }),
+    ).rejects.toThrow(
+      "No realtime transcription provider is configured; check Voice Call streaming credentials",
+    );
+  } finally {
+    mocks.providers.splice(0, mocks.providers.length, ...previous);
+  }
+});
+
+it("says no provider is registered only when the transcription registry is empty", async () => {
+  const previous = mocks.providers.splice(0, mocks.providers.length);
+  try {
+    await expect(
+      resolveConfiguredRealtimeTranscriptionProvider({
+        config: {},
+        providerConfigs: {},
+      }),
+    ).rejects.toThrow("No realtime transcription provider registered");
+  } finally {
+    mocks.providers.splice(0, mocks.providers.length, ...previous);
+  }
 });
