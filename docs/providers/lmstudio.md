@@ -212,6 +212,8 @@ With preload enabled, embedding requests also check that their model is loaded a
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
 loading is disabled. Embedding model and cache identity keep the configured model key.
+If a native preload fails and the subsequent embedding request also fails, the error includes
+the context length OpenClaw attempted alongside the inference error.
 
 ### Disabling preload
 
