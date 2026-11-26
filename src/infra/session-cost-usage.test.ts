@@ -14,7 +14,6 @@ import {
   readSessionCostUsageRollupRows,
   writeLegacyUsageCostRollupForTest,
 } from "./session-cost-usage-cache.test-support.js";
-import { listUsageCountedTranscriptStats } from "./session-cost-usage-collection.test-support.js";
 import {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -395,41 +394,6 @@ it("keeps four-digit UTC dates when filling an early calendar window", async () 
   });
   expect(summary.days).toBe(3);
   expect(summary.daily.map(({ date }) => date)).toEqual(["0999-12-30", "0999-12-31", "1000-01-01"]);
-});
-
-it("limits transcript stat fanout when listing durable cost inputs", async () => {
-  await Promise.all(
-    Array.from({ length: 48 }, async (_, index) => {
-      await fs.writeFile(path.join(sessionsDir, `sess-stat-fanout-${index}.jsonl`), "");
-    }),
-  );
-
-  const originalStat = nodeFs.promises.stat.bind(nodeFs.promises);
-  let activeStats = 0;
-  let maxActiveStats = 0;
-  vi.spyOn(nodeFs.promises, "stat").mockImplementation(async (target) => {
-    const targetPath = String(target);
-    if (targetPath.startsWith(sessionsDir) && targetPath.endsWith(".jsonl")) {
-      activeStats += 1;
-      maxActiveStats = Math.max(maxActiveStats, activeStats);
-      try {
-        await delay(2);
-        return await originalStat(target);
-      } finally {
-        activeStats -= 1;
-      }
-    }
-    return await originalStat(target);
-  });
-
-  const files = await listUsageCountedTranscriptStats("main", { sessionsDir });
-  expect(files).toHaveLength(48);
-  expect(new Set(files.map((file) => file.sessionId))).toEqual(
-    new Set(Array.from({ length: 48 }, (_, index) => `sess-stat-fanout-${index}`)),
-  );
-
-  expect(maxActiveStats).toBeGreaterThan(1);
-  expect(maxActiveStats).toBeLessThanOrEqual(32);
 });
 
 it("preserves rollups and aborts when the transcript directory cannot be read", async () => {

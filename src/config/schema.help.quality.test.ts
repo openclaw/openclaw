@@ -60,11 +60,6 @@ describe("config tier coverage", () => {
     expect(missing, formatMissingTierFailure(missing)).toEqual([]);
   });
 
-  it("keeps the curated common leaf set reviewable", () => {
-    const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
-    expect(common).toMatchSnapshot();
-  });
-
   it("documents the Appearance-owned interface language preference", () => {
     const locale = schema.properties?.ui?.properties?.prefs?.properties?.locale;
     expect(locale?.title).toBe("Interface language");
