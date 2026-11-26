@@ -626,6 +626,36 @@ describe("sidebar attention source publication", () => {
     expectCalls(request, 1, ["models.authStatus"]);
   });
 
+  it("reads scoped failure membership without sorting display rows for each table page", async () => {
+    const names = vi.fn();
+    const ids = Array.from({ length: 201 }, (_, index) => `job-${index}`);
+    const jobs = ids.map((id, index) => ({
+      ...cronPage(id, index === 200 ? "error" : "ok").jobs[0]!,
+      get name() {
+        names();
+        return id;
+      },
+    }));
+    const offsets: number[] = [];
+    const request = inventoryRequest((params) => {
+      const offset = isRecord(params) ? Number(params.offset) : 0;
+      offsets.push(offset);
+      return {
+        jobs: jobs.slice(offset, offset + 200),
+        snapshotRevision: "membership",
+        total: jobs.length,
+        limit: 200,
+        offset,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 200 : null,
+      };
+    });
+    store = startAuthenticatedStore(request).attention;
+    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
+    expect(offsets).toEqual([0, 200]);
+    expect(names).not.toHaveBeenCalled();
+  });
+
   it("keeps the indicator while a replacement inventory is only partially loaded", async () => {
     const remaining = deferred<CompactCronPage>();
     let reads = 0;

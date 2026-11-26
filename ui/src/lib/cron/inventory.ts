@@ -66,37 +66,57 @@ export function readCronInventory(
   params: CronListParams,
   options: ReadOptions = {},
 ) {
-  options.signal?.throwIfAborted();
+  if (params.compact) {
+    return readCompactCronInventory(client, params, options).then((page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.lastRunStatus,
+        (jobs) =>
+          sortCronJobs(
+            jobs.map((job) => ({
+              id: job.id,
+              name: job.name,
+              updatedAtMs: job.updatedAtMs,
+              state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
+              job,
+            })),
+            params.sortBy ?? "nextRunAtMs",
+            params.sortDir ?? "asc",
+          ).map(({ job }) => job),
+      ),
+    );
+  }
   const owner = getCronInventory(client);
-  const source = inventoryQuery(params);
-  return params.compact
-    ? readRows(client, owner, owner.compact, source, updateCompact, options).then((page) =>
-        selectPage(
-          page,
-          params,
-          (job) => job.lastRunStatus,
-          (jobs) =>
-            sortCronJobs(
-              jobs.map((job) => ({
-                id: job.id,
-                name: job.name,
-                updatedAtMs: job.updatedAtMs,
-                state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
-                job,
-              })),
-              params.sortBy ?? "nextRunAtMs",
-              params.sortDir ?? "asc",
-            ).map(({ job }) => job),
-        ),
-      )
-    : readRows(client, owner, owner.full, source, updateFull, options).then((page) =>
-        selectPage(
-          page,
-          params,
-          (job) => job.state.lastRunStatus ?? job.state.lastStatus,
-          (jobs) => sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
-        ),
-      );
+  return readRows(client, owner, owner.full, inventoryQuery(params), updateFull, options).then(
+    (page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.state.lastRunStatus ?? job.state.lastStatus,
+        (jobs) => sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
+      ),
+  );
+}
+
+/** All scoped jobs, without the table's runtime filters, ordering or paging. */
+export function readCompactCronInventory(
+  client: GatewayBrowserClient,
+  params: Pick<
+    CronListParams,
+    "agentId" | "sessionKey" | "sessionAgentId" | "query" | "scheduleKind" | "trigger"
+  >,
+  options: ReadOptions = {},
+) {
+  const owner = getCronInventory(client);
+  return readRows(
+    client,
+    owner,
+    owner.compact,
+    inventoryQuery({ ...params, compact: true }),
+    updateCompact,
+    options,
+  );
 }
 
 function selectPage<Row extends { enabled: boolean }>(
@@ -136,6 +156,7 @@ function readRows<Row>(
   update: (page: CronJobsListResult<Row>, event: Runtime) => CronJobsListResult<Row>,
   options: ReadOptions,
 ): Promise<CronJobsListResult<Row>> {
+  options.signal?.throwIfAborted();
   const key = queryKey(params);
   let entry = entries.get(key);
   if (!entry) {
