@@ -93,7 +93,6 @@ it.each(["standalone", "admitted", "competing run"] as const)(
             root,
             assertCurrent: fence.assertCurrent,
             legacyPostCore: {
-              runId: run.runId,
               createdAtMs: run.createdAtMs,
               fence,
             },

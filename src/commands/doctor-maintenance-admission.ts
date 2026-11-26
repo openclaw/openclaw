@@ -2,11 +2,7 @@ import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import {
-  hasUnrecordedUpdateRunDriver,
-  inspectUpdateRepairDriverAdmission,
-  recordedUpdateRunDrivers,
-} from "../infra/update-run-activity.js";
+import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
@@ -33,25 +29,15 @@ export function resolveDoctorUpdateAdmission(
     // The shipped updater did not record a driver. Its already-admitted native
     // executor proves this exact post-core run; all other runs still use driver admission.
     if (legacyPostCore) {
-      captureUpdateCommandExecutorAuthority(legacyPostCore.fence, legacyPostCore.runId);
-    }
-    const legacyRun =
-      legacyPostCore &&
-      runs.find(
-        (run) =>
-          run.runId === inheritedRunId &&
-          run.runId === legacyPostCore.runId &&
-          run.createdAtMs === legacyPostCore.createdAtMs &&
-          run.status === "running" &&
-          !recordedUpdateRunDrivers(run).length &&
-          !hasUnrecordedUpdateRunDriver(run),
-      );
-    if (legacyPostCore && !legacyRun) {
-      throw new Error("Legacy post-core Doctor continuation changed during admission.");
+      if (!inheritedRunId) {
+        throw new Error("Legacy post-core Doctor requires its inherited update run.");
+      }
+      captureUpdateCommandExecutorAuthority(legacyPostCore.fence, inheritedRunId);
     }
     const admission = inspectUpdateRepairDriverAdmission(
-      legacyRun ? runs.filter((run) => run !== legacyRun) : runs,
+      runs,
       inheritedRunId,
+      legacyPostCore?.createdAtMs,
     );
     if (admission.kind === "conflict") {
       if (admission.reason === "ancestry-unverified") {
@@ -75,7 +61,10 @@ export function resolveDoctorUpdateAdmission(
       }
       throw new Error(admission.message);
     }
-    return legacyRun ? { kind: "continuation" as const, run: legacyRun } : admission;
+    if (legacyPostCore && admission.kind !== "continuation") {
+      throw new Error("Legacy post-core Doctor could not verify its active update run.");
+    }
+    return admission;
   };
   const admission = readAdmission();
   const continuation =

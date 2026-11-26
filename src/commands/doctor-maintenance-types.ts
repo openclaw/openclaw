@@ -17,7 +17,7 @@ export type DoctorMaintenanceParams = {
   runtime: RuntimeEnv;
   runId?: string;
   assertCurrent?: () => void;
-  legacyPostCore?: { runId: string; createdAtMs: number; fence: UpdateRecoveryFence };
+  legacyPostCore?: { createdAtMs: number; fence: UpdateRecoveryFence };
   lendPolicyCustody?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["lendPolicyCustody"];
   databaseGenerations?: UpdateDatabaseGenerations;
   databaseWriteCapture?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["databaseWriteCapture"];

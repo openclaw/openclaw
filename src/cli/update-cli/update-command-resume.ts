@@ -199,7 +199,6 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
             !hasUnrecordedUpdateRunDriver(current)
               ? {
                   legacyPostCore: {
-                    runId,
                     createdAtMs: record.createdAtMs,
                     fence,
                   },

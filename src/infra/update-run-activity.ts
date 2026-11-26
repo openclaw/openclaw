@@ -61,12 +61,21 @@ type UpdateRunContinuationCheck = "continuation" | "not-continuation" | "ancestr
 function inspectCurrentUpdateRunContinuation(
   record: UpdateRunRecord,
   inheritedRunId: string | undefined,
+  legacyCreatedAtMs?: number,
 ): UpdateRunContinuationCheck {
   if (record.runId !== inheritedRunId?.trim() || hasUnrecordedUpdateRunDriver(record)) {
     return "not-continuation";
   }
+  const drivers = recordedUpdateRunDrivers(record);
+  if (legacyCreatedAtMs !== undefined) {
+    return record.status === "running" &&
+      record.createdAtMs === legacyCreatedAtMs &&
+      !drivers.length
+      ? "continuation"
+      : "not-continuation";
+  }
   let ownsDriver = false;
-  for (const driver of recordedUpdateRunDrivers(record)) {
+  for (const driver of drivers) {
     const liveness = inspectUpdateRunDriver(driver);
     if (liveness === "dead") {
       continue;
@@ -128,10 +137,12 @@ export type UpdateRepairDriverAdmission =
 export function inspectUpdateRepairDriverAdmission(
   runs: UpdateRunRecord[],
   inheritedRunId: string | undefined,
+  // Only supplied after verifying the registered native legacy executor.
+  legacyCreatedAtMs?: number,
 ): UpdateRepairDriverAdmission {
   let continuation: UpdateRunRecord | undefined;
   for (const run of runs) {
-    const check = inspectCurrentUpdateRunContinuation(run, inheritedRunId);
+    const check = inspectCurrentUpdateRunContinuation(run, inheritedRunId, legacyCreatedAtMs);
     if (check === "continuation") {
       continuation = run;
     } else if (!inspectUpdateRunDriverAbandonment(run, { explicit: true })) {
