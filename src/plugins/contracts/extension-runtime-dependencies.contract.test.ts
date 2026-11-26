@@ -242,6 +242,15 @@ describe("Discord dependency ownership", () => {
 });
 
 describe("extension runtime dependency manifests", () => {
+  it("keeps Playwright host-owned for the separately shipped Diffs plugin", () => {
+    expect(runtimeDependencyNames(readPackageManifest("package.json"))).toContain(
+      "playwright-core",
+    );
+    expect(
+      runtimeDependencyNames(readPackageManifest("extensions/diffs/package.json")),
+    ).not.toContain("playwright-core");
+  });
+
   it("lists extension dependency inputs from git without walking extension dirs", () => {
     expectNoReaddirSyncDuring(() => {
       const manifests = listPackageManifests(EXTENSION_ROOT);
