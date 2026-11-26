@@ -815,12 +815,10 @@ describe("inventory projections", () => {
         marker: "openclaw",
         legacy: false,
         detail: `missing recovery launcher: ${missing}`,
-        windowsMissingRecoveryLauncher: missing,
       }),
     ]);
     expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
       `schtasks /Query /TN "${orphan}" /V /FO LIST`,
-      `schtasks /Delete /F /TN "${orphan}"`,
     ]);
     const managed = await listManagedOpenClawGatewayServices(nativeEnv);
     expect(managed.errors).toEqual([]);
@@ -844,7 +842,6 @@ describe("inventory projections", () => {
         detail: `missing recovery launcher: ${missing}`,
       }),
     ]);
-    expect(result.services[0]).not.toHaveProperty("windowsMissingRecoveryLauncher");
     expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
       `schtasks /Query /TN "${label}" /V /FO LIST`,
     ]);
@@ -865,68 +862,10 @@ describe("inventory projections", () => {
     });
   });
 
-  it("checks a present package-qualified recovery alias without calling it missing", async () => {
-    const family = "OpenClawFoundation.OpenClawGateway_example";
-    const local = "C:\\AliasFixture";
-    const alias = "openclaw-gateway-recovery.exe";
-    const stored = `%LOCALAPPDATA%\\Microsoft\\WindowsApps\\${family}\\${alias}`;
-    const resolved = `C:\\AliasFixture\\Microsoft\\WindowsApps\\${family}\\${alias}`;
-    const label = "\\OpenClaw Gateway Recovery Alias";
-    const access = vi.spyOn(fs, "access").mockImplementation(async (target) => {
-      if (target === resolved) {
-        return;
-      }
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    });
-    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, stored, "")]);
-
-    const result = await findExtraGatewayServices(
-      { ...nativeEnv, LOCALAPPDATA: local },
-      { deep: true },
-    );
-
-    expect(access).toHaveBeenCalledWith(resolved);
-    expect(result).toEqual({ services: [], errors: [] });
-    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
-  });
-
-  it("reports a missing package-qualified side-by-side recovery alias", async () => {
-    const family = "OpenClawFoundation.OpenClawGateway-ab_example";
-    const local = "C:\\AliasFixture";
-    const alias = "openclaw-gateway-recovery-ab.exe";
-    const stored = `%LOCALAPPDATA%\\Microsoft\\WindowsApps\\${family}\\${alias}`;
-    const resolved = `C:\\AliasFixture\\Microsoft\\WindowsApps\\${family}\\${alias}`;
-    const label = "\\OpenClaw Gateway Recovery Alias ab";
-    vi.spyOn(fs, "access").mockImplementation(async (target) => {
-      if (target !== resolved) {
-        throw Object.assign(new Error(`unexpected probe ${String(target)}`), { code: "ENOENT" });
-      }
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    });
-    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, stored, "")]);
-
-    const result = await findExtraGatewayServices(
-      { ...nativeEnv, LOCALAPPDATA: local },
-      { deep: true },
-    );
-
-    expect(result.errors).toEqual([]);
-    expect(result.services).toEqual([
-      expect.objectContaining({
-        label,
-        detail: `missing recovery launcher: ${resolved}`,
-        windowsMissingRecoveryLauncher: resolved,
-      }),
-    ]);
-    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
-      `schtasks /Query /TN "${label}" /V /FO LIST`,
-      `schtasks /Delete /F /TN "${label}"`,
-    ]);
-  });
-
   it.each([
     "openclaw-gateway-recovery.exe",
     ".\\openclaw-gateway-recovery.exe",
+    "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe",
     "%TEMP%\\openclaw-gateway-recovery.exe",
     "%LOCALAPPDATA%\\..\\openclaw-gateway-recovery.exe",
     "\\\\server\\share\\openclaw-gateway-recovery.exe",
@@ -937,7 +876,10 @@ describe("inventory projections", () => {
       .mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
     vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task(label, launcher, "")]);
 
-    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+    const result = await findExtraGatewayServices(
+      { ...nativeEnv, LOCALAPPDATA: "C:\\AliasFixture" },
+      { deep: true },
+    );
 
     expect(access).not.toHaveBeenCalled();
     expect(result.services).toEqual([]);

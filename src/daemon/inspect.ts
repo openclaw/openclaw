@@ -625,9 +625,8 @@ async function scanGatewayServices(
       // The recovery executable has no gateway argv, so command markers skip it.
       // Canonical and profile tasks stay with their existing owner.
       let missingRecoveryLauncher: string | undefined;
-      let offerRecoveryDeletion = false;
       if (!marker && !selected && !isOpenClawGatewayTaskName(name)) {
-        const recovery = await classifyWindowsRecoveryTask(task.actions, { env, deadline });
+        const recovery = await classifyWindowsRecoveryTask(task.actions, { deadline });
         if (recovery.status === "deadline") {
           recordDeadline();
           break;
@@ -635,7 +634,6 @@ async function scanGatewayServices(
         if (recovery.status === "missing") {
           marker = "openclaw";
           missingRecoveryLauncher = recovery.path;
-          offerRecoveryDeletion = recovery.soleAction;
         } else if (recovery.status === "unreadable" || recovery.status === "unresolved") {
           errors.push({
             source: name,
@@ -672,9 +670,6 @@ async function scanGatewayServices(
         ),
         managedGateway: marker === "openclaw" && gateway,
         ...(profile?.kind === "resolved" ? { windowsProfile: profile.profile } : {}),
-        ...(offerRecoveryDeletion && missingRecoveryLauncher
-          ? { windowsMissingRecoveryLauncher: missingRecoveryLauncher }
-          : {}),
       });
     }
     if (expired()) {

@@ -60,7 +60,7 @@ export function registerServiceInspectionHintTests(params: {
     },
   );
 
-  it("labels sole-action recovery deletion as cleanup and keeps inspection failures visible", async () => {
+  it("prints query-only recovery guidance and sanitizes human inspection errors", async () => {
     const { renderGatewayServiceCleanupHints } =
       await vi.importActual<typeof import("../../daemon/inspect.js")>("../../daemon/inspect.js");
     params.renderHints.mockImplementation(renderGatewayServiceCleanupHints);
@@ -79,13 +79,12 @@ export function registerServiceInspectionHintTests(params: {
           scope: "system",
           label,
           detail: "missing recovery launcher: C:\\missing\\openclaw-gateway-recovery.exe",
-          windowsMissingRecoveryLauncher: "C:\\missing\\openclaw-gateway-recovery.exe",
         },
       ],
       extraServiceInspectionErrors: [
         {
-          source: "\\OpenClaw Gateway Unreadable",
-          message: "Gateway recovery launcher could not be inspected.",
+          source: "\\OpenClaw Gateway Unreadable\u001b[0m",
+          message: "Gateway recovery launcher could not be inspected.\n",
         },
       ],
     } as Parameters<typeof printDaemonStatus>[0];
@@ -93,16 +92,12 @@ export function registerServiceInspectionHintTests(params: {
 
     const output = params.output();
     expect(output).toContain(`Inspection hint: schtasks /Query /TN "${label}" /V /FO LIST`);
-    expect(output).toContain(`Cleanup hint: schtasks /Delete /F /TN "${label}"`);
-    expect(output).not.toContain("Inspection hint: schtasks /Delete");
+    expect(output).not.toContain("/Delete");
     expect(params.errors()).toContain("Gateway service inspection failed:");
     expect(params.errors()).toContain(
-      "- \\OpenClaw Gateway Unreadable: Gateway recovery launcher could not be inspected.",
+      "- \\OpenClaw Gateway Unreadable: Gateway recovery launcher could not be inspected.\\n",
     );
-    expect(output).not.toContain('schtasks /Delete /F /TN "\\OpenClaw Gateway Unreadable"');
-    expect(params.errors()).not.toContain(
-      'schtasks /Delete /F /TN "\\OpenClaw Gateway Unreadable"',
-    );
+    expect(params.errors()).not.toContain("\u001b");
 
     printDaemonStatus(status, { json: true, deep: true });
     expect(params.jsonValue()).toMatchObject({
