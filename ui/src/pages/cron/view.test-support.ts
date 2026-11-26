@@ -67,6 +67,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     channelLabels: {},
     runs: [],
     runsState: "ready",
+    runsError: null,
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -92,6 +93,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onRun: () => undefined,
     onRemove: async () => undefined,
     onLoadMoreRuns: () => undefined,
+    onRetryRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };

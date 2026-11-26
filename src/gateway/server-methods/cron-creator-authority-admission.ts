@@ -14,7 +14,6 @@ export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   runId: string;
   callerOrigin: { kind: "local" } | { kind: "unknown" };
   managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   /** Fresh remote user input may create under its existing caller restrictions. */
   callerScopedCreation?: true;
   isCurrent?: () => boolean;
@@ -165,7 +164,6 @@ export function prepareGatewayCronCreatorAuthorityAdmission(
       authority.managementEntitlement,
       authority.isCurrent,
       undefined,
-      authority.requesterOwner,
       authority.callerScopedCreation,
     );
     if (!boundRunScope) {

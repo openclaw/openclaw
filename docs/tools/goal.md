@@ -76,6 +76,7 @@ Status: active
 Objective: get CI green for PR 87469 and push the fix
 Tokens used: 12k
 Token budget: 12k/50k
+Settled automatic turns: 3
 
 Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 ```
@@ -94,6 +95,11 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal block [note]`                                | Mark the goal blocked.                                                   |
 | `/goal blocked [note]`                              | Alias for `block`.                                                       |
 | `/goal clear`                                       | Remove the goal from the session.                                        |
+
+The count increases when an automatic turn settles. An unchanged count can mean
+a worker is running or a turn is queued. The last status note can survive
+a resume. If progress stops, check pending turns, worker results, and any
+actions already taken before resuming the same goal.
 
 Only one goal can exist on a session at a time. Starting a new goal after the
 current goal is complete replaces it with a fresh active goal, a new identity,

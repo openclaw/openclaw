@@ -125,7 +125,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}cron`);
         await editAutomation(page, job.id);
         await page.locator("#cron-name").fill("Renamed garden summary");
-        await page.locator(".cron-form-status__link").filter({ hasText: "Send results:" }).click();
+        const recovery = "Choose an option before saving.";
+        await page
+          .locator(".cron-form-status")
+          .getByRole("button", { name: `Send results: ${recovery}`, exact: true })
+          .click();
         const mode = page.locator("#cron-delivery-mode");
         expect(await mode.evaluate((element) => document.activeElement === element)).toBe(true);
         await page.evaluate(() => document.fonts.ready);
@@ -133,9 +137,7 @@ suite.define(() => {
           await readPickerValue(page.locator("openclaw-select-picker:has(#cron-delivery-mode)")),
         ).toBe("");
         expect(await mode.getAttribute("aria-invalid")).toBe("true");
-        expect(await page.locator("#cron-error-deliveryMode").textContent()).toContain(
-          "openclaw doctor --fix",
-        );
+        expect(await page.locator("#cron-error-deliveryMode").textContent()).toBe(recovery);
         expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
         expect(await gateway.getRequests("cron.update")).toHaveLength(0);
 

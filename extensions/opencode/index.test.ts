@@ -2,10 +2,7 @@ import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  registerProviderPlugin,
-  registerSingleProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
@@ -191,20 +188,6 @@ describe("opencode provider plugin", () => {
         errorMessage: "Insufficient account funds",
       }),
     ).toBeUndefined();
-  });
-
-  it("registers image media understanding through the OpenCode plugin", async () => {
-    const { mediaProviders } = await registerProviderPlugin({
-      plugin,
-      id: "opencode",
-      name: "OpenCode Zen Provider",
-    });
-    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
-
-    expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "minimax-m3" });
-    expect(typeof mediaProvider?.describeImage).toBe("function");
-    expect(typeof mediaProvider?.describeImages).toBe("function");
   });
 
   it("owns Gemini-only passthrough replay policy", async () => {

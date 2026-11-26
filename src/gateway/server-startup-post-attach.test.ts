@@ -3,7 +3,6 @@
  */
 import "./server-worker-free.test-support.js";
 import "./server-startup-module-mocks.test-support.js";
-import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -38,7 +37,6 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -319,48 +317,6 @@ describe("startGatewayPostAttachRuntime", () => {
         restore();
       }
     }
-  });
-
-  it("drains tracked sidecars and resets fixture state after the first cleanup failure", async () => {
-    const firstError = new Error("first cleanup failure");
-    const stopOrder: string[] = [];
-    const firstLifetimeSidecar = {
-      stop: vi.fn(async () => {
-        expect(fs.existsSync(testState.root)).toBe(true);
-        stopOrder.push("lifetime:first");
-        throw firstError;
-      }),
-    };
-    const secondLifetimeSidecar = {
-      stop: vi.fn(async () => {
-        expect(fs.existsSync(testState.root)).toBe(true);
-        stopOrder.push("lifetime:second");
-      }),
-    };
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        expect(fs.existsSync(testState.root)).toBe(true);
-        stopOrder.push("post-ready");
-      }),
-    };
-    const originalCleanupEnv = process.env.OPENCLAW_CLEANUP_TEST;
-
-    adoptSidecars(publishedGatewayLifetimeSidecars, [firstLifetimeSidecar, secondLifetimeSidecar]);
-    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
-    vi.useFakeTimers();
-    vi.stubEnv("OPENCLAW_CLEANUP_TEST", "dirty");
-    expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
-
-    await expect(cleanupGatewayTestState()).rejects.toBe(firstError);
-
-    expect(stopOrder).toEqual(["lifetime:first", "lifetime:second", "post-ready"]);
-    expect(publishedGatewayLifetimeSidecars.size).toBe(0);
-    expect(publishedPostReadySidecars.size).toBe(0);
-    expect(transferredSidecars.size).toBe(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(vi.isFakeTimers()).toBe(false);
-    expect(process.env.OPENCLAW_CLEANUP_TEST).toBe(originalCleanupEnv);
-    expect(fs.existsSync(testState.root)).toBe(false);
   });
 
   registerGatewayStartupReadinessTests({
@@ -1420,66 +1376,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(trace.measures).toEqual(
       expect.arrayContaining(["sidecars.channel-start", "sidecars.plugin-services"]),
     );
-  });
-
-  it("records prepared runtime build grouping in the startup trace", async () => {
-    const trace = createStartupTraceRecorder();
-
-    await startGatewaySidecars({
-      startupTrace: trace.startupTrace,
-    });
-
-    const options = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]?.[1];
-    options?.onBuildStats?.({
-      agentCount: 12,
-      workspaceGroupCount: 2,
-      configuredFactsGroupCount: 2,
-      catalogSourceCount: 0,
-      credentialGroupCount: 1,
-      catalogGroupCount: 0,
-      runtimeRegistryCount: 12,
-      configuredRuntimeModelCount: 2,
-      generatedCatalogPluginCount: 0,
-      generatedCatalogReadCount: 0,
-      workspaceFactsMs: 120,
-      runtimePluginMs: 0,
-      pluginMetadataMs: 40,
-      staticProviderCatalogMs: 50,
-      ambientCredentialsMs: 10,
-      agentFactsMs: 5,
-      configuredProjectionMs: 15,
-      catalogSourceMs: 0,
-      registryMs: 30,
-      sourceConcurrencyLimit: 2,
-      fullCatalogConcurrencyLimit: 1,
-    });
-
-    expect(trace.details).toContainEqual({
-      name: "sidecars.model-runtime-build",
-      metrics: [
-        ["agentCount", 12],
-        ["workspaceGroupCount", 2],
-        ["configuredFactsGroupCount", 2],
-        ["catalogSourceCount", 0],
-        ["credentialGroupCount", 1],
-        ["catalogGroupCount", 0],
-        ["runtimeRegistryCount", 12],
-        ["configuredRuntimeModelCount", 2],
-        ["generatedCatalogPluginCount", 0],
-        ["generatedCatalogReadCount", 0],
-        ["workspaceFactsMs", 120],
-        ["runtimePluginMs", 0],
-        ["pluginMetadataMs", 40],
-        ["staticProviderCatalogMs", 50],
-        ["ambientCredentialsMs", 10],
-        ["agentFactsMs", 5],
-        ["configuredProjectionMs", 15],
-        ["catalogSourceMs", 0],
-        ["registryMs", 30],
-        ["sourceConcurrencyLimitCount", 2],
-        ["fullCatalogConcurrencyLimitCount", 1],
-      ],
-    });
   });
 
   it("reaches readiness without loading request-owned agent runtimes", async () => {

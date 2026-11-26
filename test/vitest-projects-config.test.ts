@@ -54,7 +54,7 @@ import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts"
 const defaultPool = process.platform === "win32" ? "forks" : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = `chat-metadata-runtime.cache agent
-  agent.followup-owner agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
+  agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
   environments.pairing-snapshot health.owner-routing sessions.send-yield-resume
   system-agent-nested-inference.integration system-agent-setup-control-ui transcripts
   users-preferences users-role.worker usage usage.sessions-usage`

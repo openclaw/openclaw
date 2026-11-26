@@ -1,11 +1,10 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { formatCliCommand } from "../command-format.js";
 import { gatewayAction } from "./gateway-action.js";
 
 export function addGatewayLockRecoveryCommand(gateway: Command): void {
   gateway
-    .command("recover-lock")
+    .command("recover-lock", { hidden: true })
     .description("Inspect or explicitly recover an unchanged Gateway state lock")
     .option("--confirm <fingerprint>", "Recover only the lock record shown by a prior inspection")
     .option("--json", "Output JSON", false)
@@ -23,15 +22,11 @@ export function addGatewayLockRecoveryCommand(gateway: Command): void {
           return;
         }
         const inspection = await inspectGatewayLockRecovery();
-        const command = formatCliCommand(
-          `openclaw gateway recover-lock --confirm ${inspection.confirmation}`,
-        );
         if (opts.json) {
           defaultRuntime.writeJson({
             present: inspection.present,
             holders: inspection.holders,
             confirmation: inspection.confirmation,
-            command,
           });
           return;
         }
@@ -42,11 +37,8 @@ export function addGatewayLockRecoveryCommand(gateway: Command): void {
         for (const holder of inspection.holders) {
           defaultRuntime.log(holder);
         }
-        defaultRuntime.log(
-          "Stop the recorded holder through its service manager or container first. " +
-            "If you have confirmed it stopped, recover exactly these unchanged records with:",
-        );
-        defaultRuntime.log(command);
+        defaultRuntime.log("Independently verify that the recorded holder has stopped.");
+        defaultRuntime.log(`Confirmation fingerprint: ${inspection.confirmation}`);
       }, "Gateway lock recovery failed"),
     );
 }

@@ -781,7 +781,9 @@
   }
 }
 
-.memory-page__panel {
+/* The stacked tabs and the settings body already inset their content. */
+.memory-page > .memory-page__panel {
+  margin-block-start: 0;
   display: grid;
   gap: 14px;
 }

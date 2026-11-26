@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatProps, ChatViewFrame } from "./chat-view-frame.ts";
+import { MessageImages } from "./components/chat-message-deferred.tsx";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 
 export type ChatTranscriptInput = {
@@ -20,32 +21,39 @@ export function ChatTranscript(input: ChatTranscriptInput) {
     (input.frame.pendingInputs.page.nextBefore !== undefined ||
       input.frame.pendingInputs.before !== undefined);
   return (
-    <>
+    <ChatThread
+      props={input.frame.threadProps}
+      transcript={input.props.transcript}
+      bindViewport={input.bindTranscriptViewport}
+      historySupplement={
+        hasSavedInputNavigation()
+          ? {
+              content: savedInputNavigation,
+              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
+            }
+          : undefined
+      }
+    >
       <Show when={input.props.catalogPreviewImage} keyed>
-        {(image) => {
-          const src = "data:image/png;base64," + image.data;
-          return (
-            <a class="chat-catalog-image" href={src} download={image.name}>
-              <img src={src} alt="" />
-              <span>{image.name}</span>
-            </a>
-          );
-        }}
+        {(image) => (
+          <figure class="chat-thread-inner" aria-label={image.name}>
+            <MessageImages
+              images={[
+                {
+                  url: `data:image/png;base64,${image.data}`,
+                  fileName: image.name,
+                  mimeType: image.mimeType,
+                },
+              ]}
+              options={{
+                onRequestOpenImage: input.frame.threadProps.onRequestOpenImage,
+                onOpenImage: input.frame.threadProps.onOpenImage,
+              }}
+            />
+          </figure>
+        )}
       </Show>
-      <ChatThread
-        props={input.frame.threadProps}
-        transcript={input.props.transcript}
-        bindViewport={input.bindTranscriptViewport}
-        historySupplement={
-          hasSavedInputNavigation()
-            ? {
-                content: savedInputNavigation,
-                height: SAVED_INPUT_HISTORY_HEIGHT_PX,
-              }
-            : undefined
-        }
-      />
-    </>
+    </ChatThread>
   );
 }
 

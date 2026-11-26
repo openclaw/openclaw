@@ -18,6 +18,7 @@ import type { ChatPageHost } from "../../ui/src/pages/chat/chat-state-host.ts";
 import { selectedChatSessionRow } from "../../ui/src/pages/chat/chat-state-route.ts";
 import type { resolveSessionWorkspaceDiff as ResolveDiff } from "../../ui/src/pages/chat/components/chat-session-workspace-diff.ts";
 import type { SessionWorkspaceHost } from "../../ui/src/pages/chat/components/chat-session-workspace-types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -112,12 +113,7 @@ try {
   await nextTurn();
   requests = unavailable = 0;
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const before = process.threadCpuUsage();
   const started = performance.now();

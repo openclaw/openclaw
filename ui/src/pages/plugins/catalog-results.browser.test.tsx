@@ -348,7 +348,24 @@ it.each([263, 362])(
       const text = identity.getBoundingClientRect();
       const button = action.getBoundingClientRect();
       expect(text.width).toBeGreaterThan(0);
-      expect(text.right).toBeLessThanOrEqual(button.left);
+      const name = find("h3", card);
+      const publisher = find(".plugin-card-author", card);
+      for (const field of [name, publisher]) {
+        const glyphs = document.createRange();
+        glyphs.selectNodeContents(field);
+        expect(new Set(Array.from(glyphs.getClientRects(), (fragment) => fragment.top)).size).toBe(
+          1,
+        );
+        expect(field.getBoundingClientRect().right).toBeLessThanOrEqual(text.right + 1);
+      }
+      expect(name.textContent).toBe(entry.catalog.name);
+      expect(publisher.textContent).toBe("@" + entry.catalog.author);
+      // A large progress button moves to the next line rather than reducing the name to a column of letters.
+      if (button.top < text.bottom) {
+        expect(text.right).toBeLessThanOrEqual(button.left);
+      } else {
+        expect(text.width).toBeGreaterThan(120);
+      }
       expect(button.right).toBeLessThanOrEqual(card.getBoundingClientRect().right);
       expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
       expect(action.disabled).toBe(false);

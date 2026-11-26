@@ -28,7 +28,7 @@ for (const [name, platform, stdout, stderr, expected] of [
     "darwin",
     "cannot verify Gateway ownership; holder 4242 at synthetic-private-host",
     undefined,
-    expect.stringMatching(/Gateway ownership could not be verified.*openclaw gateway recover-lock/),
+    expect.stringMatching(/Gateway ownership could not be verified.*Stop the recorded Gateway/),
   ],
   ["stdout FIFO", "linux", FIFO, bindError, bindError],
   ["stderr FIFO", "linux", blocked, FIFO, blocked],

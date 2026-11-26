@@ -480,7 +480,9 @@ it.for([
               runAbort.signal,
             ),
           );
-          // Code Mode keeps the yielding call direct, as it does sessions_yield.
+          // Once the session has called it by name, Code Mode keeps the yielding call direct.
+          codeMode.catalogRef.loadsOnDemandTools = true;
+          codeMode.catalogRef.promotedToolNames = new Set(["github_publish"]);
           const surface = applyCodeModeCatalog({
             tools: [...codeMode.tools, wrapped],
             config: codeMode.config,

@@ -8,6 +8,10 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import {
+  profileMcpRequesterScope,
+  readWebchatMcpRequester,
+} from "../../agent-bundle-mcp-webchat-requester.js";
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
@@ -159,6 +163,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
+  const webchatRequester = bundleMcpEnabled ? readWebchatMcpRequester(params.attempt) : undefined;
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
@@ -170,18 +175,18 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
-        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent runs
-        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
         requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        ...(webchatRequester && profileMcpRequesterScope(webchatRequester)),
+        assertRequesterCurrent: webchatRequester?.assertCurrent,
       })
     : undefined;
   phases.mark("attempt.bundle-tools.mcp-materialize");
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
+        assertRequesterCurrent: webchatRequester?.assertCurrent,
         agentId: params.setup.sessionAgentId,
         operatorConnect: params.attempt.config
           ? {

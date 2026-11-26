@@ -24,6 +24,8 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type QueuedAgentRunParams = {
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
+  /** Server-verified human principal for personal MCP; not a transport sender. */
+  mcpRequesterProfileId?: string;
   conversationId?: string | null;
   messageThreadId?: string | number;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;

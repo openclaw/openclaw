@@ -44,6 +44,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "kimi",
   "kiro",
   "litellm",
+  "llama",
   "llamacpp",
   "llmproxy",
   "lmstudio",
@@ -100,6 +101,7 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   "github-copilot": "copilot",
   kilocode: "kilo",
   "kimi-coding": "kimi",
+  "llama-app": "llama",
   "llama-cpp": "llamacpp",
   "microsoft-foundry": "microsoft",
   "minimax-portal": "minimax",
@@ -144,6 +146,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   kie: "Kie AI",
   "liquid-ai": "Liquid AI",
   litellm: "LiteLLM",
+  "llama-app": "Llama",
   "llama-cpp": "llama.cpp",
   lmstudio: "LM Studio",
   longcat: "LongCat",
@@ -171,7 +174,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
 const ACP_HARNESS_PROVIDER = /^acp-(.+)$/u;
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */
-export function formatRawProviderLabel(provider: string): string {
+function formatRawProviderLabel(provider: string): string {
   return provider
     .split(/[-_]+/u)
     .filter(Boolean)

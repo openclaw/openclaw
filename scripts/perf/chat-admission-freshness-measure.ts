@@ -25,6 +25,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -240,12 +241,7 @@ try {
     consumed = 0;
     globalThis.gc();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const hostLoadBefore = loadavg();
     const threadStart = process.threadCpuUsage();

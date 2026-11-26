@@ -35,7 +35,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
-import * as schema from "./openclaw-agent-db-schema.js";
+import * as schema from "./openclaw-agent-db-schema-admission.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,

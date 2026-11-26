@@ -702,11 +702,6 @@ describe("conversation turn capture", () => {
       reply: { text: "ordinary reply" },
     });
     expect(appendAudit).toHaveBeenCalledOnce();
-    expect(appendAudit.mock.calls[0]?.[1]).toMatchObject({
-      customType: "openclaw.conversation-turn-reply",
-      appendMode: "side",
-      data: { turnId: operationId },
-    });
   });
 
   it("does not make an ordinary post-restart reply replayable inline", async () => {

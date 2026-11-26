@@ -13,7 +13,7 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { getChatPendingInputs, mutateChatPendingInput } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -32,6 +32,16 @@ import type { SessionSnapshotInvalidationReason } from "./session-snapshot-inval
 
 export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
   const view = getChatPendingInputs(state);
+  const cancelled = view?.page.items.find(
+    (item) =>
+      `pending-input:${item.id}` === id &&
+      item.state === "cancelled" &&
+      item.endCause === "revoked",
+  );
+  if (cancelled) {
+    void mutateChatPendingInput(state, { kind: "dismiss", inputId: cancelled.id });
+    return true;
+  }
   const input = view?.queuedInputs.find(
     (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
   );

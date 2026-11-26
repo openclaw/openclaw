@@ -6,8 +6,10 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type {
@@ -161,6 +163,11 @@ export function applyChatPendingInputs(
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
+  if (view?.ownOnly) {
+    view.ownOnly = undefined;
+    view.request = undefined;
+    view.before = undefined;
+  }
   const queuedInputs = reconcileQueuedInputs(
     view?.queuedInputs ?? [],
     displayPage,
@@ -298,5 +305,41 @@ export async function mutateChatPendingInput(
       }
       chatRunPresentation(state).publish();
     }
+  }
+}
+
+/** Membership loss cannot take away the author’s own unsent text. */
+/** Admins read every session; only a non-admin may lose history yet keep its revoked inputs. */
+export function mayRestoreOwnCancelledInputs(state: ChatState): boolean {
+  return (
+    !hasOperatorAdminAccess(state.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(state, "chat.pendingInputs.own") === true
+  );
+}
+
+export async function loadOwnCancelledInputs(
+  state: ChatState,
+  ownsRequest = () => true,
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const sessionId = state.currentSessionId;
+  const agentId = resolveUiSelectedSessionAgentId(state);
+  const current = () =>
+    ownsRequest() &&
+    connectionIsCurrent() &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === sessionId &&
+    resolveUiSelectedSessionAgentId(state) === agentId;
+  try {
+    const { restoreOwnCancelledInputs } = await import("./chat-pending-inputs.runtime.ts");
+    if (current()) {
+      await restoreOwnCancelledInputs(state, current);
+    }
+  } catch {
+    // The caller still publishes its history failure; restoration is best effort.
   }
 }
