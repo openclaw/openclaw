@@ -170,6 +170,10 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   let classificationResult: Awaited<ReturnType<typeof classifyActiveMemoryWorkspacePaths>>;
   try {
     const access = getAgentWorkspaceAccess(params.workspaceDir);
+    const readSources = candidates.map((file, index) => ({
+      relativePath: relativePaths[index]!,
+      canonicalRelativePath: getWorkspaceFileSourceRelativePath(file),
+    }));
     classificationResult = await classifyActiveMemoryWorkspacePaths({
       cfg: params.config,
       agentId,
@@ -181,10 +185,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
           return hash ? [[relativePaths[index]!, hash]] : [];
         }),
       ),
-      readSources: candidates.map((file, index) => ({
-        relativePath: relativePaths[index]!,
-        canonicalRelativePath: getWorkspaceFileSourceRelativePath(file),
-      })),
+      ...(access ? { readSources } : { localReadSources: readSources }),
     });
     if (access && getAgentWorkspaceAccess(params.workspaceDir) !== access) {
       throw new Error("Workspace access changed during memory classification");

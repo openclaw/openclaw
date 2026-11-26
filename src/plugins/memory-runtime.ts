@@ -402,7 +402,11 @@ export async function getActiveMemoryProviderCore(
 
 /** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
 export async function classifyActiveMemoryWorkspacePaths(
-  params: WorkspaceMemoryPathClassification,
+  params: WorkspaceMemoryPathClassification & {
+    // Pin local reads for source-aware classifiers and host fallback without
+    // making an existing local classifier advertise the remote capability.
+    localReadSources?: WorkspaceMemoryPathClassification["readSources"];
+  },
 ): Promise<
   | { status: "unavailable" }
   | { status: "unsupported" }
@@ -415,6 +419,8 @@ export async function classifyActiveMemoryWorkspacePaths(
   if (!owner?.runtime) {
     return { status: "unavailable" };
   }
+  const { localReadSources, ...pluginParams } = params;
+  const readSources = params.readSources ?? localReadSources;
   if (
     !owner.runtime.classifyWorkspaceMemoryPaths ||
     (params.readSources !== undefined && !owner.runtime.supportsWorkspaceMemoryReadSources)
@@ -427,15 +433,15 @@ export async function classifyActiveMemoryWorkspacePaths(
       resolveRecordedMemoryArtifactOrigin,
     } = await import("../memory/memory-artifact-provenance.js");
     const workspaceRoot =
-      params.readSources === undefined
+      readSources === undefined
         ? await fs.realpath(params.workspaceDir).catch(() => undefined)
         : undefined;
     const classifications = await Promise.all(
       params.relativePaths.map(async (relativePath) => {
-        let sourcePath = params.readSources?.find(
+        let sourcePath = readSources?.find(
           (source) => source.relativePath === relativePath,
         )?.canonicalRelativePath;
-        if (params.readSources === undefined && workspaceRoot) {
+        if (readSources === undefined && workspaceRoot) {
           const filePath = await fs
             .realpath(path.resolve(params.workspaceDir, relativePath))
             .catch(() => undefined);
@@ -466,7 +472,10 @@ export async function classifyActiveMemoryWorkspacePaths(
     );
     return { status: "classified", classifications };
   }
-  const classifications = await owner.runtime.classifyWorkspaceMemoryPaths(params);
+  const classifications = await owner.runtime.classifyWorkspaceMemoryPaths({
+    ...pluginParams,
+    ...(owner.runtime.supportsWorkspaceMemoryReadSources && readSources ? { readSources } : {}),
+  });
   return { status: "classified", classifications };
 }
 

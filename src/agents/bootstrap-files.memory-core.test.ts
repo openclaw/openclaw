@@ -164,6 +164,34 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
   resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
 });
 
+it("honors a selected local plugin's quarantine without pinned-source support", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const workspaceDir = state.statePath("workspace");
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(memoryPath, "Memory quarantined by the selected plugin");
+    const classifyWorkspaceMemoryPaths = vi.fn(async () => [
+      { relativePath: "MEMORY.md", originClass: "untrusted" },
+    ]);
+    registerMemoryCapability("memory-fixture", {
+      runtime: { ...noSearchRuntime(), classifyWorkspaceMemoryPaths },
+    });
+    const { contextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        plugins: { slots: { memory: "memory-fixture" } },
+        agents: { entries: { main: { workspace: workspaceDir } } },
+      },
+      agentId: "main",
+      sessionKey: "agent:main:plugin-quarantine",
+    });
+    expect(classifyWorkspaceMemoryPaths).toHaveBeenCalledOnce();
+    expect(classifyWorkspaceMemoryPaths).toHaveBeenCalledWith(
+      expect.not.objectContaining({ readSources: expect.anything() }),
+    );
+    expect(contextFiles.some((file) => file.path === memoryPath)).toBe(false);
+  }));
+
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 
 it.each(["agent", "worktree", "roster-less worktree"] as const)(
