@@ -76,7 +76,7 @@ type TalkViewProps = {
   agentSettings?: JSX.Element;
   splitVoice?: (catalog: () => TalkCatalogState) => JSX.Element;
   liveTuning?: JSX.Element;
-  onModeChange?: (mode: "realtime" | "stt-tts" | "transcription") => void;
+  onModeChange?: (mode: "realtime" | "stt-tts") => void;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
@@ -486,9 +486,6 @@ export function Talk(props: TalkViewProps) {
   const [standalone, setChimes] = createSignal(loadSettings());
   const chimes = () => (theme ? theme.preferences.read() : standalone());
   const splitMode = createMemo(() => props.selection.mode === "stt-tts");
-  // Transcription-only has no assistant voice: it shows the speech-to-text cards alone.
-  const transcriptionOnly = createMemo(() => props.selection.mode === "transcription");
-  const sttLayout = createMemo(() => splitMode() || transcriptionOnly());
   const updateChime = (
     key: "talkChimeStart" | "talkChimeEnd" | "talkChimeReply",
     enabled: boolean,
@@ -506,21 +503,19 @@ export function Talk(props: TalkViewProps) {
     </Errored>
   );
   const readinessFor = (catalog: TalkCatalogState) =>
-    sttLayout() ? (
+    splitMode() ? (
       <>
         <ReadinessRow
           title={t("talkPage.transcription.title")}
           catalog={catalog}
           group={(ready) => ready.transcription}
         />
-        <Show when={!transcriptionOnly()}>
-          <ReadinessRow
-            title={t("talkPage.revamp.voice")}
-            catalog={catalog}
-            generalRoute
-            group={(ready) => ready.speech}
-          />
-        </Show>
+        <ReadinessRow
+          title={t("talkPage.revamp.voice")}
+          catalog={catalog}
+          generalRoute
+          group={(ready) => ready.speech}
+        />
       </>
     ) : (
       <ReadinessRow
@@ -566,8 +561,7 @@ export function Talk(props: TalkViewProps) {
       </Errored>
     );
   const voiceSection = () =>
-    props.splitVoice &&
-    !transcriptionOnly() && (
+    props.splitVoice && (
       <Errored fallback={() => props.splitVoice!(() => ({ kind: "unavailable" }))}>
         <Loading on={props.catalogScope} fallback={props.splitVoice(() => ({ kind: "loading" }))}>
           {props.splitVoice(() => props.catalog)}
@@ -593,15 +587,14 @@ export function Talk(props: TalkViewProps) {
         <SettingsSection title={t("talkPage.revamp.modeSection")}>
           <SettingsSelectRow
             title={t("talkPage.revamp.mode")}
-            value={props.selection.mode ?? "realtime"}
+            value={splitMode() ? "stt-tts" : "realtime"}
             options={[
               { value: "realtime", label: t("talkPage.revamp.live") },
               { value: "stt-tts", label: t("talkPage.revamp.split") },
-              { value: "transcription", label: t("talkPage.revamp.transcription") },
             ]}
             disabled={props.configBusy || !props.onModeChange}
             onChange={(mode) => {
-              if (mode === "realtime" || mode === "stt-tts" || mode === "transcription") {
+              if (mode === "realtime" || mode === "stt-tts") {
                 props.onModeChange?.(mode);
               }
             }}
@@ -660,14 +653,14 @@ export function Talk(props: TalkViewProps) {
             onRetry={props.voiceWake.onRetry}
           />
         )}
-        <Show when={sttLayout()} fallback={liveSettings()}>
+        <Show when={splitMode()} fallback={liveSettings()}>
           {splitSettings(true)}
         </Show>
         <SettingsDisclosure
           sections
-          title={t(sttLayout() ? "talkPage.voiceSection.title" : "talkPage.revamp.split")}
+          title={t(splitMode() ? "talkPage.voiceSection.title" : "talkPage.revamp.split")}
         >
-          <Show when={sttLayout()} fallback={splitSettings(false)}>
+          <Show when={splitMode()} fallback={splitSettings(false)}>
             {liveVoiceSettings()}
           </Show>
         </SettingsDisclosure>

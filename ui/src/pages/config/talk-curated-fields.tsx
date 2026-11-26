@@ -146,7 +146,7 @@ export function TalkAgentSettings(props: FieldsProps) {
   return (
     <SettingsSection title={t("talkPage.revamp.agent")}>
       <TalkAgentPicker {...props} />
-      <Show when={realtime()?.mode !== "stt-tts" && realtime()?.mode !== "transcription"}>
+      <Show when={realtime()?.mode !== "stt-tts"}>
         <TalkChoice
           {...props}
           title={t("talkPage.revamp.thinking")}

@@ -438,7 +438,6 @@ const enSettings = {
       mode: "Mode",
       live: "Live",
       split: "Speech to text + voice",
-      transcription: "Transcription",
     },
     chimesSection: {
       title: "Status chimes",

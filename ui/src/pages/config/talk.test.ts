@@ -985,19 +985,19 @@ describe("Talk settings page revamp", () => {
     );
   });
 
-  it("keeps transcription-only mode selectable from any mode", async () => {
+  it("offers only Live and speech-to-text plus voice for a saved legacy mode", async () => {
     const { page, runtimeConfig } = await readyTalk();
+    page.configObject = { talk: { realtime: { mode: "transcription" } } };
     const mode = () =>
       [...page.querySelectorAll("select")].find(
         (select) => select.getAttribute("aria-label") === t("talkPage.revamp.mode"),
       )!;
-    expect([...mode().options].map((option) => option.value)).toContain("transcription");
-    mode().value = "transcription";
+    await waitForSolid(() => expect(mode().value).toBe("realtime"));
+    expect([...mode().options].map((option) => option.value)).toEqual(["realtime", "stt-tts"]);
+    expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+    mode().value = "stt-tts";
     mode().dispatchEvent(new Event("change", { bubbles: true }));
-    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
-      ["talk", "realtime", "mode"],
-      "transcription",
-    );
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "realtime", "mode"], "stt-tts");
   });
 
   it("shows the general text-to-speech route when no Talk speech provider is chosen", async () => {
