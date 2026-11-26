@@ -159,6 +159,17 @@ the target workspace.
 The selected token also performs the conversation lookups for the read-target check.
 Channel and DM policy apply the same way for every choice.
 
+### Read author names
+
+`read` adds each author's Slack profile names to their messages as
+`user_profile` (`display_name`, `real_name`, `name`), using one `users.info` call
+per distinct author with the selected token. `user` stays the author's identity.
+Names are cached per account, token, and workspace in the same bounded cache
+inbound messages use, so later reads reuse them until the Slack monitor restarts.
+This needs `users:read`, which the default manifest includes. When a lookup fails
+(missing scope, deactivated user, rate limit), that author's messages keep only
+`user` and the read still succeeds. Mentions in `text` stay as `<@U…>`.
+
 ## Live policy changes
 
 DM access, allowlists, group policy, mention rules, and existing channel policy fields

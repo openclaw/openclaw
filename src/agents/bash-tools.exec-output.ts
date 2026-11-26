@@ -2,6 +2,7 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
+import { isTimeoutReason } from "../process/supervisor/cancellation-policy.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
@@ -276,6 +277,20 @@ export function buildExecExitOutcome(params: {
     oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     message: reason,
     reason: joinExecFailureOutput(params.aggregated, reason),
+  };
+}
+
+/** A run the supervisor stopped whose exit was never observed, e.g. its cleanup expired. */
+export function buildStoppedRunExit(reason: TerminationReason, durationMs: number): RunExit {
+  return {
+    reason,
+    exitCode: null,
+    exitSignal: null,
+    durationMs,
+    stdout: "",
+    stderr: "",
+    timedOut: isTimeoutReason(reason),
+    noOutputTimedOut: reason === "no-output-timeout",
   };
 }
 

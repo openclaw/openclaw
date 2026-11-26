@@ -2,9 +2,11 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
@@ -24,6 +26,7 @@ type CronRunsSectionProps = Pick<
   CronProps,
   | "runs"
   | "runsState"
+  | "runsError"
   | "highlightedRunId"
   | "runsHasMore"
   | "runsLoadingMore"
@@ -32,7 +35,7 @@ type CronRunsSectionProps = Pick<
   | "runsQuery"
   | "runsSortDir"
   | "onLoadMoreRuns"
-  | "onRefresh"
+  | "onRetryRuns"
   | "onRunsFiltersChange"
   | "onRunMount"
 > & {
@@ -255,6 +258,7 @@ export function RunsSection(
     props.runsDeliveryStatuses.length > 0;
   const sortLabel = () =>
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
+  const failure = () => (props.runsState === "failed" ? props.runsError : null);
   return (
     <div class="cron-runs" aria-busy={props.runsState === "pending" ? "true" : "false"}>
       {props.conditionActivity ? (
@@ -366,11 +370,6 @@ export function RunsSection(
           />
         </div>
       </div>
-      {props.runsState === "failed" ? (
-        <button class="btn btn--sm" onClick={() => void props.onRefresh()}>
-          {t("common.retry")}
-        </button>
-      ) : undefined}
       {runs().length === 0 ? (
         props.runsState === "pending" ? (
           <div
@@ -412,7 +411,26 @@ export function RunsSection(
           </For>
         </div>
       )}
-      {props.runsHasMore ? (
+      <Show when={failure()}>
+        {(error) => (
+          <InlineAlert
+            tone="danger"
+            title={t(
+              "cron.runs.failure." + (error().reason === "blocked" ? "load" : error().reason),
+            )}
+            action={
+              error().reason === "load" || error().reason === "more" ? (
+                <button type="button" class="btn btn--sm" onClick={() => props.onRetryRuns()}>
+                  {t("common.retry")}
+                </button>
+              ) : undefined
+            }
+          >
+            <ErrorDetails error={error().detail || null} />
+          </InlineAlert>
+        )}
+      </Show>
+      {props.runsHasMore && props.runsState !== "failed" ? (
         <button
           class="btn btn--sm cron-load-more"
           disabled={props.runsLoadingMore}

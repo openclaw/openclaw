@@ -108,16 +108,33 @@ suite.define(() => {
         const pane = page.locator("openclaw-portals-page[embedded]");
         const title = pane.getByText("Device ready. Waiting for your app…", { exact: true });
         await title.waitFor();
-        const [host, message] = await Promise.all([pane.boundingBox(), title.boundingBox()]);
-        if (!host || !message) {
-          throw new Error("Missing portal status bounds");
-        }
-        expect(
-          Math.abs(message.x + message.width / 2 - host.x - host.width / 2),
-        ).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(message.y + message.height / 2 - host.y - host.height / 2),
-        ).toBeLessThanOrEqual(1);
+        // The opening sheet can move between separate browser protocol calls.
+        const offset = await title.evaluate((message) => {
+          const host = message.closest("openclaw-portals-page[embedded]");
+          if (!host) {
+            throw new Error("Missing portal status bounds");
+          }
+          const hostBounds = host.getBoundingClientRect();
+          const messageBounds = message.getBoundingClientRect();
+          if (
+            !hostBounds.width ||
+            !hostBounds.height ||
+            !messageBounds.width ||
+            !messageBounds.height
+          ) {
+            throw new Error("Missing portal status bounds");
+          }
+          return {
+            x: Math.abs(
+              messageBounds.x + messageBounds.width / 2 - hostBounds.x - hostBounds.width / 2,
+            ),
+            y: Math.abs(
+              messageBounds.y + messageBounds.height / 2 - hostBounds.y - hostBounds.height / 2,
+            ),
+          };
+        });
+        expect(offset.x).toBeLessThanOrEqual(1);
+        expect(offset.y).toBeLessThanOrEqual(1);
       },
     );
   });

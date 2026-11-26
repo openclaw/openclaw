@@ -134,6 +134,8 @@ export function createSessionEventRefreshCoordinator({
   const reset = () => {
     absorb();
     acceptWindowExpiry(null);
+    // A consumer wake can exist without a receipt for acceptance to retire.
+    windowWake = undefined;
     windowRead = undefined;
     pending = null;
     nextAllowed = 0;
@@ -176,6 +178,12 @@ export function createSessionEventRefreshCoordinator({
           arm(false);
         }
       };
+    },
+    /** A consumer's Gateway deadline outside this window's receipt; shares the cutoff's read and retry. */
+    wake() {
+      windowWake ??= { queued: true, retryAt: null, dueAt: monotonicNow() };
+      windowWake.queued = true;
+      arm(false);
     },
     scheduleFallback() {
       fallback ??= setTimeout(() => {

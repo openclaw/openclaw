@@ -45,13 +45,9 @@ const en = {
     "The {role} role has administrator access. Administrators can change Gateway settings, manage devices and approvals, and access connected services. Only invite someone you trust with this claw.",
   adminInvite: "Confirm administrator invite",
   cancel: "Cancel",
-  changeRole: "Change role",
-  saveRole: "Save role",
-  saveAdminRole: "Confirm administrator role",
-  roleChanged: "Role changed. Their devices reconnect with the new access.",
   blocked: "Blocked",
   undefinedRole:
-    "The role {role} is not defined on this claw. Choose another role to restore access.",
+    "The role {role} is not defined on this claw. An administrator can assign another role in Settings → Team → Roles to restore access.",
   yourRole: "Your role: {role}",
 };
 

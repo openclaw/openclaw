@@ -19,7 +19,7 @@ export type ConfiguredRole = Pick<GatewayOperatorRoleDefinition, "agents" | "pro
  * may still use public GitHub repositories through the Gateway's fallback; these
  * values describe explicit shares and full access, not that fallback.
  */
-export type RoleAccessReason = "admin" | "write" | "all" | "no-sessions" | "agents" | null;
+type RoleAccessReason = "admin" | "write" | "all" | "no-sessions" | "agents" | null;
 
 export type RoleProjectAccess = { role: string; enabled: boolean; reason: RoleAccessReason };
 

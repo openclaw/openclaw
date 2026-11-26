@@ -356,17 +356,6 @@ export function clonePostgresUpgrade(
   );
 }
 
-export function validatePostgresUpgrade(
-  anchorPath: string,
-  config: OpenClawConfig,
-  expectedVersion: number,
-) {
-  return runBackupTask<void>(
-    { operation: "validate-upgrade", params: { anchorPath, config, expectedVersion } },
-    () => {},
-  );
-}
-
 /** Keep the preserved anchor when this operation refuses or server cleanup fails. */
 export function retirePostgresUpgrade(
   anchorPath: string,

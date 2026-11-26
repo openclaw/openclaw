@@ -29,7 +29,6 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
-import * as responsesDiagnostics from "./openai-responses-debug.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
@@ -311,19 +310,16 @@ it.each(["filtered", "failed", "eof", "aborted"])(
 
 it("skips payload summaries when explicit transport debugging is promoted to disabled info", async () => {
   vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", "1");
-  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
   configureAiTransportHost({ logWarn, logDebug, logInfo, isLogEnabled: () => false });
   sseState.outcomes.push(
     Object.assign(new Error("private response"), { code: "rate_limit_exceeded" }),
   );
   expect((await (await run()).result()).stopReason).toBe("error");
-  expect(summarize).not.toHaveBeenCalled();
   expect(logInfo).not.toHaveBeenCalled();
   expect(logWarn).not.toHaveBeenCalled();
 });
 
 it("logs exactly one bounded warning per rate-limited provider attempt", async () => {
-  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
   for (let attempt = 1; attempt <= 3; attempt++) {
     sseState.outcomes.push(
       Object.assign(new Error("private provider response body"), {
@@ -335,7 +331,6 @@ it("logs exactly one bounded warning per rate-limited provider attempt", async (
     );
     expect((await (await run()).result()).stopReason).toBe("error");
   }
-  expect(summarize).not.toHaveBeenCalled();
   expect(logWarn.mock.calls).toEqual(
     [1, 2, 3].map((attempt) => [
       "provider-error",

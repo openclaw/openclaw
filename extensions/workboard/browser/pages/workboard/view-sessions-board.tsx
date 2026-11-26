@@ -222,24 +222,6 @@ export function SessionsBoard(props: SessionsBoardProps) {
         {!state().sessionsLoaded && state().loading ? (
           <div role="status">{t("workboard.sessionsBoard.loading")}</div>
         ) : null}
-        {state().nextCursor ? (
-          <div class="workboard-pagination" role="status">
-            <span>
-              {t("workboard.sessionsBoard.partial", {
-                count: String(state().loaded),
-                total: String(state().total),
-              })}
-            </span>
-            <button
-              class="btn"
-              type="button"
-              disabled={state().loading || !state().canLoad}
-              onClick={() => void props.controller.loadMore()}
-            >
-              {t("workboard.sessionsBoard.loadMore")}
-            </button>
-          </div>
-        ) : null}
         <div class="workboard-board-viewport">
           <div
             ref={boardScrollEdgesRef()}
@@ -367,6 +349,24 @@ export function SessionsBoard(props: SessionsBoardProps) {
             </For>
           </div>
         </div>
+        {state().nextCursor ? (
+          <div class="workboard-sessions__pagination" role="status">
+            <span>
+              {t("workboard.sessionsBoard.loadedCount", {
+                count: String(state().loaded),
+                total: String(state().total),
+              })}
+            </span>
+            <button
+              class="btn"
+              type="button"
+              disabled={state().loading || !state().canLoad}
+              onClick={() => void props.controller.loadMore()}
+            >
+              {t("workboard.sessionsBoard.loadMore")}
+            </button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

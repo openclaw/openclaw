@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
@@ -167,32 +168,57 @@ it("wakes a cross-agent pin on the all-agent roster read, not a primary sidebar 
   expect(sessionKeys(sidebar)).toEqual([before.key, crossAgent.key, rosterAnchor.key]);
 });
 
-it("wakes a saved active reference outside the Archived query using its Gateway clock", async () => {
-  const { sidebar, sessions, result } = await mount(wakeAt + 60_000);
-  const archived = { ...row("archived"), archived: true };
-  let ts = wakeAt - 100;
-  sessions.list.mockImplementation(async (query) =>
-    query?.archivedFilter === "archived"
-      ? { ...result, ts, sessions: [archived], count: 1 }
-      : sessions.sessions.state.result,
-  );
-  setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
-  await vi.advanceTimersByTimeAsync(0);
-  await settleRoster(sidebar);
-  expect(sessionKeys(sidebar)).toContain(archived.key);
-  expect(pinnedKeys(sidebar)).not.toContain(target.key);
-  const reads = () =>
-    sessions.list.mock.calls.filter(([query]) => query?.archivedFilter === "archived").length;
-  const beforeWake = reads();
-  await vi.advanceTimersByTimeAsync(99);
-  expect(reads()).toBe(beforeWake);
-  ts = wakeAt;
-  await vi.advanceTimersByTimeAsync(2);
-  await settleRoster(sidebar);
-  expect(reads()).toBe(beforeWake + 1);
-  expect(pinnedKeys(sidebar)).toContain(target.key);
-  expect(sessionKeys(sidebar)).toContain(archived.key);
-});
+it.each([false, true])(
+  "wakes a saved active reference outside the Archived query using its Gateway clock (wake read stalls: %s)",
+  async (stall) => {
+    const { sidebar, sessions, result } = await mount(wakeAt + 60_000);
+    const archived = { ...row("archived"), archived: true };
+    let ts = wakeAt - 100;
+    let unavailableUntil = 0;
+    sessions.list.mockImplementation(async (query) => {
+      if (query?.archivedFilter !== "archived") {
+        return sessions.sessions.state.result;
+      }
+      if (Date.now() < unavailableUntil) {
+        throw new GatewayProtocolRequestTimeoutError({
+          method: "sessions.list",
+          timeoutMs: 30_000,
+          requestSent: true,
+        });
+      }
+      return { ...result, ts, sessions: [archived], count: 1 };
+    });
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
+    await vi.advanceTimersByTimeAsync(0);
+    await settleRoster(sidebar);
+    expect(sessionKeys(sidebar)).toContain(archived.key);
+    expect(pinnedKeys(sidebar)).not.toContain(target.key);
+    const reads = () =>
+      sessions.list.mock.calls.filter(([query]) => query?.archivedFilter === "archived").length;
+    const beforeWake = reads();
+    await vi.advanceTimersByTimeAsync(99);
+    expect(reads()).toBe(beforeWake);
+    ts = wakeAt;
+    if (stall) {
+      // A brief Gateway stall fails the wake read and any immediate repeat.
+      unavailableUntil = Date.now() + 1_000;
+    }
+    await vi.advanceTimersByTimeAsync(2);
+    await settleRoster(sidebar);
+    expect(reads()).toBe(beforeWake + 1);
+    if (stall) {
+      expect(pinnedKeys(sidebar)).not.toContain(target.key);
+      // The window's wake retry owns the next attempt and its pacing.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settleRoster(sidebar);
+      expect(reads()).toBe(beforeWake + 2);
+    }
+    expect(pinnedKeys(sidebar)).toContain(target.key);
+    expect(sessionKeys(sidebar)).toContain(archived.key);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(reads()).toBe(beforeWake + (stall ? 2 : 1));
+  },
+);
 
 it.each([
   { name: "profileless", connection: { hello: negotiated, selfUser: null } },
