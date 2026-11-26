@@ -17,10 +17,7 @@ import type {
 export function createStagedMediaAttachmentResolver(
   stagedMediaPaths: ReadonlyMap<string, string> | undefined,
   options?: { workspaceDir?: string },
-): ResolveSubagentAttachmentReference | undefined {
-  if (!stagedMediaPaths?.size && generatedAttachmentRegistry.size === 0) {
-    return undefined;
-  }
+): ResolveSubagentAttachmentReference {
   return async ({
     reference,
     requesterSessionKey,
@@ -32,7 +29,8 @@ export function createStagedMediaAttachmentResolver(
     if (
       generated &&
       generated.expiresAt > Date.now() &&
-      (!generated.requesterSessionKey || generated.requesterSessionKey === requesterSessionKey)
+      (!generated.requesterSessionKeys.length ||
+        generated.requesterSessionKeys.includes(requesterSessionKey ?? ""))
     ) {
       const data = await readLocalMediaFile(generated.path, getDefaultMediaLocalRoots(), {
         maxBytes: reference.sizeBytes,
@@ -75,6 +73,7 @@ type GeneratedAttachmentEntry = {
   name: string;
   mimeType: string;
   requesterSessionKey?: string;
+  requesterSessionKeys: readonly string[];
   expiresAt: number;
 };
 
@@ -87,6 +86,7 @@ export function registerGeneratedAttachment(params: {
   sizeBytes: number;
   sha256: string;
   requesterSessionKey?: string;
+  requesterSessionKeys?: readonly string[];
 }): SubagentAttachmentReference {
   for (const [id, entry] of generatedAttachmentRegistry) {
     if (entry.expiresAt <= Date.now()) generatedAttachmentRegistry.delete(id);
@@ -99,6 +99,13 @@ export function registerGeneratedAttachment(params: {
     sizeBytes: params.sizeBytes,
     sha256: params.sha256,
   };
-  generatedAttachmentRegistry.set(reference.id, { ...params, expiresAt: Date.now() + 15 * 60_000 });
+  generatedAttachmentRegistry.set(reference.id, {
+    ...params,
+    requesterSessionKeys: [
+      ...(params.requesterSessionKeys ?? []),
+      ...(params.requesterSessionKey ? [params.requesterSessionKey] : []),
+    ].filter((key, index, keys) => key && keys.indexOf(key) === index),
+    expiresAt: Date.now() + 15 * 60_000,
+  });
   return reference;
 }
