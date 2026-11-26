@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
-import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
+import { applyTemporalDecayToHybridResults, parseQueryDates } from "./temporal-decay.js";
 
 const DAY_MS = 86_400_000;
 const NOW_MS = Date.UTC(2026, 1, 10);
@@ -58,3 +58,67 @@ it.each([
     }
   },
 );
+
+const NOV_2026_MS = Date.UTC(2026, 10, 26);
+
+
+function scoreOf(entries: { path: string; score: number }[], filePath: string): number {
+  return entries.find((entry) => entry.path === filePath)?.score ?? NaN;
+}
+
+
+it("parses ISO and written dates from a query", () => {
+  expect([...parseQueryDates("rollup for 2026-11-16 and November 24, 2026")].sort()).toEqual([
+    "2026-11-16",
+    "2026-11-24",
+  ]);
+  expect(parseQueryDates("no dates here").size).toBe(0);
+});
+
+it.each([
+  "HKAH November 16 2026 performance conversions CPA ROAS",
+  "conversions and CPA for 2026-11-16",
+])("grounds the dated note named in %j", async (queryText) => {
+  const workspaceDir = await createTempWorkspace("openclaw-temporal-date-grounding-");
+  const files = ["memory/2026-11-16.md", "memory/2026-11-24.md"];
+  for (const file of files) {
+    const filename = path.join(workspaceDir, file);
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, "memory\n");
+    const mtime = new Date(NOV_2026_MS - 2 * DAY_MS);
+    await fs.utimes(filename, mtime, mtime);
+  }
+  const results = files.map((file) => ({ path: file, score: 1, source: "memory" }));
+  const ranked = await applyTemporalDecayToHybridResults({
+    results,
+    workspaceDir,
+    temporalDecay: { enabled: true, halfLifeDays: 30 },
+    nowMs: NOV_2026_MS,
+    queryText,
+  });
+  // Dated notes decay from their embedded date: 10 days before NOW_MS.
+  expect(scoreOf(ranked, "memory/2026-11-16.md")).toBeCloseTo(0.5 ** (10 / 30) * 1.25, 3);
+  expect(scoreOf(ranked, "memory/2026-11-24.md")).toBeCloseTo(0.5 ** (2 / 30), 3);
+});
+
+it("does not ground notes when the query names no date", async () => {
+  const workspaceDir = await createTempWorkspace("openclaw-temporal-date-grounding-off-");
+  const files = ["memory/2026-11-16.md", "memory/2026-11-24.md"];
+  for (const file of files) {
+    const filename = path.join(workspaceDir, file);
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, "memory\n");
+    const mtime = new Date(NOV_2026_MS - 2 * DAY_MS);
+    await fs.utimes(filename, mtime, mtime);
+  }
+  const results = files.map((file) => ({ path: file, score: 1, source: "memory" }));
+  const ranked = await applyTemporalDecayToHybridResults({
+    results,
+    workspaceDir,
+    temporalDecay: { enabled: true, halfLifeDays: 30 },
+    nowMs: NOV_2026_MS,
+    queryText: "HKAH performance conversions CPA ROAS",
+  });
+  expect(scoreOf(ranked, "memory/2026-11-16.md")).toBeCloseTo(0.5 ** (10 / 30), 3);
+  expect(scoreOf(ranked, "memory/2026-11-24.md")).toBeCloseTo(0.5 ** (2 / 30), 3);
+});

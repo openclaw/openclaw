@@ -406,6 +406,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           maxResults,
           minScore,
           activeProjectKeys: opts?.activeProjectKeys,
+          queryText: normalizedQuery,
         });
 
       const keywordOnly =
@@ -557,6 +558,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           extraPaths: this.settings.extraPaths,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
+          queryText: normalizedQuery,
         });
         // Recency reorders eligible hits without changing their membership.
         return decayed
@@ -593,6 +595,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           ...vectorResults,
         ]),
         memorySourceMtimes: this.loadSourceMtimes("memory", [...keywordResults, ...vectorResults]),
+        queryText: normalizedQuery,
       });
       return selectHybridSearchResults({
         merged,

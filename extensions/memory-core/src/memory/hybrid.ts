@@ -93,6 +93,8 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   temporalDecay: TemporalDecayConfig;
   extraPaths?: MemoryExtraPath[];
   activeProjectKeys?: readonly string[];
+  /** Raw query text, used to ground date-named daily notes by explicit date. */
+  queryText?: string;
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<RankedHybridResult<TSource>[]> {
@@ -219,6 +221,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     sessionSourceMtimes: params.sessionSourceMtimes,
     memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
+    queryText: params.queryText,
   });
   const rankable = decayed.map((entry) => {
     // Exact tiers and recall-only LIKE hits keep their public confidence;

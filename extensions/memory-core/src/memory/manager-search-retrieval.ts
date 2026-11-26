@@ -182,6 +182,8 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
     maxResults: number;
     minScore: number;
     activeProjectKeys?: readonly string[];
+    /** Query text used to ground date-named daily notes by explicit date. */
+    queryText?: string;
   }): Promise<MemoryRetrievalResult[]> {
     const appliesTemporalDecay = params.temporalDecay.enabled;
     const decayInputs = appliesTemporalDecay
@@ -209,6 +211,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
       extraPaths: this.settings.extraPaths,
       sessionSourceMtimes: this.loadSourceMtimes("sessions", params.results),
       memorySourceMtimes: this.loadSourceMtimes("memory", params.results),
+      queryText: params.queryText,
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
     const ranked = decayed
