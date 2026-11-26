@@ -209,13 +209,55 @@ export function tableExists(db: EngineConnection, tableName: string): boolean {
 }
 
 export function ensureColumn(db: EngineConnection, tableName: string, columnSql: string): boolean {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
+  const columnName = columnSql.trim().split(/\s+/)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
     return false;
   }
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-  return true;
+  try {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+    return true;
+  } catch (error) {
+    // The admitted schema snapshot can predate a column another connection just added, so the
+    // ALTER races into "duplicate column name". Accept that only when the live definition is the
+    // one requested: type, constraints and generated shape all have to match, else the shape
+    // problem stays visible and fails closed.
+    if (
+      isDuplicateColumnNameError(error) &&
+      matchesLiveColumnDefinition(db, tableName, columnName, columnSql)
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function isDuplicateColumnNameError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /duplicate column name/iu.test(message);
+}
+
+/** Compares against the live catalog; the admitted snapshot may be the stale input. */
+function matchesLiveColumnDefinition(
+  db: EngineConnection,
+  tableName: string,
+  columnName: string,
+  columnSql: string,
+): boolean {
+  /* sqlite-allow-raw -- Read-only live catalog lookup for the raced column definition. */
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName);
+  const sql = row && typeof row.sql === "string" ? row.sql : undefined;
+  if (!sql) {
+    return false;
+  }
+  const live = readCanonicalTableDefinition(sql, tableName)?.columns.get(columnName);
+  if (!live) {
+    return false;
+  }
+  const normalize = (value: string) => value.replace(/\s+/gu, " ").trim();
+  return normalize(live) === normalize(columnSql);
 }
 
 /** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
