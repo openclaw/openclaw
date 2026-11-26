@@ -135,8 +135,8 @@ export async function preparePluginGenerationArtifact(
   const assertAvailable = params.independentOperationSource ? undefined : prepared.assertAvailable;
   let custody: PluginSourceCustodyFork;
   if (params.independentOperationSource) {
-    // SAFETY: The operation capture command returns the live artifact's transfer descriptor.
     custody = await receivePluginSourceCustody(
+      // SAFETY: The operation capture command returns the live artifact's transfer descriptor.
       prepared.value as PluginSourceCustodyTransfer,
       prepared,
     );
