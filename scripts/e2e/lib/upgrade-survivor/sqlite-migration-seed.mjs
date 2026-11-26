@@ -14,7 +14,7 @@ const shutdownGraceMs = 120_000;
 
 // Serialized into the one trusted fixture plugin. All SDK URLs below come from
 // createRequire(installedBaseline/package.json), never the candidate checkout.
-function registerBaselineSeed(api) {
+function registerBaselineSeed(api, fixture) {
   let started = false;
   api.on("gateway_start", (_event, context) => {
     if (started) {
@@ -225,7 +225,7 @@ export async function seedBaselineMigrationFixture({
   };
   fs.writeFileSync(
     path.join(pluginRoot, "index.mjs"),
-    `const fixture = ${JSON.stringify(fixture)};\n${registerBaselineSeed.toString()}\nexport default { id: ${JSON.stringify(pluginId)}, register: registerBaselineSeed };\n`,
+    `const fixture = ${JSON.stringify(fixture)};\n${registerBaselineSeed.toString()}\nexport default { id: ${JSON.stringify(pluginId)}, register(api) { registerBaselineSeed(api, fixture); } };\n`,
     { flag: "wx", mode: 0o600 },
   );
   const port = await availablePort();
@@ -237,7 +237,11 @@ export async function seedBaselineMigrationFixture({
       auth: { mode: "token", token: randomBytes(32).toString("hex") },
       controlUi: { enabled: false },
     },
-    agents: { list: [{ id: "nightly", default: true, workspace }] },
+    agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "nightly" } },
+      entries: { nightly: { workspace } },
+    },
     session: {
       maintenance: { mode: "warn", maxDiskBytes: false, coldStorage: { enabled: false } },
     },

@@ -102,6 +102,7 @@ const nodeRequiredFiles = new Set([
   "test/scripts/upgrade-survivor-sqlite-observer.test.ts",
   "test/scripts/upgrade-survivor-bulk-access.test.ts",
   "test/scripts/upgrade-survivor-migration-chain.test.ts",
+  "test/scripts/upgrade-survivor-nightly-chain.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",

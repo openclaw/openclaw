@@ -1,4 +1,4 @@
-# Class A nightly gate: 456 net test lines against origin/main 74797accc35e;
+# Class A nightly gate: 457 net test lines against origin/main 74797accc35e;
 # allocate exactly the excess above the unchanged 400-line allowance.
 # upgrade-survivor-nightly-chain.test.ts: complete startup-owner custody,
 # real production trial/preimages, unchanged copy delegation, occupied-data
@@ -9,5 +9,7 @@
 # aliases and reject non-floor baselines, which positive planner proof cannot cover.
 # package-acceptance-workflow.test.ts: preserve the existing cron/input guard
 # while adding the isolated daily schedule.
+# ci-test-runtime.test.ts: real Node dispatch for native SQLite/Gateway proof,
+# not a Bun-compatible run that changes the runtime under qualification.
 # Removed parser-positive and malformed-catalog cases overlapping stronger owners.
-56
+57
