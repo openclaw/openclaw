@@ -1,5 +1,6 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
@@ -14,6 +15,7 @@ import {
   withSessionControllerOwner,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { cancelSelfSnooze } from "../../sessions/session-self-snooze.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
@@ -81,8 +83,6 @@ describe("sessions tool self-snooze", () => {
     "quiet",
     "queued",
     "queued-after-rollover",
-    "write-failed",
-    "write-failed-after-rollover",
     "submitted",
     "aborted",
     "failed",
@@ -90,20 +90,13 @@ describe("sessions tool self-snooze", () => {
     "rejected-replacement",
     "accepted-replacement",
   ] as const)("settles with %s", async (scenario) => {
-    const { sessionKey, sessionId, storePath, createTool, update, events } =
+    const { sessionKey, sessionId, storePath, createTool, update } =
       await createArchiveSession("self-snooze");
-    const writeFails = scenario === "write-failed" || scenario === "write-failed-after-rollover";
     const snoozedUntil = Date.now() + 60_000;
     const patches: unknown[] = [];
     const tool = createTool(async (request) => {
       request.sessionMutationCommitGuard?.();
       patches.push(request.params);
-      if (writeFails) {
-        if (scenario === "write-failed-after-rollover") {
-          await update({ sessionId: "next-transcript", updatedAt: Date.now() });
-        }
-        throw new Error("Storage failure: /private/session/path");
-      }
       return {} as never;
     });
     const continuation = inProcessGateway.runWithGatewayToolContinuationContext;
@@ -133,7 +126,7 @@ describe("sessions tool self-snooze", () => {
           await expect(
             tool.execute("replace", { action: "patch", snoozedUntil: Date.now() - 1 }),
           ).rejects.toThrow(/future/);
-        } else if (scenario !== "quiet" && !writeFails) {
+        } else if (scenario !== "quiet") {
           const inputSessionId =
             scenario === "queued-after-rollover" ? "next-transcript" : sessionId;
           if (scenario === "queued-after-rollover") {
@@ -162,26 +155,8 @@ describe("sessions tool self-snooze", () => {
       });
       operation.complete();
       await Promise.allSettled(pending);
-      if (writeFails) {
-        const recorded = await events(scenario === "write-failed" ? sessionId : "next-transcript");
-        if (scenario === "write-failed") {
-          expect(recorded).toContainEqual(
-            expect.objectContaining({
-              type: "custom_message",
-              customType: "session-snooze-failed",
-              display: true,
-              excludeFromContext: true,
-              content:
-                "The scheduled session snooze could not be confirmed. Check whether this session is snoozed before trying again.",
-            }),
-          );
-          expect(JSON.stringify(recorded)).not.toContain("/private/session/path");
-        } else {
-          expect(recorded).toEqual([]);
-        }
-      }
       expect(patches).toEqual(
-        scenario === "quiet" || scenario.endsWith("replacement") || writeFails
+        scenario === "quiet" || scenario.endsWith("replacement")
           ? [
               {
                 key: sessionKey,
@@ -194,6 +169,99 @@ describe("sessions tool self-snooze", () => {
     } finally {
       operation.complete();
       spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["ack lost after commit", null],
+    ["write failed", "failed"],
+    ["read unavailable", "unconfirmed"],
+    ["no visible row", "unconfirmed"],
+    ["manual wake before read", null],
+    ["new input during read", null],
+    ["transcript replaced", null],
+  ] as const)("reconciles a rejected write: %s", async (scenario, outcome) => {
+    const { sessionKey, sessionId, storePath, createTool, update, events, load } =
+      await createArchiveSession("snooze-outcome");
+    const snoozedUntil = Date.now() + 60_000;
+    const calls: Array<Pick<Parameters<AgentToolGatewayRequestCaller>[0], "method" | "params">> =
+      [];
+    let writeSignal: AbortSignal | undefined;
+    const target = { agentId: "main", storePath, sessionKey };
+    const tool = createTool(async (request) => {
+      calls.push({ method: request.method, params: request.params });
+      if (request.method === "sessions.patch") {
+        writeSignal = request.signal;
+        request.sessionMutationCommitGuard?.();
+        if (scenario === "ack lost after commit") {
+          await update({ sessionId, snoozedUntil, updatedAt: Date.now() });
+        } else if (scenario === "transcript replaced") {
+          await update({ sessionId: "next-transcript", updatedAt: Date.now() });
+        } else if (scenario === "manual wake before read") {
+          cancelSelfSnooze(target);
+        }
+        throw new Error("Transport failed: /private/session/path");
+      }
+      if (scenario === "read unavailable") {
+        throw new Error("Read failed: /private/session/path");
+      }
+      // A timed-out handler could still try to commit while its caller reconciles.
+      if (scenario === "write failed" && !writeSignal?.aborted) {
+        await update({ sessionId, snoozedUntil, updatedAt: Date.now() });
+      }
+      const row = load();
+      if (scenario === "new input during read") {
+        const recorder = createUserTurnTranscriptRecorder({
+          target: { ...target, sessionId, sessionEntry: undefined },
+          input: { text: "Keep this chat open.", idempotencyKey: "during-read" },
+        });
+        await recorder.persistApproved();
+      }
+      return {
+        session: scenario === "no visible row" ? null : { ...row, key: sessionKey },
+      } as never;
+    });
+    using continuation = vi.spyOn(inProcessGateway, "runWithGatewayToolContinuationContext");
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    try {
+      await withSessionControllerOwner(operation, () =>
+        tool.execute("snooze", { action: "patch", snoozedUntil }),
+      );
+    } finally {
+      operation.complete();
+    }
+    await Promise.allSettled(continuation.mock.results.map((result) => result.value));
+    const recorded = await events(
+      scenario === "transcript replaced" ? "next-transcript" : sessionId,
+    );
+    const notices = recorded.filter((event) => asNullableRecord(event)?.type === "custom_message");
+    expect(notices).toEqual(
+      outcome === null
+        ? []
+        : [
+            expect.objectContaining({
+              customType: "session-snooze-failed",
+              display: true,
+              excludeFromContext: true,
+              content:
+                outcome === "failed"
+                  ? "The requested snooze time isn’t set. You can ask me to try again."
+                  : "I couldn’t confirm the snooze. You can ask me to set a new time.",
+              details: { operation: "snooze", outcome },
+            }),
+          ],
+    );
+    expect(JSON.stringify(recorded)).not.toContain("/private/session/path");
+    expect(calls).toEqual([
+      patchRequest(sessionKey, { snoozedUntil }),
+      ...(scenario === "manual wake before read"
+        ? []
+        : [{ method: "sessions.describe", params: { key: sessionKey, agentId: "main" } }]),
+    ]);
+    if (scenario === "ack lost after commit") {
+      expect(load()?.snoozedUntil).toBe(snoozedUntil);
+    } else if (scenario === "new input during read") {
+      expect(JSON.stringify(recorded)).toContain("Keep this chat open.");
     }
   });
 

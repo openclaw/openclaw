@@ -10,13 +10,17 @@ import { captureSessionControlAuthority } from "./sessions-operator-authority.js
 
 /** Report the accepted operation only to its requesting transcript. Never repeat a
  * transport error to the user: its details may be private and its outcome uncertain. */
-export async function reportDeferredSessionVisibilityFailure(params: {
-  operation: "archive" | "snooze";
-  target: { agentId: string; storePath: string; sessionKey: string; sessionId: string };
-  gateway: ReturnType<typeof getInProcessGatewayToolContext>;
-  assertCurrent?: SessionSourceAssertion;
-}) {
-  const { operation, target } = params;
+export async function reportDeferredSessionVisibilityFailure(
+  params: (
+    | { operation: "archive"; outcome?: never }
+    | { operation: "snooze"; outcome: "failed" | "unconfirmed" }
+  ) & {
+    target: { agentId: string; storePath: string; sessionKey: string; sessionId: string };
+    gateway: ReturnType<typeof getInProcessGatewayToolContext>;
+    assertCurrent?: SessionSourceAssertion;
+  },
+) {
+  const { operation, outcome = "unconfirmed", target } = params;
   const customType = `session-${operation}-failed`;
   const source = captureSessionControlAuthority();
   const report = await runWithoutOwnedSessionTranscriptWrites(() =>
@@ -40,10 +44,12 @@ export async function reportDeferredSessionVisibilityFailure(params: {
             content:
               operation === "archive"
                 ? "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again."
-                : "The scheduled session snooze could not be confirmed. Check whether this session is snoozed before trying again.",
+                : outcome === "failed"
+                  ? "The requested snooze time isn’t set. You can ask me to try again."
+                  : "I couldn’t confirm the snooze. You can ask me to set a new time.",
             display: true,
             excludeFromContext: true,
-            details: { operation, outcome: "unconfirmed" },
+            details: { operation, outcome },
           }),
         }),
     ),

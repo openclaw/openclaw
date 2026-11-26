@@ -1,10 +1,12 @@
-import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionRow,
+  SessionsPatchParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { bindDeferredSelfSnoozePatch } from "../../gateway/server-methods/sessions-patch-self-snooze.js";
 import { resolveSessionSnoozeError } from "../../gateway/sessions-patch-lifecycle-flags.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
@@ -89,8 +91,10 @@ export async function scheduleSelfSnooze(params: {
         if (!intent.current() || until <= Date.now() || turnState.phase !== "completed") {
           return;
         }
+        const write = new AbortController();
         const request = {
           method: "sessions.patch",
+          signal: write.signal,
           params: bindDeferredSelfSnoozePatch(patch, chat),
           sessionMutationCommitGuard: composeSessionSourceAssertion([], intent.assertCurrent, {
             synchronousCheck: true,
@@ -102,23 +106,42 @@ export async function scheduleSelfSnooze(params: {
           } else {
             await callGateway(request);
           }
-        } catch (error) {
-          if (!intent.current()) {
+        } catch {
+          // A timeout can leave the Gateway handler running. Stop any uncommitted write
+          // before observing its outcome; never send the patch again.
+          write.abort();
+          if (!intent.current() || getInProcessGatewayToolContext() !== gateway) {
             return;
           }
-          log.warn("deferred self-snooze failed for " + key + ": " + formatErrorMessage(error));
           const access = control.restricted
             ? await prepareSessionToolControlTarget(control)
             : undefined;
           try {
+            const assertCurrent = composeSessionSourceAssertion([
+              request.sessionMutationCommitGuard,
+              access?.assertCurrent,
+            ]);
+            // Describe uses the continuing caller's read permissions. A missing or
+            // unreadable row is not evidence that the snooze failed.
+            const described = await callGateway<{ session: SessionRow | null }>({
+              method: "sessions.describe",
+              params: { key, agentId },
+              sessionMutationCommitGuard: assertCurrent,
+            }).catch(() => undefined);
+            if (!intent.current() || until <= Date.now()) {
+              return;
+            }
+            const row = described?.session;
+            const observed = row?.key === key && row.sessionId !== undefined;
+            if (observed && (row.sessionId !== reportSessionId || row.snoozedUntil === until)) {
+              return;
+            }
             await reportDeferredSessionVisibilityFailure({
               operation: "snooze",
+              outcome: observed ? "failed" : "unconfirmed",
               target: { ...chat, sessionId: reportSessionId },
               gateway,
-              assertCurrent: composeSessionSourceAssertion([
-                request.sessionMutationCommitGuard,
-                access?.assertCurrent,
-              ]),
+              assertCurrent,
             });
           } finally {
             access?.release();
@@ -127,14 +150,9 @@ export async function scheduleSelfSnooze(params: {
       },
       { agentId },
     )
-      .catch((error: unknown) => {
+      .catch(() => {
         if (intent.current()) {
-          log.warn(
-            "deferred self-snooze outcome unavailable for " +
-              key +
-              ": " +
-              formatErrorMessage(error),
-          );
+          log.warn("deferred self-snooze outcome unavailable for " + key);
         }
       })
       .finally(intent.release);
