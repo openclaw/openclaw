@@ -1,6 +1,7 @@
 import { webkit, type Browser, type BrowserContext } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForTranscriptScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let webkitBrowser: Browser;
@@ -102,6 +103,85 @@ function history() {
 type Sample = { top: number; blocks: Record<string, number> };
 
 suite.define(() => {
+  it.each(["reply", "gap"] as const)(
+    "returns to the same reading position in the %s after toggling tool calls",
+    async (edge) => {
+      await suite.withPage(
+        { viewport: { width: 1000, height: 600 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const notes = Array.from({ length: 20 }, (_, index) => ({
+            role: "user",
+            content: `Notebook entry ${index + 1}.`,
+          }));
+          const reply = "The notebook is ready.";
+          const run = { __openclaw: { runId: "notebook" } };
+          await installMockGateway(page, {
+            historyMessages: [
+              ...notes.slice(0, 10),
+              {
+                ...run,
+                role: "assistant",
+                content: [{ type: "toolCall", id: "read", name: "read" }],
+              },
+              {
+                ...run,
+                role: "toolResult",
+                toolCallId: "read",
+                toolName: "read",
+                content: "Ready.",
+              },
+              { ...run, role: "assistant", content: reply },
+              ...notes.slice(10),
+            ],
+          });
+          await page.goto(suite.server.baseUrl + "chat");
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.getByText(notes.at(-1)!.content, { exact: true }).waitFor();
+          const text = thread.getByText(reply, { exact: true });
+          // Read at the bottom of the reply or in the gap after its footer.
+          await thread.press("PageUp");
+          await waitForTranscriptScrollIdle(thread);
+          const boundary =
+            edge === "reply"
+              ? text
+              : thread
+                  .locator(".chat-group.assistant", { hasText: reply })
+                  .locator(".chat-group-footer");
+          const inset = edge === "reply" ? 2 : -2;
+          await boundary.evaluate((node, visiblePixels) => {
+            const scroller = node.closest<HTMLElement>(".chat-thread")!;
+            scroller.scrollTop +=
+              node.getBoundingClientRect().bottom -
+              scroller.getBoundingClientRect().top -
+              visiblePixels;
+          }, inset);
+          await waitForTranscriptScrollIdle(thread);
+          expect(
+            Math.abs(
+              (await boundary.evaluate((node) => node.getBoundingClientRect().bottom)) -
+                (await thread.boundingBox())!.y -
+                inset,
+            ),
+          ).toBeLessThanOrEqual(1);
+          const next = thread.getByText(notes[10]!.content, { exact: true });
+          const position = () => next.evaluate((node) => node.getBoundingClientRect().top);
+          const before = await position();
+
+          const trigger = page.getByRole("button", { name: /^Actions for / });
+          for (const shown of [false, true]) {
+            await trigger.click();
+            await page.getByRole("menuitem", { name: "View", exact: true }).click();
+            await page.getByRole("menuitemcheckbox", { name: "Tool calls", exact: true }).click();
+            await trigger.click();
+            await expect.poll(() => thread.locator(".chat-tool-row").count()).toBe(Number(shown));
+            await waitForTranscriptScrollIdle(thread);
+            expect(Math.abs((await position()) - before)).toBeLessThanOrEqual(1);
+          }
+        },
+      );
+    },
+  );
+
   it.each(["chromium", "webkit"] as const)(
     "never moves visible text against an upward scroll (%s)",
     async (engine) => {
