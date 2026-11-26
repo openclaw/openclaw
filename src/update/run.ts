@@ -368,32 +368,32 @@ export async function prepareUpdate(params: {
           );
         }
       }
-    const checkStartedAtMs = Date.now();
+      const checkStartedAtMs = Date.now();
       const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
-    if (verdict.candidate) {
-      await recordUpdateRunPhaseAsync(
-        params.runId,
-        "validating",
-        {
-          origin: {
-            releaseAdmission: {
-              owner: "candidate",
-              candidateVersion: prepared.version,
-              verdict: verdict.ok ? "admit" : "refuse",
-              ...(verdict.reason ? { reason: verdict.reason } : {}),
-              warnings: (verdict.candidate.warnings ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT),
+      if (verdict.candidate) {
+        await recordUpdateRunPhaseAsync(
+          params.runId,
+          "validating",
+          {
+            origin: {
+              releaseAdmission: {
+                owner: "candidate",
+                candidateVersion: prepared.version,
+                verdict: verdict.ok ? "admit" : "refuse",
+                ...(verdict.reason ? { reason: verdict.reason } : {}),
+                warnings: (verdict.candidate.warnings ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT),
+              },
+            },
+            step: {
+              step: "candidate-release-check",
+              status: verdict.ok ? "completed" : "failed",
+              startedAtMs: checkStartedAtMs,
+              endedAtMs: Date.now(),
             },
           },
-          step: {
-            step: "candidate-release-check",
-            status: verdict.ok ? "completed" : "failed",
-            startedAtMs: checkStartedAtMs,
-            endedAtMs: Date.now(),
-          },
-        },
-        { env },
-      );
-    }
+          { env },
+        );
+      }
       if (!verdict.ok) {
         return await fail(
           "release-check-failed",
