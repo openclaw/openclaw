@@ -62,6 +62,7 @@ import {
   resolveDiscordMessageText,
 } from "./message-text.js";
 import { buildDiscordRoutePeer } from "./route-resolution.js";
+import { resolveDiscordSessionRequireMention } from "./session-activation.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -446,7 +447,16 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
+  // A stored `/activation` mode is the owner's per-chat choice and wins over config.
+  const shouldRequireMentionByConfig =
+    isGuildMessage && !isBoundThreadSession
+      ? await resolveDiscordSessionRequireMention({
+          cfg: params.cfg,
+          agentId: effectiveRoute.agentId,
+          sessionKey: boundSessionKey || effectiveRoute.sessionKey,
+          configRequireMention: mentionPolicy.requireMention,
+        })
+      : mentionPolicy.requireMention;
   const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
 
   // Only authorized guild senders should reach the expensive transcription path.
