@@ -17,6 +17,10 @@ import {
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import {
+  pendingInputAudienceEligibility,
+  type PendingInputAudience,
+} from "./session-pending-input-audience.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
   PendingInputOrphansWorkerInput,
@@ -59,6 +63,7 @@ export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
   endCause: SessionPendingInputEndCause;
+  audience?: PendingInputAudience;
 } & ({ runId: string } | { inputIds: readonly string[] });
 
 export type RetiredPendingInputDismissalOutcome =
@@ -122,7 +127,10 @@ export function discardSessionPendingInputInWorker(
         .select(["input_id", "run_id", "state", "message_json", "end_cause"])
         .where("session_key", "=", input.sessionKey)
         .where("session_id", "=", input.sessionId)
-        .where("consumed_event_id", "is", null);
+        .where("consumed_event_id", "is", null)
+        .$if(Boolean(input.audience), (selection) =>
+          selection.where(pendingInputAudienceEligibility(current, input.audience!)),
+        );
       const found = executeSqliteQuerySync(
         current.db,
         "runId" in input

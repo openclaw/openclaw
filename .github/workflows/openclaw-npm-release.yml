@@ -4,6 +4,10 @@ run-name: "openclaw-npm-release.yml [${{ inputs.tag }}] ${{ inputs.preflight_onl
 on:
   workflow_dispatch:
     inputs:
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
+        required: false
+        type: string
       tag:
         description: Release tag to publish, or any full 40-character commit SHA for validation-only preflight (for example v2026.3.22 or 0123456789abcdef0123456789abcdef01234567)
         required: true
@@ -98,6 +102,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -217,6 +222,10 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
+          if [[ -n "${FAST_TRACK_REQUEST_JSON}" && ( "$RELEASE_EVIDENCE_MODE" != full-release-validation || -z "$FULL_RELEASE_VALIDATION_RUN_ID" || -z "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
+            echo "Fast-track requires the original full-release evidence mode and exact run/attempt." >&2
+            exit 1
+          fi
           FOCUSED_RELEASE_EVIDENCE_RUN_ID="${FOCUSED_RELEASE_EVIDENCE_RUN_ID:-}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT:-}"
           if [[ -z "${PREFLIGHT_RUN_ID}" ]]; then
@@ -397,7 +406,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and
           # tarball, so real publishes do not need the repository's full history.
-          fetch-depth: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}
+          fetch-depth: ${{ (inputs.fast_track_request != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -426,7 +435,20 @@ jobs:
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
-          sparse-checkout: scripts
+
+      - name: Setup trusted validation verifier dependencies
+        uses: ./trusted-workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: trusted-workflow/package.json
+          lockfile-path: trusted-workflow/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install trusted validation verifier dependencies
+        working-directory: trusted-workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Acquire authenticated publication manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
@@ -706,9 +728,13 @@ jobs:
             download_named_artifact "${fallback_name}" preflight-tarball
             echo "Downloaded fallback preflight artifact ${fallback_name}."
           fi
-          download_named_artifact \
-            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}" \
-            plugin-sdk-api-evidence
+          # Full evidence admission above authenticates fast-track authorization.
+          # A sealed build-only archive honestly has no SDK validation artifact.
+          if [[ "$(jq -r '.version' preflight-tarball/preflight-manifest.json)" != "4" ]]; then
+            download_named_artifact \
+              "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}" \
+              plugin-sdk-api-evidence
+          fi
 
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -784,25 +810,29 @@ jobs:
             exit 1
           fi
           node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-preflight-channel < "$MANIFEST_FILE"
-          IMMUTABLE_PLUGIN_SDK_API_EVIDENCE="plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
-          if [[ ! -f "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE" ]] || ! cmp -s \
-            <(jq -S '.pluginSdkApi' "$MANIFEST_FILE") \
-            <(jq -S '.' "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE"); then
-            echo "Prepared Plugin SDK API evidence does not match its immutable artifact." >&2
-            exit 1
+          # Provenance verification above rejects malformed build-only metadata;
+          # authenticated full evidence, not this marker, permits skipped validation.
+          if [[ "$(jq -r '.version' "$MANIFEST_FILE")" != "4" ]]; then
+            IMMUTABLE_PLUGIN_SDK_API_EVIDENCE="plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
+            if [[ ! -f "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE" ]] || ! cmp -s \
+              <(jq -S '.pluginSdkApi' "$MANIFEST_FILE") \
+              <(jq -S '.' "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE"); then
+              echo "Prepared Plugin SDK API evidence does not match its immutable artifact." >&2
+              exit 1
+            fi
+            current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+            current_selector_ref="v${current_selector_version}"
+            current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
+            node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
+              --manifest "$MANIFEST_FILE" \
+              --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+              --head "$EXPECTED_RELEASE_SHA" \
+              --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+              --current-selector-ref "$current_selector_ref" \
+              --current-selector-sha "$current_selector_sha" \
+              --target-ref "$RELEASE_TAG" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           fi
-          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
-          current_selector_ref="v${current_selector_version}"
-          current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
-          node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
-            --manifest "$MANIFEST_FILE" \
-            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --head "$EXPECTED_RELEASE_SHA" \
-            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
-            --current-selector-ref "$current_selector_ref" \
-            --current-selector-sha "$current_selector_sha" \
-            --target-ref "$RELEASE_TAG" \
-            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
             exit 1
@@ -902,6 +932,7 @@ jobs:
         id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |

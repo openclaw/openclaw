@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestAuthorityExpiredError } from "../../infra/operator-authority-error.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getWebhookLegacyListener,
@@ -16,7 +17,8 @@ import {
   runPluginHttpRoute,
 } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginGatewayRequestAuthority } from "../../plugins/runtime/gateway-request-authority.js";
+import type { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
@@ -26,11 +28,7 @@ import {
   finishFailedGatewayHttpResponse,
   finishGatewayHttpDatabaseAdmissionError,
 } from "../http-common.js";
-import {
-  bindHttpResponseAuthority,
-  finishGatewayHttpAuthorityError,
-  GatewayHttpRequestAuthorityError,
-} from "../http-request-authority.js";
+import { finishGatewayHttpAuthorityError } from "../http-request-authority.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import {
   getRemoteControlUiIngressContext,
@@ -134,6 +132,8 @@ function createPluginRouteRuntimeClient(
 async function withPluginRouteRuntimeScope<T>(
   scope: PluginRouteRuntimeScope,
   run: () => Promise<T>,
+  auth: AuthorizedGatewayHttpRequest | undefined,
+  isOpen: () => boolean,
 ): Promise<T> {
   // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
   // current across handler and projection awaits, using the same publication owner.
@@ -143,7 +143,21 @@ async function withPluginRouteRuntimeScope<T>(
       ? onUserProfilesChanged(() => prepareGatewayRecipientProfile(client))
       : undefined;
   try {
-    return await withPluginRuntimeGatewayRequestScope(scope, run);
+    return await withPluginGatewayRequestAuthority(
+      scope,
+      run,
+      auth
+        ? {
+            personProfileId: auth.personProfileId,
+            assertCurrent() {
+              if (!isOpen()) {
+                throw new GatewayRequestAuthorityExpiredError();
+              }
+              assertRemoteControlUiIngressCurrent(client?.remoteControlUiIngress);
+            },
+          }
+        : undefined,
+    );
   } finally {
     stop?.();
   }
@@ -176,7 +190,6 @@ function createPluginRouteRuntimeScope(params: {
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
-  res?: ServerResponse;
   gatewayRequestContext?: GatewayRequestContext;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
@@ -204,30 +217,10 @@ function createPluginRouteRuntimeScope(params: {
     hasCurrentRemoteControlUiIngress(ingress) &&
     requestAuth?.hasCurrentClientAuthority?.() !== false &&
     hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
-  if (params.res) {
-    bindHttpResponseAuthority(
-      { operatorAccessAuthority },
-      params.res,
-      hasCurrentClientAuthority,
-    ).assertCurrent();
-  } else if (!hasCurrentClientAuthority()) {
-    params.req.socket.destroy();
-    throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
-  }
   return {
     pluginRegistry: params.registry,
-    ...(requestAuth?.revalidate || ingress
-      ? {
-          revalidate: async () => {
-            assertRemoteControlUiIngressCurrent(ingress);
-            await requestAuth?.revalidate?.();
-            assertRemoteControlUiIngressCurrent(ingress);
-          },
-        }
-      : {}),
-    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority || ingress
-      ? { hasCurrentClientAuthority }
-      : {}),
+    ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
+    ...(requestAuth || operatorAccessAuthority || ingress ? { hasCurrentClientAuthority } : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     ...(operatorAccessAuthority || ingress
@@ -394,7 +387,6 @@ export function createGatewayPluginRequestHandler(params: {
                 registry,
                 route,
                 req,
-                res,
                 gatewayRequestContext,
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,
@@ -402,6 +394,8 @@ export function createGatewayPluginRequestHandler(params: {
               }),
               async () =>
                 runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
+              route.auth === "gateway" ? gatewayRequestAuth : undefined,
+              () => !res.writableEnded && !res.destroyed,
             )) !== false
           );
         };
@@ -519,6 +513,8 @@ export function createGatewayPluginUpgradeHandler(params: {
                   handleUpgrade(req, socket, head),
                 );
               },
+              route.auth === "gateway" ? gatewayRequestAuth : undefined,
+              () => !socket.destroyed,
             )) !== false,
         );
         if (handled) {

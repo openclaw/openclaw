@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
@@ -31,6 +32,7 @@ import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
+import { createCronTool } from "./tools/cron-tool.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 
@@ -441,4 +443,40 @@ it("keeps core signatures visible when the catalog overflows", () => {
   });
   expect(render()).not.toContain("for file changes instead of shell/Python rewriting");
   expect(render()).not.toContain("For multiline commands");
+});
+
+it("keeps the admitted native scheduler visible in a crowded catalog", () => {
+  const fillers = Array.from({ length: 150 }, (_, i) => {
+    const tool = createStubTool(`a_${i}_${"x".repeat(44)}`);
+    return { ...tool, outputSchema: tool.parameters };
+  });
+  const scheduler = createCronTool();
+  const pluginTool = { ...scheduler };
+  setPluginToolMeta(pluginTool, { pluginId: "fixture", optional: false });
+  for (const candidate of [scheduler, pluginTool, undefined]) {
+    const targets = candidate ? [...fillers, candidate] : fillers;
+    const { ctx, catalogRef } = createCatalogCodeModeHarness(targets);
+    onTestFinished(() => clearToolSearchCatalog(ctx));
+    const entries = catalogRef.current?.entries ?? [];
+    const ranking = {
+      version: 1 as const,
+      at: 1,
+      orderedToolIds: entries
+        .filter((entry) => entry.name.startsWith("a_"))
+        .map((entry) => entry.id),
+    };
+    for (const usage of [undefined, ranking]) {
+      const prompt = buildCodeModeCatalogPrompt(ctx, entries, usage);
+      expect(prompt).toContain("additional tools omitted");
+      const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
+      const firstFiller = index.indexOf("\n- a_");
+      const schedulerRow = index.indexOf(`\n- ${scheduler.name} `);
+      expect(firstFiller).toBeGreaterThan(0);
+      // A short plugin row can still fit at the end. Only the admitted core tool is pinned.
+      expect(schedulerRow >= 0 && schedulerRow < firstFiller).toBe(candidate === scheduler);
+      if (!candidate) {
+        expect(schedulerRow).toBe(-1);
+      }
+    }
+  }
 });

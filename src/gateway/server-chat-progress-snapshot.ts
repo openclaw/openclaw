@@ -205,12 +205,25 @@ export type ChatRunProgressSnapshot = {
 /** Materialize frozen replay events from the owner's immutable captured receipts. */
 export function readChatRunProgressEvents(
   snapshot: ChatRunProgressSnapshot | undefined,
+  toolTextAfterSeq?: number,
 ): AgentEventPayload[] | undefined {
-  return snapshot?.entries.map((entry) =>
-    entry.kind === "output"
-      ? freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json))
-      : entry.event,
-  );
+  return snapshot?.entries.map((entry) => {
+    if (entry.kind === "output") {
+      return freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json));
+    }
+    const { event } = entry;
+    if (
+      toolTextAfterSeq !== undefined &&
+      event.seq > toolTextAfterSeq &&
+      event.stream === "tool" &&
+      event.data.phase === "start" &&
+      typeof event.data.textLengthBeforeTool === "number"
+    ) {
+      const { textLengthBeforeTool: bufferEnd, ...data } = event.data;
+      return freezeTrustedJsonSnapshot({ ...event, data: { ...data, bufferEnd } });
+    }
+    return event;
+  });
 }
 
 export function updateChatRunProgressSnapshot(
@@ -237,6 +250,11 @@ export function updateChatRunProgressSnapshot(
         )));
   const isToolPreparation = event.stream === "run_status" && phase === "preparing_tool";
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const approvalId = typeof data.approvalId === "string" ? data.approvalId : "";
+  const isApprovalStatus =
+    event.stream === "lifecycle" &&
+    Boolean(approvalId) &&
+    (phase === "waiting-approval" || phase === "approval-resolved");
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
   const isCompaction = event.stream === "compaction" && (phase === "start" || phase === "end");
@@ -292,6 +310,7 @@ export function updateChatRunProgressSnapshot(
         candidate.data.reviewId === data.reviewId,
     );
   const isSummaryProgress =
+    isApprovalStatus ||
     isModelWait ||
     isToolPreparation ||
     isTool ||
@@ -364,6 +383,18 @@ export function updateChatRunProgressSnapshot(
     return next;
   }
 
+  if (isApprovalStatus) {
+    removeWhere(
+      (candidate) =>
+        candidate.stream === "lifecycle" &&
+        candidate.data.approvalId === approvalId &&
+        (candidate.data.phase === "waiting-approval" ||
+          candidate.data.phase === "approval-resolved"),
+    );
+    if (phase === "approval-resolved") {
+      return next;
+    }
+  }
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
@@ -424,25 +455,31 @@ export function updateChatRunProgressSnapshot(
     }
   }
 
-  const storedData: Record<string, unknown> = isTool
-    ? {
-        phase,
-        name: typeof data.name === "string" ? data.name : undefined,
-        toolCallId,
-        ...(phase === "update" && data.outputOnly === true ? { outputOnly: true } : {}),
-      }
-    : isAssistant
-      ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
-      : isPreamble
-        ? {
-            kind: "preamble",
-            phase: data.phase,
-            title: data.title,
-            status: data.status,
-            itemId: preambleItemId || undefined,
-            progressText: data.progressText,
-          }
-        : { ...previousUsage?.data, ...data };
+  const storedData: Record<string, unknown> = isApprovalStatus
+    ? { phase, approvalId, ...(toolCallId ? { toolCallId } : {}) }
+    : isTool
+      ? {
+          phase,
+          name: typeof data.name === "string" ? data.name : undefined,
+          toolCallId,
+          // Replay needs the wire coordinate at this call, not text generated after it.
+          ...(phase === "start" && typeof data.textLengthBeforeTool === "number"
+            ? { textLengthBeforeTool: data.textLengthBeforeTool }
+            : {}),
+          ...(phase === "update" && data.outputOnly === true ? { outputOnly: true } : {}),
+        }
+      : isAssistant
+        ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
+        : isPreamble
+          ? {
+              kind: "preamble",
+              phase: data.phase,
+              title: data.title,
+              status: data.status,
+              itemId: preambleItemId || undefined,
+              progressText: data.progressText,
+            }
+          : { ...previousUsage?.data, ...data };
   if (isTool && mode === "full") {
     for (const field of toolFields) {
       storedData[field] = data[field];

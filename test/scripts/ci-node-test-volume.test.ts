@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, describe as describeSuite, expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   listNodeTestConfigFiles,
@@ -10,14 +10,50 @@ import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
   resolveCanonicalNodeTestConfig,
+  type CompactNodeTestShard,
   type NodeTestVolumeContext,
   type NodeTestShardGroup,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
+import { createAgentsCoreVitestConfig } from "../vitest/vitest.agents-core.config.ts";
+import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
+import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "../vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "../vitest/vitest.unit-fast-isolated.config.ts";
+import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
 const prepareNodeTestVolumes = planOwner.prepareNodeTestVolumes;
+
+const measuredConfigCases = [
+  {
+    owner: "unit-fast",
+    config: "test/vitest/vitest.unit-fast.config.ts",
+    createConfig: () => createUnitFastVitestConfig({}, { argv: [] }),
+  },
+  {
+    owner: "unit-fast-fake-timers",
+    config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    createConfig: () => createUnitFastFakeTimersVitestConfig({}, { argv: [] }),
+  },
+  {
+    owner: "agents-core",
+    config: "test/vitest/vitest.agents-core.config.ts",
+    createConfig: () => createAgentsCoreVitestConfig({}),
+  },
+  {
+    owner: "agents-support",
+    config: "test/vitest/vitest.agents-support.config.ts",
+    createConfig: () => createAgentsSupportVitestConfig({}),
+  },
+  {
+    owner: "infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    createConfig: () => createInfraVitestConfig({}),
+  },
+];
 
 const volumeGroup = (configs: string[], includePatterns?: string[]): NodeTestShardGroup => ({
   configs,
@@ -98,7 +134,14 @@ it.each(["node", "bun-all", "dual-all"] as const)(
     const describe = prepareNodeTestVolumes(volumeContextFor([boundary, mixed], policy));
     for (const group of [boundary, mixed]) {
       const entries = describe(group).entries;
-      expect(entries.length).toBe(group.configs.length * (policy === "dual-all" ? 2 : 1));
+      const executionProfiles = group.configs.flatMap((config) =>
+        resolveCiTestRuntimeSelections({ configs: [config] }, policy).map(
+          ({ runtime }) => `${config}:${runtime}`,
+        ),
+      );
+      expect(entries.map(({ config, runtime }) => `${config}:${runtime}`).toSorted()).toEqual(
+        executionProfiles.toSorted(),
+      );
       for (const entry of entries) {
         expect(entry.full).not.toBeNull();
         expect(entry.full?.count).toBe(entry.selected?.count);
@@ -250,42 +293,100 @@ it("matches runtime-config execution inventory without changing canonical owners
   expect(listNodeTestConfigFiles(config)).toBeUndefined();
 });
 
-it.each(["node", "bun-all", "dual-all"] as const)(
-  "measures runtime-config only against its scheduled full profile under %s",
-  (policy) => {
-    const config = "test/vitest/vitest.runtime-config.config.ts";
-    const target = "src/config/io.load-async.test.ts";
-    const full = createNodeTestShardBundles({
+it.each(measuredConfigCases)(
+  "matches $owner execution inventory only for measurement",
+  ({ config, createConfig }) => {
+    const files = expectDefined(listNodeTestVolumeConfigFiles(config), "measurement inventory");
+    expect(files.toSorted()).toEqual(listMatchedTestFiles(createConfig()).toSorted());
+    expect(listNodeTestConfigFiles(config)).toBeUndefined();
+  },
+);
+
+it("keeps ordinary unit-fast inventory disjoint from timer and isolated siblings", () => {
+  const ordinary = expectDefined(
+    listNodeTestVolumeConfigFiles("test/vitest/vitest.unit-fast.config.ts"),
+    "ordinary unit-fast inventory",
+  );
+  for (const sibling of ["unit-fast-fake-timers", "unit-fast-isolated"]) {
+    const files = new Set(listNodeTestVolumeConfigFiles(`test/vitest/vitest.${sibling}.config.ts`));
+    expect(ordinary.filter((file) => files.has(file))).toEqual([]);
+  }
+});
+
+describeSuite("new inventory measurement", () => {
+  let full: readonly CompactNodeTestShard[];
+  let selections: readonly { target: string; selected: NodeTestShardGroup }[];
+
+  beforeAll(() => {
+    const configs = new Set(measuredConfigCases.map(({ config }) => config));
+    full = createNodeTestShardBundles({
       compactMode: "pull-request",
       runnerBackend: "hybrid",
-      changedPaths: [target],
+      changedPaths: [],
       includeReleaseOnlyRuntimeTests: false,
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyPluginShards: false,
       includeReleaseOnlyToolingShards: false,
       includeProofTests: false,
+    }).flatMap((job) => {
+      const groups = job.groups.filter((group) =>
+        group.configs.some((config) => configs.has(config)),
+      );
+      return groups.length ? [{ ...job, groups }] : [];
     });
-    const scheduled = expectDefined(
-      full
-        .flatMap((job) => job.groups)
-        .find(
-          (group) =>
-            group.configs.includes(config) &&
-            (!group.includePatterns || group.includePatterns.includes(target)),
-        ),
-      "scheduled runtime-config group",
+    selections = measuredConfigCases.map(({ config, createConfig }) => {
+      const files = listMatchedTestFiles(createConfig());
+      const scheduled = expectDefined(
+        full
+          .flatMap((job) => job.groups.map((group) => ({ job, group })))
+          .find(
+            ({ group }) =>
+              group.configs.includes(config) &&
+              files.some((file) => !group.includePatterns || group.includePatterns.includes(file)),
+          ),
+        `admitted ${config} group`,
+      );
+      const { job, group } = scheduled;
+      const target = expectDefined(
+        files.find((file) => !group.includePatterns || group.includePatterns.includes(file)),
+        "scheduled target",
+      );
+      return {
+        target,
+        selected: {
+          ...group,
+          configs: [config],
+          includePatterns: [target],
+          env: { ...job.env, ...group.env },
+        },
+      };
+    });
+  });
+
+  it.each(
+    (["node", "bun-all", "dual-all"] as const).flatMap((policy) =>
+      measuredConfigCases.map(({ owner, config }) => ({ policy, owner, config })),
+    ),
+  )("measures $owner inventory under $policy", ({ policy, config }) => {
+    const { target, selected } = expectDefined(
+      selections.find((selection) => selection.selected.configs.includes(config)),
+      `selected ${config} group`,
     );
-    const selected = { ...scheduled, configs: [config], includePatterns: [target] };
+    const census = full.flatMap((job) => {
+      const groups = job.groups.filter((group) => group.configs.includes(config));
+      return groups.length ? [{ ...job, groups }] : [];
+    });
     const context = {
       ...volumeContextFor([], policy),
       eligibility: {
-        changedPaths: [target],
+        changedPaths: [],
         includeReleaseOnlyRuntimeTests: false,
         includePrExemptRuntimeTests: false,
       },
-      fullPlan: () => full,
+      fullPlan: () => census,
     };
     const describe = prepareNodeTestVolumes(context);
+    const repeated = prepareNodeTestVolumes({ ...context, fullPlan: () => [...census, ...census] });
     const entries = describe(selected, [target]).entries;
     expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(
       policy === "dual-all" ? ["bun", "node"] : [policy === "node" ? "node" : "bun"],
@@ -293,21 +394,179 @@ it.each(["node", "bun-all", "dual-all"] as const)(
     for (const entry of entries) {
       expect(entry.selected?.count).toBe(1);
       expect(entry.full?.count).toBeGreaterThan(0);
-      expect(entry.full?.id).toMatch(/^[a-f0-9]{64}$/u);
     }
+    expect(repeated(selected, [target]).entries).toEqual(entries);
     expect(
       describe({ ...selected, env: { ...selected.env, SCENARIO: "other" } }, [target]).entries.map(
         (entry) => entry.full,
       ),
     ).toEqual(entries.map(() => null));
+  });
+
+  it("does not change executable plans", () => {
+    const targets = selections.map(({ target }) => target);
+    const options = { selectedTestTargets: targets, runnerBackend: "hybrid" };
+    const baseline = createChangedNodeTestShards(targets, options);
+    const result = expectDefined(
+      createChangedNodeTestShards(targets, {
+        ...options,
+        volumeContext: {
+          ...volumeContextFor([]),
+          fullPlan: () => full,
+        },
+      }),
+      "planned jobs",
+    );
+    const stripped = structuredClone(result);
+    for (const job of stripped) {
+      delete job.targetVolumes;
+      for (const group of job.groups ?? []) {
+        delete group.volume;
+      }
+    }
+    expect(JSON.stringify(stripped)).toBe(JSON.stringify(baseline));
+  });
+});
+
+it("matches isolated-unit execution inventory including both observed direct targets", () => {
+  const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
+  const files = expectDefined(listNodeTestVolumeConfigFiles(config), "isolated-unit inventory");
+  expect(files.toSorted()).toEqual(
+    listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] })).toSorted(),
+  );
+  expect(files).toEqual(
+    expect.arrayContaining([
+      "test/scripts/ci-workflow-ui-full.test.ts",
+      "test/scripts/type-suppression-inventory.test.ts",
+    ]),
+  );
+  expect(listNodeTestConfigFiles(config)).toBeUndefined();
+});
+
+it.each(
+  (["node", "bun-all", "dual-all"] as const).flatMap((policy) => [
+    {
+      policy,
+      owner: "runtime-config",
+      config: "test/vitest/vitest.runtime-config.config.ts",
+      targets: ["src/config/io.load-async.test.ts"],
+    },
+    {
+      policy,
+      owner: "isolated-unit",
+      config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+      targets: [
+        "test/scripts/ci-workflow-ui-full.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
+      ],
+    },
+  ]),
+)(
+  "measures $owner only against its scheduled full profile under $policy",
+  ({ policy, config, targets }) => {
+    const full = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      changedPaths: targets,
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: false,
+      includeProofTests: false,
+    }).flatMap((job) => {
+      const groups = job.groups.filter((group) => group.configs.includes(config));
+      return groups.length ? [{ ...job, groups }] : [];
+    });
+    const scheduled = expectDefined(
+      full
+        .flatMap((job) => job.groups)
+        .find(
+          (group) =>
+            group.configs.includes(config) &&
+            targets.every(
+              (target) => !group.includePatterns || group.includePatterns.includes(target),
+            ),
+        ),
+      "scheduled full group",
+    );
+    const selected = { ...scheduled, configs: [config], includePatterns: targets };
+    const context = {
+      ...volumeContextFor([], policy),
+      eligibility: {
+        changedPaths: targets,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+      },
+      fullPlan: () => full,
+    };
+    const describe = prepareNodeTestVolumes(context);
+    const entries = describe(selected, targets).entries;
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(
+      policy === "dual-all" ? ["bun", "node"] : [policy === "node" ? "node" : "bun"],
+    );
+    for (const entry of entries) {
+      expect(entry.selected?.count).toBe(targets.length);
+      expect(entry.full?.count).toBeGreaterThan(0);
+      expect(entry.full?.id).toMatch(/^[a-f0-9]{64}$/u);
+    }
+    expect(
+      describe({ ...selected, env: { ...selected.env, SCENARIO: "other" } }, targets).entries.map(
+        (entry) => entry.full,
+      ),
+    ).toEqual(entries.map(() => null));
     const missing = prepareNodeTestVolumes({ ...context, fullPlan: undefined });
-    expect(missing(selected, [target]).entries).toEqual(
+    expect(missing(selected, targets).entries).toEqual(
       entries.map((entry) => Object.assign({}, entry, { full: null })),
     );
+    const repeated = prepareNodeTestVolumes({ ...context, fullPlan: () => [...full, ...full] });
+    expect(repeated(selected, targets).entries).toEqual(entries);
   },
 );
 
-it("does not invent runtime-config membership or an infra baseline for direct targets", () => {
+it("adds isolated-unit direct volumes without changing executable plans", () => {
+  const targets = [
+    "test/scripts/ci-workflow-ui-full.test.ts",
+    "test/scripts/type-suppression-inventory.test.ts",
+  ];
+  const options = { selectedTestTargets: targets, runnerBackend: "hybrid" };
+  const baseline = createChangedNodeTestShards(targets, options);
+  const result = expectDefined(
+    createChangedNodeTestShards(targets, {
+      ...options,
+      volumeContext: {
+        ...volumeContextFor([]),
+        fullPlan: () =>
+          createNodeTestShardBundles({
+            changedPaths: targets,
+            compactMode: "pull-request",
+            runnerBackend: "hybrid",
+            includeReleaseOnlyToolingShards: false,
+            includeReleaseOnlyPluginShards: false,
+            includeProofTests: false,
+          }),
+      },
+    }),
+    "planned jobs",
+  );
+  for (const target of targets) {
+    const row = result
+      .flatMap((job) => job.targetVolumes ?? [])
+      .find((entry) => entry.target === target);
+    expect(row?.configs).toEqual(["test/vitest/vitest.unit-fast-isolated.config.ts"]);
+    expect(row?.volume.entries[0]?.selected?.count).toBe(1);
+    expect(row?.volume.entries[0]?.full).not.toBeNull();
+  }
+  const stripped = structuredClone(result);
+  for (const job of stripped) {
+    delete job.targetVolumes;
+    for (const group of job.groups ?? []) {
+      delete group.volume;
+    }
+  }
+  expect(JSON.stringify(stripped)).toBe(JSON.stringify(baseline));
+});
+
+it("does not invent runtime-config membership or an unadmitted infra baseline", () => {
   const config = "test/vitest/vitest.runtime-config.config.ts";
   const target = "src/config/io.load-async.test.ts";
   const other = volumeGroup([config], ["src/config/io.compat.test.ts"]);
@@ -318,8 +577,28 @@ it("does not invent runtime-config membership or an infra baseline for direct ta
   expect(selected[0]?.full).toBeNull();
   const excluded = "src/config/sessions/session-canonical-key.test.ts";
   expect(describe(volumeGroup([config], [excluded]), [excluded]).entries).toEqual([]);
-  const plugin = "src/plugins/loader.runtime-registry.test.ts";
+  for (const infraTarget of [
+    "src/plugins/loader.runtime-registry.test.ts",
+    "test/scripts/pr-worktree-provision.test.ts",
+  ]) {
+    const entries = describe(volumeGroup(["test/vitest/vitest.infra.config.ts"], [infraTarget]), [
+      infraTarget,
+    ]).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.selected?.count).toBe(1);
+    expect(entries[0]?.full).toBeNull();
+  }
+  const provision = "test/scripts/pr-worktree-provision.test.ts";
+  const prContext = prepareNodeTestVolumes({
+    ...volumeContextFor([other]),
+    eligibility: {
+      changedPaths: [],
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+    },
+  });
   expect(
-    describe(volumeGroup(["test/vitest/vitest.infra.config.ts"], [plugin]), [plugin]).entries,
+    prContext(volumeGroup(["test/vitest/vitest.infra.config.ts"], [provision]), [provision])
+      .entries,
   ).toEqual([]);
 });

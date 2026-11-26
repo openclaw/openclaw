@@ -11,7 +11,11 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
+import {
+  releaseEvidenceProducerTuple,
+  retainedPublicationArtifactSource,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -199,7 +203,7 @@ function validatePublicationEvidence(options, evidence) {
   ) {
     throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  if (current.conclusion !== "success") {
+  if (current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (manifest.version !== 4) {
@@ -304,6 +308,8 @@ function validatePublicationEvidence(options, evidence) {
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
+ *   fastTrackRequest?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
@@ -316,6 +322,8 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
+      fastTrackRequest: options.fastTrackRequest ?? process.env.FAST_TRACK_REQUEST_JSON,
+      fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
       trustedWorkflowFullRef: options.expectedTrustedWorkflowFullRef,
@@ -327,7 +335,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     evidenceClient,
   );
-  if (evidence.current.conclusion !== "success") {
+  if (evidence.current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -410,6 +418,10 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   if (!descriptor || !evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
+  const policyDescriptor = manifest?.receiptRecovery?.policyQualification?.admission;
+  if (policyDescriptor && !evidence.policyAdmission) {
+    throw new Error("Authenticated waiver policy admission authority is missing");
+  }
   // Retain authenticated identities, not live permission or ref verdicts.
   return structuredClone({
     descriptor,
@@ -422,6 +434,10 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
           sha: manifest.workflowSha,
         }
       : null,
+    // A later waiver admission is a second operator grant; later commands recheck it too.
+    policy: policyDescriptor
+      ? { descriptor: policyDescriptor, admission: evidence.policyAdmission }
+      : null,
   });
 }
 
@@ -430,6 +446,9 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
 export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
   if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
+    if (authority.policy) {
+      evidenceClient.revalidateQualificationAdmissionAuthority(authority.policy);
+    }
     if (authority.recoveryProducer) {
       if (evidenceClient.verifyReceiptRecoveryAuthority) {
         evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
@@ -442,11 +461,16 @@ export function revalidateCandidateArtifactAuthority(authority, evidenceClient) 
 
 function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
   const qualification = evidence.qualification;
+  const producer = releaseEvidenceProducerTuple(manifest);
   if (
     qualification.candidateSha !== candidateSha ||
-    qualification.qualificationSha !== qualificationSha ||
-    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.conclusion !== "success" ||
+    qualification.qualificationSha !==
+      (manifest.publicationArtifactSource ? manifest.workflowSha : qualificationSha) ||
+    (manifest.publicationArtifactSource &&
+      retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
+    String(evidence.current.runId) !== String(producer.runId) ||
+    evidence.current.runAttempt !== Number(producer.runAttempt) ||
+    (evidence.current.conclusion !== "success" && !evidence.fastTrack) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
@@ -469,6 +493,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherSha,
   publisherFullRef = "refs/heads/main",
   client,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
 }) {
   const recovery = manifest?.receiptRecovery;
   if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
@@ -477,10 +502,12 @@ export async function authenticateCandidateOwnedArtifact({
     );
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const producer = releaseEvidenceProducerTuple(manifest);
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
-      runId: String(manifest.runId),
+      fastTrackRequest,
+      runId: String(producer.runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
       trustedWorkflowSha: publisherSha,

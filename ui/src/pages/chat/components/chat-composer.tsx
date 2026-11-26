@@ -8,11 +8,14 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
+import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
@@ -74,7 +77,24 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     );
     state.dictation = new ComposerDictationOwner(initialDictationOptions);
   }
-  const voice = { dictation: state.dictation, picker: microphonePicker };
+  const application = useOptionalApplication();
+  const voice = {
+    dictation: state.dictation,
+    picker: microphonePicker,
+    configureApiKey: application
+      ? (modelProvider: string | undefined) => {
+          if (modelProvider) {
+            navigateToModelProvider(
+              application,
+              currentProps.currentAgentId || null,
+              modelProvider,
+            );
+          } else {
+            navigateToSpeechSettings(application);
+          }
+        }
+      : undefined,
+  };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
   onSettled(() =>
     voice.dictation.subscribe(() => {

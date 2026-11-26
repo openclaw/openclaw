@@ -8,6 +8,7 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
 } from "../../infra/fs-safe-copy-worker-contract.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -181,7 +182,11 @@ export const nativeWorktreeFilesystem = {
     return write({ type: "create", destination }, options);
   },
   remove(this: void, destination: string, options: WorktreeFilesystemOptions) {
-    return write({ type: "remove", destination }, options);
+    // Recursive removal owns a child, never the Gateway's shared libuv pool.
+    return withContentGitSlot(
+      () => write({ type: "remove", destination }, options),
+      options.signal,
+    );
   },
   copy(this: void, source: string, destination: string, options: WorktreeFilesystemOptions) {
     return write({ type: "copy", source, destination }, options);

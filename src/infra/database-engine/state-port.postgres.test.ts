@@ -8,6 +8,10 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
+  pluginBlobRegisterInDatabase,
+} from "../../plugin-state/plugin-blob-store.sqlite.js";
+import {
   capturePostgresBackup,
   preparePostgresRestore,
   readBackupEngine,
@@ -66,6 +70,19 @@ describe.skipIf(!connection)("shared-state database port", () => {
     for (const key of ["newline\n", 'quote"', "slash\\"]) {
       source.prepare("INSERT INTO user_preferences VALUES ('profile', ?, '{}', 1)").run(key);
     }
+    // The blob owner's full allowance must survive inspection, port, backup and restore.
+    const blob = Buffer.alloc(MAX_PLUGIN_BLOB_BYTES_PER_ENTRY, 0xab);
+    pluginBlobRegisterInDatabase(source, {
+      pluginId: "test",
+      namespace: "test",
+      key: "durable",
+      bytes: blob,
+      metadataJson: JSON.stringify("m".repeat(65_534)),
+      maxEntries: 2,
+      maxBytesPerNamespace: MAX_PLUGIN_BLOB_BYTES_PER_ENTRY + 3,
+      overflowPolicy: "reject-new",
+    });
+    const blobMd5 = createHash("md5").update(blob).digest("hex");
     expect(descriptor.inspectSqliteSource!(source)).toEqual({
       version: OPENCLAW_STATE_SCHEMA_VERSION,
       migrationRequired: false,
@@ -187,6 +204,11 @@ describe.skipIf(!connection)("shared-state database port", () => {
           ? [{ entry_key: "durable" }, { entry_key: "ttl" }]
           : [{ entry_key: "durable" }],
       );
+      expect(
+        await rows(
+          `SELECT octet_length(blob) AS bytes, md5(blob) AS md5 FROM "${restored.namespace}".plugin_blob_entries WHERE entry_key = 'durable'`,
+        ),
+      ).toEqual([{ bytes: MAX_PLUGIN_BLOB_BYTES_PER_ENTRY, md5: blobMd5 }]);
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
     expect(
@@ -211,7 +233,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     await expect(
       descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
     ).rejects.toThrow(/schema drift/);
-    expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+    expect(fs.readFileSync(sourcePath).equals(sourceBytes)).toBe(true);
   });
 
   it("retains absence of optional fragments and Doctor-owned history", async () => {

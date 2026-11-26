@@ -7,13 +7,11 @@ import {
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import type { PluginListResult, PluginMutationResult } from "../../lib/plugins/index.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createCredentialPresentation } from "./credential-presentation.ts";
 import { installedPluginDetailTabFromHash } from "./detail-tabs.ts";
@@ -21,6 +19,7 @@ import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
 import { createPluginPromptLaunch } from "./plugin-prompt-launch.ts";
+import { confirmPluginRemoval } from "./plugin-removal-confirmation.ts";
 import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
@@ -69,6 +68,7 @@ export function createPluginsPage(options: {
     routeData: () => routeData,
     uninstalling: uninstallingSelection,
     selectInstalled: (pluginId) => mcpLogin.select(pluginId),
+    findCatalogEntry: (id) => discovery.findEntry(id),
   });
   const { showDetails, showCatalogDetail } = details;
 
@@ -138,7 +138,7 @@ export function createPluginsPage(options: {
       ),
     onSnapshot: handleGatewaySnapshot,
   });
-  const skillPreview = createPluginPreview(gateway, publish);
+  const skillPreview = createPluginPreview(gateway);
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
     getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
@@ -149,6 +149,7 @@ export function createPluginsPage(options: {
     {
       getClient: () => gateway.client,
       isConnected: () => gateway.connected,
+      inventory: () => state.result?.plugins,
     },
     publish,
   );
@@ -303,6 +304,7 @@ export function createPluginsPage(options: {
         discovery.read(),
         rendered,
         state.detail?.catalog ?? state.catalogDetail?.result,
+        state.catalogDetail?.preview?.catalog.imageUrl,
       ),
   );
   onSettled(() => {
@@ -349,7 +351,6 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    // The file viewer owns Escape inside its shadow-root modal.
     if (skillPreview.state) {
       return;
     }
@@ -504,8 +505,8 @@ export function createPluginsPage(options: {
     } else {
       icons.installed.reset();
     }
-    setState({ messages: consent.reconcileInstallMessages(result) });
-    setState({ result });
+    setState({ result, messages: consent.reconcileInstallMessages(result) });
+    discovery.inventoryChanged();
     // Installed identity needs reconciliation; an uninstalled catalog read stays independent.
     const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
     if (
@@ -654,13 +655,10 @@ export function createPluginsPage(options: {
 
   function closeCatalogDetail() {
     setState({ catalogDetail: null, detail: null });
-    context.navigate("plugins", {
-      pathname: pathForRoute("plugins", context.basePath),
-    });
+    context.navigate("plugins", { pathname: pathForRoute("plugins", context.basePath) });
   }
 
   async function uninstall(pluginId: string, rowKey: string): Promise<void> {
-    const name = state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     const trigger = options.element().contains(document.activeElement)
       ? document.activeElement
       : null;
@@ -694,11 +692,13 @@ export function createPluginsPage(options: {
       {
         action: "uninstall",
         confirm: () =>
-          showConfirmDialog({
-            title: t("pluginsPage.removeConfirmTitle", { name }),
-            message: t("pluginsPage.removeConfirmMessage"),
-            confirmLabel: t("pluginsPage.remove"),
-            danger: true,
+          confirmPluginRemoval({
+            pluginId,
+            name: state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId,
+            context,
+            gateway,
+            inspection: details.inspection.receipt()?.result,
+            detail: () => state.detail,
           }),
       },
     );
@@ -737,7 +737,6 @@ export function createPluginsPage(options: {
     routeLoading: () => gateway.connected && !routeDataConsumed,
     catalogRead: catalog,
     inspectionRead: details.inspection,
-    detailRead: details.catalog,
     setState,
     refreshCatalog,
     accessBlockedReason,

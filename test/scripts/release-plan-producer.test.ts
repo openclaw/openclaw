@@ -310,14 +310,7 @@ type YamlPackageHarnessParams = {
 function runYamlPackageSubprocess(
   options: {
     inventory?: boolean;
-    admission?:
-      | "valid"
-      | "candidate"
-      | "qualification"
-      | "inputs"
-      | "descriptor"
-      | "authority"
-      | "ancestry";
+    admission?: "valid" | "candidate" | "qualification" | "inputs" | "descriptor" | "authority";
     version?: string;
     toolingFullRef?: string;
     identityResponse?: (params: YamlPackageHarnessParams) => string;
@@ -369,14 +362,16 @@ function runYamlPackageSubprocess(
     if (options.admission === "authority") {
       admission.authority.permission = "read";
     }
-    if (options.admission === "ancestry") {
-      admission.authority.qualificationAncestry = "diverged";
-    }
     for (const endpoint of new Set(admission.calls)) {
       admissionResponses[endpoint] = admission.runGh(["api", endpoint]);
     }
-    admissionResponses["repos/openclaw/openclaw/compare/" + fixture.toolingSha + "...main"] =
-      JSON.stringify({ status: admission.authority.qualificationAncestry });
+    if (options.admission === "qualification") {
+      // The requested Q exists, but the sealed admission selected a different Q.
+      const prefix =
+        "repos/openclaw/openclaw/contents/scripts/lib/release-validation-waivers.json?ref=";
+      admissionResponses[prefix + fixture.toolingSha] =
+        admissionResponses[prefix + admission.selected.qualificationSha]!;
+    }
     if (options.admission === "descriptor") {
       admission.descriptor.artifactName = "wrong-admission-artifact";
     }
@@ -544,7 +539,7 @@ exit 1
       expect(result.stderr).not.toContain("synthetic-token");
     },
   );
-  it("produces admitted inventory with independent C, Q, and P through the verified wrapper", () => {
+  it("produces admitted inventory with off-main Q and independent C and P through the verified wrapper", () => {
     const { result, fixture } = runYamlPackageSubprocess({ inventory: true, admission: "valid" });
     expect(result.status, result.stderr).toBe(0);
     expect(new Set([fixture.candidateSha, fixture.toolingSha, "b".repeat(40)]).size).toBe(3);
@@ -570,7 +565,6 @@ exit 1
     ["inputs", "Qualification evidence differs from the authenticated operator request"],
     ["descriptor", "Invalid qualification admission artifact identity"],
     ["authority", "Qualification operator no longer has repository qualification authority"],
-    ["ancestry", "main release tooling SHA is not reachable"],
   ] as const)("rejects admitted inventory with invalid %s", (admission, message) => {
     const { result } = runYamlPackageSubprocess({ inventory: true, admission });
     expect(result.status).toBe(1);
@@ -1829,7 +1823,12 @@ mutateModule.syncBuiltinESMExports();
     execFileSync("git", ["update-ref", "refs/heads/main", toolingSha], { cwd: root });
     expect(candidateSha).not.toBe(toolingSha);
     expect(existsSync(join(root, "src"))).toBe(false);
-    expect(collectExtensionPackageJsonCandidates(root)).toEqual(candidates);
+    // Directory enumeration order is not part of the inventory contract.
+    const byId = (left: { extensionId: string }, right: { extensionId: string }) =>
+      left.extensionId < right.extensionId ? -1 : left.extensionId > right.extensionId ? 1 : 0;
+    expect(collectExtensionPackageJsonCandidates(root).toSorted(byId)).toEqual(
+      candidates.toSorted(byId),
+    );
     expect(
       listDirectoryTreeStrictSync(join(root, "extensions"))
         .map((walkEntry) => walkEntry.dirent)

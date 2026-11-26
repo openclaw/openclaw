@@ -12,7 +12,8 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
+import { resolveSkillStatusEntry } from "../skills/discovery/skill-index.js";
+import type { SkillStatusReport } from "../skills/discovery/status.types.js";
 import {
   installSkillFromClawHub,
   readTrackedClawHubSkillSlugs,

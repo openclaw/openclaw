@@ -154,6 +154,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `gateway.auth.identityScopes`: maps a verified trusted-proxy user or Tailscale WhoIs login to connection-only operator scopes. Email keys match case-insensitively; other identities match exactly. For trusted-proxy Control UI connections, `x-openclaw-scopes` caps device enrollment or upgrade requests and the final device-plus-identity session scopes. Grants do not create or modify pairing records. Token, password, and no-auth connections have no verified identity and receive no grant.
 - `gateway.roles`: a catalog of named operator roles. Setting `default` enables named-role enforcement for authenticated user profiles on team Gateways. Every definition specifies `sessions.others` (`none`, `view`, `suggest`, or `write`), allowed session-creation and agent-run `agents` (`"*"` or an array of agent IDs), and a closed `scopes` ceiling that also applies to identity-authenticated HTTP requests and signed Control UI plugin grants. Optional `sandbox` is `"inherit"` by default or `"required"` to sandbox the exec and file tools of sessions created under that role even when the agent's sandbox mode is `"off"`. This requirement is recorded once from the authenticated creator, cannot be changed through role updates or session mutation, and does not affect existing sessions. A sandbox-required person cannot start a host-execution session, including through an invitation; unavailable sandbox backends block session execution, and elevated or host-target exec overrides cannot escape that tool policy. This is not whole-host isolation; review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions). The administrator-scoped `users.setRole` Gateway method assigns or clears a profile's role and immediately disconnects its active clients so they reconnect with current authority. Identity-authenticated operator sessions do not receive reusable, person-unbound device/bootstrap tokens when their profile is role-enforced, and setting `gateway.roles.default` rejects identity-less device-token or bootstrap-token operator authentication; reconnect through trusted-proxy or other supported verified identity instead. `assignments.byGithubLogin` maps case-insensitive GitHub logins to defined roles before a person first signs in; a valid explicit profile assignment wins, then a matching cached GitHub identity, then `default`. Invalid or duplicate normalized logins and unknown role names are rejected; profiles without a cached GitHub identity do not match. `default` is optional and must name a configured definition when set. `assignments.byGithubLogin` requires a default, even for an empty mapping. Without a default, definitions enforce roles only for current OpenClaw ID members through their canonical linked profile, including ordinary trusted-proxy, HTTP, channel, and background access by that same person. A stored identity link without current membership is insufficient. Nonmembers retain device-token and setup-code sign-in, browser-code pairing, owner ingress, identity scopes, profile requirements, and session access as if `gateway.roles` were absent. In that state `users.setRole` accepts named member assignments but rejects named nonmember assignments; clearing with `role: null` remains allowed. Nonmembers have no effective role. `users.list` preserves the explicit `role` and adds `effectiveRole` and `roleSource` (`assigned`, `githubLogin`, or `default`). `sessions.others: "none"` also denies Gateway-wide `usage.cost`; audit diagnostics and other `operator.write` control-plane capabilities remain shared-domain surfaces, not hostile-tenant isolation. Omitting `roles` leaves existing solo and shared-secret deployments unchanged. See [Operator scopes](/gateway/operator-scopes#named-operator-roles).
 - OpenClaw ID members use their canonical linked profile's effective role from `gateway.roles.definitions` with or without `default`, independently of sign-in transport. Invite approval assigns that profile role; the membership role is a display label, not a separate grant. Enabling OpenClaw ID installs missing `operator`, `viewer`, and sandbox-required `guest` presets without changing existing definitions, `default`, or `assignments`. Manage membership roles on **Access**; definitions are config-only. Missing definitions block member connections. See [Member roles](/gateway/operator-scopes#openclaw-id-member-roles) for preset scopes and Doctor checks.
+- `gateway.roles.definitions.<role>.projects`: optional registry project IDs, or `"*"` for every registered project, that a role without `operator.write` may discover and open in addition to public GitHub repositories. Sessions and spawns reach a project granted only this way through an isolated managed worktree. Unknown IDs are ignored; omitting the field leaves project access unchanged. Grant edits apply to the next request without reconnecting clients or stopping runs. See [Project grants](/gateway/operator-scopes#project-grants).
 - `gateway.roles.definitions.<role>.accessPolicyPlugin`: optional exact plugin ID whose registered Gateway access policy must authorize people governed by this role. For example, a default visitor role can require `"visitor-access"`, while an independently assigned staff role omits the field. The Gateway denies this role's access when the plugin is missing or disabled, its manifest is missing or malformed, loading fails, or the policy supplies no current authority. The reference remains valid configuration while the plugin is unavailable, so independent staff and the Gateway owner can repair it. Omitting the field adds no plugin dependency.
 
 Access denials include a bounded `accessCause` in handshake error details and an
@@ -168,7 +169,7 @@ Ingress and unknown-owner failures remain fail closed; the non-Gateway owner
 isolation rules in [Secrets runtime model](/gateway/secrets/runtime-model) do
 not grant access during a policy failure.
 
-- `gateway.roles.definitions.<name>.modelPolicy`: optional model ceiling for a role's requests, queued work, and children. With `{}`, permitted models follow the designated source agent's primary and fallbacks. `sourceAgent` chooses that agent; `allow` replaces membership and `deny` excludes resolved model references, aliases, or trailing family patterns such as `provider/restricted-*`. An empty `allow` denies all models. With config reload enabled, edits confined to existing roles' model policies apply when committed without restarting the Gateway: requests using removed models are canceled while permitted models and unrelated work continue. Other role changes hot-apply and reconnect clients with current authority, including when combined with a model-policy edit. Existing manual model rules still apply; omitted role model policy and System access are unchanged. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+- `gateway.roles.definitions.<name>.modelPolicy`: optional model ceiling for a role's requests, queued work, and children. With `{}`, permitted models follow the designated source agent's primary and fallbacks. `sourceAgent` chooses that agent; `allow` replaces membership and `deny` excludes resolved model references, aliases, or trailing family patterns such as `provider/restricted-*`. An empty `allow` denies all models. With config reload enabled, edits confined to existing roles' model policies or project grants apply when committed without restarting the Gateway: requests using removed models are canceled while permitted models and unrelated work continue. Other role changes hot-apply and reconnect clients with current authority, including when combined with a model-policy edit. Existing manual model rules still apply; omitted role model policy and System access are unchanged. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 - `gateway.roles.definitions.<name>.accessPrograms.cyber`: optional Access ceiling: `"daybreak_blue"`, `"daybreak_red"`, both, or `[]` for Standard only. An explicit list binds every operator, including administrators. When omitted, admitted `operator.admin` authority includes all eligible programs; restricted operators receive Standard only. Model wildcards and retired model aliases do not grant programs. The selected model must independently be permitted, and the account/runtime must advertise the program. Changes retire current source authority and require fresh admission, including queued work and restart recovery. System/shared-secret use and Gateways without named-role enforcement keep their existing behavior. See [Access program grants](/gateway/operator-scopes#access-program-grants).
 - Role definitions, proxy trust, identity scopes, Tailscale authentication, and trusted-proxy policy hot-apply. Changes beyond model policy reconnect existing clients with current authority, except that verified WebSocket logins retain their connections and accepted runs when only another login’s identity grants change or their own scope set is merely reordered. Changes to their own resolved grants revoke retained and delegated work; restoring a grant does not revive that authority. Pending handshakes and writes cannot keep revoked access. Auth mode changes still require a Gateway restart.
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`. Changes hot-apply to the existing limiters: recorded failures, earned lockout deadlines, and pending loopback delays survive. New limits and exemptions apply to subsequent attempts; deleting the section restores defaults.
@@ -198,7 +199,7 @@ not grant access during a policy failure.
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.experimental.customPlugins`: allow native browser UI from enabled user-installed plugins, including local development plugins. Default: `true`, with no Labs switch. This existing key remains an advanced opt-out: explicit `false` values stay off on upgrade; omission and `true` allow native UI. Native UI runs with each signed-in viewer’s Gateway authority, so install only trusted plugins. Enabled bundled views, backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected by the opt-out. Changes hot-apply and refresh connected browser tabs. After disabling, reload tabs to clear JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
-- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `false`. Enable through **Settings → Labs → Templates** or set this boolean to `true`. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Turning the switch off blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
+- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `true`, with no Labs or replacement settings switch. This historical key remains an advanced opt-out: explicit `false` stays off on upgrade, and unset or `true` permits discovery and Add. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Setting it to `false` blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway browser connections. When omitted, defaults to `gateway.publicOrigin` if configured. An explicit list, including `[]`, replaces this default. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.newSessionModelDefaults`: `"last-used"` (default) restores remembered new-session model, runtime, and reasoning choices. Set `"configured"` to start fresh drafts with the selected agent’s configured defaults instead. Applies to `/new` and the command palette in the UI served by this Gateway, after browser refresh or reconnect. Explicit choices remain editable and survive reload with the current unsent draft; submitting that draft retires its choices so the next fresh draft uses configured defaults. Existing conversations are untouched. Workspace, placement, and Fast Mode preferences are preserved; stored preferences are not deleted. Configure the desired model and `thinkingDefault` on the agent (or `agents.defaults`); this setting does not force a particular model or reasoning level.
@@ -382,3 +383,117 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+## `gateway.resources.profile`
+
+```json5
+{ gateway: { resources: { profile: "auto" } } }
+```
+
+- `auto` (default): choose `lean` when effective memory is **below 8 GiB**;
+  exactly 8 GiB or more selects `standard`. Automatic selection is enabled by default
+  and depends only on memory, not CPU count.
+- `standard` or `lean`: explicitly override automatic selection.
+- Memory is the smallest visible cgroup v2 `memory.max` across the process's cgroup
+  and ancestors, bounded by total host RAM. Without a finite readable limit,
+  total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
+  `memory.high`, swap and current free memory do not select
+  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+- Changing the setting requires a Gateway restart.
+
+`standard` keeps the existing worker layout. `lean` runs the first worker of each core
+kind (SQLite store per carrier class, session transcript, state reader and plugin model
+catalog reader) as a logical endpoint inside one shared host worker. The endpoints load
+their common code once but keep their own ports, queues and task state; extra workers of
+the same kind, CPU-heavy kinds, external databases, Postgres-engine installs and plugins
+such as Knowledge keep their own workers. Runtimes where closing a SQLite database is not
+qualified to release its native resources (such as Bun on Windows) also keep dedicated
+workers, because their cleanup relies on worker exit. A failed, cancelled or timed-out hosted task
+replaces the whole shared host: every hosted endpoint's in-flight work fails with an
+explicit error, and the next request starts a new host. Neither profile is a memory cap or
+OOM guarantee.
+
+### Lean startup
+
+Lean also lowers memory use while the Gateway starts:
+
+- **Post-ready work waits for a quiet Gateway.** Standard starts post-ready maintenance
+  500 ms after startup settles. That covers session reconcile, disk-budget and archive
+  sweeps, worktree maintenance, the skills refresh, cron start, prewarming and the
+  restart-sentinel wake. Lean first checks 2 seconds after startup settles. If requests
+  are still running, such as a first agent turn, it checks again every second until
+  they finish. After 60 seconds it starts the work anyway, so a busy Gateway can't
+  postpone maintenance indefinitely. Requests never wait for this work.
+- **Command children spawn directly.** Lean doesn't start the Linux spawn broker, the
+  same as hosts with 1 GiB or less. Commands and SQLite readers spawn from the
+  Gateway, trading some fork latency for the broker's memory. The plugin
+  native-resource broker still starts when plugins first need it.
+
+### Lean worker memory admission
+
+In `lean`, the Gateway admits extra workers only while they fit a memory budget.
+Lean trades latency for staying inside it; work waits rather than starting a worker
+that would exceed the budget.
+
+```json5
+{ gateway: { resources: { profile: "lean", memoryBudgetMiB: 1024 } } }
+```
+
+| Limit source                  | Default budget   | Memory use compared with it                      |
+| ----------------------------- | ---------------- | ------------------------------------------------ |
+| cgroup v2 `memory.max`        | 85% of the limit | The limiting cgroup's working set                |
+| Host RAM (no container limit) | 40% of host RAM  | The Gateway process RSS, not its child processes |
+| `memoryBudgetMiB` set         | That many MiB    | As above, by limit source                        |
+
+A container limit is usually sized for OpenClaw alone, so the budget keeps a 15%
+margin. Without one, the Gateway shares the machine with everything else and keeps
+to 40%. `memoryBudgetMiB` (positive integer, lean only, ignored by `standard`)
+overrides both. The shares are provisional. Changing the budget requires a Gateway
+restart.
+
+- **Floors always run.** Each worker pool has a floor of one worker (two for
+  shared-state reads, so a held settlement read cannot block a fresh one), plus a
+  point-read lane once a pool uses point reads. Fixed direct workers (native lifecycle
+  supervisor, state heartbeats, SQLite broker carriers, Knowledge registry and
+  storage, PostgreSQL bridges, the shared core host) keep their normal counts. Floors
+  are reserved and never refused, so admission cannot deadlock.
+- **Growth waits.** A pool worker beyond its floor starts only if current memory use,
+  plus reservations not yet running, plus that worker's estimated cost stays under the
+  budget. Otherwise the task waits in the same pool queue for an existing worker. It
+  is never dropped; existing deadlines and cancellation still apply.
+- **Nested pools** created inside worker threads stay at their floor in lean.
+- **Measurement.** Inside a cgroup v2 limit, memory use is the limiting cgroup's
+  `memory.current` minus `inactive_file`. Active file cache still counts, so this can
+  overstate process memory. Without a cgroup limit, it is the Gateway process RSS,
+  which includes its worker threads but not subprocesses. Either is read at each
+  admission decision, not continuously.
+- **Estimates** are per worker kind heap measurements, not marginal RSS.
+- **Not covered:** memory already admitted (including floors, the main thread and
+  growth inside running workers), subprocesses, and plugin workers created directly
+  rather than through a worker pool. These are measured once running but not refused.
+
+The floor estimate is the memory measured when the lean budget starts (the main
+thread and any workers already running) plus every floor's estimate. The Gateway logs
+a warning once if that estimate exceeds the budget, and once if measured memory
+exceeds the budget while only floor workers run. In either case, mandatory workers
+still run and no growth is admitted.
+
+`openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
+report the active profile, selection reason, effective memory limit/source and CPU
+count. Their live census reports direct worker kind, count, retained idle floor,
+normal cap, point-read cap, idle policy and sampled heap usage. Floors are retained
+after first use, not eager startup counts. A zero idle timeout means until-close;
+warm-worker grace can extend configured timeouts. Workers remain counted until
+native exit, including pending retirement.
+
+Heap samples reuse the existing diagnostic sampler; unavailable or partial samples
+are labeled rather than reported as zero. Workers outside task pools have unknown
+policy fields. The census covers directly registered workers, not subprocesses or
+nested workers; it is not a process RSS breakdown. In lean, the shared host is one
+worker whose row also reports its live hosted endpoints. Offline status does not substitute
+the CLI's own resource profile for the Gateway's.
+
+In `lean`, status and `diagnostics.lanes` also report `memoryBudget`: the budget, its
+basis (`cgroup-85`, `host-40` or `configured`), the limit and its source, last measured use, the startup baseline and estimated floor bytes, reservations not yet running, growth
+admissions and refusals, and waits (count, currently waiting, total and longest
+wait), in total and per worker kind.

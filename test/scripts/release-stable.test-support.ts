@@ -191,8 +191,7 @@ export const CANDIDATE_COMMAND =
   -f npm_dist_tag=latest \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \
-  -f finalize_release_before_docker=true \
-  -f wait_for_clawhub=true`.replaceAll("\\`", "`");
+  -f finalize_release_before_docker=true`.replaceAll("\\`", "`");
 
 export const publishParentRun = () => ({
   ...workflowRun("openclaw-release-publish.yml", 301, `Publish v${RELEASE}`),

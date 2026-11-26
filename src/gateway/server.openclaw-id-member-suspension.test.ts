@@ -107,7 +107,7 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
       const pending = JSON.stringify(input.slice(lastOutput + 1));
       const reply = () =>
         writeOpenAiResponsesText(response, { text: "Done.", messageId: "r", responseId: "r" });
-      for (const marker of ["QUEUED_FOLLOWUP", "STEERED_INPUT", "CRON_RUN_MARKER"]) {
+      for (const marker of ["QUEUED_FOLLOWUP", "CRON_RUN_MARKER"]) {
         if (pending.includes(marker)) {
           mark(marker);
         }
@@ -352,9 +352,6 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
     report.queuedFollowup = await send(member.client, s1, "QUEUED_FOLLOWUP later", {
       queueMode: "followup",
     });
-    report.steeredInput = await send(member.client, s1, "STEERED_INPUT now", {
-      queueMode: "steer",
-    });
     const s2 = await create();
     report.spawnTurn = await send(member.client, s2, "PLEASE_SPAWN a helper");
     report.childStarted = await until(() => holds.has("CHILD_HOLD"));
@@ -415,20 +412,18 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
         ),
       };
     }
-    await until(() => [...holds.values()].every((hold) => hold.aborted), 3000);
-    report.inFlightTurnAborted = holds.get("HOLD_TURN")?.aborted ?? "never started";
-    report.childRunAborted = holds.get("CHILD_HOLD")?.aborted ?? "never started";
+    if (cutOff === "openclaw-id-remove") {
+      await until(() => holds.get("HOLD_TURN")?.aborted === true, 3000);
+    }
     for (const hold of holds.values()) {
       hold.release();
     }
     await sleep(4000);
+    report.inFlightTurnAborted = holds.get("HOLD_TURN")?.aborted ?? "never started";
+    report.childRunAborted = holds.get("CHILD_HOLD")?.aborted ?? "never started";
     const after = (marker: string) =>
       seen.some((entry) => entry.marker === marker && entry.at >= cutAt);
     report.queuedFollowupRanAfterCut = after("QUEUED_FOLLOWUP");
-    report.steeredInputRanAfterCut = after("STEERED_INPUT");
-    report.steeredInputRanBeforeCut = seen.some(
-      (entry) => entry.marker === "STEERED_INPUT" && entry.at < cutAt,
-    );
     if (job) {
       report.cronAfterCut = await settle(
         owner.request("cron.run", { id: job.id, mode: "force" }),
@@ -466,9 +461,9 @@ it.for<CutOff>([
   "owner-sets-reader",
   "owner-sets-null",
   "openclaw-id-remove",
-])("cuts off an OpenClaw ID member's work (%s)", async (cutOff, { signal }) => {
+])("applies OpenClaw ID member access changes (%s)", async (cutOff, { signal }) => {
   const report = await runScenario(cutOff, signal);
-  // Assignment changes apply to tunnel connections and every retained source.
+  // The assigned profile role controls tunnel admission.
   expect(report.profileRoleApplies).toMatchObject({
     member: ["operator.approvals", "operator.read", "operator.write"],
     memberProfileId: true,
@@ -481,16 +476,15 @@ it.for<CutOff>([
     ownerDeviceProfileIsPerson: true,
   });
   const cut = cutOff !== "control";
-  // A: tunnel connection closed, in-flight run revoked.
+  // Role changes close the tunnel; membership removal also explicitly stops its run.
   expect(report.memberConnectionClosed).toBe(
     cutOff === "openclaw-id-remove" ? 1008 : cut ? 4001 : "still open",
   );
-  expect(report.inFlightTurnAborted).toBe(cut);
-  // B1-B3: queued/steered input, subagent child and the member's automation.
+  expect(report.inFlightTurnAborted).toBe(cutOff === "openclaw-id-remove");
+  // Queued follow-ups and scheduled automation runs re-admit when they start.
   expect(report.queuedFollowupRanAfterCut).toBe(!cut);
-  expect(report.steeredInputRanAfterCut).toBe(!cut);
-  // Membership removal refuses fresh sources but preserves an admitted recovered child.
-  expect(report.childRunAborted).toBe(cut && cutOff !== "openclaw-id-remove");
+  // The independently admitted child keeps its own authority in every case.
+  expect(report.childRunAborted).toBe(false);
   expect(report.cronTurnReachedModelAfterCut).toBe(!cut);
   if (cut) {
     expect(report.cronRuns).toMatchObject({

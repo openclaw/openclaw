@@ -28,10 +28,7 @@ import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-c
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import {
-  withStateDatabaseSchemaMaintenance,
-  withStateDatabaseSchemaMaintenanceAsync,
-} from "../infra/state-database-maintenance.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import {
   runUpdateSqliteMigration,
@@ -50,7 +47,6 @@ import {
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
 import {
-  type OpenClawStateDatabaseOptions,
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -85,6 +81,7 @@ import {
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
+  normalizeSqliteText,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
@@ -99,50 +96,12 @@ import {
   recoverOrphanTaskDeliveryRows,
   prepareOrphanTaskDeliveryRecovery,
 } from "./openclaw-state-db-task-delivery-recovery.js";
-import { resolveDatabasePath, describeAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { describeAgentPathMigration } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
-
-type DoctorRepairScope = "doctor" | "indexes" | "readability" | "version";
-type DoctorRepairOptions = OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" };
-
-function resolveDoctorRepairTarget(options: DoctorRepairOptions, scope: DoctorRepairScope) {
-  const env = options.env ?? process.env;
-  const pathname = resolveDatabasePath(options);
-  assertOpenClawStateSchemaRepairAllowed(pathname);
-  if (!existsSync(pathname)) {
-    return undefined;
-  }
-  if (scope === "readability") {
-    // A writer close may checkpoint WAL and invalidate a recorded corruption refusal.
-    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  }
-  return { pathname, env };
-}
-
-export function repairDoctorStateSchema(options: DoctorRepairOptions, scope: DoctorRepairScope) {
-  const target = resolveDoctorRepairTarget(options, scope);
-  return target
-    ? withStateDatabaseSchemaMaintenance({ databasePath: target.pathname }, () =>
-        repairStateSchema(target.pathname, target.env, scope, options.integrityCheck),
-      )
-    : { changes: [], warnings: [] };
-}
-
-export async function repairDoctorStateSchemaAsync(
-  options: DoctorRepairOptions,
-  scope: DoctorRepairScope,
-): Promise<{ changes: string[]; warnings: string[]; failure?: unknown }> {
-  const target = resolveDoctorRepairTarget(options, scope);
-  return target
-    ? withStateDatabaseSchemaMaintenanceAsync({ databasePath: target.pathname }, () =>
-        repairStateSchemaAsync(target.pathname, target.env, scope, options.integrityCheck),
-      )
-    : { changes: [], warnings: [] };
-}
 
 export function repairStateSchema(
   pathname: string,
@@ -302,8 +261,8 @@ function* repairOpenedStateSchemaSteps(
         warnings: [],
       };
     }
-    // Private preservation readers cannot inspect the recognized malformed catalog.
-    // Publish its owner-rechecked repair before credential or orphan preparation.
+    // Normalization and private preservation readers require a readable catalog.
+    // Publish its owner-rechecked repair before inspecting historical values.
     const preparedSchemaRepair =
       scope === "doctor" || scope === "readability"
         ? prepareStateDatabaseSchemaRepair(db, pathname, env)
@@ -315,15 +274,30 @@ function* repairOpenedStateSchemaSteps(
       };
       const apply = yield {
         sync() {
-          if (scope === "readability") {
-            repairCatalog();
-          }
+          repairCatalog();
         },
         async prepare() {
           return repairCatalog;
         },
       };
       apply?.();
+    }
+    const normalizationVersion = scope === "doctor" ? readSqliteUserVersion(db) : 0;
+    if (normalizationVersion > 0 && normalizationVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      // The first async resume can precede capture; yield before this existing repair writes.
+      const applyNormalization = yield {
+        sync() {
+          assertWriteAllowed();
+          normalizeSqliteText(db);
+        },
+        async prepare() {
+          return () => {
+            assertWriteAllowed();
+            normalizeSqliteText(db);
+          };
+        },
+      };
+      applyNormalization?.();
     }
     if (scope === "version" || scope === "doctor") {
       yield {

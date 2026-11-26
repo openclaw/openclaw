@@ -4,6 +4,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { currentPluginCommandHostProcessId } from "../plugin-command-schedule.js";
 import { resolveCronContinuationSessionKey } from "../session-target.js";
 import type { CronSchedulerSnapshot } from "../store/scheduler-actor.types.js";
+import { captureCronProviderBackoff } from "./provider-backoff.js";
 import type { CronServiceState } from "./state.js";
 
 export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
@@ -58,6 +59,7 @@ export async function captureCronSchedulerSnapshot(
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
       memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
+      providerBackoff: captureCronProviderBackoff(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
         ? preparedOwner.defaultAgentId

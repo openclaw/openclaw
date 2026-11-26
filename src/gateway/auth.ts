@@ -9,8 +9,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayIngressPrincipal } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { delegatedProfileAuthority } from "../state/user-profile-delegation.js";
+import type { GatewayAuthMethod } from "./auth-policy.types.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { verifyCloudflareAccessJwt } from "./cloudflare-access-jwt.js";
 import { getHeader } from "./http-header-value.js";
 import {
   prepareGatewayIngressAttribution,
@@ -54,15 +56,7 @@ const LEGACY_OPENCLAW_ENV_NOTE =
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?:
-    | "none"
-    | "token"
-    | "password"
-    | "tailscale"
-    | "device-token"
-    | "bootstrap-token"
-    | "trusted-proxy"
-    | "remote-ingress";
+  method?: GatewayAuthMethod;
   user?: string;
   delegation?: GatewayDelegation;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
@@ -264,11 +258,11 @@ function isTrustedProxyUserAllowed(
   return !allowUsers?.length || users.some((user) => allowUsers.includes(user));
 }
 
-function authorizeTrustedProxy(params: {
+async function authorizeTrustedProxy(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
   trustedProxyConfig: GatewayTrustedProxyConfig;
-}): { user: string; delegation?: GatewayDelegation } | { reason: string } {
+}): Promise<{ user: string; delegation?: GatewayDelegation } | { reason: string }> {
   const { req, trustedProxies, trustedProxyConfig } = params;
 
   if (!req) {
@@ -306,7 +300,24 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_user_missing" };
   }
 
-  const user = userHeaderValue.trim();
+  let user = userHeaderValue.trim();
+
+  const accessJwt = trustedProxyConfig.cloudflareAccessJwt;
+  if (accessJwt) {
+    // Opt-in: the signed assertion, not the header, names the user. Other readers
+    // still use the header, so it must agree with the verified claim.
+    const verified = await verifyCloudflareAccessJwt(
+      getHeader(req, "cf-access-jwt-assertion") ?? "",
+      accessJwt,
+    );
+    if (!verified.ok) {
+      return { reason: `trusted_proxy_access_${verified.reason}` };
+    }
+    if (!verified.email || verified.email.toLowerCase() !== user.toLowerCase()) {
+      return { reason: "trusted_proxy_access_user_mismatch" };
+    }
+    user = verified.email;
+  }
 
   if (hasGatewayDelegationClaim(req, trustedProxyConfig.userHeader)) {
     const delegation = authorizeGatewayDelegation(req, trustedProxyConfig, user);
@@ -545,7 +556,7 @@ async function authorizeGatewayConnectCore(
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
     }
-    const result = authorizeTrustedProxy({
+    const result = await authorizeTrustedProxy({
       req,
       trustedProxies,
       trustedProxyConfig: auth.trustedProxy,

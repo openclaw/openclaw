@@ -22,9 +22,9 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveDefaultProviderEnvVar } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 
@@ -47,11 +47,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVarsCore(provider, {
-    ...(config ? { config } : {}),
-    includeUntrustedWorkspacePlugins: false,
-  });
-  const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
+  const envVar = resolveDefaultProviderEnvVar(provider, config);
   if (!envVar) {
     throw new Error(
       `Provider "${provider}" does not have a default env var mapping for secret-input-mode=ref.`,

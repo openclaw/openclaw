@@ -27,6 +27,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
+import { createTemplateCronGateway } from "./cron-gateway.js";
 import {
   applyTemplateAddForGateway,
   TemplateGatewayPlanBlockedError,
@@ -80,6 +81,10 @@ it.each([
       );
       await fs.writeFile(path.join(root, "SOUL.md"), "A calm fixture personality.\n");
       const manifest = path.join(root, "CLAW.md");
+      const retrySchedule =
+        outcome === "admitted-runtime-retry" || outcome === "admitted-config-retry";
+      const originZone = outcome === "admitted-runtime-retry" ? "America/New_York" : undefined;
+      let deviceTimeZone = originZone;
       await fs.writeFile(
         manifest,
         "---\n" +
@@ -87,6 +92,19 @@ it.each([
             schemaVersion: 1,
             agent: { id: "fixture-first", name: "First Fixture" },
             workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+            ...(retrySchedule
+              ? {
+                  automations: [
+                    {
+                      id: "weekly",
+                      enabled: false,
+                      schedule: { cron: "0 9 * * 1", timezone: "Europe/Paris" },
+                      session: "main",
+                      message: "Prepare a summary.",
+                    },
+                  ],
+                }
+              : {}),
           }) +
           "\n---\n",
       );
@@ -163,7 +181,11 @@ it.each([
       setRuntimeConfigSnapshot(config);
       const reviewPlan = async () =>
         projectGatewayTemplateAddPlan(
-          await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
+          await buildGatewayTemplateAddPlan(source, {
+            config,
+            sourceMcpServers: {},
+            deviceTimeZone,
+          }),
           source,
           { riskAcknowledgementRequired: false },
           config,
@@ -229,12 +251,23 @@ it.each([
           ),
         ).toBe("A calm fixture personality.\n");
       });
+      await using cleanup = new AsyncDisposableStack();
+      const scheduler = retrySchedule
+        ? cleanup.adopt(createDeletionCron(state), (fixture) => fixture.stop())
+        : undefined;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Fixture authority expired");
+        }
+      };
       const applyInput = {
+        cronGateway:
+          scheduler && createTemplateCronGateway(scheduler.cron, () => config, assertCurrent),
         source: { packageName: "@fixture/template-first", version: "1.0.0" },
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
           : {}),
-        getPlanningContext: async () => ({ config, sourceMcpServers: {} }),
+        getPlanningContext: async () => ({ config, sourceMcpServers: {}, deviceTimeZone }),
         policyConfig: { configPath: state.configPath, env: state.env },
         configWriteOptions: {
           beforeCommit: async () => {
@@ -247,11 +280,7 @@ it.each([
             }
           },
         },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Fixture authority expired");
-          }
-        },
+        assertCurrent,
         prepareAgentChat,
         waitForAgentRuntime: async () => {
           if (outcome === "admitted-recreated" && recreating) {
@@ -412,6 +441,14 @@ it.each([
         });
         const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
         expect(retained?.sessionId).toBe(admittedSessionId);
+        if (retrySchedule) {
+          if (originZone) {
+            expect(retained?.templateInitialization?.deviceTimeZone).toBe(originZone);
+          } else {
+            // This is also the persisted shape of receipts written before device-zone support.
+            expect(retained?.templateInitialization).not.toHaveProperty("deviceTimeZone");
+          }
+        }
         const profile = path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md");
         if (outcome === "admitted-config-retry") {
           expect(result.error?.code).toBe("add_failed");
@@ -420,7 +457,8 @@ it.each([
         }
         const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
         // A rerun from a new client has only the kept agent's ID and the catalog coordinate.
-        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {} };
+        deviceTimeZone = "Asia/Tokyo";
+        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {}, deviceTimeZone };
         expect(
           await planTemplateAddForGateway({ ...rerun, source: applyInput.source }),
         ).toMatchObject({ blockers: [], planIntegrity: review!.planIntegrity });
@@ -432,6 +470,13 @@ it.each([
           expect.objectContaining({ code: "agent_id_collision" }),
         );
         result = await applyTemplateAddForGateway(applyInput);
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        if (scheduler) {
+          const jobs = await scheduler.cron.list({ includeDisabled: true });
+          expect(jobs.map((job) => job.schedule)).toEqual([
+            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
+          ]);
+        }
         if (before) {
           const after = await fs.stat(profile);
           expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
@@ -439,7 +484,6 @@ it.each([
             mtimeMs: before.mtimeMs,
           });
         }
-        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
         expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
           admittedSessionId,
         );

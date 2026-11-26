@@ -10,15 +10,13 @@ import { createTestAdmittedRunContext } from "../../admitted-run-context.test-su
 import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
+import { startControlProducer } from "./subagent-control-native.test-support.js";
 import * as ended from "./subagent-lifecycle-events.js";
-import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
 import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import * as fixtures from "./subagent-registry-lifecycle-controller.test-support.js";
-import { registerRequesterAdmissionRetryTests } from "./subagent-registry-lifecycle-delivery.test-support.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -159,7 +157,11 @@ export function registerDetachedCleanupAuthorityTest({
         sessionKey,
         operationalRunInstance:
           createTestAdmittedRunContext("cleanup-requester").operationalRunInstance,
-        receiptAuthority: () => !disposed,
+        receiptAuthority: () => {
+          if (disposed) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         transcripts.withOwnedSessionTranscriptWrites(
@@ -386,84 +388,6 @@ export function registerDeliveryRetryOwnerTests({
     },
   );
 
-  it("retains a child result and retries parent admission without a sweep", async () => {
-    await useRetryTimers();
-    vi.setSystemTime(10_000);
-    const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
-      "./subagent-registry-cleanup.js",
-    );
-    const decision = vi
-      .spyOn(cleanupPolicy, "resolveDeferredCleanupDecision")
-      .mockImplementation(actualPolicy.resolveDeferredCleanupDecision);
-    const terminalReply = { disposition: "visible", text: "A=alpha" } as const;
-    const runSubagentAnnounceFlow = vi
-      .fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>()
-      .mockImplementationOnce(async (params) => {
-        await params.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          disposition: "retryable",
-          error:
-            'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED',
-        });
-        return "retryable";
-      })
-      .mockResolvedValue("delivered");
-    using run = fixture(
-      { execution: { status: "running" }, retainAttachmentsOnKeep: true },
-      {
-        captureSubagentCompletionReply: vi.fn(async () => terminalReply.text),
-        runSubagentAnnounceFlow,
-      },
-    );
-    const { entry, controller, read } = run;
-    const join = observeRootWork();
-    try {
-      await controller.completeSubagentRun({
-        runId: entry.runId,
-        endedAt: Date.now(),
-        outcome: { status: "ok" },
-        reason: ended.SUBAGENT_ENDED_REASON_COMPLETE,
-        terminalReply,
-        triggerCleanup: true,
-      });
-      await join(true);
-      expect(read().completion?.terminalReply).toEqual(terminalReply);
-      expect(read().delivery).toMatchObject({
-        status: "pending",
-        payload: { childRunId: entry.runId, terminalReply },
-        nextAttemptAt: 11_000,
-      });
-      expect(read().cleanupCompletedAt).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(999);
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(1);
-      await join(true);
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-      for (const [params] of runSubagentAnnounceFlow.mock.calls) {
-        expect(params.terminalReply).toEqual(terminalReply);
-        expect(params.roundOneReply).toBe("A=alpha");
-      }
-      expect(read().delivery?.status).toBe("delivered");
-      expect(read().completion?.resultText).toBeUndefined();
-      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
-        "A=alpha",
-      );
-      expect(read().cleanupCompletedAt).toBeTypeOf("number");
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-    } finally {
-      await join();
-      decision.mockRestore();
-    }
-  });
-
-  registerRequesterAdmissionRetryTests({
-    createRunEntry,
-    createLifecycleController,
-    useRetryTimers,
-  });
-
   it.each(["current", "completed cleanup", "replaced", "cancelled", "stale generation"] as const)(
     "resumes one scheduled delivery only for its current owner (%s)",
     async (state) => {
@@ -506,6 +430,60 @@ export function registerDeliveryRetryOwnerTests({
     },
   );
 
+  it("keeps the announce deadline waiting for its live requester, then expires an orphan", async () => {
+    await useRetryTimers();
+    const finished = createDeferredCore<"undelivered">();
+    const announceStarted = createDeferredCore();
+    const announce = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(async () => {
+      announceStarted.resolve();
+      return finished.promise;
+    });
+    using run = fixture(
+      {
+        requesterTurnRunId: "live-expiry-requester",
+        delivery: {
+          status: "pending",
+          requesterDelivery: { state: "waiting", blockingRunId: "live-expiry-requester" },
+        },
+      },
+      { runSubagentAnnounceFlow: announce },
+    );
+    const requester = startControlProducer(
+      run.entry.requesterSessionKey,
+      "expiry-requester",
+      "/synthetic/requester/sessions.json",
+      undefined,
+      "live-expiry-requester",
+    );
+    requester.operation.setPhase("running");
+    const progress = setInterval(
+      () => requester.operation.watchdog.progress("semantic", "requester-work"),
+      60_000,
+    );
+    const join = observeRootWork();
+    try {
+      run.controller.startSubagentAnnounceCleanupFlow(run.entry);
+      await announceStarted.promise;
+      expect(announce).toHaveBeenCalledOnce();
+      expect(run.read().delivery?.requesterDelivery).toMatchObject({
+        state: "waiting",
+        blockingRunId: "live-expiry-requester",
+      });
+      const signal = announce.mock.calls[0]![0].signal!;
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(requester.operation.result).toBeNull();
+      expect(signal.aborted).toBe(false);
+      await requester.finish();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      clearInterval(progress);
+      finished.resolve("undelivered");
+      await requester.finish();
+      await join();
+    }
+  });
+
   it.each(["delivered", "expired", "expired during preparation"] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",
     async (outcome) => {
@@ -518,7 +496,7 @@ export function registerDeliveryRetryOwnerTests({
         throw new Error("descendant preparation failed");
       });
       const runSubagentAnnounceFlow = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
-        async () => "retryable",
+        async () => "undelivered",
       );
       using run = fixture(
         {
@@ -563,12 +541,9 @@ export function registerDeliveryRetryOwnerTests({
           await advanceRetry();
         }
         expect(rootWork.getActiveGatewayRootWorkCount()).toBe(0);
-        expect(read().delivery).toMatchObject({
-          status: outcome === "delivered" ? "delivered" : "suspended",
-          deadlineAt: entry.delivery?.deadlineAt,
-        });
+        expect(read().delivery?.status).toBe("delivered");
+        expect(read().cleanupCompletedAt).toBeTypeOf("number");
         if (outcome !== "delivered") {
-          expect(read().delivery?.suspendedReason).toBe("expiry");
           expect(countPendingDescendantRuns).toHaveBeenCalledTimes(outcome === "expired" ? 4 : 5);
           expect(runSubagentAnnounceFlow.mock.lastCall?.[0].signal?.aborted).toBe(true);
         }

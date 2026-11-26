@@ -273,7 +273,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
             placement.sessionKey !== session.sessionKey ||
             !resolvePlacementTurnEnvironment(placement, claim)))
       ) {
-        throw new Error("GitHub publication session authority changed.");
+        throw new Error("GitHub publication session moved. Retry the publication.");
       }
     };
     assertCurrent();

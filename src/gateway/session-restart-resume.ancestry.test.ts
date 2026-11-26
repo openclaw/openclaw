@@ -9,8 +9,11 @@ import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   persistRunningSessionsForRestart,
@@ -97,6 +100,81 @@ it.each(["nested-hidden", "direct-visible"] as const)(
         for (const sessionKey of children) {
           subagentRuns.delete(sessionKey);
         }
+      }
+    }),
+);
+
+it.each(["delegated", "ordinary"] as const)(
+  "keeps chat recovery in its physical store when the same key in another store is %s",
+  (kind) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const key = "agent:main:dashboard:retained";
+      const parentKey = "agent:main:dashboard:parent";
+      const chat = {
+        agentId: "main",
+        sessionKey: key,
+        sessionId: "chat",
+        storePath: state.statePath("chat.sqlite"),
+      };
+      const other = { ...chat, sessionId: "other", storePath: state.statePath("other.sqlite") };
+      const parent = { ...other, sessionKey: parentKey, sessionId: "parent" };
+      const spawn = { createdVia: "spawn" as const, spawnedBy: parentKey, spawnDepth: 1 };
+      replaceSessionEntrySync(chat, { sessionId: chat.sessionId, updatedAt: 1, ...spawn });
+      replaceSessionEntrySync(other, {
+        sessionId: other.sessionId,
+        updatedAt: 1,
+        ...(kind === "delegated" ? spawn : {}),
+      });
+      replaceSessionEntrySync(parent, { sessionId: parent.sessionId, updatedAt: 1 });
+      const runId = "other-store-spawn";
+      if (kind === "delegated") {
+        subagentRuns.set(
+          runId,
+          createSubagentRunRecord({
+            runId,
+            childSessionKey: key,
+            childAgentId: "main",
+            childSessionIdentity: { sessionId: other.sessionId },
+            requesterSessionKey: parentKey,
+            requesterAgentId: "main",
+            requesterStorePath: other.storePath,
+          }),
+        );
+      }
+      const rpc = registerChatAbortController({
+        ...chat,
+        runId: "direct-chat",
+        kind: "chat-send",
+        timeoutMs: 30_000,
+        target: captureSessionTarget({
+          ...chat,
+          storeScope: chat.storePath,
+          physicalStorePath: chat.storePath,
+          incarnation: chat.sessionId,
+        }),
+      });
+      try {
+        const controllerInput = expectDefined(rpc.entry, "registered chat").input;
+        // Admit the other store first: neither its route nor its marker may absorb this chat.
+        await withSessionTurn(other, () =>
+          withSessionTurn({ ...chat, controllerInput }, () =>
+            persistRunningSessionsForRestart({ cfg }),
+          ),
+        );
+        expect(loadExactSessionEntry(chat)?.entry.resumeAfterRestart).toMatchObject({
+          directChat: true,
+        });
+        expect(loadExactSessionEntry(other)?.entry.resumeAfterRestart).toEqual(
+          kind === "delegated" ? undefined : {},
+        );
+        expect(loadExactSessionEntry(parent)?.entry.resumeAfterRestart).toEqual(
+          kind === "delegated" ? {} : undefined,
+        );
+      } finally {
+        rpc.cleanup();
+        subagentRuns.delete(runId);
       }
     }),
 );

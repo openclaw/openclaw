@@ -75,7 +75,10 @@ export async function root(
   rootDir: string,
   defaults?: RootDefaults & LegacyNonBlockingReadOption,
 ): Promise<Root> {
-  return await fsSafeRoot(rootDir, defaults);
+  return await fsSafeRoot(rootDir, {
+    ...defaults,
+    allowDrvfsRenameRecovery: defaults?.allowDrvfsRenameRecovery ?? true,
+  });
 }
 
 export type ExternalFileWriteOptions = {
@@ -130,6 +133,7 @@ export async function writeExternalFileWithinRoot(
     staging: "sibling",
     producerIsolation: "private-directory",
     fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
+    allowDrvfsRenameRecovery: true,
   });
   // Preserve the caller-facing path spelling while carrying forward any
   // portable basename selected by fs-safe (for example, /var vs /private/var).

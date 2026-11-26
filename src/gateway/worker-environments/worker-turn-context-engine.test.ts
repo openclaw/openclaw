@@ -42,7 +42,13 @@ it.each(["direct", "outer"] as const)(
     const followUpFile = path.join(input.workspaceDir, "engine-follow-up.txt");
     await writeFile(acceptedFile, "previous Gateway content");
     const engineId = `worker-context-${owner}`;
-    const config = { ...input.config, plugins: { slots: { contextEngine: engineId } } };
+    const config = {
+      ...input.config,
+      plugins: {
+        ...input.config.plugins,
+        slots: { ...input.config.plugins?.slots, contextEngine: engineId },
+      },
+    };
     const previous = await worker.openSessionManager();
     await previous.appendMessageAsync(
       makeAgentUserMessage({ content: "Unassembled history", timestamp: 1 }),

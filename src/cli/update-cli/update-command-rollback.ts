@@ -488,6 +488,7 @@ export async function rollbackFailedUpdate(params: {
             await fs.rm(targetPath, { force: true });
           } else {
             await replaceFileAtomic({
+              allowDrvfsRenameRecovery: true,
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,

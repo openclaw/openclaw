@@ -1,4 +1,4 @@
-import { resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -200,10 +200,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           params.abortSignal,
         )));
     assertActive();
-    const responsesApi =
-      effectiveModel.api === "openai-responses" ||
-      effectiveModel.api === "azure-openai-responses" ||
-      effectiveModel.api === "openai-chatgpt-responses";
+    const responsesApi = isOpenAIResponsesApi(effectiveModel.api);
     const sessionManager = preparedSessionManager
       ? guardSessionManager(preparedSessionManager, {
           agentId: sessionAgentId,
@@ -293,7 +290,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       try {
         if (sessionManager && resourceLoader) {
           ({ session } = await createAgentSession({
-            cleanupProviderSessionResourcesOnDispose: false,
             systemPrompt: systemPromptText,
             cwd: effectiveCwd,
             modelRegistry,

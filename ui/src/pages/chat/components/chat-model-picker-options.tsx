@@ -109,7 +109,7 @@ function optionPresentation(options: ModelPresentationProps) {
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const modelLabel = formatModelLabel(options.entry);
+  const modelLabel = formatModelLabel(options.entry.label, options.groupLabel);
   const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
@@ -173,7 +173,7 @@ export function modelOptionSearchRow(
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
   return {
     key: modelPickerOptionKey(options.entry),
-    name: formatModelLabel(options.entry).toLocaleLowerCase(),
+    name: formatModelLabel(options.entry.label, options.groupLabel).toLocaleLowerCase(),
     keywords: [
       options.entry.isDefault ? defaultLabel : "",
       runtimeLabel,
@@ -186,6 +186,7 @@ export function modelOptionSearchRow(
       options.entry.presentation,
     ).toLocaleLowerCase(),
     reference: options.entry.value,
+    recommended: options.entry.recommended,
     selected,
     hasShortcut: !selected,
     disabled:
@@ -207,7 +208,9 @@ function ModelOptionButton(
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
   const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
-  const modelName = createMemo(() => formatModelLabel(props.entry).toLocaleLowerCase());
+  const modelName = createMemo(() =>
+    formatModelLabel(props.entry.label, props.groupLabel).toLocaleLowerCase(),
+  );
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);

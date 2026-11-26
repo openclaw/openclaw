@@ -18,6 +18,12 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  /** Host-stamped participation context, never a tool argument. */
+  participation?: boolean;
+  /** Host-owned starting-directory boundary; this does not sandbox command arguments. */
+  participationRoot?: string;
+  /** Retained participant allowlist misses cannot be reopened by a host approval. */
+  participationDenyMisses?: boolean;
   /** Stable checkout owner, independent of a command's selected working directory. */
   scratchRoot?: string;
   hasCronTool?: boolean;
@@ -34,10 +40,14 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  /** Public tool inputs prepared by the owner of this execution host. */
+  preparedLocalToolEnv?: Readonly<Record<string, string>>;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   /** Host-prepared routing hint; remote workers have no Gateway session database. */
   preparedSubagentExecution?: boolean;
+  /** Internal provider-attested worker fact; not an exec argument or environment override. */
+  workerMemoryBoundary?: "sandbox";
   autoReviewer?: ExecAutoReviewer;
   createApprovalTransport?: (toolCallId: string, signal?: AbortSignal) => ExecApprovalTransport;
   /** Reads current attempt context only when a command needs review. */
@@ -110,6 +120,7 @@ export type ExecHostCommandParams = {
   requestedEnv?: Record<string, string>;
   timeoutSec?: number;
   defaultTimeoutSec: number;
+  participationDenyMisses?: boolean;
   security: ExecSecurity;
   ask: ExecAsk;
   bypassHostApprovalFloors?: boolean;

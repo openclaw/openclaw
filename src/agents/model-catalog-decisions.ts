@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
@@ -32,6 +31,7 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { createAccountCatalogOutcomes } from "./model-catalog-account-outcomes.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 import { createCatalogPluginAuth } from "./model-catalog-decisions.plugin-auth.js";
@@ -125,13 +125,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
   ).profile;
   const primary = resolveDefaultModelForAgent({ ...params, manifestPlugins: metadataSnapshot });
-  const primaryEntry = { provider: primary.provider, id: primary.model };
+  const primaryEntry = primary && { provider: primary.provider, id: primary.model };
   // This decision view owns one plugin metadata generation. Resolve each provider's
   // identity policy once for that view instead of reloading it for every catalog row.
   const modelKeyOf = createModelCatalogIdentityKeyResolver();
-  const primaryKey = modelKeyOf(primaryEntry);
+  const primaryKey = primaryEntry && modelKeyOf(primaryEntry);
   const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    configuredProfileId !== undefined && modelKeyOf(entry) === primaryKey
+    configuredProfileId !== undefined &&
+    primaryKey !== undefined &&
+    modelKeyOf(entry) === primaryKey
       ? configuredProfileId
       : undefined;
   // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
@@ -227,8 +229,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ),
     };
   }
-  // Selected-account discovery is private to this prepared projection, never the shared inventory.
-  const providerOutcomes = [...(snapshot.providerOutcomes ?? [])];
+  const accountOutcomes = createAccountCatalogOutcomes(snapshot.providerOutcomes);
+  const providerOutcomes = accountOutcomes.outcomes;
   const statusSource = snapshot;
   snapshot = {
     ...snapshot,
@@ -314,27 +316,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
     resolveOpenAIProviderRoutes,
-    // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
-    // is per account, so only the listing discovery made with this exact credential applies.
-    accountListedModelIds: (provider, profileId) => {
-      let listed: Set<string> | undefined;
-      for (const outcome of providerOutcomes) {
-        if (
-          outcome.status === "ready" &&
-          outcome.listedModelIds &&
-          outcome.profileId === profileId &&
-          normalizeProviderId(outcome.provider) === provider
-        ) {
-          listed ??= new Set();
-          for (const id of outcome.listedModelIds) {
-            listed.add(normalizeLowercaseStringOrEmpty(id));
-          }
-        }
-      }
-      return listed;
-    },
+    accountListsModel: accountOutcomes.accountListsModel,
   });
-  const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
+  const evaluations = new Map<string, Map<string, ModelAuthAvailabilityEvaluation>>();
   const preferredProfileIdForCatalog = params.preferredProfileId || undefined;
   const pinnedProfileIdForCatalog = params.pinnedProfileId || undefined;
   const normalizeAuthProvider = (provider: string) =>
@@ -365,7 +349,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       observedRoutes,
     ]);
     const pluginAuth = isPluginAuthProvider(entry.provider);
-    const cached = pluginAuth ? undefined : evaluations.get(cacheKey);
+    const provider = normalizeProviderId(entry.provider);
+    const cached = pluginAuth ? undefined : evaluations.get(provider)?.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -381,16 +366,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ...authResolver.evaluateRuntimeModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         runtimeId: requestedRuntimeId,
-        ...(normalizeProviderId(entry.provider) === "openai"
-          ? {}
-          : { api: entry.api, baseUrl: entry.baseUrl }),
+        ...(provider === "openai" ? {} : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(preferredProfileId ? { preferredProfileId } : {}),
         ...(pinnedProfileId ? { pinnedProfileId } : {}),
         observedRoutes,
       }),
       ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
     };
-    const provider = normalizeProviderId(entry.provider);
     // The wildcard narrows only what native Claude CLI credentials supplied. A selected or
     // pinned API account answers for its own models, so a saved account choice keeps them.
     const listed =
@@ -417,7 +399,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         }
       : listed;
     if (!pluginAuth) {
-      evaluations.set(cacheKey, evaluation);
+      const rows = evaluations.get(provider) ?? new Map<string, ModelAuthAvailabilityEvaluation>();
+      rows.set(cacheKey, evaluation);
+      evaluations.set(provider, rows);
     }
     return evaluation;
   };
@@ -463,9 +447,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     if (selectedProfileId && profileProvider) {
       selections.set(selectedProfileId, normalizeProviderId(profileProvider));
     }
-    if (configuredProfileId && pinnedProfileForEntry(primaryEntry) === configuredProfileId) {
+    if (
+      configuredProfileId &&
+      primaryEntry &&
+      pinnedProfileForEntry(primaryEntry) === configuredProfileId
+    ) {
       // Automatic session preferences can still own siblings; retain both account inventories.
-      selections.set(configuredProfileId, normalizeProviderId(primary.provider));
+      selections.set(configuredProfileId, normalizeProviderId(primaryEntry.provider));
     }
     for (const [profileId, providerId] of selections) {
       const credential = await withCurrentReadAuthority(
@@ -517,19 +505,20 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         accountObservations.push(acquired.isCurrent);
         // A cold account cache is not a new observation. Retain the current
         // authenticated shared outcome until the account publishes a result.
-        if (!acquired.hasPublishedCatalog) {
+        if (
+          !acquired.hasPublishedCatalog ||
+          !accountOutcomes.replace(providerId, profileId, acquired.outcomes)
+        ) {
           return;
         }
-        providerOutcomes.splice(
-          0,
-          providerOutcomes.length,
-          ...providerOutcomes.filter(
-            (outcome) =>
-              normalizeProviderId(outcome.provider) !== providerId ||
-              outcome.profileId !== profileId,
-          ),
-          ...acquired.outcomes,
-        );
+        // A projection can evaluate rows before its selected account publishes. Retire those
+        // decisions along with the listing, including routes using this provider's auth alias.
+        for (const provider of evaluations.keys()) {
+          if (provider === providerId || normalizeAuthProvider(provider) === providerId) {
+            evaluations.delete(provider);
+          }
+        }
+        projectedCatalog = undefined;
       });
     }
   };

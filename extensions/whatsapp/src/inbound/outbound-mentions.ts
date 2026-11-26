@@ -113,18 +113,30 @@ function chooseMentionJid(
   );
 }
 
-function shouldSkipMentionAt(
-  text: string,
-  index: number,
-  end: number,
-  codeRanges: CodeRegion[],
-): boolean {
-  if (isInsideCode(index, codeRanges)) {
-    return true;
+function collectItalicDelimiters(text: string, codeRanges: CodeRegion[]): Set<number> {
+  const delimiters = new Set<number>();
+  let open: number | undefined;
+  const word = /[\p{L}\p{M}\p{N}\p{Pc}@]/u;
+  // Inspect adjacent code points without consuming them. Only paired formatting can bound a mention.
+  for (const match of text.matchAll(/\\.|(?<=(.?))_(?=(.?))|\n[ \t\r]*\n/gu)) {
+    if (match[0].startsWith("\n")) {
+      open = undefined;
+      continue;
+    }
+    if (match[0] !== "_" || isInsideCode(match.index, codeRanges)) {
+      continue;
+    }
+    const before = match[1] ?? "";
+    const after = match[2] ?? "";
+    if (open !== undefined && /\S/.test(before) && !word.test(after)) {
+      delimiters.add(open);
+      delimiters.add(match.index);
+      open = undefined;
+    } else if (!word.test(before) && /\S/.test(after)) {
+      open = match.index;
+    }
   }
-  const previous = index > 0 ? text[index - 1] : "";
-  const next = text[end] ?? "";
-  return Boolean((previous && /[\w@]/.test(previous)) || (next && /[\w@]/.test(next)));
+  return delimiters;
 }
 
 export function resolveWhatsAppOutboundMentions(params: {
@@ -171,11 +183,18 @@ export function resolveWhatsAppOutboundMentions(params: {
   }
 
   const codeRanges = collectCodeRanges(params.text);
+  const italicDelimiters = collectItalicDelimiters(params.text, codeRanges);
+  const touchesWord = (index: number) =>
+    /[\w@]/.test(params.text[index] ?? "") && !italicDelimiters.has(index);
   const mentionedJids = new Set<string>();
   const text = params.text.replace(
     OUTBOUND_MENTION_RE,
     (token, rawDigits: string, start: number) => {
-      if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
+      if (
+        isInsideCode(start, codeRanges) ||
+        touchesWord(start - 1) ||
+        touchesWord(start + token.length)
+      ) {
         return token;
       }
       const digits = rawDigits.replace(/\D/g, "");

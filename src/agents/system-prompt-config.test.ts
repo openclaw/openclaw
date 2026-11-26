@@ -6,11 +6,13 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import * as projects from "../projects/project-registry.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
+import { sessionProjectGuidanceSource } from "./session-project-guidance.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
@@ -118,6 +120,48 @@ function reasoningConfig(
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it("suggests a project only when this conversation can move to a registered destination", async () => {
+    const workspace = {
+      id: "workspace:main",
+      displayName: "Workspace",
+      source: "workspace" as const,
+      repoRoot: "/workspace",
+    };
+    const website = {
+      id: "website",
+      displayName: "Website",
+      source: "registered" as const,
+      repoRoot: "/website",
+    };
+    const config = { agents: { entries: { main: { workspace: workspace.repoRoot } } } };
+    const catalog = vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([workspace]);
+    const prompt = (projectId?: string, toolNames = ["session_project"]) =>
+      buildPrompt({
+        config,
+        agentId: "main",
+        runtimeInfo: { sessionKey: "agent:main:chat" },
+        toolNames,
+        prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+          config,
+          agentId: "main",
+          sessionKey: "agent:main:chat",
+          entry: { sessionId: "chat", updatedAt: 1, projectId },
+          senderIsOwner: true,
+        }),
+      });
+    const hint = "You are in the default workspace";
+    expect(await prompt()).not.toContain(hint);
+    catalog.mockResolvedValue([workspace, website]);
+    const eligible = await prompt();
+    expect(eligible).toContain(hint);
+    expect(eligible).toContain('{"id":"website","name":"Website"}');
+    expect(eligible).toContain("as your first tool call");
+    expect(await prompt(workspace.id)).toContain(hint);
+    expect(await prompt("workspace:another-agent")).not.toContain(hint);
+    expect(await prompt(website.id)).not.toContain(hint);
+    expect(await prompt(undefined, [])).not.toContain(hint);
+  });
+
   it.each([
     ["OpenClaw", true],
     ["crestodian", true],
@@ -195,30 +239,42 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { toolNames: ["exec", "openclaw"] },
     { toolNames: ["exec", "gateway", "openclaw"] },
     { toolNames: ["gateway", "openclaw"] },
-  ])(
-    "describes maintenance without forcing an update method with tools $toolNames",
-    async ({ toolNames }) => {
-      const config: OpenClawConfig = { commands: { restart: false } };
-      const prompts = [
-        await buildPrompt({ config, toolNames }),
-        buildAgentHarnessBasePrompt({ config, toolNames }),
-      ];
-      for (const prompt of prompts) {
-        expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
-        expect(prompt).not.toContain("perform the work with `gateway`");
-        expect(prompt).not.toContain("restart, config, channels");
-        expect(prompt).not.toContain("For an update request, use the Control UI");
-        expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
-        expect(prompt).toContain("Keep a working restart path before stopping");
-        expect(prompt).toContain(
-          "if runtime admission refuses, report the blocker and never bypass via `exec`",
-        );
-        expect(prompt.includes("`gateway` runs `update.run` (supervised restart)")).toBe(
-          toolNames.includes("gateway"),
-        );
-      }
-    },
-  );
+  ])("scopes the in-place Git update exception with tools $toolNames", async ({ toolNames }) => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompts = [
+      await buildPrompt({ config, toolNames }),
+      buildAgentHarnessBasePrompt({ config, toolNames }),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+      expect(prompt).not.toContain("perform the work with `gateway`");
+      expect(prompt).not.toContain("restart, config, channels");
+      expect(prompt).not.toContain("For an update request, use the Control UI");
+      expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+      expect(prompt).toContain("Use the built-in updater for standard installs.");
+      expect(prompt).toContain(
+        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      );
+      expect(prompt).toContain(
+        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
+      );
+      expect(prompt).toContain(
+        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
+      );
+      expect(prompt).toContain(
+        "Shell access is not update authority. Change installation methods only on explicit operator request.",
+      );
+      expect(prompt).toContain("Keep a working restart path before stopping");
+      expect(prompt).toContain(
+        "if runtime admission refuses, report the blocker and never bypass via `exec`",
+      );
+      expect(
+        prompt.includes(
+          "`gateway`: use update.run only when the installation uses the built-in updater",
+        ),
+      ).toBe(toolNames.includes("gateway"));
+    }
+  });
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "keeps bounded local config recovery available with tools $toolNames",

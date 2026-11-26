@@ -210,7 +210,11 @@ it.each(["member", "missing inventory"])("does not hide %s faults", async (fault
 
 it("packs distinct self-update targets without changing the candidate artifact", async () => {
   const root = tempDirs.make("openclaw-same-schema-fixtures-");
-  makePackageFixture({ root: path.join(root, "package") });
+  const admissionModule = "check-release-Fixture1.mjs";
+  makePackageFixture({
+    root: path.join(root, "package"),
+    distFiles: { [admissionModule]: "export {};\n" },
+  });
   const uiFiles = {
     "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
     "assets/startup.js": 'globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO = { buildId: "old-build" };',
@@ -251,7 +255,11 @@ it("packs distinct self-update targets without changing the candidate artifact",
         ...legacyChunks.map((name) => `dist/${name}`),
       );
     }
+    if (sequence === 2) {
+      changed.push("dist/postinstall-inventory.json", "dist/" + admissionModule);
+    }
     const members = tar("-tzf", output).toString().split("\n");
+    expect(members.includes("package/dist/" + admissionModule)).toBe(sequence !== 2);
     expect(receipt.members.changes).toEqual(
       changed
         .toSorted((left, right) => left.localeCompare(right))

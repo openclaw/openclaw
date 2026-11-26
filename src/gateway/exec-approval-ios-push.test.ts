@@ -418,23 +418,52 @@ describe("createExecApprovalIosPushDelivery", () => {
   });
 
   it.each([
-    {
-      audience: "creator alias",
-      creatorId: "member-profile-alias",
-      withSession: true,
-      visible: true,
-    },
-    { audience: "another profile", creatorId: "other-profile", withSession: true, visible: false },
-    { audience: "missing source", creatorId: "other-profile", withSession: false, visible: false },
+    ...[
+      {
+        audience: "creator alias",
+        creatorId: "member-profile-alias",
+        withSession: true,
+        visible: true,
+      },
+      {
+        audience: "another profile",
+        creatorId: "other-profile",
+        withSession: true,
+        visible: false,
+      },
+      {
+        audience: "missing source",
+        creatorId: "other-profile",
+        withSession: false,
+        visible: false,
+      },
+    ].map((row) =>
+      Object.assign(row, {
+        others: "none" as const,
+        member: false,
+        raiserId: undefined as string | undefined,
+      }),
+    ),
+    ...(["invited", "write"] as const).flatMap((others) =>
+      ["member-profile", "unrelated", undefined].map((raiserId) => ({
+        audience: `${others} member / requester ${raiserId ?? "unattributed"}`,
+        creatorId: "other-profile",
+        withSession: true,
+        others,
+        member: true,
+        raiserId,
+        visible: others === "write" || raiserId === "member-profile",
+      })),
+    ),
   ])(
     "uses the ID session ceiling for a $audience approval despite a linked admin role",
-    async ({ creatorId, withSession, visible }) => {
+    async ({ creatorId, withSession, visible, others, member, raiserId }) => {
       setRuntimeConfigSnapshot({
         gateway: {
           openclawId: { enabled: true },
           roles: {
             definitions: {
-              member: { scopes: approvalScopes, sessions: { others: "none" }, agents: "*" },
+              member: { scopes: approvalScopes, sessions: { others }, agents: "*" },
             },
           },
         },
@@ -456,7 +485,7 @@ describe("createExecApprovalIosPushDelivery", () => {
             createdActor: { type: "human", source: "profile", id: creatorId },
           },
         },
-        membership: new Set(),
+        membership: new Set(member ? ["member-profile"] : []),
       };
       mocks.sessionFacts.mockResolvedValue({
         storageTarget: {
@@ -470,6 +499,7 @@ describe("createExecApprovalIosPushDelivery", () => {
         release: () => {},
       } satisfies import("./session-sharing-preparation.js").SessionFactsRead<PreparedSessionMutationFacts>);
       const request = approvalRequest("approval-session-policy");
+      request.requestedByProfileId = raiserId;
       request.requestedByDeviceId = "other-requester";
       request.approvalReviewerDeviceIds = ["id-ios"];
       if (withSession) {

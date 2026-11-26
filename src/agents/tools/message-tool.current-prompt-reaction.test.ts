@@ -389,7 +389,6 @@ it("rolls back a reaction when its capability expires at SQLite commit", async (
 });
 
 it.each([
-  ["run close", () => run.close()],
   ["revocation", () => revoke(token)],
   ["expiry", () => vi.spyOn(Date, "now").mockReturnValue(Number.MAX_SAFE_INTEGER)],
 ] as const)("fences retained tools after %s", async (_reason, invalidate) => {

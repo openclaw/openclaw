@@ -314,6 +314,8 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  /** Session tools are the worker-placed variants, whose `sessions_spawn` takes only `task`, `label`, `agentId`, `model` and `runTimeoutSeconds`. */
+  workerPlacement?: boolean;
   /** Deferred directory tools can be invoked by name in the embedded harness. */
   deferredToolsDirectlyCallable?: boolean;
   /** Guidance published by the MCP servers backing this prompt's visible tools. */
@@ -322,6 +324,7 @@ export function buildAgentSystemPrompt(params: {
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
+  sessionProjectGuidance?: string;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -354,7 +357,7 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
-  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime && !params.workerPlacement;
   // Preserve first caller casing; sparse tool arrays skip absent entries.
   const visibleTools = new Map<string, string>();
   (params.toolNames ?? []).forEach((tool) => {
@@ -439,7 +442,7 @@ export function buildAgentSystemPrompt(params: {
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
-  const { inTurnCollectionGuidance, delegationSection: subagentDelegationPreferenceSection } =
+  const { inTurnCollectionGuidance, delegationSection, sessionsSpawnHint } =
     buildSubagentPromptGuidance({
       mode: proactiveSubagentOrchestration
         ? "suggest"
@@ -448,8 +451,8 @@ export function buildAgentSystemPrompt(params: {
       availableTools,
       sessionKey: runtimeInfo?.sessionKey,
       resolveToolName,
+      workerPlacement: params.workerPlacement,
     });
-  const delegationRenders = subagentDelegationPreferenceSection.includes("## Delegation");
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -471,10 +474,12 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
       : sanitizedWorkspaceDir;
+  // Reply file paths (#202534): repo-relative paths in a reply opened from the session
+  // workspace instead of the repository, so chat file links showed "session file not found".
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""}`
-      : "Single global file workspace unless explicitly told otherwise.";
+      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""} Reply file paths: relative ones resolve from the working directory; write others as absolute paths.`
+      : "Single global file workspace unless explicitly told otherwise. Reply file paths: relative ones resolve from the working directory; write others as absolute paths.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
       ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch; avoid explicit /tmp paths.`
@@ -482,7 +487,7 @@ export function buildAgentSystemPrompt(params: {
   const directorySection = hasSeparateRuntimeCwd
     ? [
         "## Directory Roles",
-        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
+        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools, deliverables, and relative reply file paths; write other files as absolute paths).`,
         `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
       ]
     : ["## Workspace", `Working directory: ${displayWorkspaceDir}`];
@@ -499,10 +504,6 @@ export function buildAgentSystemPrompt(params: {
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
   });
   params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
-  const toolGuidanceSection = listToolPromptGuidance(availableTools).flatMap((section) => [
-    section,
-    "",
-  ]);
   const memorySection =
     isMinimal || params.includeMemorySection === false
       ? []
@@ -610,9 +611,7 @@ export function buildAgentSystemPrompt(params: {
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
       waitHints.length > 0 && `Wait: end turn if exit wakes you, else ${waitHints.join(" or ")}.`,
-      // `## Delegation` owns the child brief, waiting and synthesis when it renders.
-      hasSessionsSpawn &&
-        `Execute work directly by default; delegate bounded independent work via \`sessions_spawn\` (${delegationRenders ? "" : "objective/output/write-scope/verification; "}\`context:"isolated"\` for clean context, \`context:"fork"\` for transcript; \`taskName\` for stable handle, \`label\` for UI; hidden by default unless user needs to steer). Keep dependent steps with one owner${delegationRenders ? "." : " and synthesize child outputs."}`,
+      sessionsSpawnHint,
       availableTools.has("screen") &&
         "`screen` present: web/app turn may drive UI; messaging turn: don't.",
       // The repeat is noticed during ordinary work, not while reading the
@@ -658,7 +657,8 @@ export function buildAgentSystemPrompt(params: {
       setupIssue: params.openClawSetupIssue,
     }),
     ...skillsSection,
-    ...toolGuidanceSection,
+    ...listToolPromptGuidance(availableTools).flatMap((section) => [section, ""]),
+    params.sessionProjectGuidance && [params.sessionProjectGuidance, ""],
     ...memorySection,
     params.modelAliasLines &&
       params.modelAliasLines.length > 0 &&
@@ -723,7 +723,7 @@ export function buildAgentSystemPrompt(params: {
       enabled: proactiveSubagentOrchestration,
       hasSessionsSpawn,
     }),
-    ...subagentDelegationPreferenceSection,
+    ...delegationSection,
     params.sandboxInfo?.enabled && elevated
       ? elevated.allowed && elevated.fullAccessAvailable
         ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`

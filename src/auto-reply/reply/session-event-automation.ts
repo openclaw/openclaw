@@ -92,6 +92,27 @@ export type ScheduledAutomationAdmission = Pick<
   "admissionDeferred" | "admissionDeferredReason"
 >;
 
+/** Keep provider admission tied to the selected model of this scheduled occurrence. */
+export function withScheduledSessionProviderAdmission(
+  automation: ScheduledSessionAutomation | undefined,
+  onWait: (provider: string) => void,
+): ScheduledSessionAutomation | undefined {
+  const slot = automation?.providerRunSlot;
+  if (!automation || !slot) {
+    return automation;
+  }
+  return {
+    ...automation,
+    beforeModelRun(provider) {
+      if (slot.tryStart(provider)) {
+        return true;
+      }
+      onWait(provider);
+      return false;
+    },
+  };
+}
+
 /** Wait behind foreground work, then recheck the same automation's current start policy. */
 export async function prepareScheduledAutomationStart(params: {
   automation?: ScheduledSessionAutomation;

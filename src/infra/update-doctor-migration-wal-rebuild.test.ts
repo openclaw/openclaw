@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -159,4 +161,47 @@ it("keeps a rebuilt WAL index attributable across repeated Doctor admissions", a
   );
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+});
+
+it("waits for a short-lived outside reader to close before taking migration exclusion", async () => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  // A monitoring-style reader that is still open when exclusion starts, then closes (#197083, #201085).
+  const exclusionStarted = new Int32Array(new SharedArrayBuffer(4));
+  const reader = new Worker(
+    `
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort, workerData } = require("node:worker_threads");
+      const reader = new DatabaseSync(${JSON.stringify(pathname)}, { readOnly: true });
+      reader.prepare("SELECT value FROM retained").all();
+      parentPort.postMessage("open");
+      Atomics.wait(workerData.exclusionStarted, 0, 0, 30_000);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      reader.close();
+    `,
+    { eval: true, execArgv: [], workerData: { exclusionStarted } },
+  );
+  const exited = once(reader, "exit");
+  try {
+    await once(reader, "message");
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      using database = new DatabaseSync(pathname);
+      const exec = database.exec.bind(database);
+      database.exec = (sql) => {
+        if (sql.includes("BEGIN EXCLUSIVE")) {
+          Atomics.store(exclusionStarted, 0, 1);
+          Atomics.notify(exclusionStarted, 0);
+        }
+        return exec(sql);
+      };
+      migrate(database, pathname);
+    });
+    expect(Atomics.load(exclusionStarted, 0)).toBe(1);
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+  } finally {
+    Atomics.store(exclusionStarted, 0, 1);
+    Atomics.notify(exclusionStarted, 0);
+    await exited;
+  }
 });

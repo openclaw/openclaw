@@ -8,7 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim-install.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,
@@ -82,7 +82,11 @@ it.skipIf(process.platform === "win32")(
       const tree = git(origin, "rev-parse", "HEAD^{tree}");
       const tool = await createGitExecTool(root, root);
       const shim = path.join(root, "git");
-      await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
+      const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(root)], {
+        env,
+        encoding: "utf8",
+      });
+      expect(installed.status, installed.stderr).toBe(0);
       const packedObjects = (cwd: string) =>
         Number(git(cwd, "count-objects", "-v").match(/in-pack: (\d+)/)?.[1]);
       const pythonCommands: [string, string, ...string[]][] = [

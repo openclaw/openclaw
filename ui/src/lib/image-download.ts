@@ -14,6 +14,13 @@ function imageDownloadFileName(title: string, mimeType: string): string {
   return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
 }
 
-export function downloadImageBlob(blob: Blob, title: string): void {
-  downloadBlobFile(imageDownloadFileName(title, blob.type), blob, 30_000);
+export function downloadImageBlob(
+  blob: Blob,
+  title: string,
+  options?: { attachmentOnly?: boolean },
+): void {
+  const content = options?.attachmentOnly
+    ? new Blob([blob], { type: "application/octet-stream" })
+    : blob;
+  downloadBlobFile(imageDownloadFileName(title, blob.type), content, 30_000);
 }

@@ -1,10 +1,10 @@
 import { readProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 import { readStringField } from "@openclaw/normalization-core/record-coerce";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 
 export function resolveProviderRefusal(
-  message: AssistantMessage | undefined,
+  message: AssistantHistoryMessage | undefined,
 ): EmbeddedAgentMeta["providerRefusal"] {
   const refusal = message?.diagnostics?.find(
     (diagnostic) => diagnostic.type === "provider_refusal",

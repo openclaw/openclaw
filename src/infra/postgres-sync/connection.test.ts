@@ -42,7 +42,14 @@ function transactionFixture() {
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
+  initialMode:
+    | "normal"
+    | "spurious"
+    | "mismatched"
+    | "missing"
+    | "timeout"
+    | "service-death"
+    | "delayed",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -79,6 +86,11 @@ function transportFixture(
     const query = pending.operation === "query" ? pending : undefined;
     if (query) {
       waits.push({ observed, timeout });
+      if (mode === "delayed") {
+        mode = "normal";
+        now += 121_000;
+        return "timed-out";
+      }
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -143,6 +155,7 @@ function transportFixture(
     suspend: (ms: number) => (wallNow += ms),
     normal: () => (mode = "normal"),
     dropReplies: () => (mode = "missing"),
+    delayNextReply: () => (mode = "delayed"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
@@ -189,6 +202,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         reconnectIfIdle: true,
         ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
+        deadlineMs: 120_000,
       },
       {
         operation: "query",
@@ -197,6 +211,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         parameters: [],
         reconnectIfIdle: true,
         id: 4,
+        deadlineMs: 120_000,
       },
     ]);
   } finally {
@@ -204,6 +219,23 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
     vi.advanceTimersByTime(3 * 60_000);
     vi.useRealTimers();
   }
+});
+
+it("lets maintenance finish beyond the runtime deadline, then restores runtime liveness", () => {
+  const fixture = transportFixture("normal");
+  fixture.command("COMMIT");
+  const result = fixture.db.runTransaction(
+    () => {
+      fixture.delayNextReply();
+      return fixture.db.prepare("SELECT 7 AS value").get();
+    },
+    { maintenance: true },
+  );
+  expect(result).toEqual({ value: 7 });
+  expect(fixture.db.isTransaction).toBe(false);
+  fixture.delayNextReply();
+  expect(() => fixture.db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
+  expect(fixture.db.isOpen).toBe(false);
 });
 
 it("validates retained idle connections after suspended wall time, never inside a transaction", () => {
@@ -244,7 +276,7 @@ it("checks transport status after a query error instead of reusing an earlier id
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "release", id: 4 },
+      { operation: "release", id: 4, deadlineMs: 120_000 },
     ]);
   } finally {
     vi.advanceTimersByTime(3 * 60_000);

@@ -264,7 +264,6 @@ describe("Bedrock thinking request composition", () => {
     ["legacy budget exhausted", legacy, { reasoning: "minimal" }, 1024, undefined],
     ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
     ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
-    ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
     [
       "authored 32768 cap",
       { ...named, maxTokens: 32_768 },

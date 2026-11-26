@@ -2508,7 +2508,7 @@ final class NodeAppModel {
         case OpenClawCameraCommand.list.rawValue:
             let devices = await camera.listDevices()
             struct Payload: Codable {
-                var devices: [CameraController.CameraDeviceInfo]
+                var devices: [OpenClawCameraDeviceInfo]
             }
             return try Self.successfulInvokeResponse(req, payload: Payload(devices: devices))
         case OpenClawCameraCommand.snap.rawValue:

@@ -116,6 +116,7 @@ vi.mock("./session-transcript-worker-scopes.js", () => ({
     value: await read(),
   }),
   pruneClosedHistoryDatabaseScopes: () => {},
+  closeHistoryDatabaseScopes: () => {},
 }));
 // mock-isolation: Missing-store admission isolates startup imports from actual database handles.
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
