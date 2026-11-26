@@ -23,7 +23,6 @@ export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./c
 export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
-const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
 const loadGoogleMeetNodeInvokePolicyModule = createLazyRuntimeModule(
   () => import("./node-invoke-policy.js"),
 );
@@ -160,43 +159,17 @@ export function keepTrustedToolAgentId(
   return agentId ? { ...rest, agentId } : rest;
 }
 
-export function createGoogleMeetRuntimeAccessor(params: {
+export async function createGoogleMeetRuntime(params: {
   api: OpenClawPluginApi;
   config: GoogleMeetConfig;
-}): () => Promise<GoogleMeetRuntime> {
-  let transcriptsEnabled = params.api.config.transcripts?.enabled !== false;
-  let runtime: GoogleMeetRuntime | undefined;
-  let runtimePromise: Promise<GoogleMeetRuntime> | undefined;
-  params.api.registerService({
-    id: "google-meet-transcripts",
-    reload: { configPrefixes: ["transcripts.enabled"] },
-    start: ({ config }) => {
-      transcriptsEnabled = config.transcripts?.enabled !== false;
-      return runtime?.reconcileTranscriptPolicy(transcriptsEnabled);
-    },
-    stop: () => {
-      transcriptsEnabled = false;
-      return runtime?.reconcileTranscriptPolicy(false);
-    },
+}): Promise<GoogleMeetRuntime> {
+  const { GoogleMeetRuntime } = await import("./runtime.js");
+  return new GoogleMeetRuntime({
+    config: params.config,
+    fullConfig: params.api.config,
+    runtime: params.api.runtime,
+    logger: params.api.logger,
   });
-  return async () => {
-    if (!params.config.enabled) {
-      throw new Error("Google Meet plugin disabled in plugin config");
-    }
-    runtimePromise ??= loadGoogleMeetRuntimeModule().then(
-      async ({ GoogleMeetRuntime: Runtime }) => {
-        runtime = new Runtime({
-          config: params.config,
-          fullConfig: params.api.config,
-          runtime: params.api.runtime,
-          logger: params.api.logger,
-        });
-        await runtime.reconcileTranscriptPolicy(transcriptsEnabled);
-        return runtime;
-      },
-    );
-    return await runtimePromise;
-  };
 }
 
 export function createLazyGoogleMeetNodeInvokePolicy(
