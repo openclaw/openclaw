@@ -665,7 +665,12 @@ it.each([
   const runWorker = vi
     .spyOn(childCommandBuffers, "runUtf8CommandBuffersWithTimeout")
     .mockImplementation((argv, options) =>
-      runNative(argv, { ...options, timeoutMs: options.timeoutMs ?? 2_000 }),
+      runNative(
+        argv,
+        typeof options === "number"
+          ? options
+          : { ...options, timeoutMs: options.timeoutMs ?? 2_000 },
+      ),
     );
   let stderr = "";
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
