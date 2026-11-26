@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 
 // <mach/host_info.h>: HOST_VM_INFO returns vm_statistics_data_t, 14 natural_t counters.
 const HOST_VM_INFO = 2;
@@ -98,18 +99,48 @@ function listCgroupV2Directories(): string[] {
   if (process.platform !== "linux") {
     return [];
   }
-  let relative: string | undefined;
-  try {
-    relative = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
-  } catch {
-    return [];
-  }
-  if (!relative) {
-    return [];
-  }
   const mount = "/sys/fs/cgroup";
-  let directory = path.resolve(mount, `.${relative}`);
-  if (directory !== mount && !directory.startsWith(`${mount}/`)) {
+  let directory: string;
+  try {
+    const membership = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
+    if (!membership || membership.split("/").includes("..")) {
+      return [];
+    }
+    // A delegated mount can expose /pod at this path while membership still names
+    // /pod/slice/service. A hidden, shadowed or unrelated view cannot identify our controllers.
+    const views = [
+      ...readFileSync("/proc/self/mountinfo", "utf8").matchAll(
+        /^(\d+) (\d+) \d+:\d+ (\S+) (\/sys\/fs\/cgroup(?:\/\S*)?) .*? - (\S+) /gmu,
+      ),
+    ];
+    // For stacked mounts, the visible one is not the parent mount of another at the same path.
+    const atMount = views.filter(([, , , , point]) => point === mount);
+    const visible = atMount.filter(([, id]) => !atMount.some(([, , parent]) => parent === id));
+    const controller = visible.length === 1 ? visible[0] : undefined;
+    if (!controller || controller[5] !== "cgroup2") {
+      return [];
+    }
+    const root = decodeMountInfoPath(controller[3]!);
+    const relative = path.relative(root, membership);
+    if (
+      !root.startsWith("/") ||
+      root.split("/").includes("..") ||
+      relative.split("/")[0] === ".."
+    ) {
+      return [];
+    }
+    directory = path.join(mount, relative);
+    for (const [, , , , point] of views) {
+      if (point === mount) {
+        continue;
+      }
+      const child = decodeMountInfoPath(point!);
+      const shadow = path.basename(child).startsWith("memory.") ? path.dirname(child) : child;
+      if (directory === shadow || directory.startsWith(`${shadow}/`)) {
+        return [];
+      }
+    }
+  } catch {
     return [];
   }
   const directories = [directory];

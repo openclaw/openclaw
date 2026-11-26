@@ -5,6 +5,7 @@ import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js
 import { ensureCliLiveSessionMemory } from "../agents/cli-runner/cli-live-session-registry.js";
 import {
   isMemoryPressureHigh,
+  readEffectiveMemoryLimit,
   readHostFreeMemoryBytes,
   readProcessAvailableMemoryBytes,
 } from "./host-memory.js";
@@ -22,13 +23,16 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 function mockCgroupFiles(files: Map<string, string> = new Map()) {
-  return vi.spyOn(fs, "readFileSync").mockImplementation((path) => {
-    const contents = files.get(String(path));
-    if (contents === undefined) {
-      throw new Error("controller unavailable");
-    }
-    return contents;
-  });
+  return vi
+    .spyOn(fs, "readFileSync")
+    .mockClear()
+    .mockImplementation((path) => {
+      const contents = files.get(String(path));
+      if (contents === undefined) {
+        throw new Error("controller unavailable");
+      }
+      return contents;
+    });
 }
 
 vi.mock("node:module", async (importOriginal) => {
@@ -195,6 +199,7 @@ it.each([0, 1000])("tracks sibling pressure with native leaf limit %i", (leafLim
   const parent = "/sys/fs/cgroup/pod";
   const files = new Map([
     ["/proc/self/cgroup", "0::/pod/service/gateway"],
+    ["/proc/self/mountinfo", "30 1 0:27 / /sys/fs/cgroup rw - cgroup2 cgroup rw"],
     [`${parent}/memory.max`, "2000"],
     [`${parent}/memory.high`, "max"],
     [`${parent}/memory.current`, "1599"],
@@ -216,5 +221,50 @@ it.each([0, 1000])("tracks sibling pressure with native leaf limit %i", (leafLim
   expect(isMemoryPressureHigh()).toBe(false);
   files.set(`${parent}/memory.current`, "1800");
   files.set("/proc/self/cgroup", "0::/");
+  expect(isMemoryPressureHigh()).toBe(false);
+});
+
+it("maps only the service's visible cgroup controllers in a delegated mount", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+
+  const mount = "/sys/fs/cgroup";
+  const parent = `${mount}/slice`;
+  const decoy = `${mount}/pod/slice`;
+  const view = `30 1 0:27 /pod ${mount} rw - cgroup2 cgroup rw`;
+  const files = new Map([
+    ["/proc/self/cgroup", "0::/pod/slice/service"],
+    ["/proc/self/mountinfo", view],
+    [`${parent}/memory.max`, "1000"],
+    [`${parent}/memory.current`, "799"],
+    [`${decoy}/memory.max`, "10"],
+    [`${decoy}/memory.current`, "10"],
+  ]);
+  const read = mockCgroupFiles(files);
+  expect(readEffectiveMemoryLimit().memoryLimitBytes).toBe(1000);
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set(`${parent}/memory.current`, "800");
+  expect(isMemoryPressureHigh()).toBe(true);
+  expect(read.mock.calls.some(([file]) => String(file).startsWith(`${mount}/pod/`))).toBe(false);
+
+  for (const membership of ["/", "/pod-other/slice/service", "/../pod/slice/service"]) {
+    files.set("/proc/self/cgroup", `0::${membership}`);
+    expect(isMemoryPressureHigh()).toBe(false);
+    expect(readEffectiveMemoryLimit().memoryLimitSource).toBe("host");
+  }
+  files.set("/proc/self/cgroup", "0::/pod/slice/service");
+  files.set("/proc/self/mountinfo", `1 0 0:27 / ${mount} rw - cgroup2 cgroup rw\n${view}`);
+  expect(isMemoryPressureHigh()).toBe(true);
+  files.set(
+    "/proc/self/mountinfo",
+    `${view}\n31 30 0:27 /other ${mount}/sibling rw - cgroup2 cgroup rw`,
+  );
+  expect(isMemoryPressureHigh()).toBe(true);
+  files.set("/proc/self/mountinfo", `${view}\n31 30 0:27 /other ${parent} rw - cgroup2 cgroup rw`);
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.delete("/proc/self/mountinfo");
   expect(isMemoryPressureHigh()).toBe(false);
 });

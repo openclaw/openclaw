@@ -20,6 +20,7 @@ const GiB = 1024 ** 3;
 const files = new Map<string, string>();
 beforeEach(() => {
   files.clear();
+  files.set("/proc/self/mountinfo", "30 1 0:27 / /sys/fs/cgroup rw - cgroup2 cgroup rw");
   files.set("/proc/self/cgroup", "0::/service/gateway\n");
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
