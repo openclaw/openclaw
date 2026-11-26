@@ -1,4 +1,4 @@
-export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false, beforeStart = () => {}) {
+export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false, beforeStart = () => {}, requireHealthRpc = false) {
   if (managedUpdateLease?.action.kind !== "update" || !ownsManagedUpdateLease()) return false;
   let expectedRevision;
   const record = (restored) => recordManagedUpdateOutcome(
@@ -151,6 +151,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       if (!ownsRecovery()) throw new Error("managed update recovery ownership was lost");
       const health = await waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId, params.recoveryTimeoutMs);
       restored = ownsRecovery() && health.healthy === true &&
+        (!requireHealthRpc || health.healthRpcVerified === true) &&
         health.runtime?.status === "running" && health.gatewayVersion === expectedVersion &&
         (!expectedBuildId || health.gatewayBuildId === expectedBuildId);
       if (restored && serviceStoppedAtMs !== undefined) serviceDowntimeMs = Math.max(0, Date.now() - serviceStoppedAtMs);
@@ -160,8 +161,8 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
         runningVersion: health.gatewayVersion ?? undefined,
         runningBuildId: health.gatewayBuildId ?? undefined,
         versionMatch: health.gatewayVersion === expectedVersion && (!expectedBuildId || health.gatewayBuildId === expectedBuildId),
-        settled: health.healthy === true,
-        channelsReady: health.healthy === true && !health.channelProbeErrors?.length,
+        settled: restored,
+        channelsReady: restored && !health.channelProbeErrors?.length,
         pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
       });
     } catch (error) {

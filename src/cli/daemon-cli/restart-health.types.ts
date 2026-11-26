@@ -34,6 +34,7 @@ export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
   healthy: boolean;
+  healthRpcVerified?: true;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
   gatewayBootId?: string;

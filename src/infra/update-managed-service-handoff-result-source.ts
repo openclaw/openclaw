@@ -262,7 +262,7 @@ async function recoverInterruptedUpdater() {
     const restored = await restoreGatewayService(
       recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
       recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,
-      false, updaterStopped, assertPendingStop,
+      false, updaterStopped, assertPendingStop, true,
     );
     if (!restored) throw new Error("Recovered runtime could not restore Gateway readiness and identity");
     runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"
