@@ -2983,7 +2983,6 @@
 ["src/cli/update-cli-mocks.test-support.ts","../config/config.js","f8b2c2ee8c0c497e0a4fb58151d54bc031ad30eee1c4e3e7a091256cff2b6585",1]
 ["src/cli/update-cli-mocks.test-support.ts","../daemon/service.js","f4d889e17ad70d59e8c893618871622ecb91e29934d0f543521be3a88878f336",1]
 ["src/cli/update-cli-mocks.test-support.ts","../daemon/systemd-maintenance.js","205d9664a61eff5f70a15fcdea7dea34e7d07045af5126581f8ec62cb7f6bda3",1]
-["src/cli/update-cli-mocks.test-support.ts","../infra/openclaw-root.js","fe60efa16ccbf2f26e34fadb330760b0028efb29a97810ceb57f6aa47f197cd6",1]
 ["src/cli/update-cli-mocks.test-support.ts","../infra/ports-format.js","322d0696758a75b96857d8ade4f932eab8c4ba36289665a8d93351d54ad25020",1]
 ["src/cli/update-cli-mocks.test-support.ts","../infra/ports-inspect.js","1197c1dff1f93d78e61932616176cb30b3581df60776c4b5d0eb327ab0f413e9",1]
 ["src/cli/update-cli-mocks.test-support.ts","../infra/restart-stale-pids.js","9707949eb04d4d7c3879c71777deb803ac9f4962161848a1871c0150176b2839",1]
