@@ -290,16 +290,11 @@ export async function resolveApprovalRequest(
   approval: ExecApprovalRequest,
   decision: ExecApprovalDecision,
 ): Promise<void> {
-  if (approval.kind === "system-agent") {
-    await client.request("approval.resolve", {
-      id: approval.id,
-      kind: "system-agent",
-      decision,
-    });
-    return;
-  }
-  const method = approval.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-  await client.request(method, { id: approval.id, decision });
+  await client.request("approval.resolve", {
+    id: approval.id,
+    kind: approval.kind,
+    decision,
+  });
 }
 
 function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {

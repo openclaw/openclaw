@@ -424,7 +424,10 @@ describe("exec approval card", () => {
       }
       await Promise.all(onDecision.mock.results.map((result) => result.value));
       expect(client.request.mock.calls).toEqual(
-        order.map(([, decision]) => ["plugin.approval.resolve", { id: request.id, decision }]),
+        order.map(([, decision]) => [
+          "approval.resolve",
+          { id: request.id, kind: "plugin", decision },
+        ]),
       );
     },
   );

@@ -10,9 +10,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import {
+  parseApprovalRequestedEvent,
+  resolveApprovalRequest,
+} from "../../../ui/src/app/exec-approval.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -246,7 +251,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     });
   });
 
-  it("delivers and lists an approval for a separate non-admin reviewer", async () => {
+  it("delivers and resolves a Control UI approval for a separate non-admin reviewer", async () => {
     const requested = createDeferredCore<{ id: string }>();
     const admin = await connectGatewayClient({
       url,
@@ -285,11 +290,16 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     });
     let id: string | undefined;
     try {
-      ({ id } = await awaitGateBeforeSettlement(
+      const event = await awaitGateBeforeSettlement(
         requested.promise,
         call,
         "Approval ended before delivery",
-      ));
+      );
+      const approval = expectDefined(
+        parseApprovalRequestedEvent("plugin.approval.requested", event),
+        "Control UI approval",
+      );
+      id = approval.id;
       const pending = await approvalClient.request<Array<{ id: string }>>(
         "plugin.approval.list",
         {},
@@ -297,6 +307,11 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       expect(reviewerScopes.toSorted()).toEqual([APPROVALS_SCOPE, READ_SCOPE]);
       expect(reviewerEvents).toContain(id);
       expect(pending.map((entry) => entry.id)).toContain(id);
+      await expect(approvalClient.request("approval.get", { id })).resolves.toMatchObject({
+        approval: { id, status: "pending" },
+      });
+      await resolveApprovalRequest(approvalClient, approval, "deny");
+      await expect(call).resolves.toMatchObject({ id, decision: "deny" });
     } finally {
       if (id) {
         await admin.request("approval.resolve", { id, decision: "deny" });
