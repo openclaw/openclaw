@@ -33,7 +33,13 @@ export type InterruptedUpdateGatewayObservation = {
 /** Read-only settlement shares one deadline for setup and serving readiness. */
 export async function observeInterruptedUpdateGateway(
   candidate: InstalledUpdateCandidate,
-  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; deadline: GatewayRestartDeadline },
+  input: {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    deadline: GatewayRestartDeadline;
+    /** The installation to check; by default the one this process runs from. */
+    root?: string;
+  },
 ): Promise<InterruptedUpdateGatewayObservation> {
   const { deadline } = input;
   let waitOutcome: GatewayRestartWaitOutcome | undefined;
@@ -45,9 +51,11 @@ export async function observeInterruptedUpdateGateway(
   });
   try {
     const env = input.env ?? process.env;
-    const root = await deadline.read("setup:package-root", () =>
-      resolveOpenClawPackageRoot({ argv1: process.argv[1], moduleUrl: import.meta.url }),
-    );
+    const root =
+      input.root ??
+      (await deadline.read("setup:package-root", () =>
+        resolveOpenClawPackageRoot({ argv1: process.argv[1], moduleUrl: import.meta.url }),
+      ));
     if (!root) {
       return result("unverified");
     }

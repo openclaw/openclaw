@@ -42,6 +42,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as restartHealthProbe from "../daemon-cli/restart-health-probe.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as shared from "./shared.js";
 import {
@@ -184,6 +185,7 @@ afterEach(async () => {
     os.userInfo,
     gatewayService.readGatewayServiceState,
     restartHealth.waitForGatewayHealthyRestart,
+    restartHealthProbe.waitForGatewayHttpReadiness,
     processOwner.captureNamespacedStateLeaseProcessOwner,
     containerEnvironment.isContainerEnvironment,
     os.uptime,
@@ -207,9 +209,12 @@ export const lease = (slot: string) =>
     captureUpdateCommandExecutorAuthority(await executor.enter(slot)),
   );
 export type Updater = {
-  end?: "killed" | "stalled";
+  /** `released`: the updater returned through its own unwind, which releases its lease. */
+  end?: "killed" | "stalled" | "released";
   /** The version the update was installing. */
   candidate?: string;
+  /** The build ID of the package candidate the update recorded. */
+  candidateBuildId?: string;
   installed?: "previous" | "candidate";
   trigger?: "cli" | "api";
   gateway?: "untouched" | "stopped" | "restarted";
@@ -236,8 +241,8 @@ export async function updater(slot: string, options: Updater = {}) {
   );
   let stderr = "";
   proc.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-  const closed = new Promise<NodeJS.Signals | null>((resolve) => {
-    proc.once("close", (_code, signal) => resolve(signal));
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    proc.once("close", (code, signal) => resolve({ code, signal }));
   });
   // The child reports its run once the recovery is reserved, then dies or stalls.
   const reported = await new Promise<string>((resolve) => {
@@ -253,7 +258,8 @@ export async function updater(slot: string, options: Updater = {}) {
   if (spec.end === "stalled") {
     ctx.stalled.push({ proc, closed });
   } else {
-    expect({ signal: await closed, stderr }).toMatchObject({ signal: "SIGKILL" });
+    const exit = spec.end === "released" ? { code: 0 } : { signal: "SIGKILL" };
+    expect({ ...(await closed), stderr }).toMatchObject(exit);
   }
   expect(reported, stderr).not.toBe("");
   const runId = String(JSON.parse(reported).runId);
@@ -290,10 +296,21 @@ export async function linkedInstallation(name = "prefix") {
  */
 export async function replacePackageDirectory(
   { slot, key }: { slot: string; key: string },
-  { keepPrevious = false, version = candidate } = {},
+  {
+    keepPrevious = false,
+    version = candidate,
+    buildId,
+  }: {
+    keepPrevious?: boolean;
+    version?: string;
+    buildId?: string;
+  } = {},
 ) {
   const next = path.join(path.dirname(path.dirname(key)), version, "openclaw");
   await writePackageRoot(next, version);
+  if (buildId) {
+    fs.writeFileSync(path.join(next, "dist", "build-info.json"), JSON.stringify({ buildId }));
+  }
   fs.rmSync(slot);
   fs.symlinkSync(next, slot, "dir");
   if (!keepPrevious) {
@@ -435,6 +452,24 @@ export function managedGateway(slot: string) {
     staleGatewayPids: [],
     gatewayVersion: packageVersion(slot),
   });
+}
+/**
+ * What a fresh probe of the managed Gateway finds: running and ready, serving `version`
+ * built as `buildId`, unless `ready` is false.
+ */
+export function servingGateway(version: string, buildId: string, { ready = true } = {}) {
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue({
+    outcome: "ready",
+    healthy: true,
+    runtime: { status: "running", pid: 4242 },
+    portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    staleGatewayPids: [],
+    gatewayVersion: version,
+    gatewayBuildId: buildId,
+  });
+  vi.spyOn(restartHealthProbe, "waitForGatewayHttpReadiness").mockResolvedValue(
+    ready ? { healthz: 200, readyz: 200 } : { healthz: 200, readyz: 503 },
+  );
 }
 export const recorded = (prepared: Prepared | undefined, name: string) =>
   prepared?.packageActivationSteps?.find((step) => step.name === name)?.warnings?.[0];

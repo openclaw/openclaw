@@ -74,6 +74,13 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import {
+  admitsReleasedLeaseSettlement,
+  confirmReleasedLeaseProof,
+  inspectReleasedLeaseProof,
+  recordReleasedLeaseVerification,
+  UNLEASED_REFUSAL,
+} from "./update-released-lease-proof.js";
 
 /**
  * Only an absent or completed package activation has given up restoring the
@@ -269,6 +276,10 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   admit?: (plan: {
     action: "commit" | "rollback";
     originalCore: boolean;
+    /** The installed core is exactly the candidate the cohort reserved. */
+    candidateCore: boolean;
+    /** Package recovery could still restore the original core. */
+    packageRecoveryAuthority: boolean;
     /** The cohort owner finishes a recorded rollback that restored anything, whatever `action` says. */
     rollbackStarted: boolean;
   }) => void;
@@ -314,14 +325,16 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   // This is a precheck: the cohort owner continues a rollback that already restored
   // anything, including migration rows restored before any publication was counted.
   const verification = getUpdateRun(current.cohort.runId, options)?.verification;
+  // A moved package directory's cohort is settled from its successor.
+  const packageRecoveryAuthority = [
+    current.cohort.installKey,
+    resolveUpdateInstallRoot(params.root),
+  ].some((key) => hasPackageRecoveryAuthority(key));
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
     originalGone &&
-    // A moved package directory's cohort is settled from its successor.
-    ![current.cohort.installKey, resolveUpdateInstallRoot(params.root)].some((key) =>
-      hasPackageRecoveryAuthority(key),
-    ) &&
+    !packageRecoveryAuthority &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.runningVersion === to.version &&
@@ -332,6 +345,8 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   params.admit?.({
     action,
     originalCore: installed(from),
+    candidateCore: installed(to),
+    packageRecoveryAuthority,
     rollbackStarted: current.cohort.disposition === "rollback",
   });
   await settleUpdatePluginCohort({
@@ -411,7 +426,9 @@ export async function settleManagedHandoffPluginCohort(
  * shows a command-line update whose driver exited, and the update lease store still
  * holds that driver's lease, so claiming the installation proves its processes and
  * their children gone. When a restart emptied that store, a recorded earlier boot of
- * this host proves the same. When that update had replaced the installed version without
+ * this host proves the same. When the driver released its lease itself, the store that
+ * held it proves the same, but only for keeping a candidate the managed Gateway is found
+ * serving now. When that update had replaced the installed version without
  * confirming it, had begun rolling back on it, or left the Gateway stopped, this
  * update then finishes it as repair does before deciding anything about its own
  * core; a stopped Gateway only when this update would restart it anyway. Inspect
@@ -587,6 +604,12 @@ export async function inspectInterruptedUpdateRecovery(
       holder.startIdentity === driver.startIdentity;
     // A restart empties the temporary lease store, but also ends every process of the boot.
     const rebooted = !recorded && held.kind === "absent" && ranBeforeRestart(history);
+    const released =
+      !recorded &&
+      !rebooted &&
+      held.kind === "absent" &&
+      store !== undefined &&
+      (await inspectReleasedLeaseProof(pair, history, root, databasePath));
     return {
       pair,
       refuse,
@@ -595,12 +618,8 @@ export async function inspectInterruptedUpdateRecovery(
       databasePath,
       store,
       rebooted,
-      refused:
-        recorded || rebooted
-          ? undefined
-          : refuse(
-              "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
-            ),
+      released,
+      refused: recorded || rebooted || released ? undefined : refuse(UNLEASED_REFUSAL),
     };
   };
   // A failed inspection changes nothing: admission then reports what it finds itself.
@@ -611,6 +630,7 @@ export async function inspectInterruptedUpdateRecovery(
   const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
     inspected;
   const rebooted = inspected.rebooted === true;
+  const released = inspected.released === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -660,6 +680,12 @@ export async function inspectInterruptedUpdateRecovery(
         if (rebooted && !ranBeforeRestart(history)) {
           throw refuse("The update's recorded processes changed while this update was starting.");
         }
+        const proof = released
+          ? await confirmReleasedLeaseProof(pair, history, root, databasePath, env)
+          : undefined;
+        if (proof && "refusal" in proof) {
+          throw refuse(proof.refusal);
+        }
         const installation = inspectPluginCohortInstallation(pair, installKey, history);
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
@@ -678,7 +704,12 @@ export async function inspectInterruptedUpdateRecovery(
               throw new Error("Plugin cohort recovery installation changed during settlement.");
             }
           },
-          admit: ({ action: outcome, originalCore, rollbackStarted }) => {
+          admit: (plan) => {
+            const { action: outcome, originalCore, rollbackStarted } = plan;
+            if (proof && !admitsReleasedLeaseSettlement(plan)) {
+              blocked = refuse(UNLEASED_REFUSAL);
+              throw blocked;
+            }
             // A rollback over the installed candidate leaves it half updated, including
             // a commit the cohort owner turns back into a rollback.
             if (outcome === "rollback" && !originalCore) {
@@ -702,13 +733,17 @@ export async function inspectInterruptedUpdateRecovery(
             refuse(`It could not be settled (${formatErrorMessage(cause)}).`, undefined, cause)
           );
         });
-        return { action, unfinished, gatewayStopped, replaced: installation.kind === "replaced" };
+        if (proof) {
+          recordReleasedLeaseVerification(pair.cohort.runId, proof.verification, options);
+        }
+        const replaced = installation.kind === "replaced";
+        return { action, unfinished, gatewayStopped, replaced, verifiedNow: proof !== undefined };
       }),
     );
     if (!settled || settled === "settled") {
       return;
     }
-    const { action, unfinished, gatewayStopped, replaced } = settled;
+    const { action, unfinished, gatewayStopped, replaced, verifiedNow } = settled;
     const runId = pair.cohort.runId;
     const note = unfinished.length
       ? `Settled interrupted update ${runId}: ${unfinished.join(" ")} Its plugin and configuration changes were settled as ${repair} settles them, and this update finishes the installed version the same way before it continues.`
@@ -718,7 +753,7 @@ export async function inspectInterruptedUpdateRecovery(
             : replaced
               ? "kept, because its Gateway was verified on the version it installed, which this installation replaced"
               : "kept, because its Gateway was verified on the installed version"
-        }; update can proceed past recovery admission.`;
+        }${verifiedNow ? "; its updater had released its lease, and the managed Gateway was found serving that version now" : ""}; update can proceed past recovery admission.`;
     defaultRuntime.error(note);
     const settledAt = Date.now();
     const step = (name: string, command: string, sinceMs: number, warning: string) =>
