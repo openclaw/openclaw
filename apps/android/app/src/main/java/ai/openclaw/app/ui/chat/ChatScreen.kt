@@ -3996,6 +3996,7 @@ private fun BranchSwitcherSheet(
         Surface(
           onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
           enabled = selectionEnabled && !branch.active,
+          modifier = Modifier.semantics { selected = branch.active },
           color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
           contentColor = ClawTheme.colors.text,
         ) {
