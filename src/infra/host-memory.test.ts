@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
@@ -14,6 +15,21 @@ const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 // vm_statistics_data_t counters reported by the simulated macOS kernel.
 const mach = vi.hoisted(() => ({ free: 0, inactive: 0, purgeable: 0 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+
+function mockCgroupFiles(files: Map<string, string> = new Map()) {
+  return vi.spyOn(fs, "readFileSync").mockImplementation((path) => {
+    const contents = files.get(String(path));
+    if (contents === undefined) {
+      throw new Error("controller unavailable");
+    }
+    return contents;
+  });
+}
 
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
@@ -120,6 +136,7 @@ it.each([
 ])(
   "defers optional work in the last fifth of a process limit (limit: %d, available: %d)",
   (limit, available, low) => {
+    mockCgroupFiles();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
     vi.spyOn(process, "availableMemory").mockReturnValue(available);
@@ -155,6 +172,7 @@ it.each([
   { name: "Bun host", limit: 0, free: 40 * MiB, bun: "1.4.4", expected: false },
   { name: "Bun process pressure", limit: GiB, available: 0, bun: "1.4.4", expected: true },
 ])("detects $name without changing process-limit policy", (sample) => {
+  mockCgroupFiles();
   vi.spyOn(process, "platform", "get").mockReturnValue(sample.platform ?? "linux");
   Object.defineProperty(process.versions, "bun", { configurable: true, value: sample.bun });
   vi.spyOn(process, "constrainedMemory").mockReturnValue(sample.limit);
@@ -164,4 +182,39 @@ it.each([
   vi.spyOn(os, "totalmem").mockReturnValue(sample.total ?? 353 * MiB);
 
   expect(isMemoryPressureHigh()).toBe(sample.expected);
+});
+
+it.each([0, 1000])("tracks sibling pressure with native leaf limit %i", (leafLimit) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(leafLimit);
+  vi.spyOn(process, "availableMemory").mockReturnValue(900);
+  vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+
+  const parent = "/sys/fs/cgroup/pod";
+  const files = new Map([
+    ["/proc/self/cgroup", "0::/pod/service/gateway"],
+    [`${parent}/memory.max`, "2000"],
+    [`${parent}/memory.high`, "max"],
+    [`${parent}/memory.current`, "1599"],
+    [`${parent}/memory.stat`, "inactive_file 200"],
+  ]);
+  const read = mockCgroupFiles(files);
+  // The intermediate service controller is unreadable. The next visible ancestor still counts.
+  expect(isMemoryPressureHigh()).toBe(false);
+  expect(read).not.toHaveBeenCalledWith(`${parent}/memory.stat`, "utf8");
+  files.set(`${parent}/memory.current`, "1799");
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set(`${parent}/memory.current`, "1800");
+  expect(isMemoryPressureHigh()).toBe(true);
+  files.set(`${parent}/memory.max`, "3000");
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set(`${parent}/memory.high`, "2000");
+  expect(isMemoryPressureHigh()).toBe(true);
+  files.delete(`${parent}/memory.current`);
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set(`${parent}/memory.current`, "1800");
+  files.set("/proc/self/cgroup", "0::/");
+  expect(isMemoryPressureHigh()).toBe(false);
 });

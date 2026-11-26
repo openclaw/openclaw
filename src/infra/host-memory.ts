@@ -90,7 +90,7 @@ export function isMemoryPressureHigh(): boolean {
     return false;
   }
   const free = readHostFreeMemoryBytes();
-  return free > 0 && free <= os.totalmem() * 0.2;
+  return (free > 0 && free <= os.totalmem() * 0.2) || isCgroupV2AncestorPressured();
 }
 
 /** Visible cgroup-v2 directories from this process's group up to the mount root. */
@@ -156,15 +156,31 @@ export function findCgroupV2MemoryLimitDirectory(): string | undefined {
   return found?.directory;
 }
 
-/**
- * memory.current minus inactive file cache: the part of the cgroup charge the kernel
- * cannot cheaply reclaim. Active file cache still counts, so this overstates anon use.
- */
-export function readCgroupV2WorkingSetBytes(directory: string): number | undefined {
-  const current = readCgroupV2Number(directory, "memory.current");
-  if (current === undefined) {
-    return undefined;
-  }
+// Node's native check covers the leaf. Sibling usage belongs to each shared ancestor,
+// so compare its own charge with its own reclaim or hard limit.
+function isCgroupV2AncestorPressured(): boolean {
+  return listCgroupV2Directories()
+    .slice(1)
+    .some((directory) => {
+      const limit = Math.min(
+        readCgroupV2Number(directory, "memory.high") ?? Infinity,
+        readCgroupV2Number(directory, "memory.max") ?? Infinity,
+      );
+      if (!Number.isFinite(limit)) {
+        return false;
+      }
+      const threshold = limit * 0.8;
+      const current = readCgroupV2Number(directory, "memory.current");
+      // Reading memory.stat is unnecessary when even the full charge is below the threshold.
+      return (
+        current !== undefined &&
+        current >= threshold &&
+        cgroupV2WorkingSetBytes(directory, current) >= threshold
+      );
+    });
+}
+
+function cgroupV2WorkingSetBytes(directory: string, current: number): number {
   let inactiveFile = 0;
   try {
     const stat = readFileSync(path.join(directory, "memory.stat"), "utf8");
@@ -173,6 +189,15 @@ export function readCgroupV2WorkingSetBytes(directory: string): number | undefin
     // Without memory.stat, the whole charge counts as working set.
   }
   return Math.max(0, current - inactiveFile);
+}
+
+/**
+ * memory.current minus inactive file cache: the part of the cgroup charge the kernel
+ * cannot cheaply reclaim. Active file cache still counts, so this overstates anon use.
+ */
+export function readCgroupV2WorkingSetBytes(directory: string): number | undefined {
+  const current = readCgroupV2Number(directory, "memory.current");
+  return current === undefined ? undefined : cgroupV2WorkingSetBytes(directory, current);
 }
 
 /** Hard memory allowance, not free memory or the cgroup's reclaim threshold. */
