@@ -136,7 +136,7 @@ export function buildCompactionStructureInstructions(
     "Archive the conversation under these exact headings:",
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
-    "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions.",
+    "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions, updating superseded facts when corrected.",
     "Limit ## Open TODOs to unfinished user-requested work or unresolved execution failures.",
     "Keep only stated constraints in ## Constraints/Rules and unresolved user requests in ## Pending user asks.",
   ].join("\n");

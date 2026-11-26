@@ -21,7 +21,7 @@ describe("compaction summary request matching", () => {
       "Finish release preparation.",
     );
     expect(instructions).toContain(
-      "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions.",
+      "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions, updating superseded facts when corrected.",
     );
     expect(instructions).toContain(
       "Limit ## Open TODOs to unfinished user-requested work or unresolved execution failures.",
