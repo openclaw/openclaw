@@ -20,6 +20,7 @@ import {
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
@@ -92,6 +93,8 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
+        admitScheduledOccurrence: ({ job }) =>
+          admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
         onEvent: (event) => events.push(structuredClone(event)),
         runIsolatedAgentJob: async (runParams) =>
           await runCronIsolatedAgentTurn({
