@@ -36,8 +36,12 @@ struct ConnectionSettingsView: View {
     }
 
     var body: some View {
+        let local = LocalGatewayConnectionPresentation(
+            mode: self.state.connectionMode,
+            state: ControlChannel.shared.state,
+            readinessFailure: self.gatewayManager.lastFailureReason)
         Form {
-            self.statusSection
+            self.statusSection(local: local)
             if MacOpenClawIDFeature.isEnabled, let presentation = self.openClawID.presentation(state: self.state) {
                 OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
             }
@@ -57,7 +61,7 @@ struct ConnectionSettingsView: View {
             case .unconfigured:
                 EmptyView()
             case .local:
-                self.localGatewaySection
+                self.localGatewaySection(local: local)
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused,
@@ -104,26 +108,36 @@ struct ConnectionSettingsView: View {
 
     // MARK: - Status
 
-    private var statusSection: some View {
+    private func statusSection(local: LocalGatewayConnectionPresentation?) -> some View {
         Section {
             HStack(spacing: 12) {
                 Image(systemName: self.connectionStatusIcon)
                     .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(self.connectionStatusTint)
+                    .foregroundStyle(self.connectionStatusTint(local: local))
                     .frame(width: 32, height: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionStatusTitle)
                         .font(.headline)
-                    Text(self.connectionStatusSubtitle)
+                    Text(local?.readinessFailure ?? self.connectionStatusSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let issue = local?.credentialIssue {
+                        Text(issue.message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Link(destination: issue.helpURL) {
+                            Text(LocalGatewayConnectionPresentation.credentialHelpTitle)
+                        }
+                        .environment(\.openURL, AppActivation.shared.openURLAction)
+                    }
                 }
 
                 Spacer(minLength: 12)
 
-                if let latency = self.latencyText {
+                if local?.hasFailure != true, let latency = self.latencyText {
                     Text(latency)
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -135,7 +149,6 @@ struct ConnectionSettingsView: View {
 
     private var latencyText: String? {
         guard ControlChannel.shared.state == .connected,
-              self.localGatewayFailure == nil,
               let ping = ControlChannel.shared.lastPingMs
         else { return nil }
         return String(format: String(localized: "%lld ms"), Int(ping))
@@ -149,8 +162,8 @@ struct ConnectionSettingsView: View {
         }
     }
 
-    private var connectionStatusTint: Color {
-        if self.localGatewayFailure != nil { return .red }
+    private func connectionStatusTint(local: LocalGatewayConnectionPresentation?) -> Color {
+        if local?.hasFailure == true { return .red }
         switch ControlChannel.shared.state {
         case .connected: return .green
         case .connecting, .disconnected, .degraded: return .orange
@@ -166,7 +179,6 @@ struct ConnectionSettingsView: View {
     }
 
     private var connectionStatusSubtitle: String {
-        if let failure = self.localGatewayFailure { return failure }
         switch self.state.connectionMode {
         case .local:
             return self.gatewayManager.installation == .external
@@ -189,13 +201,6 @@ struct ConnectionSettingsView: View {
         case .unconfigured:
             return "Choose local or remote before the app can attach to a Gateway."
         }
-    }
-
-    private var localGatewayFailure: String? {
-        guard self.state.connectionMode == .local else { return nil }
-        if let failure = self.gatewayManager.lastFailureReason { return failure }
-        return ControlChannel.isStoredGatewayTokenFailure(ControlChannel.shared.state)
-            ? ControlChannel.storedGatewayTokenMessage : nil
     }
 
     private var controlStatusLine: String {
@@ -239,7 +244,7 @@ struct ConnectionSettingsView: View {
 
     // MARK: - Local
 
-    private var localGatewaySection: some View {
+    private func localGatewaySection(local: LocalGatewayConnectionPresentation?) -> some View {
         Section {
             if !self.isNixMode {
                 switch self.gatewayManager.installation {
@@ -258,7 +263,7 @@ struct ConnectionSettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            self.healthRow
+            self.healthRow(local: local)
         } header: {
             Text("Local Gateway")
         } footer: {
@@ -427,8 +432,9 @@ private enum RemoteStatus: Equatable {
 }
 
 extension ConnectionSettingsView {
-    private var healthRow: some View {
-        LabeledContent {
+    private func healthRow(local: LocalGatewayConnectionPresentation?) -> some View {
+        let duplicatesCredentialIssue = local?.duplicatesCredentialIssue(self.healthStore.degradedSummary) == true
+        return LabeledContent {
             HStack(spacing: 8) {
                 Button("Retry now") {
                     Task { await HealthStore.shared.refresh(onDemand: true) }
@@ -441,9 +447,13 @@ extension ConnectionSettingsView {
                 Circle()
                     .fill(self.healthStore.state.tint)
                     .frame(width: 8, height: 8)
-                Text(self.healthStore.summaryLine)
+                if duplicatesCredentialIssue, !self.healthStore.isRefreshing {
+                    Text("Health check failed")
+                } else {
+                    Text(self.healthStore.summaryLine)
+                }
             }
-            if let detail = self.healthStore.detailLine {
+            if !duplicatesCredentialIssue, let detail = self.healthStore.detailLine {
                 Text(detail)
             }
         }

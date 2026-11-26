@@ -436,9 +436,8 @@ final class ControlChannel {
         return message
     }
 
-    static let storedGatewayTokenMessage =
-        "The macOS app cannot read the local Gateway token from its configured secret source. "
-            + "Review the Gateway authentication setup on this Mac."
+    static let storedGatewayTokenMessage = String(localized:
+        "The macOS app cannot read the local Gateway token from its configured secret source.")
 
     /// True when the control channel is degraded with the stored-token message.
     static func isStoredGatewayTokenFailure(_ state: ConnectionState) -> Bool {

@@ -231,6 +231,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let snapshot = StatusMenuDescriptor.Snapshot(
             isPaused: self.state.isPaused,
             connection: connection,
+            hasLocalGatewayCredentialIssue: LocalGatewayConnectionPresentation(
+                mode: self.state.connectionMode,
+                state: self.controlChannel.state,
+                readinessFailure: self.gatewayManager.lastFailureReason)?.credentialIssue != nil,
             quickChatEnabled: self.state.quickChatEnabled,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
