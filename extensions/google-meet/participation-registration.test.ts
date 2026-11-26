@@ -18,7 +18,8 @@ const runtime = vi.hoisted(() => ({
   leave: vi.fn(),
 }));
 
-vi.mock("./src/runtime.js", () => ({
+vi.mock("./src/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/runtime.js")>()),
   GoogleMeetRuntime: class {
     constructor() {
       runtime.constructed();
