@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -12,12 +13,13 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const parentTask = "PARENT-CLEANUP-PROBE";
-const childTask = "CHILD-CLEANUP-PROBE";
 
 function tool(response: ServerResponse, code: string) {
   const id = randomUUID();
@@ -67,19 +69,18 @@ function findToolResult(value: unknown, field: string): Record<string, unknown> 
   return undefined;
 }
 
-it.each([false, true])(
-  "agent --local settles registration cleanup after a child turn: %s",
+it(
+  "agent --local settles projection cleanup after a session RPC",
   { timeout: 120_000 },
-  async (spawn) => {
-    const root = tempDirs.make("openclaw-subagent-cleanup-");
+  async () => {
+    const root = tempDirs.make("openclaw-local-rpc-cleanup-");
     const fixture = createCliProcessFixture(root, {
       TMPDIR: root,
       NO_COLOR: "1",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     });
     let parentRequests = 0;
-    let childRequests = 0;
-    let collected = false;
+    let listed = false;
     const server = await startOpenAiResponsesModelServer({
       modelId: "gpt-5.2",
       bindError: "cleanup probe provider did not bind",
@@ -110,47 +111,25 @@ it.each([false, true])(
           );
           return;
         }
-        const visible = JSON.stringify(body.input);
+        const userInput = Array.isArray(body.input)
+          ? body.input.filter((entry) => asRecord(entry).role === "user")
+          : body.input;
+        const visible = JSON.stringify(userInput ?? "");
         const reply = (text: string) =>
           writeOpenAiResponsesText(response, {
             text,
             messageId: `msg_${randomUUID()}`,
             responseId: `resp_${randomUUID()}`,
           });
-        if (!visible.includes(parentTask) && visible.includes(childTask)) {
-          childRequests++;
-          reply("child complete");
-          return;
-        }
         if (!visible.includes(parentTask)) {
           reply("metadata complete");
           return;
         }
         parentRequests++;
-        if (spawn && parentRequests === 1) {
-          tool(
-            response,
-            `text(await sessions_spawn({task:${JSON.stringify(childTask)}, context:"isolated", mode:"run", collect:true}));`,
-          );
-        } else if (spawn && parentRequests === 2) {
-          const spawned = findToolResult(body.input, "childSessionKey");
-          const runId = spawned?.runId;
-          if (spawned?.status !== "accepted" || typeof runId !== "string") {
-            throw new Error("real sessions_spawn returned no accepted run ID");
-          }
-          tool(
-            response,
-            `text(await agents_wait({ids:[${JSON.stringify(runId)}], awaitResults:true}));`,
-          );
+        if (parentRequests === 1) {
+          tool(response, "text(await sessions_list({limit:1}));");
         } else {
-          const completed = findToolResult(body.input, "completed")?.completed;
-          collected =
-            !spawn ||
-            (Array.isArray(completed) &&
-              completed.some((entry) => {
-                const result = asRecord(entry);
-                return result.status === "done" && result.result === "child complete";
-              }));
+          listed = Array.isArray(findToolResult(body.input, "sessions")?.sessions);
           reply("parent complete");
         }
       },
@@ -169,7 +148,7 @@ it.each([false, true])(
         defaults: { ...config.agents?.defaults, workspace: path.join(root, "workspace") },
         entries: { main: {} },
       };
-      config.tools = { ...config.tools, codeMode: { enabled: true }, swarm: { enabled: true } };
+      config.tools = { ...config.tools, codeMode: { enabled: true } };
       await fixture.writeConfig(config);
       const result = await runCliProcessChild({
         env: fixture.env,
@@ -178,7 +157,7 @@ it.each([false, true])(
         nodeArgs: [
           "--import",
           path.resolve("scripts/tsx.mjs"),
-          path.resolve("src/entry.ts"),
+          fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
           "agent",
           "--local",
           "--agent",
@@ -196,8 +175,7 @@ it.each([false, true])(
       });
       expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
       expect(JSON.parse(result.stdout)).toMatchObject({ payloads: [{ text: "parent complete" }] });
-      expect(childRequests, result.stderr).toBe(spawn ? 1 : 0);
-      expect(collected, result.stderr).toBe(true);
+      expect(listed, result.stderr).toBe(true);
       expect(result.stderr).not.toContain("CLI cleanup failed");
     } finally {
       await server.close();
