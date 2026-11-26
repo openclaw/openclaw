@@ -20,7 +20,7 @@ openclaw channels logs --channel <id>
 
 `doctor --lint` is read-only and can exit `1` for findings: read the report and continue the remaining checks. Do not substitute ordinary `doctor` or `doctor --non-interactive`; they can copy legacy config and migrate state without `--fix`.
 
-On managed installs, bounded recent logs: `./scripts/clawlog.sh` (repo checkout) or the log path printed at gateway startup (`/tmp/openclaw/openclaw-<date>.log` by default).
+On managed installs, bounded recent logs: `./scripts/clawlog.sh` (repo checkout) or the log path printed at gateway startup (`~/.openclaw/logs/openclaw-<date>.log` by default).
 
 Check these signatures without guessing:
 
