@@ -133,7 +133,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
     const cases: Record<string, RoleCase> = {
       "denies out-of-role session creation": {
         sessionKey: "agent:blocked:missing",
-        expectedError: 'cannot create sessions for agent "blocked"',
+        expectedError: 'did not start a session with agent "blocked"',
       },
       "plugin provenance": missingSandbox("agent:main:missing", "plugin_doctor"),
       "main-alias provenance": missingSandbox("main"),

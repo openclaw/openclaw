@@ -361,7 +361,11 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         context,
         () => read?.assertCurrent(),
         diffTiming,
-        (target) => assertSessionFileReadPolicy(options, target),
+        (target) =>
+          assertSessionFileReadPolicy(options, {
+            ...target,
+            invitedSession: read?.isInvitedWorkspaceTarget(target),
+          }),
         retained,
       );
       read?.assertCurrent();

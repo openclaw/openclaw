@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { packControlUiLocaleArtifact } from "../../scripts/control-ui-locale-artifacts.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -86,11 +87,10 @@ function commit(root: string, message: string) {
   return runGit(root, ["rev-parse", "HEAD"]);
 }
 
-/** Real scripts and catalogs in a disposable source checkout; only services are fixtures. */
+/** Real workflow scripts with bounded catalog data and synthetic external services. */
 export function createLocaleFinalizerHarness() {
   const temporary = createTempDirTracker();
   let template: string;
-  let initialOriginVerified = false;
   return {
     cleanup: temporary.cleanup,
     async prepare() {
@@ -134,18 +134,32 @@ export function createLocaleFinalizerHarness() {
       ]) {
         fs.mkdirSync(target(directory), { recursive: true });
       }
-      for (const file of fs.readdirSync(assets)) {
-        if (file.endsWith(".tm.jsonl") || file.endsWith(".meta.json")) {
-          fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
-        }
-      }
+      // Workflow compatibility needs complete fixture data, not the production catalog.
+      // Catalog composition has separate coverage; source hashing stays real here.
+      const languages = {
+        en: "English",
+        ...Object.fromEntries(
+          CONTROL_UI_LOCALE_ENTRIES.map(({ languageKey, locale }) => [languageKey, locale]),
+        ),
+      };
+      put(template, sourceFile, `export const en = ${JSON.stringify({ languages })};\n${before}`);
+      put(
+        template,
+        "scripts/lib/control-ui-i18n-catalog.ts",
+        `import { readFile } from "node:fs/promises";
+import { en } from "../../ui/src/i18n/locales/en.ts";
+export const loadControlUiStartupCatalog = () => en;
+export const loadControlUiSourceCatalog = () => en;
+export const readControlUiSourceCatalog = () =>
+  readFile(new URL("../../ui/src/i18n/locales/en.ts", import.meta.url), "utf8");
+`,
+      );
       fs.symlinkSync(path.join(repo, "node_modules"), target("node_modules"), "junction");
       // Keep each publisher pathspec populated in this sparse checkout. This
       // non-UI plugin is not a generation input; plugin generation has its own proof.
       put(template, "extensions/fixture/openclaw.plugin.json", '{"id":"fixture"}\n');
       put(template, "extensions/fixture/i18n/.i18n/fixture.json", "{}\n");
       put(template, "extensions/fixture/i18n/locales/translated.json", "{}\n");
-      fs.appendFileSync(target(sourceFile), before);
       put(template, ".gitignore", "node_modules/\n.artifacts/\n.isolated-state/\n");
       execFileSync(
         testNodeExecPath,
@@ -178,8 +192,6 @@ export function createLocaleFinalizerHarness() {
       // actions/checkout disables GC; detached maintenance would race the Git owner's lock scan.
       runGit(root, ["config", "gc.auto", "0"]);
       runGit(root, ["config", "maintenance.auto", "false"]);
-      // Synthetic local transport does not need compression of the large warm TM.
-      runGit(root, ["config", "core.compression", "0"]);
       const providerLog = path.join(directory, "finalizer-provider-requests");
       const workerLog = path.join(directory, "worker-provider-requests");
       const states: Record<string, JobResult> = {};
@@ -340,48 +352,8 @@ export function createLocaleFinalizerHarness() {
           scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
       );
       fs.writeFileSync(svFile, canonicalSv.join("\n") + "\n");
-      const initialSource = commit(root, "canonical source before workers");
-      const origin = fixture.env.FAKE_ORIGIN;
-      const originConfig = fs.readFileSync(path.join(origin, "config"));
-      const worktreeConfig = fs.readFileSync(at(".git", "config"));
-      const alternates = path.join("objects", "info", "alternates");
-      expect(fs.existsSync(at(".git", alternates))).toBe(false);
-      // Construct the initial remote without packing the warm translation memories.
-      // Later workflow and catch-up pushes still exercise the real transport.
-      fs.rmSync(origin, { recursive: true });
-      runGit(root, ["clone", "--quiet", "--bare", "--no-hardlinks", ".", origin]);
-      // Bare cloning adds a reverse remote; retain the fixture's original configuration.
-      fs.writeFileSync(path.join(origin, "config"), originConfig);
-      runGit(root, ["update-ref", "refs/remotes/origin/main", initialSource]);
-      if (!initialOriginVerified) {
-        // Prove the real seed boundary once; keep later cases focused on publication.
-        expect(fs.readFileSync(path.join(origin, "config"))).toEqual(originConfig);
-        expect(fs.readFileSync(at(".git", "config"))).toEqual(worktreeConfig);
-        const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
-        expect(originGit("symbolic-ref", "HEAD")).toBe("refs/heads/main");
-        expect(originGit("rev-parse", "HEAD")).toBe(initialSource);
-        expect(originGit("for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
-        expect(
-          originGit("merge-base", "--is-ancestor", fixture.env.FAKE_INITIAL_MAIN, initialSource),
-        ).toBe("");
-        expect(runGit(root, ["rev-parse", "refs/remotes/origin/main"])).toBe(initialSource);
-        expect(fs.existsSync(path.join(origin, alternates))).toBe(false);
-        const object = path.join("objects", initialSource.slice(0, 2), initialSource.slice(2));
-        const sourceObject = at(".git", object);
-        const originObject = path.join(origin, object);
-        const objectBytes = fs.readFileSync(sourceObject);
-        expect(fs.readFileSync(originObject)).toEqual(objectBytes);
-        expect(fs.statSync(originObject).ino).not.toBe(fs.statSync(sourceObject).ino);
-        const corrupted = Buffer.from(objectBytes);
-        corrupted.writeUInt8(corrupted.readUInt8(0) ^ 0xff, 0);
-        try {
-          fs.writeFileSync(originObject, corrupted);
-          expect(fs.readFileSync(sourceObject)).toEqual(objectBytes);
-        } finally {
-          fs.writeFileSync(originObject, objectBytes);
-        }
-        initialOriginVerified = true;
-      }
+      commit(root, "canonical source before workers");
+      runGit(root, ["push", "--quiet", "origin", "main"]);
       const resolved = execute(workflow.jobs["resolve-base"].steps[0]);
       states["resolve-base"] = jobResult(resolved, context.steps!.base?.outputs);
       if (!resolved || !gate("publisher-preflight")) {

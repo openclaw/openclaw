@@ -37,10 +37,14 @@ import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
+type ConfigLoadOptions = {
+  skipSuspiciousRecovery?: boolean;
+  assertCurrent?: () => void;
+  projectInvalidConfig?: (snapshot: ConfigFileSnapshot) => OpenClawConfig | undefined;
+};
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
@@ -177,6 +181,12 @@ function* loadConfigWithEffects(
         resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       });
+      // An offline policy reader may supply an already-validated repair projection.
+      // Never observe that projection as disk config or write it from the reader.
+      const projected = !deps.observe ? options.projectInvalidConfig?.(invalidSnapshot) : undefined;
+      if (projected) {
+        return materializeRuntimeConfig(projected, pathResolution);
+      }
       yield* resolveConfigIoEffect({
         sync: () => context.observeLoadConfigSnapshot(invalidSnapshot),
         async: () => context.observeLoadConfigSnapshotAsync(invalidSnapshot, options.assertCurrent),

@@ -42,6 +42,7 @@ import {
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
+import { bindSessionParticipationSource } from "./session-participation-authorization.js";
 import { resolveSessionSystemTurnProfileId } from "./session-principal-run-authority.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -353,15 +354,24 @@ export async function resolveSessionMutationAuthorizationAsync(
       ]
     : [
         ...resolveDirectSessionTargets(params.method, params.requestParams),
-        ...(resolveSessionMutationTargets(params) ?? []),
+        // Discovery precedes profile preparation; the final check resolves the role ceiling.
+        ...(resolveSessionMutationTargets({
+          ...params,
+          ...(params.method === "session.typing" &&
+          params.sessionScope === "operator.sessions.write"
+            ? { participationRequired: true as const }
+            : {}),
+        }) ?? []),
       ];
   if (targets.length === 0 && !params.sessionScope && !isSessionTargetMethod(params.method)) {
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  const startsSessionRun = params.method === "chat.send" || params.method === "agent";
   // Goal Resume retains session access across transcript writer handoffs.
   const sessionAccessOnly =
     params.method === "chat.send" ||
+    params.method === "sessions.send" ||
     (params.method === "sessions.goal.update" && requestPreparation.authorizesAgentRun);
   const chatParams =
     params.method === "chat.send" ? asOptionalRecord(params.requestParams) : undefined;
@@ -371,6 +381,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       : undefined;
   // Match the chat handler's command interpretation: cancellation must not join startup.
   const stopCommand =
+    !params.participationRequired &&
     chatParams?.suppressCommandInterpretation !== true &&
     chatParams?.intent === undefined &&
     chatMessage?.ok === true &&
@@ -455,7 +466,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
-      if (!initialFacts.target && (params.method === "chat.send" || params.method === "agent")) {
+      if (!initialFacts.target && startsSessionRun) {
         const { getSubagentRunsForChildSession } =
           await import("../agents/subagents/registry/subagent-registry-memory.js");
         // An indexed custody requirement can refuse recreation, never reconstruct authority.
@@ -466,10 +477,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       }
       const inherited = params.client?.internal?.operatorRunAuthority;
-      if (
-        (params.method === "chat.send" || params.method === "agent") &&
-        initialFacts.target?.entry.delegatedOperatorSource
-      ) {
+      if (startsSessionRun && initialFacts.target?.entry.delegatedOperatorSource) {
         childParticipation = await prepareSessionDelegatedOperatorAuthority({
           context: params.context,
           agentId: input.agentId,
@@ -481,11 +489,10 @@ export async function resolveSessionMutationAuthorizationAsync(
           creationReleases.push(childParticipation.release);
         }
       }
-      const participantRunAuthority =
-        params.method === "chat.send" || params.method === "agent"
-          ? (childParticipation?.authority ??
-            (inherited?.participationCeiling ? inherited : undefined))
-          : undefined;
+      const participantRunAuthority = startsSessionRun
+        ? (childParticipation?.authority ??
+          (inherited?.participationCeiling ? inherited : undefined))
+        : undefined;
       if (participantRunAuthority) {
         params = {
           ...params,
@@ -528,6 +535,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             storageTarget: retained.storageTarget,
             members: [],
             isMember: (identityId: string) => facts.membership.has(identityId),
+            memberAccess: (identityId: string) => facts.memberAccess?.[identityId],
             assertCurrent: () => {
               readCurrent();
             },
@@ -574,6 +582,9 @@ export async function resolveSessionMutationAuthorizationAsync(
       authorization.participationCeiling = childParticipation.authority.participationCeiling;
       authorization.participationSignal = childParticipation.authority.signal;
     }
+    if (authorization.release) {
+      creationReleases.push(authorization.release);
+    }
     const prepareWorkerGrant = authorization.prepareWorkerGrant;
     if (prepareWorkerGrant) {
       authorization.prepareWorkerGrant = async (source) => {
@@ -604,6 +615,12 @@ export async function resolveSessionMutationAuthorizationAsync(
         retain,
         retainForRun: () => ({
           signal: authorization.participationSignal,
+          participationCeiling: bindSessionParticipationSource(
+            authorization.participationCeiling,
+            () => preparedTargets[0]?.read().target,
+            params.context.getRuntimeConfig,
+            authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
+          ),
           participationAuthority: childParticipation?.authority,
           assertCurrent: () => {
             authorization.participationSignal?.throwIfAborted();
@@ -625,8 +642,9 @@ export async function resolveSessionMutationAuthorizationAsync(
           if (!created.entry) {
             return;
           }
-          const path = created.readSource?.path ?? created.storePath;
-          const identity = readDatabasePathIdentitySync(path);
+          const identity = readDatabasePathIdentitySync(
+            created.readSource?.path ?? created.storePath,
+          );
           const retained = retainPreparedSessionSharingFacts({
             databaseIdentity: identity.key,
             sessionKey: created.sessionKey,
@@ -636,6 +654,11 @@ export async function resolveSessionMutationAuthorizationAsync(
             membership: new Set(),
           });
           creationReleases.push(retained.release);
+          const storageTarget = {
+            agentId: created.agentId,
+            canonicalKey: created.sessionKey,
+            storePath: created.storePath,
+          };
           const readScope = sessionAccessOnly ? "session-access" : "sharing";
           const read = () => {
             const current = retained.readCurrent(readScope);
@@ -652,13 +675,10 @@ export async function resolveSessionMutationAuthorizationAsync(
                 readSource: created.readSource,
                 entry: current.entry,
               },
-              storageTarget: {
-                agentId: created.agentId,
-                canonicalKey: created.sessionKey,
-                storePath: created.storePath,
-              },
+              storageTarget,
               members: [],
               isMember: (identityId: string) => current.membership.has(identityId),
+              memberAccess: (identityId: string) => current.memberAccess?.[identityId],
               assertCurrent: () => {
                 if (!active || !retained.readCurrent(readScope)) {
                   throw sessionMutationTargetChanged(params.method, created.sessionKey);
@@ -679,11 +699,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             preparedTargets.push({
               sessionKey: created.sessionKey,
               agentId: created.agentId,
-              storageTarget: {
-                agentId: created.agentId,
-                canonicalKey: created.sessionKey,
-                storePath: created.storePath,
-              },
+              storageTarget,
               readSource: created.readSource,
               prepareRead: retained.prepareRead,
               read,

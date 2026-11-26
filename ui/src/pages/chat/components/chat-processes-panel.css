@@ -351,6 +351,10 @@
   .chat-processes__detail-name {
     color: var(--text);
     font-weight: 400;
+    line-height: 1.4;
+    direction: rtl;
+    text-align: match-parent;
+    text-overflow: ellipsis;
   }
 }
 :root[data-theme-mode="light"] .chat-processes__panel[data-mobile="false"] {

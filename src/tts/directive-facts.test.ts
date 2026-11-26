@@ -80,11 +80,27 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
+    {
+      chunks: ["`", "``\ncode\n```\n[[tts:sample]]"],
+      expected: "```\ncode\n```\nsample",
+    },
+    {
+      chunks: ["```lang", "```\n[[tts:sample]]"],
+      expected: "```lang```\nsample",
+    },
+  ])("reclassifies streamed backticks before a directive: $chunks", ({ chunks, expected }) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
+  });
+
+  it.each([
     ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
     ["Use `", "[[tts:literal", " speech]]", "` here."],
     ["Use `", "`[[tts:literal", " speech]]", "`` here."],
     ["Use ``", "[[tts:literal speech]]`` here."],
     ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
+    ["~", "~~\n[[tts:literal speech]]\n~", "~~", " example\n[[tts:still literal]]\n~~~"],
+    ["~~~", "~\n~~~\n[[tts:still inside the longer fence]]\n~~~~"],
     ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
   ])("preserves code literals across chunks: %j", (...chunks) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();

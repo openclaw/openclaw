@@ -769,7 +769,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (opts.onResponse) {
               const onResponse = opts.onResponse;
               responseWork = Promise.resolve().then(() =>
-                onResponse(client.request.bind(client), startAbort.signal),
+                onResponse(client.request.bind(client), startAbort.signal, result),
               );
               await responseWork;
             }

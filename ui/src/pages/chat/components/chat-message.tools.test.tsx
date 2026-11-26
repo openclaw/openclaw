@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByText, isInaccessible, queryByText } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
@@ -265,9 +266,13 @@ describe("grouped chat rendering", () => {
     });
     await renderHistory([call, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
-    expect(harness.view.textContent).toContain("No result available.");
+    const operation = requireElement(".chat-tool-msg-collapse--manual", HTMLElement);
+    expect(isInaccessible(getByText(operation, "interrupted"))).toBe(false);
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Commands");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     const completed = await renderHistory([
       call,
       abort,
@@ -281,6 +286,7 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-tool-row__cmd")).toBe("check-workspace");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
     expectCount(".chat-tool-row", 1);
     expectAbsent(".chat-tool-row--running");
   });

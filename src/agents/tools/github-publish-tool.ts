@@ -14,6 +14,7 @@ import {
   GitHubPublicationEvidenceSchema,
   type GitHubPublicationEvidence,
   GitHubPublicationTitleSchema,
+  SessionGitHubPullRequestInspectResultSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
   type SessionGitHubReadinessResult,
@@ -35,11 +36,15 @@ import type { SandboxContext } from "../sandbox/types.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult } from "./common.js";
 import {
   withGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import {
+  describeGitHubPublishTool,
+  githubActionGuidance,
+  guidedResult,
+} from "./github-publish-guidance.js";
 import { callAgentToolGatewayRequest, callInProcessGatewayTool } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
@@ -51,6 +56,7 @@ const publicationWorkspaceActions = [
   "readiness",
   "inspect_pr",
   "create_issue",
+  "create_comment",
   "prepare_pr",
   "refresh_base",
   "edit",
@@ -58,6 +64,10 @@ const publicationWorkspaceActions = [
   "request_review",
   "upload_evidence",
 ];
+
+const commentIssueNumber = Type.Optional(
+  SessionGitHubPullRequestInspectResultSchema.properties.number,
+);
 
 export const githubPublishToolDefinition = {
   name: "github_publish",
@@ -70,37 +80,13 @@ export const githubPublishToolDefinition = {
       action: Type.Optional(stringEnum(publicationWorkspaceActions)),
       title: Type.Optional(GitHubPublicationTitleSchema),
       body: GitHubPublicationEditSchema.properties.body,
+      issueNumber: commentIssueNumber,
       draft: Type.Optional(Type.Boolean()),
       workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath,
     },
     { additionalProperties: false },
   ),
 };
-
-function describeGitHubPublishTool(
-  publicationAvailable: boolean,
-  prepareAvailable: boolean,
-  refreshBaseAvailable: boolean,
-  evidenceAvailable: boolean,
-): string {
-  const continuation =
-    'continue that work before ending the turn, or use automations to schedule a continuation when it offers add and the current caller is authorized (at + agentTurn + sessionTarget "session:<this session key from Runtime>"). While that scheduled continuation waits, use automations next_check to rearm its existing job, not add another job. If a scheduled continuation is unavailable, explain the remaining work';
-  const readiness =
-    "readiness: strictly observe the selected publishing session and optional existing requestId without credentials, refresh, source adoption, publication or recovery. Reports separate read policy, custody, bounded target support and shared receipt facts; write authority, authentication, exact remote destination, CI and mergeability remain unknown. Pending or unconfirmed effects retain their original requestId: observe that request, never resubmit it. Accepts only action, publishingSessionKey and requestId. It does not check for running background exec, unfinished children, open terminals or another active run, which refuse workspace publication. ";
-  const inspection =
-    "inspect_pr: read pullRequestUrl, including copied PR tab, query and comment links. Guests qualify through a linked GitHub PR author or contributor to the selected publisher's PR, across sessions; current full-write maintainers can assist with others' PRs. Private repositories also require current linked-account access. Returns canonical URL, author, state, base/head repositories, branches and commits. This read never prepares a workspace, binds or publishes the PR, or grants later authority. It is not a publisher credential check: bot-authored PRs need not belong to your linked account. ";
-  const publication = publicationAvailable
-    ? `Publish workspace changes or edit authorized PR metadata through Gateway-held credentials.
-- publish (default when action is omitted): publish accepted workspace changes as an open PR by default; draft: true creates a draft. title/body and draft are used only when creating a PR. Updating an existing PR preserves its state. requested/publishing means accepted, not finished: retain requestId, finish the turn and await its result here; do not submit another publication to recover it. The receipt does not resume the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it. With workspacePath, status started is not success: the result, possibly a refusal, resumes this session as the next turn. Running background exec, unfinished children, open terminals or another active run refuse preparation; finish or kill them first. Each checkout publishes to one PR; publishing it again updates that PR.
-- edit: read current metadata with {action: "edit"}. To edit an explicitly identified PR without preparing its source, also supply pullRequestUrl on every read and edit; the Gateway rechecks the eligibility above and repository access. This explicit target takes precedence over the session PR and accepts no requestId. Read first, omitting expectedHeadCommit, title/body and expectedTitle/expectedBody. To change either field, send the read's top-level headCommit as expectedHeadCommit (not publication.headCommit), requestId when a publication receipt is returned, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. After an uncertain response, read again with action edit and the same pullRequestUrl when explicitly selected, without write preconditions, before retrying.
-- ready: mark the current session's own draft, or an explicitly identified pullRequestUrl, ready for review, using the expectedHeadCommit and any publication requestId observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
-- request_review: after an explicit re-review request, read the PR with edit, then send expectedHeadCommit and any publication requestId to post only "@clawsweeper re-review". For an explicitly identified PR, supply the same pullRequestUrl on the read and request_review, without requestId; the same eligibility and access checks apply without importing source. No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
-${prepareAvailable ? `- prepare_pr: when asked to continue an existing PR under the eligibility above, supply pullRequestUrl. Maintainer assistance does not require being the conversation creator or PR author and never grants later guest turns additional authority. Intent may be established before the URL arrives; inspect_pr is optional. An ordinary unbound conversation yields and resumes here with a new owned PR workspace. Earlier files remain in their original source and earlier message links stay read-only. Background work, children or terminals cause a no-effect busy refusal; finish or observe them and retry. Initial preparation in an already managed workspace requires clean source without dirty, untracked, staged, or unpublished work; otherwise preparation preserves it and refuses. For a PR this conversation published, including one the managed publisher authored, preparation instead merges another writer's newer head into the saved work. A clean workspace receives exactly the PR head files. Already managed workspaces keep their directory, sandbox scope and guest Git history. Preparation associates the original PR without publishing. Repeating a completed same-head preparation preserves edits without resetting files. ${refreshBaseAvailable ? "An explicit refresh reconciles the PR's current destination and review comparison while preserving local edits and history; a destination change alone does not merge it into the PR head. Use inspect_pr for current branch and commit facts when needed. Reconcile recoverable changes from the user's intent; ask a focused question only when the intended work is materially ambiguous. Do not ask the user to undo a destination change. An explicit refresh of the bound PR integrates its newer head while preserving later guest work. Files with both staged and unstaged changes must have their staged changes committed first; refresh preserves them and refuses. Resolve returned conflictPaths, then repeat with conflictsResolved: true and expectedHeadCommit set to the returned headCommit. " : ""}Interrupted preparation finishes the same accepted head; if headChanged is true, repeat to integrate the newer remote head. Tests and Auto Review use the returned exact review base. After preparation, omit action to append accepted changes to the original PR through the shared publisher, preserving its branch history, author and draft state. A remote head change refuses publication and preserves local work until the newer head is integrated; do not create a replacement PR. Existing edit, ready${evidenceAvailable ? ", upload_evidence" : ""} and request_review actions use the original bound PR before any new push. Read with edit first: an imported target returns pullRequest instead of a publication receipt; send expectedHeadCommit without requestId.\n` : ""}${evidenceAvailable ? "- upload_evidence: upload one inspected image/video from this conversation's sandbox workspace to its existing GitHub.com PR repository. First read the PR with edit; send its expectedHeadCommit, any publication requestId, and evidence {path: workspace-relative path, sha256: inspected lowercase SHA-256, sizeBytes: inspected byte count, at most 10 MB}. Supports PNG, JPEG, GIF, WebP, MP4, MOV and WebM. Only the inspected bytes are sent. Use the returned uploaded URL with edit to associate it in the PR body, then verify reviewer access; uploaded does not prove public access. An unconfirmed result may have created an attachment: never repeat the upload blindly. No host credentials, other mounts, remote URLs, repository or PR selectors are accepted.\n" : ""}${refreshBaseAvailable ? "- refresh_base: integrate the current target base of this workspace's prepared or published PR into its local managed sandbox before tests and Auto Review; without a PR, use the selected repository base. Finish any pending prepare_pr first. Base refresh preserves the accepted PR head and never imports another writer's newer PR head; use prepare_pr for that source update. Commit distinct staged changes before refreshing a file with unstaged edits. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.\n" : ""}Edit, request_review, inspect, ready, merge and close accept an optional verified pullRequestUrl, never with a publishing session or source ref.`
-    : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
-  const issue =
-    "create_issue: file an issue in this conversation's registered GitHub project using the selected agent account. Supply only title and optional body (up to 8192 characters). No worktree or PR is needed. If creation is unconfirmed, check the repository before retrying. ";
-  return `${readiness}${inspection}${issue}${publication} inspect, ready, merge and close act on this session's published or bound PR, a delegated child's publishingSessionKey, or an explicit pullRequestUrl (without requestId or publishingSessionKey). For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks; pass the same pullRequestUrl on every call for a PR this session did not publish. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected expectedHeadCommit and any publication requestId; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Inspect, merge, close and child selection require full operator write access. These actions also support a bound original PR: use its observed expectedHeadCommit without requestId when no publication receipt is returned. Actions do not change session sandboxing.`;
-}
 
 /** Describe the schema after policy filtering, without claiming prepared runtime capabilities. */
 export function describeGitHubPublishToolPreview(parameters: unknown): string {
@@ -159,6 +145,7 @@ function resolveGitHubPublishParameters(params: {
             ),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
+            issueNumber: commentIssueNumber,
             draft: Type.Optional(Type.Boolean()),
             ...(params.workspacePreparationAvailable
               ? { workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath }
@@ -174,10 +161,12 @@ function resolveGitHubPublishParameters(params: {
               "readiness",
               "inspect_pr",
               "create_issue",
+              "create_comment",
               ...publicationOperatorActions,
             ]),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: SessionGitHubPublishParamsSchema.properties.body,
+            issueNumber: commentIssueNumber,
           },
           { additionalProperties: false },
         );
@@ -227,25 +216,24 @@ export function createGitHubPublishTool(
   const tool: AnyAgentTool = {
     label: options.observationOnly ? "GitHub Publication Readiness" : "GitHub Publish",
     name: githubPublishToolDefinition.name,
-    // An unbound sandboxed preparation yields this turn. Like sessions_yield, it stays a direct
-    // call: a Code Mode exec cannot carry a turn handoff.
+    // An unbound sandboxed preparation yields this turn. Like sessions_yield, it runs only as a
+    // direct call: a Code Mode exec cannot carry a turn handoff. On-demand keeps every call
+    // direct without sending this definition before the session first uses it.
     ...((prepareSupported && options.sandbox?.workspaceSource !== "managed-worktree") ||
     (publicationSupported && workspacePreparationAvailable)
-      ? { async: false as const, catalogMode: "direct-only" as const }
+      ? { async: false as const, catalogMode: "on-demand" as const }
       : {}),
     description: options.observationOnly
-      ? "Observe publication readiness and existing receipts without credentials, refresh, publication, or recovery. Send action readiness and retain the original requestId for accepted or uncertain work; never resubmit it. This listing offers no authenticated GitHub actions; configuration or tool refresh re-evaluates them. For current identity status or setup, ask the operator to check GitHub in Settings → Agents → Tools. Readiness does not establish write authority, authentication, CI, or mergeability."
+      ? "Observe GitHub publication readiness and existing receipts with action readiness; no authenticated actions are offered. Retain an accepted or uncertain requestId; never resubmit it. For GitHub setup, ask the operator to check Settings → Agents → Tools."
       : options.preview
         ? "Work with GitHub issues and pull requests through the Gateway."
-        : describeGitHubPublishTool(
+        : describeGitHubPublishTool({
             publicationAvailable,
             prepareAvailable,
             refreshBaseAvailable,
             evidenceAvailable,
-          ) +
-          (publicationAvailable && workspacePreparationAvailable
-            ? " For a local task checkout, supply workspacePath after committing its changes. Publication uses a separate task checkout and returns here without changing this conversation's workspace."
-            : ""),
+            workspacePreparationAvailable,
+          }),
     parameters: options.observationOnly
       ? githubPublicationObservationParameters
       : resolveGitHubPublishParameters({
@@ -267,6 +255,7 @@ export function createGitHubPublishTool(
           action?:
             | "readiness"
             | "create_issue"
+            | "create_comment"
             | "inspect_pr"
             | "prepare_pr"
             | "publish"
@@ -276,6 +265,7 @@ export function createGitHubPublishTool(
             | "upload_evidence"
             | GitHubPublicationAction["action"];
           pullRequestUrl?: string;
+          issueNumber?: number;
           evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
@@ -328,7 +318,8 @@ export function createGitHubPublishTool(
           },
         );
         // An unbound workspace is the normal starting state, not a failure; say how to proceed.
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.readiness,
           readiness.custody.kind === "unbound_workspace" &&
             !input.publishingSessionKey &&
             publicationAvailable &&
@@ -355,7 +346,9 @@ export function createGitHubPublishTool(
           onYield: options.onYield,
           signal,
           senderIsOwner: options.senderIsOwner,
-          ...(method === "sessions.github.action" ? { retainRequester: true as const } : {}),
+          ...(method === "sessions.github.action" || caller.operatorAuthority?.participationCeiling
+            ? { retainRequester: true as const }
+            : {}),
           fenceSuccessors: true,
           run: ({ assertCurrent, signal: handoffSignal }) =>
             withGatewayToolCallerIdentity(
@@ -390,7 +383,11 @@ export function createGitHubPublishTool(
           // Only PR import can return repository-sized path lists.
           formatResult: (result) =>
             method === "sessions.github.publish"
-              ? JSON.stringify(result)
+              ? JSON.stringify(
+                  result.status === "failed"
+                    ? result
+                    : { ...result, next: githubActionGuidance.publish },
+                )
               : JSON.stringify({
                   status: result.status,
                   url: result.url,
@@ -406,6 +403,7 @@ export function createGitHubPublishTool(
                             : name + " failed.",
                       }
                     : {}),
+                  next: githubActionGuidance.prepare_pr,
                 }),
         });
       };
@@ -439,7 +437,8 @@ export function createGitHubPublishTool(
         if (adopting && options.sandbox) {
           return handoff("PR preparation", "sessions.github.action", params);
         }
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.prepare_pr,
           await withGatewayToolCallerIdentity(
             { ...caller, workspaceBaseRefreshSandbox: options.sandbox ?? undefined },
             () =>
@@ -458,7 +457,8 @@ export function createGitHubPublishTool(
             "create_issue accepts only a title and optional body for the current project.",
           );
         }
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.create_issue,
           await callGateway("sessions.github.action", {
             action: "create_issue",
             sessionKey: caller.sessionKey,
@@ -466,6 +466,31 @@ export function createGitHubPublishTool(
             title: input.title,
             ...(input.body !== undefined ? { body: input.body } : {}),
           }),
+        );
+      }
+      if (input.action === "create_comment") {
+        if (
+          input.issueNumber === undefined ||
+          !input.body ||
+          Object.keys(input).some((key) => !["action", "issueNumber", "body"].includes(key))
+        ) {
+          throw new Error(
+            "create_comment accepts only an issueNumber and body for the current project.",
+          );
+        }
+        return guidedResult(
+          githubActionGuidance.create_comment,
+          await callGateway(
+            "sessions.github.action",
+            {
+              action: "create_comment",
+              sessionKey: caller.sessionKey,
+              agentId: caller.agentId,
+              issueNumber: input.issueNumber,
+              body: input.body,
+            },
+            { signal },
+          ),
         );
       }
       if (input.action === "inspect_pr") {
@@ -477,7 +502,10 @@ export function createGitHubPublishTool(
             `inspect_pr accepts only the pullRequestUrl to inspect, without publication or workspace fields${extra.length ? `; remove ${extra.join(", ")}` : ""}.`,
           );
         }
-        return jsonResult(
+        return guidedResult(
+          prepareAvailable
+            ? `${githubActionGuidance.inspect_pr} ${githubActionGuidance.inspectPrPrepare}`
+            : githubActionGuidance.inspect_pr,
           await callGateway<SessionGitHubPullRequestInspectResult>("sessions.github.action", {
             sessionKey: caller.sessionKey,
             action: "inspect_pr",
@@ -504,7 +532,8 @@ export function createGitHubPublishTool(
             "request_review only posts the fixed ClawSweeper command on an authorized PR.",
           );
         }
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.request_review,
           await callGateway<SessionGitHubActionResult>("sessions.github.action", {
             sessionKey: caller.sessionKey,
             action: "request_review",
@@ -530,7 +559,8 @@ export function createGitHubPublishTool(
             "upload_evidence accepts only this session's observed PR and inspected workspace media.",
           );
         }
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.upload_evidence,
           await withGatewayToolCallerIdentity(
             { ...caller, workspaceEvidenceSandbox: options.sandbox ?? undefined },
             () =>
@@ -565,7 +595,10 @@ export function createGitHubPublishTool(
             "edit accepts the current session PR or a verified PR URL, with metadata fields only.",
           );
         }
-        return jsonResult(
+        return guidedResult(
+          input.title === undefined && input.body === undefined
+            ? githubActionGuidance.editRead
+            : githubActionGuidance.edit,
           await callGateway<SessionGitHubActionResult>("sessions.github.action", {
             sessionKey: caller.sessionKey,
             action: "edit",
@@ -597,7 +630,8 @@ export function createGitHubPublishTool(
             "refresh_base only prepares the current workspace; it accepts no publication target or PR action fields.",
           );
         }
-        return jsonResult(
+        return guidedResult(
+          githubActionGuidance.refresh_base,
           await withGatewayToolCallerIdentity(
             { ...caller, workspaceBaseRefreshSandbox: options.sandbox ?? undefined },
             () =>
@@ -613,7 +647,10 @@ export function createGitHubPublishTool(
         );
       }
       if (action !== "publish") {
-        return jsonResult(
+        return guidedResult(
+          action === "ready" || action === "inspect" || action === "merge" || action === "close"
+            ? githubActionGuidance[action]
+            : undefined,
           await callGateway<SessionGitHubActionResult>("sessions.github.action", {
             sessionKey: caller.sessionKey,
             action,
@@ -642,14 +679,17 @@ export function createGitHubPublishTool(
         ...(input.draft !== undefined ? { draft: input.draft } : {}),
         ...(input.workspacePath !== undefined ? { workspacePath: input.workspacePath } : {}),
       };
-      if (input.workspacePath !== undefined) {
+      if (input.workspacePath !== undefined || caller.operatorAuthority?.participationCeiling) {
         return handoff("GitHub publication", "sessions.github.publish", publishParams);
       }
       const result = await callGateway<SessionGitHubPublicationResult>(
         "sessions.github.publish",
         publishParams,
       );
-      return jsonResult(result);
+      return guidedResult(
+        result.status === "failed" ? undefined : githubActionGuidance.publish,
+        result,
+      );
     },
   };
   bindAgentToolListingScope(

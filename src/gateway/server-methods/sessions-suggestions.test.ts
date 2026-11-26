@@ -390,17 +390,15 @@ it("keeps an uncertain dispatch claimed until retry reconciliation", () =>
       params: { idempotencyKey: `session-suggestion:${id}`, queueMode: "steer" },
       client: {
         authenticatedUserProfile: { profileId: "owner", displayName: "Owner" },
-        internal: expect.objectContaining({
-          syntheticClient: true,
-          senderAttribution: {
-            id: "alice",
-            name: "Suggested by Alice",
-            identity: { type: "profile", id: "alice" },
-          },
-        }),
+        internal: expect.objectContaining({ suggestedBy: { id: "alice", name: "Alice" } }),
       },
     };
     expect(mocks.handleChatSend.mock.calls).toMatchObject([[dispatchedInput], [dispatchedInput]]);
+    // The approver sends the turn as their own; the author is display credit only.
+    for (const [{ client: dispatchedClient }] of mocks.handleChatSend.mock.calls) {
+      expect(dispatchedClient.internal).not.toHaveProperty("senderAttribution");
+      expect(dispatchedClient.internal).not.toHaveProperty("syntheticClient");
+    }
   }));
 
 it("claims a pending suggestion before dispatching it", () =>

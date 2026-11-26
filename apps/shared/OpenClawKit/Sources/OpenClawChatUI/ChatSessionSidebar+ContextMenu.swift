@@ -21,7 +21,7 @@ extension ChatSessionSidebar {
             set: { if !$0 { self.sessionPendingRename = nil } })
     }
 
-    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool, now: Date = .now) -> some View {
+    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool, now: Date? = nil) -> some View {
         var session = session
         session.agentId = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
@@ -31,7 +31,7 @@ extension ChatSessionSidebar {
             isChild: isChild,
             groups: self.groups,
             actions: self.menuActions,
-            now: now,
+            now: now ?? self.sidebarClock.gatewayDate(),
             inspect: { self.inspectedSession = session },
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
@@ -69,15 +69,22 @@ private struct ChatSessionSidebarRowMenu: View {
                         unitsStyle: .abbreviated))))
             }
             if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild) {
+                let saved = self.actions.isPinnedForAction(self.session, at: self.now)
                 self.button(
-                    self.session.pinned == true ? String(localized: "Unpin") : String(localized: "Pin"),
+                    saved ? String(localized: "Unpin") : String(localized: "Pin"),
                     "pin",
                     key: "p")
                 {
                     self.viewModel.setSessionPinned(
                         key: self.session.key,
-                        pinned: self.session.pinned != true,
+                        pinned: !saved,
                         agentID: self.session.agentId)
+                }
+                .disabled(!self.actions.canTogglePin(self.session, at: self.now))
+                if self.actions.connection?.supportsPersonalPins == false,
+                   let reason = OpenClawPersonalPinError.unsupportedGateway.errorDescription
+                {
+                    Text(reason)
                 }
             }
             // Snooze shares Pin's root-session eligibility.

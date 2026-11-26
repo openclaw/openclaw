@@ -14,6 +14,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -107,12 +108,7 @@ requests = completions = 0;
 globalThis.gc?.();
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const gc = new GCProfiler();
 gc.start();

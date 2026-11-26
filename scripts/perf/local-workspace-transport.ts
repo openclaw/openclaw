@@ -23,6 +23,7 @@ import v8 from "node:v8";
 import zlib from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LocalWorkspacePreparation } from "../../src/gateway/worker-environments/local-workspace-cas.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -186,12 +187,7 @@ try {
     global.gc!();
     const hostLoad = loadavg();
     if (values.allocation) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const samples = [];
     for (let i = 0; i < iterations; i++) {

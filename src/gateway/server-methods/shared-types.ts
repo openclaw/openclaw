@@ -343,7 +343,7 @@ type GatewayTransportContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
-  isConnectionActive?: (connId: string) => boolean;
+  isConnectionActive?: (connId: string, expectedClient?: GatewayClient) => boolean;
   /** Server-stamped activity from an accepted request on the exact live person connection. */
   recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
@@ -685,6 +685,8 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Host-only exact live exec binding; does not replace session disclosure checks. */
+  participationApprovalRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

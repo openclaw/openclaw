@@ -24,6 +24,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isMainThread, parentPort, type MessagePort } from "node:worker_threads";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 // Exercise dispatch's worker reader with the same host-owned SQLite write receipts.
@@ -229,12 +230,7 @@ try {
       await setImmediate();
       observer.observe({ entryTypes: ["gc"] });
       if (values.mode === "allocation") {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 32768,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 32768);
       }
       const loadBefore = os.loadavg();
       statements.subscribe(observeStatement);

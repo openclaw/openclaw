@@ -536,11 +536,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             channel: "signal",
             accountId: ctx.accountId ?? undefined,
           });
+          // Standalone whitespace cannot be sent. Keep the raw fallback when no formatted packet remains.
           let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
             tableMode,
             chunkMode:
               ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
-          });
+          }).filter((chunk) => chunk.text.trim());
           if (chunks.length === 0 && ctx.text) {
             chunks = [{ text: ctx.text, styles: [] }];
           }

@@ -45,6 +45,8 @@ const enBrowser = {
     inspectFocusable: "Focusable",
     loading: "Loading page…",
     notRunning: "The browser isn’t running.",
+    previewUnavailable:
+      "This browser does not provide a visual preview. The agent can still read and interact with pages.",
     start: "Start browser",
     errors: {
       pasteFailed: "Couldn’t paste. Reconnect to a managed browser and try again.",

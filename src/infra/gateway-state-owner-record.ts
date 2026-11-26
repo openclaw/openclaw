@@ -53,8 +53,8 @@ function comparableStateOwnerStaleReason(
       : undefined;
 }
 
-/** Reclamation requires proof that the recorded owner stopped. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
+/** Reclamation uses native identity for local owners and heartbeat expiry across namespaces. */
+export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath?: string): boolean {
   const payload = isRecord(value) ? value : null;
   if (!payload) {
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
@@ -172,8 +172,9 @@ export function reserveGatewayStateRestoration(
   assertOwnerCurrent();
   const lockPath = `${resolveStateOwnerIdentity(databasePath).ownerPath}.gateway-restoration`;
   const payload = defaultPayload(databasePath);
+  // Reservations do not renew their mtime; only actual owner locks carry a heartbeat.
   const stale = ({ payload: previous }: { payload: unknown }) =>
-    isGatewayStateOwnerDefinitelyStale(previous, lockPath);
+    isGatewayStateOwnerDefinitelyStale(previous);
   const lock = acquireFileLockSync(lockPath, {
     lockPath,
     timeoutMs: 0,
@@ -219,10 +220,7 @@ function assertGatewayRestorationPriority(
     throw error;
   }
   const reservation = parseGatewayLockPayload(raw);
-  if (
-    isGatewayStateOwnerDefinitelyStale(reservation, restorationPath) ||
-    reservation?.pid === payload.pid
-  ) {
+  if (isGatewayStateOwnerDefinitelyStale(reservation) || reservation?.pid === payload.pid) {
     return;
   }
   // Gateway bootstrap may need schema admission before acquiring its process root.

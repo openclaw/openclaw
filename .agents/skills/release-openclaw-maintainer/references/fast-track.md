@@ -35,8 +35,8 @@ workflow. Assemble the packet below from the request and digest; do not add an
 human chat decision. Publication still waits for the GitHub environment approval.
 
 The contract in `scripts/lib/release-fast-track-contract.mts` binds repository,
-release tag/channel, candidate commit, published reference release/commit,
-complete delta, policy, exact artifact digests,
+release tag/channel, candidate commit, published reference release/commit and
+complete delta (both omitted for beta prereleases), policy, exact artifact digests,
 publication scope, run/attempt, lowercase UUIDv4 request ID, expiry and explicit
 action. Canonical serialization sorts artifacts and scope before hashing.
 Persist the exact packet with release evidence; a digest alone is not approval.
@@ -56,6 +56,18 @@ Persist the exact packet with release evidence; a digest alone is not approval.
   changes or shallow history. A previous fast-track cannot reset the baseline.
   The Git-backed helper recomputes the delta; a typed reference assertion is not
   authenticated evidence.
+
+  **Beta prereleases** (`vYYYY.M.P-beta.N`) have no commit/LOC ceiling and need
+  no preceding non-fast-tracked beta or other reference release. Omit
+  `reference` and `delta`; the contract rejects them for betas. A final version
+  published to the `beta` dist-tag is not a beta prerelease and keeps the
+  ceiling. A fast-tracked beta never qualifies its stable promotion: the final
+  needs a passing `release_profile=stable` FRV (`rerun_group=all`, soak,
+  blocking performance), either fresh or reused from a beta FRV that itself
+  passed. Build-only or failed beta evidence is not reusable. A stable
+  fast-track remains its own exception, measured from a non-fast-tracked
+  release; a fast-tracked beta cannot be its reference.
+
 - `approved-partial-frv-v1`: separate explicit action **Approve publication with
   incomplete validation**, with no delta ceiling. Bind the reason, original FRV
   run/attempt and candidate, durable snapshot URL/digest, result summary and every

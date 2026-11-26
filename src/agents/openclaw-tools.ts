@@ -21,6 +21,7 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
+import { KNOWLEDGE_CONVERSATION_SCRIBE } from "./knowledge-conversation-scribe.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
@@ -437,6 +438,13 @@ function* createOpenClawToolsSteps(
     pinnedWidgetAuthoringAdmitted &&
     inlineWidgetClientAvailable &&
     options?.clientCaps?.includes("inline-widgets") !== true;
+  // The UI uses this start request ID for both setup and run-once turns. A
+  // caller-chosen ID can only narrow tools here; the owner is the admitted agent.
+  const sessionReadAgentOnly =
+    scheduledTargets?.sessionReadAgentOnly === true ||
+    (Boolean(requesterSessionKey) &&
+      options?.runId?.startsWith(`${KNOWLEDGE_CONVERSATION_SCRIBE}:${requesterSessionKey}:`) ===
+        true);
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
@@ -637,18 +645,21 @@ function* createOpenClawToolsSteps(
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
-      supportsActiveOnly: !embedded,
+      sessionReadAgentOnly,
+      gatewayBacked: !embedded,
       requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
+      sessionReadAgentOnly,
     }),
     createSessionsSearchTool({
       ...sessionLookupToolOptions,
       agentId: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
+      sessionReadAgentOnly,
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
