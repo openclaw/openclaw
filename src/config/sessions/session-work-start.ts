@@ -19,6 +19,7 @@ type SessionWorkStartEntry = Pick<
   | "pendingProjectGitUrl"
   | "pendingWorktree"
   | "providerReview"
+  | "nativeRestartRecovery"
   | "lifecycleRevision"
 > &
   Partial<Pick<InternalSessionEntry, "updatedAt">>;
@@ -42,6 +43,7 @@ type SessionWorkStartBlockReason =
   | "expired"
   | "initialization_pending"
   | "provider_review"
+  | "native_recovery_held"
   | "archived"
   | "workspace_pending";
 
@@ -108,6 +110,16 @@ export function resolveSessionWorkStartBlock(
     return new SessionWorkStartError(
       "initialization_pending",
       `Session "${sessionKey}" is still initializing. Retry after initialization completes.`,
+      true,
+    );
+  }
+  if (
+    entry?.nativeRestartRecovery?.state === "held" &&
+    options?.purpose !== "accepted-result-settlement"
+  ) {
+    return new SessionWorkStartError(
+      "native_recovery_held",
+      "A command in this session may already have taken effect. Check what changed before resuming the held inputs.",
       true,
     );
   }

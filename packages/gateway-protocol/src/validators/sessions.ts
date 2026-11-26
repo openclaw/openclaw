@@ -259,6 +259,10 @@ export const validateSessionsProviderReviewContinueParams = createProtocolValida
   S.SessionsProviderReviewContinueParamsSchema,
   Checks.isSessionsProviderReviewContinueParams,
 );
+export const validateSessionsNativeRecoveryResumeParams = createProtocolValidator(
+  S.SessionsNativeRecoveryResumeParamsSchema,
+  Checks.isSessionsNativeRecoveryResumeParams,
+);
 export const validateSessionsPatchManyParams = createProtocolValidator(
   S.SessionsPatchManyParamsSchema,
   Checks.isSessionsPatchManyParams,

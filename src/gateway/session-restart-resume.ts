@@ -10,6 +10,7 @@ import {
   applySessionEntryReplacements,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readInterruptedNativeRestartReceipt } from "../config/sessions/session-native-restart-recovery.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import { createRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
 import {
@@ -35,6 +36,7 @@ import {
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareNativeRestartQueueRelease } from "./session-restart-native-release.js";
 import {
   hasInterruptedCommittedRequesterSettleInput,
   prepareRestartCompletionCustody,
@@ -357,6 +359,7 @@ async function resumeRestartStore(
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   const ended = new Set(outOfScope);
+  const nativeRecovery = new Map<string, InternalSessionEntry>();
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -386,6 +389,7 @@ async function resumeRestartStore(
               parked: ReturnType<typeof resolveSessionYieldWait>;
               skip: ReturnType<typeof restartResumeSkipReason>;
             }
+          | { entry: InternalSessionEntry; nativeRecovery: true }
           | undefined
         >({
           ...target,
@@ -419,6 +423,38 @@ async function resumeRestartStore(
             });
             const { orphanedRun, marker } = resolved;
             stale = resolved.stale;
+            const recovery = selected.nativeRestartRecovery;
+            if (recovery?.state === "held" || recovery?.state === "releasing") {
+              return { result: { entry: selected, nativeRecovery: true } };
+            }
+            const interruptedNativeReceipt = readInterruptedNativeRestartReceipt(selected);
+            if (
+              !skip &&
+              (orphanedRun || selected.resumeAfterRestart || marker) &&
+              interruptedNativeReceipt
+            ) {
+              const entry: InternalSessionEntry = {
+                ...selected,
+                ...(orphanedRun
+                  ? derivePersistedSessionLifecyclePatch({
+                      entry: selected,
+                      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+                      event: {
+                        runId: orphanedRun,
+                        ts: Date.now(),
+                        data: { phase: "end", aborted: true, stopReason: "restart" },
+                      },
+                    })
+                  : {}),
+                resumeAfterRestart: undefined,
+                mainRestartRecovery: undefined,
+                nativeRestartRecovery: { runId: interruptedNativeReceipt.runId, state: "held" },
+              };
+              return {
+                result: { entry, nativeRecovery: true },
+                replacements: [{ sessionKey, entry }],
+              };
+            }
             if (!marker && !stale && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
@@ -466,6 +502,28 @@ async function resumeRestartStore(
             sessionKey,
             interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
+          continue;
+        }
+        if ("nativeRecovery" in resumed) {
+          nativeRecovery.set(sessionKey, resumed.entry);
+          const recovery = resumed.entry.nativeRestartRecovery!;
+          if (recovery.state === "held") {
+            summary.record(agentId, sessionKey, "native-outcome-unknown");
+          }
+          if (recovery.state === "held" && snapshotEntry.nativeRestartRecovery?.state !== "held") {
+            await recordRestartResumeFailure({
+              target: { ...target, agentId, sessionKey },
+              entry: resumed.entry,
+              runId: recovery.runId,
+              admissionStage: "native-outcome-unknown",
+              nextStep: "Check what changed, then select Resume in chat to release held inputs.",
+              error: new Error(
+                "A command may already have taken effect. The interrupted turn won’t retry automatically.",
+              ),
+              signal,
+              log,
+            });
+          }
           continue;
         }
         const { entry, marker, parked, skip } = resumed;
@@ -581,7 +639,7 @@ async function resumeRestartStore(
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
         authority?.release();
-        if (!queuedKeys.has(sessionKey)) {
+        if (!queuedKeys.has(sessionKey) && !nativeRecovery.has(sessionKey)) {
           sessions.get(sessionKey)?.resolve();
         }
       }
@@ -591,6 +649,9 @@ async function resumeRestartStore(
       // Input queued behind work from another restart resume scope ended with it.
       const endCause = ended.has(session.sessionKey) ? "restart-unrecoverable" : undefined;
       try {
+        if (nativeRecovery.has(session.sessionKey)) {
+          continue;
+        }
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
@@ -617,13 +678,28 @@ async function resumeRestartStore(
         completed = false;
         log.warn(`Skipped queued input recovery for ${session.sessionKey}: ${String(error)}`);
       } finally {
-        sessions.get(session.sessionKey)?.resolve();
+        if (!nativeRecovery.has(session.sessionKey)) {
+          sessions.get(session.sessionKey)?.resolve();
+        }
       }
     }
+    completed =
+      (await prepareNativeRestartQueueRelease({
+        context,
+        signal,
+        log,
+        target,
+        sessions,
+        nativeRecovery,
+        deferred,
+        assertCurrent: assertRecoveryCurrent,
+        ownsInput,
+        resume,
+      })) && completed;
   } finally {
     summary.publish();
   }
   // Admit restart inputs before recovered completion notices can start a turn.
-  resume();
+  resume((key) => !nativeRecovery.has(key));
   return completed;
 }

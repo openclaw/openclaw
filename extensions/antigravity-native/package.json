@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/antigravity-native",
+  "version": "2026.11.7",
+  "description": "Bundled Google Antigravity native agent harness",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.11.7"
+    },
+    "build": {
+      "bundledDist": true,
+      "openclawVersion": "2026.11.7"
+    },
+    "release": {
+      "publishToClawHub": false,
+      "publishToNpm": false
+    }
+  }
+}

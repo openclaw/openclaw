@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   timedText,
   persistedText,
@@ -61,6 +64,54 @@ const userPrecedesReply = (
   );
 
 suite.define(() => {
+  it("resumes an Antigravity hold without submitting a new message", async () => {
+    const sessionKey = "agent:main:native-recovery";
+    const sessionId = "native-recovery-session";
+    const runId = "interrupted-native-run";
+    const row = {
+      key: sessionKey,
+      sessionId,
+      agentId: "main",
+      kind: "direct",
+      label: "Release checklist",
+      updatedAt: Date.now(),
+    };
+    const held = { ...row, nativeRecoveryHeldRunId: runId };
+    const history = {
+      sessionId,
+      messages: [timedText("user", "Update the local release checklist.")],
+    };
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "chat.startup": history,
+        "chat.history": history,
+        "sessions.list": chatSessionListResponse([held]),
+        "sessions.describe": { session: held },
+        "sessions.nativeRecovery.resume": { queueReleased: true },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const button = page.getByRole("button", { name: "Resume", exact: true });
+    const notice = page.getByText("Antigravity paused after a restart", { exact: true });
+    await button.waitFor();
+    const root = page.locator(".chat-composer-neighbor-card").filter({ has: button });
+    const frame = await takeControlUiScreenshotFrame(page, root, [notice, button], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(suite.artifactDir, "antigravity-held.png"), frame.png);
+    await gateway.setMethodResponse("sessions.list", chatSessionListResponse([row]));
+    await gateway.setMethodResponse("sessions.describe", { session: row });
+    await button.click();
+    expect((await gateway.waitForRequest("sessions.nativeRecovery.resume")).params).toEqual({
+      sessionKey,
+      agentId: "main",
+      sessionId,
+      runId,
+    });
+    await notice.waitFor({ state: "hidden" });
+    await expectRequestCountStable(gateway, "chat.send", 0);
+  });
+
   it("sends a pending steer now without replacing its user bubble", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = `session:${sessionKey}`;

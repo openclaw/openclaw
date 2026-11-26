@@ -41,6 +41,8 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     initializationPending: entry.initializationPending,
     templateInitialization: entry.templateInitialization,
     providerReview: entry.providerReview,
+    nativeRestartRecovery:
+      entry.nativeRestartRecovery?.state === "held" ? entry.nativeRestartRecovery : undefined,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
     skillLibrarySelections: entry.skillLibrarySelections,

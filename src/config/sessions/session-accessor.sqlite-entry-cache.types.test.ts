@@ -19,6 +19,11 @@ const workspacePending = "workspace is not ready";
 const cases: [string, Partial<InternalSessionEntry>, string?][] = [
   ["allowed session", {}],
   ["provider pause", { providerReview }, "paused as a precaution"],
+  [
+    "unreconciled native turn",
+    { nativeRestartRecovery: { runId: "interrupted-native-run", state: "held" } },
+    "may already have taken effect",
+  ],
   ["pending initialization", { initializationPending: true }, "still initializing"],
   ["incognito age despite recent activity", { incognito: true, createdAt: 1 }, "expired"],
   ["pending project", { pendingProjectGitUrl: "https://example.org/repo.git" }, workspacePending],

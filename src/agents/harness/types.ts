@@ -560,6 +560,8 @@ type AgentHarnessContract<
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";
+  /** Ask the host to hold automatic recovery if a durable native attempt did not settle. */
+  interruptedRestartRecovery?: "explicit-resume";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
   /** Certifies binding the actual native model through the host before every inference dispatch. */

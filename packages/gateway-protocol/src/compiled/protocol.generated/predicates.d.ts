@@ -2098,6 +2098,11 @@ export function isSessionsProviderReviewContinueParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsProviderReviewContinueParamsSchema
 >;
+export function isSessionsNativeRecoveryResumeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsNativeRecoveryResumeParamsSchema
+>;
 export function isSessionsPatchManyParams(
   value: unknown,
 ): value is import("typebox").Static<

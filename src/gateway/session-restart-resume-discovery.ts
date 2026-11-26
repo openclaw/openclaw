@@ -82,7 +82,12 @@ async function prepareRestartStore(
   try {
     summaries = await readSessionEntrySummariesInWorker(target);
     entries = summaries.filter(({ sessionKey, entry }) => {
-      if (entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId) {
+      if (
+        entry.resumeAfterRestart ||
+        entry.mainRestartRecovery ||
+        entry.lifecycleRunId ||
+        (entry.nativeRestartRecovery && entry.nativeRestartRecovery.state !== "running")
+      ) {
         return true;
       }
       // A settled requester has no run marker but can still owe a child result.

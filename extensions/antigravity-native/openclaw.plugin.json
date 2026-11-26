@@ -1,0 +1,19 @@
+{
+  "id": "antigravity-native",
+  "name": "Google Antigravity native agent runtime",
+  "description": "Runs selected turns through the Google Antigravity CLI.",
+  "categories": [
+    "agent-runtimes"
+  ],
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": [
+      "antigravity-native"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

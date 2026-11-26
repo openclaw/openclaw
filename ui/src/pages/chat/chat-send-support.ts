@@ -3,6 +3,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
@@ -43,6 +44,8 @@ import {
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
+
+registerChatSessionEnglish();
 
 export function chatOfflineQueueStorageError(): string {
   return t("chat.queue.storageFailed");
@@ -100,7 +103,11 @@ export function chatSendAdmissionHoldReason(
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
-  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  const row = chatProviderReviewRow(host, sessionKey, agentId);
+  if (row?.nativeRecoveryHeldRunId) {
+    return t("chat.nativeRecovery.title");
+  }
+  const sendDisabledReason = row?.sendDisabledReason;
   if (sendDisabledReason) {
     return sendDisabledReason;
   }

@@ -112,6 +112,7 @@ export type ChatProps = Omit<
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
+    nativeRecovery?: import("./chat-view-notices.tsx").ChatNativeRecoveryNotice;
     error: string | null;
     errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;

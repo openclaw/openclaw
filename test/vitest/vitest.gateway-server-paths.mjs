@@ -320,6 +320,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-restart-resume-custody.refusal.test.ts",
   "src/gateway/session-restart-resume-custody.test.ts",
+  "src/gateway/session-restart-native-recovery.test.ts",
   "src/gateway/session-restart-resume.admission.test.ts",
   "src/gateway/session-restart-resume.scope.test.ts",
   "src/gateway/session-restart-resume.test.ts",

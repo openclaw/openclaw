@@ -63,6 +63,7 @@ export async function recordRestartResumeFailure(params: {
   entry: InternalSessionEntry;
   runId?: string;
   admissionStage: string;
+  nextStep?: string;
   error: unknown;
   signal: AbortSignal;
   log: { warn: (message: string) => void };
@@ -99,7 +100,7 @@ export async function recordRestartResumeFailure(params: {
       error: diagnostic,
       notice:
         `The Gateway restarted, but this run could not resume. ${diagnostic} ` +
-        "Resolve this error, then send a new message to continue.",
+        (params.nextStep ?? "Resolve this error, then send a new message to continue."),
       assertCommitAllowed: () => signal.throwIfAborted(),
     });
   } catch (noticeError) {

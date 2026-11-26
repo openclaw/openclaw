@@ -634,6 +634,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["webSearch.status", "web-search", "operator.read", "2026.9", PROFILE_DEPENDENT],
   ["webSearch.test", "web-search", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
+  ["sessions.nativeRecovery.resume", "sessions-native-recovery", "operator.write", "2026.11"],
   ["users.linkChannelIdentity", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["users.listChannelIdentities", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
