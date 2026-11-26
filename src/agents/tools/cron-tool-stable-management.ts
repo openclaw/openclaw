@@ -12,9 +12,11 @@ export type CronManagementDeclaration = "only" | "also";
  * Only an admitted operator turn binds the cron management grant, so completion
  * and other internal turns would otherwise publish a narrower Automations schema
  * and a native runtime would replace its thread for a changed tool catalog.
- * Turns without a grant reuse the session's last granted declaration. Execution
- * still reads only the current turn's grant, so this never widens access:
- * management-only arguments from such a turn are refused exactly as before.
+ * Turns without a grant reuse the session's last granted declaration, and a
+ * management-only continuation keeps a wider declaration the session already
+ * holds. Execution still reads only the current turn's grant, so this never
+ * widens access: arguments the current turn may not use are refused exactly as
+ * before.
  */
 export function createStableCronManagementDeclaration() {
   const declarations = new Map<string, CronManagementDeclaration>();
@@ -28,12 +30,13 @@ export function createStableCronManagementDeclaration() {
         return current;
       }
       if (current) {
+        const declared = current === "only" && declarations.get(key) === "also" ? "also" : current;
         declarations.delete(key);
-        declarations.set(key, current);
+        declarations.set(key, declared);
         if (declarations.size > MAX_REMEMBERED_SESSIONS) {
           declarations.delete(declarations.keys().next().value!);
         }
-        return current;
+        return declared;
       }
       return declarations.get(key);
     },

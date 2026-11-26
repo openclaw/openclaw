@@ -8,8 +8,18 @@ describe("stable cron management declaration", () => {
     expect(stable.resolve("agent:main:main", "also")).toBe("also");
     expect(stable.resolve("agent:main:main", undefined)).toBe("also");
     expect(stable.resolve("agent:main:other", undefined)).toBeUndefined();
-    expect(stable.resolve("agent:main:main", "only")).toBe("only");
-    expect(stable.resolve("agent:main:main", undefined)).toBe("only");
+    expect(stable.resolve("agent:main:other", "only")).toBe("only");
+    expect(stable.resolve("agent:main:other", undefined)).toBe("only");
+  });
+
+  it("keeps a wider declaration through management-only continuations", () => {
+    const stable = createStableCronManagementDeclaration();
+    expect(stable.resolve("agent:main:main", "also")).toBe("also");
+    expect(stable.resolve("agent:main:main", "only")).toBe("also");
+    expect(stable.resolve("agent:main:main", undefined)).toBe("also");
+    expect(stable.resolve("agent:main:only", "only")).toBe("only");
+    expect(stable.resolve("agent:main:only", "also")).toBe("also");
+    expect(stable.resolve("agent:main:only", "only")).toBe("also");
   });
 
   it("does not remember turns without a session", () => {

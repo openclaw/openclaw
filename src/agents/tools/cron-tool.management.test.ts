@@ -6,6 +6,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
+import { stableCronManagementDeclaration } from "./cron-tool-stable-management.js";
 import { createCronTool } from "./cron-tool.js";
 import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
@@ -25,7 +26,10 @@ function updateCalls(patch: Record<string, unknown>, readsCurrent = false) {
   ];
 }
 
-beforeEach(() => setRuntimeConfigSnapshot({}));
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+  stableCronManagementDeclaration.clear();
+});
 afterEach(clearRuntimeConfigSnapshot);
 
 async function withAdminTool(
@@ -288,4 +292,33 @@ it("keeps a session's granted Automations declaration on its ungranted turns", a
     }),
   ).rejects.toThrow("automation command payloads cannot be created or edited");
   expect(gateway).not.toHaveBeenCalled();
+});
+
+it("keeps a session's wider declaration on management-only continuations", async () => {
+  const sessionKey = "agent:main:sticky-declaration";
+  const granted = await withCronManagementCaller(
+    "declaration-also-run",
+    async () => createCronTool({ runId: "declaration-also-run", agentSessionKey: sessionKey }),
+    "channel-owner",
+  );
+  await withCronManagementCaller("declaration-only-run", async () => {
+    const continuation = createCronTool({
+      runId: "declaration-only-run",
+      agentSessionKey: sessionKey,
+    });
+    expect(continuation.parameters).toEqual(granted.parameters);
+    expect(continuation.description).toBe(granted.description);
+    using gateway = vi.spyOn(gatewayModule, "callGatewayTool");
+    await expect(
+      continuation.execute("continuation-add", {
+        action: "add",
+        job: {
+          name: "follow up",
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "check" },
+        },
+      }),
+    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+    expect(gateway).not.toHaveBeenCalled();
+  });
 });
