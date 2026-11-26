@@ -14,6 +14,7 @@ import {
   formatActiveGoalContext,
   isChatWindowStructuredContext,
   normalizePromptMediaPath,
+  resolveChatWindowCoverage,
 } from "./inbound-meta.js";
 import {
   buildInboundHistoryMediaPromptPayload,
@@ -136,9 +137,18 @@ export function buildCompactInboundUserContextPrefix(
   const replySender =
     normalizePromptMetadataString(ctx.ReplyToSender) ??
     (ctx.ReplyToBody ? undefined : normalizePromptMetadataString(replyChainEntry?.sender));
-  // Like the default context, a Telegram reply leaves its quote to the current-message block.
+  // Like the default context, a Telegram reply leaves its quote to the current-message block, and
+  // a chat window that already holds the quoted message or the history is not repeated.
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
-  if ((replyBody || replySender) && !currentMessageContext) {
+  const chatWindowCoverage = resolveChatWindowCoverage(
+    ctx,
+    !ctx.ReplyToBody && replyChainEntry ? [replyChainEntry.messageId] : [],
+  );
+  if (
+    (replyBody || replySender) &&
+    !currentMessageContext &&
+    !chatWindowCoverage.coversReplyContext
+  ) {
     blocks.push(
       `Reply target: ${formatContextJson({
         sender: replySender,
@@ -231,7 +241,9 @@ export function buildCompactInboundUserContextPrefix(
     );
   }
 
-  const boundedHistory = selectInboundHistoryContext(ctx).boundedHistory;
+  const boundedHistory = chatWindowCoverage.coversHistory
+    ? []
+    : selectInboundHistoryContext(ctx).boundedHistory;
   // A session row of this history is removed only when a native row of the same history repeats
   // its timestamp and body. A transcript-only row (a close-out, a message-tool reply) is not
   // replayed.

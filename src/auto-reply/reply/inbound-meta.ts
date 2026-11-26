@@ -221,6 +221,45 @@ function isChatWindowHistoryContext(
   return relation === "before_current_message" || relation === "selected_for_current_message";
 }
 
+/**
+ * Reports which inbound context a chat window already carries, so a builder does not send it twice.
+ * `replyChainMessageIds` lists the reply-chain entries the builder would render.
+ */
+export function resolveChatWindowCoverage(
+  ctx: TemplateContext,
+  replyChainMessageIds: readonly unknown[],
+): { coversHistory: boolean; coversReplyContext: boolean } {
+  const structuredContext = ctx.ChannelStructuredContext ?? [];
+  const chatWindowMessageIds = new Set<string>();
+  for (const entry of structuredContext) {
+    if (!isChatWindowStructuredContext(entry)) {
+      continue;
+    }
+    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+    for (const message of messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      const id = normalizePromptMetadataString(message["message_id"]);
+      if (id) {
+        chatWindowMessageIds.add(id);
+      }
+    }
+  }
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const coversReplyContext =
+    replyChainMessageIds.length > 0
+      ? replyChainMessageIds.every((value) => {
+          const id = normalizePromptMetadataString(value);
+          return id ? chatWindowMessageIds.has(id) : false;
+        })
+      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
+  return {
+    coversHistory: structuredContext.some(isChatWindowHistoryContext),
+    coversReplyContext,
+  };
+}
+
 export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
   return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
 }
@@ -362,31 +401,14 @@ export function buildInboundUserContextPrefix(
       ];
     }) ?? [];
   const structuredContext = ctx.ChannelStructuredContext ?? [];
-  const chatWindowMessageIds = new Set<string>();
-  for (const entry of structuredContext) {
-    if (!isChatWindowStructuredContext(entry)) {
-      continue;
-    }
-    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
-    for (const message of messages) {
-      if (!isRecord(message)) {
-        continue;
-      }
-      const id = normalizePromptMetadataString(message["message_id"]);
-      if (id) {
-        chatWindowMessageIds.add(id);
-      }
-    }
-  }
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
-  const chatWindowCoversReplyContext =
-    replyChainPayload.length > 0
-      ? replyChainPayload.every((entry) => {
-          const messageIdLocal = normalizePromptMetadataString(entry["message_id"]);
-          return messageIdLocal ? chatWindowMessageIds.has(messageIdLocal) : false;
-        })
-      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
-  const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
+  const {
+    coversReplyContext: chatWindowCoversReplyContext,
+    coversHistory: chatWindowCoversHistory,
+  } = resolveChatWindowCoverage(
+    ctx,
+    replyChainPayload.map((entry) => entry["message_id"]),
+  );
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
   const senderId = normalizePromptMetadataString(ctx.SenderId);
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);

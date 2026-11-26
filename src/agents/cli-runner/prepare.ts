@@ -68,6 +68,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
+import { selectCurrentInboundContext } from "../context-serialization/project.js";
 import {
   resolvePromptBuildHookResult,
   type ResolvedPromptBuildHookResult,
@@ -1528,6 +1529,13 @@ async function prepareCliRunContextWithinReadFence(
           .join("\n\n").length,
       },
     });
+    // Report the projection this route sends; a private transport sends producer fragments instead.
+    if (!skipsTurnPreparation && executionTarget.kind !== "plugin") {
+      systemPromptReport.contextSerialization = selectCurrentInboundContext({
+        context: params.currentInboundContext,
+        serialization: profiled.contextSerialization,
+      }).report;
+    }
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,

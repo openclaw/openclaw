@@ -187,6 +187,14 @@ describe("prepareCliRunContext agent profiles", () => {
       });
 
       expect(context.params.prompt).toContain("Compact current-turn context\n\nlatest ask");
+      expect(context.systemPromptReport.contextSerialization).toEqual({
+        mode: "compact",
+        source: "agent-profile",
+        defaultChars: "Verbose current-turn context".length,
+        serializedChars: "Compact current-turn context".length,
+        removedSessionMessages: 0,
+        deduplicatedMessages: 0,
+      });
     },
   );
 
