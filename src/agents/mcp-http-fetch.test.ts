@@ -39,9 +39,9 @@ class TestAgent {
   constructor(readonly options: { connect?: Record<string, unknown> }) {}
 }
 
-class TestEnvHttpProxyAgent {}
+const TestEnvHttpProxyAgent = vi.fn();
 
-class TestProxyAgent {}
+const TestProxyAgent = vi.fn();
 
 function useFetch(fetch: (url: string | URL | Request, init?: RequestInit) => Promise<Response>) {
   testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {

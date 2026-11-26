@@ -457,7 +457,7 @@ export function usePreparedModelRuntimeHarness(
   });
   return {
     mocks: preparedModelRuntimeMocks,
-    holdCatalogWrite() {
+    holdCatalogWrite(this: void) {
       const started = createDeferred();
       const result = createDeferred<Record<string, never>>();
       const pending: Promise<unknown>[] = [];
