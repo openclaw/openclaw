@@ -34,9 +34,18 @@ Matching is case-insensitive. Decomposed diacritics fold away in any script, so
 decomposed `άλφα` and unaccented `αλφα` match alike. Precomposed letters with
 diacritics fold to their base letters across the Latin script, including Latin
 Extended-A (`cafe` matches `café`, and `c` matches `č`): an unaccented query
-does not reach a composed accented word in other scripts. There is no stemming,
-prefix search, or language-specific segmentation, so unsegmented CJK substrings
-may not match.
+does not reach a composed accented word in other scripts. There is no stemming
+or prefix search.
+Chinese and Japanese text needs no spaces: each Han, Hiragana, or Katakana run
+is indexed as overlapping character pairs, so a word matches anywhere inside a
+sentence (`新加坡` in `地理位置在新加坡`) and a Latin token next to CJK text
+matches too (`NAS` in `按NAS方式`). In `all` mode each CJK word matches as an
+exact substring, a single character included, and characters in another order
+do not match. In `any` mode each character pair of a CJK word may match on
+its own. In `phrase` mode a space between two CJK words is a word boundary:
+`新加坡 补贴` does not match `新加坡补贴`. Decomposed kana and ideographic
+variation selectors fold for matching; stored text and snippets stay verbatim.
+Hangul is space-delimited and indexed by word.
 Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
 Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
 matches its original spelling plus both canonical forms, so a partially
@@ -93,8 +102,9 @@ origin, and the stable ID, path, revision, and SHA-256 of the observed Markdown.
   lines.
 - At most three verified evidence locators are included. `evidenceTruncated`
   points to `knowledge_record` for more.
-- For bodies over 64 KiB, the snippet is an opening excerpt, not the match
-  location (`snippet.matchLocated: false`).
+- For bodies over 64 KiB of stored UTF-8 text, the snippet is an opening
+  excerpt, not the match location (`snippet.matchLocated: false`). The bound
+  counts stored text, not the longer character-pair index of CJK text.
 - Citation hashes identify the searched revision. Compare hashes before relying
   on a later read.
 
@@ -131,10 +141,11 @@ There is no background indexing worker.
 
 ### What is rebuildable
 
-The `keyword_fts_v1_*`, `keyword_rows_v1_*`, `keyword_history_fts_v1_*`, and
-`keyword_history_rows_v1_*` tables, `keyword_state_v1`, and the temporal tables are
+The `keyword_fts_v2_*`, `keyword_rows_v2_*`, `keyword_history_fts_v2_*`, and
+`keyword_history_rows_v2_*` tables, `keyword_state_v1`, and the temporal tables are
 projections. Missing tables or changed fingerprints are rebuilt on the next
-query.
+query. The first search of a scope after upgrading builds its `v2` tables and
+drops that scope's `v1` keyword tables.
 
 Do not drop `state.sqlite` to rebuild search. It also holds store identity,
 receipts, history, Git checkpoints, session activity, and withdrawal and
