@@ -8,6 +8,7 @@ import {
   onCleanup,
   onSettled,
   Show,
+  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { bootComposerElement, finishBootFrame } from "../../app/boot-composer.ts";
@@ -398,21 +399,33 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         runtime.presentationId,
         () => frame().layout?.primary.chat ?? null,
       );
-      // Only cold boot already exposes a loading frame. Restored panes keep their
-      // synchronous construction even after the warm-frame deadline expires.
-      if (!splitColdBoot) {
+      // Cached snapshots/known targets keep synchronous construction. A cold target's first
+      // descriptor must select its header and composer before publishing either.
+      if (!splitColdBoot && !untrack(() => runtime.initialSessionPresentationPending())) {
         return <MountedPane />;
       }
       const [constructed, setConstructed] = createSignal(false);
-      onSettled(() => {
-        frame();
-        pendingLayout = yieldChatTask().then(() => {
-          pendingLayout = undefined;
-          if (!disposed) {
-            setConstructed(true);
+      createEffect(
+        () => {
+          frame();
+          return !runtime.initialSessionPresentationPending();
+        },
+        (admitted) => {
+          if (!admitted || disposed || untrack(constructed) || pendingLayout) {
+            return;
           }
-        });
-      });
+          if (!splitColdBoot) {
+            setConstructed(true);
+            return;
+          }
+          pendingLayout = yieldChatTask().then(() => {
+            pendingLayout = undefined;
+            if (!disposed && !runtime.initialSessionPresentationPending()) {
+              setConstructed(true);
+            }
+          });
+        },
+      );
       return (
         <Show
           when={constructed()}

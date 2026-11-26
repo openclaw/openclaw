@@ -21,6 +21,7 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
+import { getChatHistoryLoadState, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import {
@@ -122,6 +123,26 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  initialSessionPresentationPending() {
+    const state = this.state;
+    if (
+      !state?.connected ||
+      parseCatalogSessionKey(state.sessionKey) ||
+      (selectedChatSessionRow(state) && !state.sessions.state.resultCached) ||
+      this.cachedSessionState() ||
+      this.resourceSessionObservation()?.hasObserved ||
+      isChatSessionProvenAbsent(state) ||
+      state.chatSubmissions?.creation?.sessionKey === state.sessionKey ||
+      state.hasPendingInitialTurn?.(state.sessionKey)
+    ) {
+      return false;
+    }
+    // Unknown archive/title facts cannot paint an editable first frame. The existing
+    // initial read owns settlement, including missing/new sessions and visible failures.
+    const load = getChatHistoryLoadState(state);
+    return load.phase === "in-flight" || load.phase === "pending-presentation";
+  }
+
   protected cachedSessionState() {
     const state = this.state;
     if (!state || !this.ownsChatSnapshot({ sessionKey: state.sessionKey })) {
