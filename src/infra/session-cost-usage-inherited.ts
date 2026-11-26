@@ -5,6 +5,7 @@ import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
+  type SessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import type { ParsedTranscriptEntry, UsageRollupTiming } from "./session-cost-usage.types.js";
 
@@ -42,15 +43,13 @@ export function projectUsageScanFields(
  * `activeUserTurn` is the canonical active path's latest user turn: the cursor the
  * next append-only scan continues from.
  *
- * `navigated` is false for a transcript without leaf controls, which
- * `selectSessionTranscriptLeafControlledPath` leaves entirely active; those rows
- * keep the flat, file-order timing their legacy appender produced.
+ * A transcript without leaf controls uses file-order timing and needs no ancestry map.
  */
 type BilledTranscriptPaths<T> = {
   billed: T[];
-  userTurnOf: ReadonlyMap<T, T>;
+  userTurnOf?: ReadonlyMap<T, T>;
   activeUserTurn?: T;
-  navigated: boolean;
+  visibleLeafId: string | undefined;
 };
 
 function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
@@ -60,13 +59,16 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   const tree = scanSessionTranscriptTree(records);
   const selected: T[] = [];
   const seen = new Set<T>();
-  const userTurnOf = new Map<T, T>();
+  const userTurnOf = tree.hasLeafControl ? new Map<T, T>() : undefined;
   const addPath = (leafId: string | null) => {
     let userTurn: T | undefined;
     for (const node of selectSessionTranscriptTreePathNodes(tree, leafId)) {
       if (!seen.has(node.entry)) {
         seen.add(node.entry);
         selected.push(node.entry);
+      }
+      if (!userTurnOf) {
+        continue;
       }
       // Ancestry is unique per row, so one visit settles its user turn.
       if (userTurn !== undefined && !userTurnOf.has(node.entry)) {
@@ -116,13 +118,9 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   const selection = dropInheritedTranscriptEvents(
     records,
     billed.length === 0 && !tree.hasLeafControl ? [...records] : billed,
+    tree,
   );
-  // A transcript the visible-event owner leaves entirely active has no branch to
-  // resolve timing against, so it keeps the flat, file-order timing its legacy
-  // appender produced: the same fallback that owner applies.
-  return tree.hasLeafControl
-    ? { billed: selection, userTurnOf, activeUserTurn, navigated: true }
-    : { billed: selection, userTurnOf: new Map(), navigated: false };
+  return { billed: selection, userTurnOf, activeUserTurn, visibleLeafId: tree.leafId ?? undefined };
 }
 
 /** Billed rows alone, for diagnostics that report counted history. */
@@ -135,26 +133,31 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
 /** The billed usage rows of one full scan, with the canonical timing they need. */
 export function selectBilledUsageEntries(
   records: readonly (Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null })[],
-): { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } {
-  const paths = selectBilledTranscriptPaths(
+): {
+  entries: ParsedTranscriptEntry[];
+  timing?: UsageRollupTiming;
+  visibleLeafId: string | undefined;
+} {
+  const { billed, userTurnOf, activeUserTurn, visibleLeafId } = selectBilledTranscriptPaths(
     records,
     (record) => record.usageEntry?.role === "user",
   );
-  const entries = paths.billed.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
-  if (!paths.navigated) {
-    return { entries };
+  const entries = billed.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
+  if (!userTurnOf) {
+    return { entries, visibleLeafId };
   }
   // Timing lookup must not keep processed usage entries alive during aggregation.
   const userTimestamps = new WeakMap<ParsedTranscriptEntry, number>();
-  for (const record of paths.billed) {
-    const userTurn = paths.userTurnOf.get(record)?.usageEntry?.timestamp?.getTime();
+  for (const record of billed) {
+    const userTurn = userTurnOf.get(record)?.usageEntry?.timestamp?.getTime();
     if (record.usageEntry && userTurn !== undefined) {
       userTimestamps.set(record.usageEntry, userTurn);
     }
   }
-  const activeUserTimestamp = paths.activeUserTurn?.usageEntry?.timestamp?.getTime();
+  const activeUserTimestamp = activeUserTurn?.usageEntry?.timestamp?.getTime();
   return {
     entries,
+    visibleLeafId,
     timing: {
       userTimestamps,
       ...(activeUserTimestamp !== undefined ? { activeUserTimestamp } : {}),
@@ -172,12 +175,13 @@ export function selectBilledUsageEntries(
 export function dropInheritedTranscriptEvents<T extends Record<string, unknown>>(
   records: readonly T[],
   selected: T[],
+  preparedTree?: SessionTranscriptTree<T>,
 ): T[] {
   const through = readInheritedThrough(records.find((record) => record.type === "session"));
   if (through.length === 0) {
     return selected;
   }
-  const tree = scanSessionTranscriptTree(records);
+  const tree = preparedTree ?? scanSessionTranscriptTree(records);
   const inherited = new Set<T>();
   for (const id of through) {
     for (const node of selectSessionTranscriptTreePathNodes(tree, id)) {
