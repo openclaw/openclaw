@@ -5,6 +5,7 @@ import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { buildAssistantMessage } from "./event-bridge-transcript.js";
+import { resolveCopilotSessionModel } from "./model-selection.js";
 import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
@@ -132,6 +133,7 @@ export async function runCopilotIsolatedCompletion(
   }
   const authorization = params.authorization;
   const { auth, model } = authorization;
+  const sessionModel = resolveCopilotSessionModel(model, params);
   const apiKey = auth.apiKey?.trim();
   if (!apiKey) {
     throw new Error("[copilot] isolated completion requires the prepared credential");
@@ -199,7 +201,7 @@ export async function runCopilotIsolatedCompletion(
     handle = acquiredHandle;
     const sessionConfig: SessionConfig = {
       ...createCopilotIsolatedSessionRestrictions(),
-      model: model.id,
+      ...sessionModel,
       ...(githubAuth ? { gitHubToken: apiKey } : {}),
       ...(sessionProvider.provider ? { provider: sessionProvider.provider } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -215,6 +217,10 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
+    await awaitWithinCompletionBoundary({
+      boundary,
+      start: () => createdSession.rpc.remote.disable(),
+    });
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,

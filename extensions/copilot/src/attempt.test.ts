@@ -41,6 +41,7 @@ import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.
 import { runCopilotAttempt as runCopilotAttemptEntry } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
+  makeCopilotModel,
   makeFakePool,
   makeFakeSdk,
   makeUserTurnRecorder,
@@ -500,6 +501,30 @@ afterEach(() => {
 });
 
 describe("runCopilotAttempt", () => {
+  it.each(["standard", "high", "max"])(
+    "passes the Fusion %s tier to new and resumed SDK sessions",
+    async (fusionTier) => {
+      for (const resume of [false, true]) {
+        const { sdk, run } = makeAttempt();
+        const result = await run({
+          model: {
+            ...makeCopilotModel(),
+            id: "fusion",
+          },
+          config: {
+            agents: {
+              defaults: { models: { "github-copilot/fusion": { params: { fusionTier } } } },
+            },
+          },
+          ...(resume ? { initialReplayState: replayState("fusion-session") } : {}),
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        const config = resume ? requireResumeSessionConfig(sdk) : requireCreateSessionConfig(sdk);
+        expect(config).toMatchObject({ model: "fusion", capi: { fusionTier } });
+      }
+    },
+  );
+
   it.each(["provider headers", "prepared header auth", "token auth"] as const)(
     "preserves BYOK %s in the pool, session, and model request",
     async (mode) => {
@@ -1942,6 +1967,34 @@ describe("runCopilotAttempt", () => {
   });
 
   describe("settled tool finalization isolation", () => {
+    it("does not send after remote export disable times out", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const entered = createDeferred<void>();
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.rpc.remote.disable.mockImplementation(() => {
+            entered.resolve();
+            return new Promise<void>(() => {});
+          });
+        },
+      });
+      const pending = runCopilotAttempt(
+        makeFinalizationParams({
+          initialReplayState: replayState("sdk-settled-session"),
+          timeoutMs: 10,
+        }),
+        { operation: "settled-tool-finalization", pool: makeFakePool(sdk) },
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(10);
+      const result = await pending;
+      expect(promptError(result)).toMatchObject({
+        message: "[copilot] timed out disabling remote export for finalization",
+      });
+      expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+      expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledOnce();
+    });
+
     it.each(["missing", "stale"] as const)(
       "fails closed when the existing finalization session is %s",
       async (mode) => {
@@ -1972,6 +2025,7 @@ describe("runCopilotAttempt", () => {
     );
 
     it("resumes with every ambient Copilot capability disabled", async () => {
+      let remoteDisabled = false;
       gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
       const beforePromptBuild = vi.fn();
       const llmInput = vi.fn();
@@ -1985,7 +2039,12 @@ describe("runCopilotAttempt", () => {
       });
       const sdk = makeFakeSdk({
         onResumeSession: (session, _sessionId, config) => {
+          session.rpc.remote.disable.mockImplementation(async () => {
+            await Promise.resolve();
+            remoteDisabled = true;
+          });
           session.sendAndWait.mockImplementationOnce(async (options) => {
+            expect(remoteDisabled).toBe(true);
             const systemMessage = (config.systemMessage as { content?: unknown } | undefined)
               ?.content;
             if (typeof systemMessage === "string") {
@@ -2080,7 +2139,6 @@ describe("runCopilotAttempt", () => {
         mcpServers: {},
         memory: { enabled: false },
         pluginDirectories: [],
-        remoteSession: "off",
         requestCanvasRenderer: false,
         requestExtensions: false,
         skillDirectories: [],
@@ -2089,6 +2147,7 @@ describe("runCopilotAttempt", () => {
         tools: [],
       });
       expect(cfg).not.toHaveProperty("hooks");
+      expect(sdk.sessions[0]?.rpc.remote.disable).toHaveBeenCalledOnce();
       expect(cfg).not.toHaveProperty("onUserInputRequest");
       expect(cfg).toHaveProperty(
         "systemMessage",

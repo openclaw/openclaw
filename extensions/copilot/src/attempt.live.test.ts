@@ -264,9 +264,19 @@ async function resolveLiveAttemptFacts(
   });
   try {
     await client.start();
-    const available = (await client.listModels()).filter(
-      (model) => model.policy?.state !== "disabled",
-    );
+    const catalog = await client.rpc.models.list({});
+    const available = catalog.models.filter((model) => model.policy?.state !== "disabled");
+    const requestedModel = readNonEmptyEnv("OPENCLAW_COPILOT_AGENT_LIVE_MODEL");
+    if (requestedModel) {
+      const availableRequestedModel =
+        requestedModel === "fusion"
+          ? catalog.auto?.tiers.some((tier) => tier.fusionTier && tier.status.enabled)
+          : available.some((model) => model.id === requestedModel);
+      if (!availableRequestedModel) {
+        throw new Error(`Copilot live smoke model is unavailable: ${requestedModel}`);
+      }
+      return createGitHubAttemptFacts(authMode.gitHubToken, requestedModel);
+    }
     for (const preferred of LIVE_MODEL_PREFERENCES) {
       if (available.some((model) => model.id === preferred)) {
         return createGitHubAttemptFacts(authMode.gitHubToken, preferred);
@@ -356,6 +366,20 @@ async function createAttemptParams(params: {
     messages: [userMessage],
     model: params.facts.model,
     modelId: params.facts.model.id,
+    config: {
+      agents: {
+        defaults: {
+          models: {
+            "github-copilot/fusion": {
+              params: {
+                fusionTier:
+                  readNonEmptyEnv("OPENCLAW_COPILOT_AGENT_LIVE_FUSION_TIER") ?? "standard",
+              },
+            },
+          },
+        },
+      },
+    },
     onAgentEvent: params.onAgentEvent,
     onAssistantDelta: params.onAssistantDelta,
     profileVersion,

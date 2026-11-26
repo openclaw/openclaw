@@ -38,6 +38,7 @@ import {
   type CopilotHistoryCompactResult,
   type CopilotHistoryCompactSession,
 } from "./src/history-compaction.js";
+import { resolveCopilotSessionModel } from "./src/model-selection.js";
 import {
   isCopilotByokUnsupportedProviderError,
   resolveCopilotProvider,
@@ -334,9 +335,14 @@ function computeSessionKey(
   } catch {
     authParts = ["auth=unresolvable"];
   }
+  const { capi } = resolveCopilotSessionModel(
+    { id: modelId, provider, params: modelObj.params },
+    input.params,
+  );
   const parts = [
     `provider=${provider}`,
     `model=${modelId}`,
+    ...(capi?.fusionTier ? [`fusionTier=${capi.fusionTier}`] : []),
     ...(options.includeApi ? [`api=${normalizeOptionalString(modelObj.api) ?? ""}`] : []),
     ...(options.includeApi
       ? [`baseUrlFingerprint=${fingerprintSessionValue(modelObj.baseUrl)}`]
