@@ -166,7 +166,9 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    or trigger rollback.
 
 Once the resident launcher owns an installation, `gateway install` keeps that
-state directory's selected launcher as its service entry. Explicit retained-CLI
+state directory's selected launcher as its service entry, including before the
+first pending trial replaces an unmodified npm fallback. Checked durable CLI
+reuse follows the same selection as a new install. Explicit retained-CLI
 recovery still uses the requested recovery entry. Dry runs keep the existing
 read-only preview. Immutable activation and switches that need the in-place
 installer refuse with a next step; they never replace a launcher-owned
