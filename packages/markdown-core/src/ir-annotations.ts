@@ -64,7 +64,7 @@ export function appendAssistantTranscriptRoleText(
   });
 }
 
-type ImageToken = { type: string; content?: string; children?: ImageToken[] };
+type ImageToken = { type: string; content?: string; markup?: string; children?: ImageToken[] };
 
 /** Image labels keep only their plain text: emphasis and link markup drops, code and HTML stay literal. */
 function imageAlternativeText(token: ImageToken): string {
@@ -74,6 +74,10 @@ function imageAlternativeText(token: ImageToken): string {
   }
   let text = "";
   for (const child of token.children) {
+    if (child.type === "underline_open" || child.type === "underline_close") {
+      text += child.markup ?? "";
+      continue;
+    }
     text +=
       child.type === "image"
         ? imageAlternativeText(child)

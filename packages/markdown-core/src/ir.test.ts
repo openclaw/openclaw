@@ -378,6 +378,11 @@ it.each<[string, MarkdownIR, Parameters<typeof markdownToIR>[1]?]>([
     plainIR(`before ${imageAlt} after`, [makeStyle(7, 7 + imageAlt.length, "bold")]),
   ],
   [
+    '<ins>lead</ins> ![<U title="Mark">**x**</U> ![<ins>y</ins>](inner)](outer)',
+    plainIR('lead <U title="Mark">x</U> <ins>y</ins>', [makeStyle(0, 4, "underline")]),
+    { enableHtmlUnderline: true },
+  ],
+  [
     "before <b>x</b> ||<i>y</i>|| after",
     {
       ...plainIR("before <b>x</b> <i>y</i> after", [makeStyle(16, 24, "spoiler")]),
