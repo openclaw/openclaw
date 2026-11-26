@@ -26,6 +26,17 @@ const SINGLE_LINE_FENCE_RE = new RegExp(FENCE_LINE_RE, "gy");
 // The next chunk can extend a marker run or add text that disqualifies a closing fence.
 const PARTIAL_MARKER_LINE_RE = /^ {0,3}(?:(?:`+|~+)[ \t]*\r?)?$/u;
 
+function canOpenFence(marker: string, trailing: string): boolean {
+  return marker.charAt(0) !== "`" || !trailing.includes("`");
+}
+
+export function isMarkdownFenceOpener(line: string): boolean {
+  const match = line.matchAll(SINGLE_LINE_FENCE_RE).next().value;
+  const marker = match?.[2];
+  const trailing = match?.[3];
+  return marker !== undefined && trailing !== undefined && canOpenFence(marker, trailing);
+}
+
 /** Scans fenced-code spans incrementally so chunking can carry an open fence forward. */
 export function scanFenceSpans(
   buffer: string,
@@ -61,7 +72,7 @@ export function scanFenceSpans(
     const markerLen = marker.length;
     if (!open) {
       // CommonMark forbids backticks in a backtick fence info string.
-      if (markerChar === "`" && trailing.includes("`")) {
+      if (!canOpenFence(marker, trailing)) {
         continue;
       }
       openStart = start;

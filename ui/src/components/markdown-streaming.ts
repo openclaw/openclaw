@@ -1,6 +1,6 @@
 import type { Token } from "markdown-it";
 import remend, { type RemendOptions } from "remend";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
+import { isMarkdownFenceOpener } from "../../../packages/markdown-core/src/fences.js";
 import {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
@@ -12,7 +12,7 @@ import {
   type MarkdownDetailsFrame,
   scanMarkdownDisclosureLine,
 } from "./markdown-details.ts";
-import { findUnescapedMathDelimiter, MAX_MATH_SCAN } from "./markdown-math.ts";
+import { displayMathCloser, findUnescapedMathDelimiter, MAX_MATH_SCAN } from "./markdown-math.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import {
   streamingMarkdownState,
@@ -191,14 +191,14 @@ function scanStableStreamingMarkdown(
     lastLiteralOffset: 0,
     lineMode: null,
     openFence: null,
-    openMath: null,
+    mathCloser: null,
     mathScanEnd: 0,
   },
 ): { cursor: StreamingMarkdownCursor; rawTail: boolean; result: StreamingMarkdownSplit } {
   let { boundary, containerOffset, hasLinkReferenceDefinition, index, lastLiteralOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
-  let openMath = cursor.openMath;
+  let mathCloser = cursor.mathCloser;
   let mathScanEnd = cursor.mathScanEnd;
   const detailsStack: MarkdownDetailsFrame[] = [];
   // Completed literal blocks cannot gain indentation ownership from later prose. Keep
@@ -239,14 +239,14 @@ function scanStableStreamingMarkdown(
         lastLiteralOffset,
         lineMode,
         openFence,
-        openMath,
+        mathCloser,
         mathScanEnd,
       };
       continue;
     }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
-    if (openMath && (index >= mathScanEnd || scanFenceSpans(line).state.open)) {
-      openMath = null;
+    if (mathCloser && (index >= mathScanEnd || isMarkdownFenceOpener(line))) {
+      mathCloser = null;
     }
     const lineFence = openFence;
     let rawHtmlLine = false;
@@ -259,18 +259,17 @@ function scanStableStreamingMarkdown(
           boundary = lineEnd;
         }
       }
-    } else if (openMath) {
-      const close = openMath === "$$" ? "$$" : "\\]";
+    } else if (mathCloser) {
       // Native block parsing removes indentation, not quote/list markers.
       // Container-owned formulas retain their suffix rather than guessing here.
       const content = line.trimStart();
-      const closeIndex = findUnescapedMathDelimiter(content, close, 0);
+      const closeIndex = findUnescapedMathDelimiter(content, mathCloser, 0);
       if (
         closeIndex >= 0 &&
         index + line.length - content.length + closeIndex < mathScanEnd &&
-        !content.slice(closeIndex + close.length).trim()
+        !content.slice(closeIndex + 2).trim()
       ) {
-        openMath = null;
+        mathCloser = null;
         if (detailsStack.length === 0 && nextLineBreak !== -1) {
           boundary = lineEnd;
         }
@@ -298,18 +297,10 @@ function scanStableStreamingMarkdown(
           lastLiteralOffset = lineEnd;
         } else {
           const content = line.trimStart();
-          const delimiter = content.startsWith("$$")
-            ? "$$"
-            : content.startsWith("\\[")
-              ? "\\["
-              : null;
-          if (delimiter) {
-            const close = delimiter === "$$" ? "$$" : "\\]";
-            const closeIndex = findUnescapedMathDelimiter(content, close, 2);
-            if (closeIndex < 0) {
-              openMath = delimiter;
-              mathScanEnd = index + line.length - content.length + 2 + MAX_MATH_SCAN;
-            }
+          const closer = displayMathCloser(content);
+          if (closer && findUnescapedMathDelimiter(content, closer, 2) < 0) {
+            mathCloser = closer;
+            mathScanEnd = index + line.length - content.length + 2 + MAX_MATH_SCAN;
           }
           if (DISCLOSURE_LINE_CANDIDATE_RE.test(strippedLine.content)) {
             updateDetailsStack(
@@ -336,7 +327,7 @@ function scanStableStreamingMarkdown(
     if (
       detailsStack.length === 0 &&
       !rawHtmlLine &&
-      (nextLineBreak !== -1 || (!openMath && canResumeStreamingLine(line, lineFence)))
+      (nextLineBreak !== -1 || (!mathCloser && canResumeStreamingLine(line, lineFence)))
     ) {
       lineMode = nextLineBreak === -1 ? (lineFence ? "fence" : "plain") : null;
       resumeCursor = {
@@ -347,7 +338,7 @@ function scanStableStreamingMarkdown(
         lastLiteralOffset,
         lineMode,
         openFence,
-        openMath,
+        mathCloser,
         mathScanEnd,
       };
     }
@@ -393,7 +384,7 @@ function scanStableStreamingMarkdown(
     rawTail,
     result: {
       boundary,
-      tailRepairStart: openFence || openMath ? null : Math.max(boundary, lastLiteralEnd),
+      tailRepairStart: openFence || mathCloser ? null : Math.max(boundary, lastLiteralEnd),
     },
   };
 }

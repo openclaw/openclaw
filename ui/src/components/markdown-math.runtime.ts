@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { renderToString } from "katex";
+import { rememberRenderedMarkdownMathSource } from "./markdown-math-element.ts";
 import { markdownMathSanitizer } from "./markdown-math-sanitizer.ts";
 import mathStyles from "katex/dist/katex.min.css?inline";
 
@@ -41,7 +42,7 @@ openclaw-markdown-math[data-display="true"] > .katex-display {
 // Inline CSS stays in the async chunk; adopting it synchronously precedes typesetting.
 let stylesheet: CSSStyleSheet | undefined;
 
-export function applyMarkdownMathStyles(root: Node): void {
+function applyMarkdownMathStyles(root: Node): void {
   if (!stylesheet) {
     stylesheet = new CSSStyleSheet();
     // Intrinsic display width keeps both ends reachable; short equations stay centered.
@@ -85,4 +86,28 @@ function renderMath(source: string, displayMode: boolean): string {
 
 export function renderMarkdownMath(source: string, displayMode: boolean): DocumentFragment {
   return sanitizer.sanitize(renderMath(source, displayMode), sanitizeOptions);
+}
+
+export function typesetMarkdownMath(element: HTMLElement, literal: string, displayMode: boolean) {
+  const open = displayMode ? "$$" : "\\(";
+  const close = displayMode ? "$$" : "\\)";
+  if (
+    !element.isConnected ||
+    element.textContent !== literal ||
+    (element.dataset.display === "true") !== displayMode ||
+    !literal.startsWith(open) ||
+    !literal.endsWith(close)
+  ) {
+    return;
+  }
+  const source = literal.slice(2, -2);
+  applyMarkdownMathStyles(element.getRootNode());
+  const fragment = renderMarkdownMath(source, displayMode);
+  if (!fragment.childNodes.length) {
+    return;
+  }
+  // Only sanitized generated nodes enter the light DOM. Source remains readable
+  // when rendering fails.
+  element.replaceChildren(fragment);
+  rememberRenderedMarkdownMathSource(element, { source, literal });
 }

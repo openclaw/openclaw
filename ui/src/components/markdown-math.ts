@@ -1,18 +1,8 @@
 import "./markdown-math-element.ts";
 import type { MarkdownIt, StateBlock, StateInline } from "markdown-it";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
+import { isMarkdownFenceOpener } from "../../../packages/markdown-core/src/fences.js";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/markdown-code-regions.js";
-import { isInsideCode } from "../../../packages/markdown-core/src/reasoning-tag-syntax.js";
-
-const DISPLAY_DELIMITERS = [
-  { open: "$$", close: "$$", displayMode: true },
-  { open: "\\[", close: "\\]", displayMode: true },
-] as const;
-const INLINE_DELIMITERS = [
-  { open: "$$", close: "$$", displayMode: true },
-  { open: "\\[", close: "\\]", displayMode: true },
-  { open: "\\(", close: "\\)", displayMode: false },
-] as const;
+import { isInsideCode as isInsideSpan } from "../../../packages/markdown-core/src/reasoning-tag-syntax.js";
 
 export const MAX_MATH_SCAN = 4096;
 const MAX_MATH_EXPRESSIONS = 200;
@@ -23,6 +13,10 @@ declare module "markdown-it" {
   }
 }
 const BARE_URL_RE = /(?:https?:\/\/|www\.)[^\s<]*/giu;
+
+export function displayMathCloser(source: string): "$$" | "\\]" | null {
+  return source.startsWith("$$") ? "$$" : source.startsWith("\\[") ? "\\]" : null;
+}
 
 function renderMath(
   source: string,
@@ -62,124 +56,89 @@ export function findUnescapedMathDelimiter(source: string, needle: string, start
   return -1;
 }
 
-// Inline states own one source string; reuse its URL ranges across delimiter probes.
-const bareUrlRanges = new WeakMap<StateInline, Array<readonly [number, number]>>();
-const codeSpanRanges = new WeakMap<StateInline, Array<[number, number]>>();
+// Inline states own one source string; reuse its ranges across delimiter probes.
+const inlineRanges = new WeakMap<
+  StateInline,
+  { urls: Array<[number, number]>; code?: Array<[number, number]> }
+>();
 
-function isInsideCodeSpan(state: StateInline, position: number): boolean {
-  let ranges = codeSpanRanges.get(state);
-  if (!ranges) {
-    ranges = findMarkdownCodeSpans(state.src);
-    codeSpanRanges.set(state, ranges);
+function parseDisplayMath(state: StateBlock, startLine: number, endLine: number, silent: boolean) {
+  const lineStart = state.bMarks[startLine]! + state.tShift[startLine]!;
+  const afterOpen = lineStart + 2;
+  const closer = displayMathCloser(state.src.slice(lineStart, afterOpen));
+  if (!closer) {
+    return false;
   }
-  return isInsideCode(position, ranges);
-}
-
-function isInsideBareUrl(state: StateInline, position: number): boolean {
-  let ranges = bareUrlRanges.get(state);
-  if (!ranges) {
-    ranges = [];
-    BARE_URL_RE.lastIndex = 0;
-    for (const match of state.src.matchAll(BARE_URL_RE)) {
-      ranges.push([match.index, match.index + match[0].length]);
+  // Bound the complete block search, not each line independently: repeated
+  // unmatched openers must not rescan the entire remaining document.
+  const scanEnd = afterOpen + MAX_MATH_SCAN;
+  let content = "";
+  for (let lineIndex = startLine; lineIndex < endLine; lineIndex += 1) {
+    const firstLine = lineIndex === startLine;
+    const currentStart = firstLine
+      ? afterOpen
+      : state.bMarks[lineIndex]! + state.tShift[lineIndex]!;
+    if (currentStart >= scanEnd) {
+      return false;
     }
-    bareUrlRanges.set(state, ranges);
-  }
-  let low = 0;
-  let high = ranges.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    const [start, end] = ranges[middle]!;
-    if (position < start) {
-      high = middle;
-    } else if (position >= end) {
-      low = middle + 1;
-    } else {
-      return true;
+    const current = state.src.slice(currentStart, state.eMarks[lineIndex]!);
+    if (
+      !firstLine &&
+      state.sCount[lineIndex]! - state.blkIndent < 4 &&
+      isMarkdownFenceOpener(current)
+    ) {
+      return false;
     }
+    const close = findUnescapedMathDelimiter(current, closer, 0);
+    if (close < 0 || currentStart + close >= scanEnd) {
+      content += current + "\n";
+      continue;
+    }
+    if (current.slice(close + 2).trim()) {
+      return false;
+    }
+    const latex = (content + current.slice(0, close)).trim();
+    if (!latex || silent) {
+      return Boolean(latex);
+    }
+    const token = state.push("math_block", "div", 0);
+    token.block = true;
+    token.content = latex;
+    token.map = [startLine, lineIndex + 1];
+    state.line = lineIndex + 1;
+    return true;
   }
   return false;
 }
 
-function parseDisplayMath(state: StateBlock, startLine: number, endLine: number, silent: boolean) {
-  const lineStart = state.bMarks[startLine]! + state.tShift[startLine]!;
-  const lineEnd = state.eMarks[startLine]!;
-  const line = state.src.slice(lineStart, lineEnd);
-  const delimiter = DISPLAY_DELIMITERS.find(({ open }) => line.startsWith(open));
-  if (!delimiter) {
-    return false;
-  }
-  const afterOpen = line.slice(delimiter.open.length);
-  const sameLineClose = findUnescapedMathDelimiter(afterOpen, delimiter.close, 0);
-  let nextLine = startLine;
-  let latex: string;
-  if (sameLineClose >= 0) {
-    if (afterOpen.slice(sameLineClose + delimiter.close.length).trim()) {
-      return false;
-    }
-    latex = afterOpen.slice(0, sameLineClose).trim();
-  } else {
-    const lines: string[] = [afterOpen];
-    const scanEnd = Math.min(state.src.length, lineStart + delimiter.open.length + MAX_MATH_SCAN);
-    let closeLine = -1;
-    for (let lineIndex = startLine + 1; lineIndex < endLine; lineIndex += 1) {
-      const currentStart = state.bMarks[lineIndex]! + state.tShift[lineIndex]!;
-      // Bound the complete block search, not each line independently: repeated
-      // unmatched openers must not rescan the entire remaining document.
-      if (currentStart >= scanEnd) {
-        break;
-      }
-      const current = state.src.slice(currentStart, state.eMarks[lineIndex]!);
-      if (state.sCount[lineIndex]! - state.blkIndent < 4 && scanFenceSpans(current).state.open) {
-        return false;
-      }
-      const close = findUnescapedMathDelimiter(current, delimiter.close, 0);
-      if (close >= 0 && currentStart + close < scanEnd) {
-        if (current.slice(close + delimiter.close.length).trim()) {
-          return false;
-        }
-        lines.push(current.slice(0, close));
-        closeLine = lineIndex;
-        break;
-      }
-      lines.push(current);
-    }
-    if (closeLine < 0) {
-      return false;
-    }
-    latex = lines.join("\n").trim();
-    nextLine = closeLine;
-  }
-  if (!latex || silent) {
-    return Boolean(latex);
-  }
-  const token = state.push("math_block", "div", 0);
-  token.block = true;
-  token.content = latex;
-  token.map = [startLine, nextLine + 1];
-  token.meta = { displayMode: delimiter.displayMode };
-  state.line = nextLine + 1;
-  return true;
-}
-
 function parseInlineMath(state: StateInline, silent: boolean): boolean {
   const source = state.src.slice(state.pos, state.posMax);
-  const delimiter = INLINE_DELIMITERS.find(({ open }) => source.startsWith(open));
-  if (!delimiter) {
+  const closer = displayMathCloser(source) ?? (source.startsWith("\\(") ? "\\)" : null);
+  if (!closer) {
     return false;
   }
-  if (isInsideBareUrl(state, state.pos)) {
+  let ranges = inlineRanges.get(state);
+  if (!ranges) {
+    ranges = {
+      urls: Array.from(state.src.matchAll(BARE_URL_RE), (match) => [
+        match.index,
+        match.index + match[0].length,
+      ]),
+    };
+    inlineRanges.set(state, ranges);
+  }
+  if (isInsideSpan(state.pos, ranges.urls)) {
     return false;
   }
-  const contentStart = delimiter.open.length;
-  const close = findUnescapedMathDelimiter(source, delimiter.close, contentStart);
-  if (close <= contentStart) {
+  const close = findUnescapedMathDelimiter(source, closer, 2);
+  if (close <= 2) {
     return false;
   }
-  const latex = source.slice(contentStart, close);
+  const latex = source.slice(2, close);
   if (
-    isInsideBareUrl(state, state.pos + close) ||
-    (latex.includes("`") && isInsideCodeSpan(state, state.pos + close))
+    isInsideSpan(state.pos + close, ranges.urls) ||
+    (latex.includes("`") &&
+      isInsideSpan(state.pos + close, (ranges.code ??= findMarkdownCodeSpans(state.src))))
   ) {
     return false;
   }
@@ -216,13 +175,13 @@ function parseInlineMath(state: StateInline, silent: boolean): boolean {
       return false;
     }
   }
-  state.pos += close + delimiter.close.length;
+  state.pos += close + 2;
   if (silent) {
     return true;
   }
   const token = state.push("math_inline", "span", 0);
   token.content = latex;
-  token.meta = { displayMode: delimiter.displayMode };
+  token.meta = { displayMode: closer !== "\\)" };
   return true;
 }
 
@@ -234,17 +193,15 @@ export function installMarkdownMath(markdownParser: MarkdownIt) {
     alt: ["paragraph"],
   });
   markdownParser.inline.ruler.before("escape", "math_inline", parseInlineMath);
-  markdownParser.renderer.rules.math_inline = (tokens, index, _options, env) => {
-    const token = tokens[index];
-    return token
-      ? renderMath(token.content, Boolean(token.meta?.displayMode), env?.mathBudget)
-      : "";
-  };
-  markdownParser.renderer.rules.math_block = (tokens, index, _options, env) => {
+  const rules = markdownParser.renderer.rules;
+  rules.math_inline = rules.math_block = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
     }
-    return renderMath(token.content, true, env?.mathBudget) + "\n";
+    return (
+      renderMath(token.content, token.block || token.meta?.displayMode === true, env?.mathBudget) +
+      (token.block ? "\n" : "")
+    );
   };
 }

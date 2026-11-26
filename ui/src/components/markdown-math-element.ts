@@ -1,33 +1,24 @@
-// This non-JSX utility module owns both typesetting and its stylesheet.
 // Share settled failures as well, so multiple leaves do not start retry storms.
 let runtime: ReturnType<typeof loadMath> | undefined;
 const renderedSources = new WeakMap<Node, { source: string; literal: string }>();
+
+async function loadMath() {
+  try {
+    return (await import("./markdown-math.runtime.ts")).typesetMarkdownMath;
+  } catch {
+    return null;
+  }
+}
 
 export function getRenderedMarkdownMathSource(node: Node | null) {
   return node ? renderedSources.get(node) : undefined;
 }
 
-export function cloneWithRenderedMarkdownMath<T extends HTMLElement>(element: T): T {
-  const clone = element.ownerDocument.importNode(element, true);
-  const originals = element.getElementsByTagName("openclaw-markdown-math");
-  const copies = clone.getElementsByTagName("openclaw-markdown-math");
-  for (let index = 0; index < originals.length; index += 1) {
-    const source = renderedSources.get(originals[index]!);
-    if (source) {
-      renderedSources.set(copies[index]!, source);
-    }
-  }
-  return clone;
-}
-
-async function loadMath() {
-  try {
-    const { applyMarkdownMathStyles, renderMarkdownMath } =
-      await import("./markdown-math.runtime.ts");
-    return { applyMarkdownMathStyles, renderMarkdownMath };
-  } catch {
-    return null;
-  }
+export function rememberRenderedMarkdownMathSource(
+  node: Node,
+  source: { source: string; literal: string },
+): void {
+  renderedSources.set(node, source);
 }
 
 // Markdown parsing also runs without a DOM (Node tests, non-browser callers); the
@@ -52,33 +43,13 @@ function defineMarkdownMathElement(): void {
           return;
         }
         const literal = this.textContent ?? "";
+        if (literal.length <= 4) {
+          return;
+        }
         const displayMode = this.dataset.display === "true";
-        const open = displayMode ? "$$" : "\\(";
-        const close = displayMode ? "$$" : "\\)";
-        if (!literal.startsWith(open) || !literal.endsWith(close)) {
-          return;
-        }
-        const source = literal.slice(open.length, -close.length);
-        if (!source) {
-          return;
-        }
-        void (runtime ??= loadMath()).then((loaded) => {
-          if (
-            !loaded ||
-            !this.isConnected ||
-            generation !== this.generation ||
-            this.textContent !== literal ||
-            (this.dataset.display === "true") !== displayMode
-          ) {
-            return;
-          }
-          loaded.applyMarkdownMathStyles(this.getRootNode());
-          const fragment = loaded.renderMarkdownMath(source, displayMode);
-          if (fragment.childNodes.length) {
-            // Only sanitized generated nodes enter the light DOM. Source remains
-            // readable on load/render failure; detached/replaced leaves never commit.
-            this.replaceChildren(fragment);
-            renderedSources.set(this, { source, literal });
+        void (runtime ??= loadMath()).then((typesetMarkdownMath) => {
+          if (generation === this.generation) {
+            typesetMarkdownMath?.(this, literal, displayMode);
           }
         });
       });

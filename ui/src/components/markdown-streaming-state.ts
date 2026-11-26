@@ -18,7 +18,7 @@ export type StreamingMarkdownCursor = {
   lastLiteralOffset: number;
   lineMode: "fence" | "plain" | null;
   openFence: FenceMarker | null;
-  openMath: "$$" | "\\[" | null;
+  mathCloser: "$$" | "\\]" | null;
   mathScanEnd: number;
 };
 
