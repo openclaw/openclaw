@@ -90,7 +90,7 @@ Session total: 95.13% cache · $154.52
 More: /context list · /context detail · /context map · /context json
 ```
 
-The bar spans the context window; every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale. **Session total** covers the current session instance, the same total as `/usage cost`; a partly priced total shows as a lower bound (`≥`) and usage with no price shows `unpriced`.
+The bar spans the prompt budget: the last run's prompt budget before the compaction reserve when one is recorded for the current model, else the context window. Every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale. **Latest run** covers every model call since your last message. **Session total** covers the current session instance, the same total as `/usage cost`; a partly priced total shows as a lower bound (`≥`) and usage with no price shows `unpriced`.
 
 ### `/context list`
 
