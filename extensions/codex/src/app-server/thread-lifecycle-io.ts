@@ -80,7 +80,8 @@ export type CodexResumeThreadContext = CodexThreadRequestContext & {
   ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
   prepareResume: () => Promise<CodexThreadResumePreparation>;
-  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
+  /** Returns whether release acknowledged this physical connection’s subscription. */
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<boolean>;
 };
 
 export type CodexStartThreadContext = CodexThreadRequestContext & {
@@ -126,8 +127,9 @@ export async function resumeExistingCodexThread(
         : resumeBinding;
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
-    await context.releaseRetainedThread(configuration.assertCurrent);
+    const releasedOnClient = await context.releaseRetainedThread(configuration.assertCurrent);
     configuration.assertCurrent();
+    await configuration.releaseFailedRemoteRuntime(releasedOnClient);
     const clientBoundThread =
       ringZeroClientInstanceId !== undefined ||
       resumeBinding.ringZeroClientInstanceId !== undefined ||
