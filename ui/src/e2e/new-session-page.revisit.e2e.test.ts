@@ -50,6 +50,11 @@ function withDraft(
   return suite.withPage(
     { viewport: { width: 1280, height: 900 }, locale: "en-US" },
     async ({ page }) => {
+      page.on("console", (message) => {
+        if (message.text().startsWith("[new-session-recovery]")) {
+          console.info(message.text());
+        }
+      });
       const gateway = await installMockGateway(page, { awaitInitialRoster: true, ...scenario });
       await run({ page, gateway, composer: page.locator(".new-session-page__message") });
     },

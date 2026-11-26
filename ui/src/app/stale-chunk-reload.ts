@@ -286,34 +286,54 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
 export async function reloadAfterRenderErrorOnce(
   deps: Omit<StaleChunkReloadDeps, "buildId"> = {},
 ): Promise<boolean> {
+  const trace = (phase: string) =>
+    console.info("[new-session-recovery]", JSON.stringify({ phase }));
   const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
-  if (!storage || deps.canReload?.() === false || !canReloadControlUiDocument()) {
+  if (!storage) {
+    trace("storage-unavailable");
+    return false;
+  }
+  if (deps.canReload?.() === false) {
+    trace("caller-declined");
+    return false;
+  }
+  if (!canReloadControlUiDocument()) {
+    trace("document-declined");
     return false;
   }
   try {
     if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      trace("already-attempted");
       return false;
     }
   } catch {
+    trace("storage-read-failed");
     return false;
   }
   // Do not replace a recoverable error with a browser network-error document.
+  trace("probe-start");
   if (!(await waitForReachableControlUiDocument({ timeoutMs: 0 }, () => true))) {
+    trace("probe-unreachable");
     return false;
   }
+  trace("probe-reachable");
   if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    trace("post-probe-declined");
     return false;
   }
   try {
     // Recheck after the shared probe: another failing surface may have claimed it.
     if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      trace("post-probe-already-attempted");
       return false;
     }
     // Never clear on mount, Retry, or a timer: a persistent bug must stay stopped.
     storage.setItem(RENDER_RELOAD_STORAGE_KEY, "1");
   } catch {
+    trace("storage-write-failed");
     return false;
   }
+  trace("reload");
   (deps.reload ?? reloadControlUiDocument)();
   return true;
 }

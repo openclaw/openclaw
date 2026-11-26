@@ -10,7 +10,6 @@ import {
   Show,
 } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
-import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { mergeNewSessionPageChrome } from "../../app/mobile-nav-layout.ts";
 import {
   cancelStaleChunkRecovery,
@@ -35,11 +34,11 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuerySource } from "../../lib/reactive/platform.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
@@ -76,6 +75,7 @@ import {
   type NewSessionPageProps,
   type PageHost,
 } from "./new-session-page-owner.ts";
+import { traceNewSessionReloadOptions } from "./new-session-recovery-trace.ts";
 import { PickerSkeleton } from "./picker.tsx";
 import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
@@ -333,7 +333,7 @@ function PageContent(shell: NewSessionPageProps, host: PageHost) {
       if (context && !renderedPages.has(host)) {
         // Only failed initial mounts reload; later errors must preserve active drafts.
         void reloadAfterRenderErrorOnce(
-          createGatewayControlUiReloadOptions(context.gateway, () => active && host.isConnected),
+          traceNewSessionReloadOptions(context.gateway, host, () => active),
         );
       }
       return () => {
