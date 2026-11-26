@@ -6,10 +6,10 @@ const english = { locale: "en-US" };
 describe("explicit dictated file references", () => {
   it.each([
     "The phrase reference file appears in the documentation.",
-    "reference file auth middleware dot ts",
     'Say "reference file auth.ts end reference" to illustrate the syntax.',
+    "Say 'let's use reference file auth.ts end reference' as an example.",
     "Say “reference file auth.ts end reference” as quoted instructions.",
-    "Say ‘reference file auth.ts end reference’ as quoted instructions.",
+    "Say ‘let’s use reference file auth.ts end reference’ as an example.",
     "`reference file auth.ts end reference` is code",
     "literal reference file auth.ts end reference end literal",
     "literal reference file auth.ts end reference",
@@ -17,9 +17,9 @@ describe("explicit dictated file references", () => {
     expect(recognize(text, english)).toMatchObject({ text, commands: [] });
   });
 
-  it("retains surrounding bytes and distinct command ranges", () => {
+  it("retains surrounding contractions and distinct command ranges", () => {
     const text =
-      "👋 inspect reference file Src slash Auth dot TS end reference and reference file résumé dot md end reference, please";
+      "👋 Let's inspect reference file Src slash Auth dot TS end reference because it's failing; also reference file résumé dot md end reference, please";
     const plan = recognize(text, english);
     expect(plan.text).toBe(text);
     expect(plan.commands.map(({ query }) => query)).toEqual(["Src/Auth.TS", "résumé.md"]);

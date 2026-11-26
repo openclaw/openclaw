@@ -51,8 +51,9 @@ export function recognizeDictatedFileReferences(
   }
   const protectedRanges = [...(options.protectedRanges ?? [])];
   // Quoted/code text and explicit literal scopes are data, even if they contain commands.
+  // Single quotes inside words are apostrophes, not quote delimiters.
   for (const match of text.matchAll(
-    /`[^`]*`|"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|‘[^’\n]*’|\bliteral\b[\s\S]*?(?:\bend literal\b|$)/giu,
+    /`[^`]*`|"[^"\n]*"|(?<![\p{L}\p{M}\p{N}])'(?:[^'\n]|(?<=[\p{L}\p{M}\p{N}])'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])|“[^”\n]*”|‘(?:[^’\n]|(?<=[\p{L}\p{M}\p{N}])’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])|\bliteral\b[\s\S]*?(?:\bend literal\b|$)/giu,
   )) {
     protectedRanges.push({ start: match.index, end: match.index + match[0].length });
   }
