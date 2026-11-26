@@ -17,7 +17,11 @@ describe("CPU budgets + determinism", () => {
   it("does not charge off-CPU waits to the synchronous work budget", () => {
     const waitState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     expectWithinCpuBudget(() => {
-      Atomics.wait(waitState, 0, 0, 250);
+      // Bun's JavaScriptCore scavenges this thread's allocator during waits over
+      // 100 ms. Use shorter waits to measure parking, not unrelated heap cleanup.
+      for (let i = 0; i < 5; i++) {
+        Atomics.wait(waitState, 0, 0, 50);
+      }
     }, 50);
   });
 
