@@ -132,8 +132,9 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   } else {
     return null;
   }
-  if (rejectUnauthorizedCommand(params, "/tools")) {
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/tools");
+  if (unauthorized) {
+    return unauthorized;
   }
   const model = params.model;
   if (!model) {

@@ -193,7 +193,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     workspaceDir: params.workspaceDir,
     isGroup: sessionState.isGroup,
   });
-  if (command.commandBodyNormalized === "/status") {
+  // An unauthorized /status falls through to the command gate, which owns the refusal.
+  if (command.isAuthorizedSender && command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
     const canApplyStoredModel =

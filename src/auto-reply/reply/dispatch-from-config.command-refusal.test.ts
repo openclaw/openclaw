@@ -196,7 +196,7 @@ it.each<
   [string, string, boolean, typeof statusReply.outcome, "silent" | "notice" | "throw" | RegExp]
 >([
   ["member", "/tell hi", false, "real", "silent"],
-  ["member", "/status", true, "real", "silent"],
+  ["member", "/status", true, "real", /You are not authorized to use this command/u],
   ["owner", "/status", true, "real", /OpenClaw/u],
   ["member", "/new@bot", true, "real", /New session started/u],
   ["member", "/new", true, "real", /New session started/u],
@@ -224,6 +224,8 @@ it.each<
 it.each<[string, string, boolean, boolean, RegExp | "silent"]>([
   ["member", "/help", false, true, /\/help is limited to this bot's owners.*\/new or \/reset/u],
   ["member", "/commands", true, true, /\/commands is limited to this bot's owners/u],
+  ["member", "/status", true, true, /\/status is limited to this bot's owners/u],
+  ["member", "/tools", false, true, /\/tools is limited to this bot's owners/u],
   ["member", "/help", false, false, "silent"],
   ["owner", "/help", false, true, /\/model/u],
 ])(
