@@ -114,7 +114,19 @@ export function createMeetingRuntimeFacade<
         },
         joinTransport: async ({ request, session, context }) =>
           await this.#joinTransport(request, session, context),
-        releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
+        releaseBrowserTab: (session) =>
+          this.releaseTrackedBrowserTab(session, {
+            messages: options.messages,
+            leave: (tab) =>
+              options.transport.leaveInBrowser({
+                runtime: params.runtime,
+                config: params.config,
+                meetingSessionId: session.id,
+                meetingUrl: session.url,
+                nodeId: session.chrome?.nodeId,
+                tab,
+              }),
+          }),
         refreshBrowserHealth: async (session, refreshOptions) =>
           await this.#refreshBrowserHealth(session, refreshOptions),
         refreshStatus: async (session) => await this.#refreshStatus(session),
@@ -413,58 +425,6 @@ export function createMeetingRuntimeFacade<
         nodeId: session.chrome?.nodeId,
         tab,
       });
-    }
-
-    async #releaseBrowserTab(session: Session): Promise<boolean | undefined> {
-      const tab = session.chrome?.browserTab;
-      if (!tab) {
-        this.#noteSession(session, options.messages.noTrackedTab);
-        session.browserLeft = false;
-        return false;
-      }
-      const shared = this.list().some(
-        (other) =>
-          other.id !== session.id &&
-          other.state === "active" &&
-          other.chrome?.browserTab?.targetId === tab.targetId &&
-          other.chrome?.nodeId === session.chrome?.nodeId,
-      );
-      if (shared) {
-        this.#noteSession(session, options.messages.sharedTab);
-        return undefined;
-      }
-      try {
-        const result = await options.transport.leaveInBrowser({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          meetingSessionId: session.id,
-          meetingUrl: session.url,
-          nodeId: session.chrome?.nodeId,
-          tab,
-        });
-        this.#noteSession(session, result.note);
-        if (result.left && session.chrome) {
-          session.chrome.browserTab = undefined;
-          if (session.chrome.health) {
-            session.chrome.health = {
-              ...session.chrome.health,
-              captioning: false,
-              audioInputRouted: false,
-              audioOutputRouted: false,
-              providerConnected: false,
-              realtimeReady: false,
-              audioInputActive: false,
-              audioOutputActive: false,
-            };
-          }
-        }
-        session.browserLeft = result.left;
-        return result.left;
-      } catch (error) {
-        this.#noteSession(session, options.messages.leaveFailed(formatErrorMessage(error)));
-        session.browserLeft = false;
-        return false;
-      }
     }
 
     #withSessionAgentConfig(agentId: string): Config {

@@ -98,10 +98,6 @@ function isBrowserTransport(transport: GoogleMeetTransport): boolean {
   return transport === "chrome" || transport === "chrome-node";
 }
 
-function noteSession(session: GoogleMeetSession, note: string): void {
-  session.notes = [...session.notes.filter((item) => item !== note), note];
-}
-
 function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
   return config.realtime.agentId === agentId
     ? config
@@ -227,7 +223,26 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       },
       joinTransport: async ({ request, session, context }) =>
         await this.#joinTransport(request, session, context),
-      releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
+      releaseBrowserTab: (session) =>
+        this.releaseTrackedBrowserTab(session, {
+          messages: {
+            noTrackedTab:
+              "No tracked Meet browser tab for this session; close the Meet tab manually if it is still in the call.",
+            sharedTab: "Kept the shared Meet tab open because another active session uses it.",
+            leaveFailed: (error) => `Browser control could not leave the Meet tab: ${error}`,
+          },
+          leave: (tab) =>
+            leaveChromeMeet({
+              runtime: params.runtime,
+              ...(session.transport === "chrome-node"
+                ? { transport: "chrome-node", nodeId: session.chrome?.nodeId }
+                : {}),
+              config: params.config,
+              meetingSessionId: session.id,
+              meetingUrl: session.url,
+              tab,
+            }),
+        }),
       refreshBrowserHealth: async (session, options) =>
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) => await this.#refreshStatus(session),
@@ -628,70 +643,5 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       meetingSessionId: session.id,
       tab,
     });
-  }
-
-  async #releaseBrowserTab(session: GoogleMeetSession): Promise<boolean | undefined> {
-    if (!isBrowserTransport(session.transport)) {
-      return undefined;
-    }
-    const tab = session.chrome?.browserTab;
-    if (!tab) {
-      noteSession(
-        session,
-        "No tracked Meet browser tab for this session; close the Meet tab manually if it is still in the call.",
-      );
-      session.browserLeft = false;
-      return false;
-    }
-    const shared = this.list().some(
-      (other) =>
-        other.id !== session.id &&
-        other.state === "active" &&
-        isBrowserTransport(other.transport) &&
-        other.chrome?.browserTab?.targetId === tab.targetId &&
-        other.chrome?.nodeId === session.chrome?.nodeId,
-    );
-    if (shared) {
-      noteSession(session, "Kept the shared Meet tab open because another active session uses it.");
-      session.browserLeft = undefined;
-      return undefined;
-    }
-    let left: boolean;
-    try {
-      const result = await leaveChromeMeet({
-        runtime: this.params.runtime,
-        ...(session.transport === "chrome-node"
-          ? { transport: "chrome-node", nodeId: session.chrome?.nodeId }
-          : {}),
-        config: this.params.config,
-        meetingSessionId: session.id,
-        meetingUrl: session.url,
-        tab,
-      });
-      noteSession(session, result.note);
-      left = result.left;
-    } catch (error) {
-      noteSession(
-        session,
-        `Browser control could not leave the Meet tab: ${formatErrorMessage(error)}`,
-      );
-      left = false;
-    }
-    if (session.chrome && left) {
-      session.chrome.browserTab = undefined;
-      if (session.chrome.health) {
-        session.chrome.health = {
-          ...session.chrome.health,
-          captioning: false,
-          audioOutputRouted: false,
-          providerConnected: false,
-          realtimeReady: false,
-          audioInputActive: false,
-          audioOutputActive: false,
-        };
-      }
-    }
-    session.browserLeft = left;
-    return left;
   }
 }

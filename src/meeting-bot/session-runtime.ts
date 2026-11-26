@@ -21,6 +21,8 @@ import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import {
   inheritMeetingBrowserTabOwnership,
+  leaveTrackedMeetingBrowserTab,
+  type MeetingBrowserTabRelease,
   settleMeetingRetainedBrowserTabs,
   settleMeetingRetainedBrowserTabsAfterFailure,
 } from "./session-runtime-browser-tabs.js";
@@ -272,6 +274,41 @@ export class MeetingSessionRuntime<
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
     );
+  }
+
+  /** Release the tracked participant for explicit leave or failed-join cleanup. */
+  protected async releaseTrackedBrowserTab(
+    session: TSession,
+    release: MeetingBrowserTabRelease<TTab>,
+  ): Promise<boolean | undefined> {
+    if (!this.options.isBrowserTransport(session.transport)) {
+      return undefined;
+    }
+    const { left, note } = await leaveTrackedMeetingBrowserTab(
+      this.#sessions.values(),
+      this.options,
+      session,
+      release,
+    );
+    this.#noteSession(session, note);
+    session.browserLeft = left;
+    if (left) {
+      this.options.setBrowserTab(session, undefined);
+      const health = this.options.getBrowser(session)?.health;
+      if (health) {
+        this.options.setBrowserHealth(session, {
+          ...health,
+          captioning: false,
+          audioInputRouted: false,
+          audioOutputRouted: false,
+          providerConnected: false,
+          realtimeReady: false,
+          audioInputActive: false,
+          audioOutputActive: false,
+        });
+      }
+    }
+    return left;
   }
 
   async speak(
