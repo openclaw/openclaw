@@ -19,12 +19,14 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { buildContextReply, formatContextBudget } from "./commands-context-report.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
+import type * as CostRuntime from "./commands-session-cost.runtime.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 // The `/usage cost` reader has its own suite; here the card only formats what it returns.
-vi.mock("./commands-session-cost.runtime.js", () => ({
+vi.mock("./commands-session-cost.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof CostRuntime>()),
   loadCurrentSessionCostSummary: async () => null,
 }));
 
