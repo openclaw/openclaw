@@ -3,7 +3,9 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
-  Partial<Pick<UpdateRunRecord, "before" | "after" | "verification" | "steps" | "origin">>;
+  Partial<
+    Pick<UpdateRunRecord, "phase" | "before" | "after" | "verification" | "steps" | "origin">
+  >;
 
 /** Serving observation is independent of permission to restart or roll back. */
 export function resolveUpdateRunVerifiedServingVersion(
@@ -57,9 +59,11 @@ export function renderUpdateRunSummary(
   options: { manualCommand?: string } = {},
 ): string {
   const headline =
-    run.status !== "skipped"
-      ? UPDATE_RUN_HEADLINES.get(run.status)
-      : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
+    run.status === "running" && run.phase
+      ? `⬆️ OpenClaw update in progress: ${run.phase}.`
+      : run.status !== "skipped"
+        ? UPDATE_RUN_HEADLINES.get(run.status)
+        : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
     ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
     : run.origin?.nextAction

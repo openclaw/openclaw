@@ -81,9 +81,10 @@ suite.define(() => {
         await review.press("Enter");
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog
-          .getByText(/OpenClaw update failed: preflight-no-good-commit/)
+          .getByText(/OpenClaw couldn't finish updating/)
           .first()
           .waitFor();
+        expect(await dialog.textContent()).toContain("preflight-no-good-commit");
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
     );
@@ -185,7 +186,7 @@ suite.define(() => {
         const card = page.locator('[data-attention-kind="updateAvailable"]');
         await inbox.click();
         await card
-          .getByText(/OpenClaw update failed/)
+          .getByText(/OpenClaw couldn't finish updating/)
           .first()
           .waitFor();
 
@@ -285,7 +286,7 @@ suite.define(() => {
           await gateway.waitForRequest("update.status");
           const surface = page.locator("openclaw-update-run-view");
           await surface
-            .getByText(historical ? /Last update run failed/ : /OpenClaw update failed/)
+            .getByText(historical ? /Last update run failed/ : /OpenClaw couldn't finish updating/)
             .first()
             .waitFor();
           expect(

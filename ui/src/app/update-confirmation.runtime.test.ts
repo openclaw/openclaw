@@ -727,7 +727,9 @@ it.each([
       expect(view.getAttribute("data-run-id")).toBe(run.runId);
       expect(view.getAttribute("data-run-status")).toBe(status);
       expect(view.querySelector("h3")?.textContent).toContain(
-        status === "running" ? "OpenClaw is updating" : "OpenClaw couldn't finish updating",
+        status === "running"
+          ? "OpenClaw update in progress: verifying"
+          : "OpenClaw couldn't finish updating",
       );
       const reportText = view.textContent;
       const check = findButton("Check status");

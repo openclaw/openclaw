@@ -79,6 +79,9 @@ describe("update conversation notices", () => {
       const progressed = { ...requested, phase };
       expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
       expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
+      expect(renderUpdateRunSummary(progressed)).toContain(
+        `OpenClaw update in progress: ${phase}.`,
+      );
     }
     expect(
       renderUpdateRunNotice({ status: "succeeded", phase: "finished", reason: null }, "parking"),
