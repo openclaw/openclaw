@@ -235,13 +235,16 @@ export function collectDoctorHealthResultWarnings(params: {
 }
 
 /** Startup repairs may report before the full health context exists. */
-export function createDoctorHealthFindingBuffer(runtime: DoctorHealthFlowContext["runtime"]) {
+export function createDoctorHealthFindingBuffer(
+  runtime: DoctorHealthFlowContext["runtime"],
+  repairEvidence?: DoctorHealthFlowContext["repairEvidence"],
+) {
   const buffer: Pick<
     DoctorHealthFlowContext,
     "runtime" | "healthFindings" | "updateWarnings" | "repairEvidence"
   > & {
     healthFindings: HealthFinding[];
-  } = { runtime, healthFindings: [] };
+  } = { runtime, healthFindings: [], ...(repairEvidence ? { repairEvidence } : {}) };
   return {
     buffer,
     reportFindings(this: void, findings: readonly HealthFinding[], warnings?: readonly string[]) {

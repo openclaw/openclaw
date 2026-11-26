@@ -100,6 +100,7 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../status/summary.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  /** Bounded updater display projection; classify raw warnings via recordDoctorHealthWarnings. */
   updateWarnings?: string[];
   /** Findings awaiting the final current-state summary; effects and prompts remain streamed. */
   healthFindings?: HealthFinding[];

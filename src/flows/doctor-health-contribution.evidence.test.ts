@@ -3,6 +3,7 @@ import { createExternallyManagedDoctorRepairEvidence } from "../commands/doctor-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createDoctorHealthContribution,
+  createDoctorHealthFindingBuffer,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
 import {
@@ -165,5 +166,37 @@ it.each([
     expect(report.ok).toBe(true);
     expect(report.remaining).toEqual([]);
     expect(report.advisories).toEqual([{ stepId: receipt.id, message: receipt.warnings[0] }]);
+  });
+});
+
+it("keeps startup warnings and receipt refusals once in repair evidence", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const evidence = createExternallyManagedDoctorRepairEvidence();
+    const ctx = createDoctorHealthFlowContext({ repairEvidence: evidence.sink });
+    const { reportFindings } = createDoctorHealthFindingBuffer(ctx.runtime, evidence.sink);
+    reportFindings([], ["Pre-repair recovery copy was unavailable."]);
+    evidence.sink.receipts([
+      {
+        id: "plugin-session-repair",
+        phase: "final",
+        source: [],
+        target: [],
+        requiredness: "conditional",
+        reversibility: "checkpoint-required",
+        outcome: "refused",
+        changes: [],
+        warnings: ["Plugin session repair failed."],
+        refusal: { code: "step-threw", message: "Plugin session repair failed." },
+      },
+    ]);
+    recordDoctorHealthWarnings(ctx, [], ["Plugin session repair failed."]);
+    evidence.sink.complete();
+    const report = evidence.finish();
+    expect(report.ok).toBe(false);
+    expect(report.remaining).toEqual([
+      { stepId: "doctor", message: "Pre-repair recovery copy was unavailable." },
+      { stepId: "plugin-session-repair", message: "Plugin session repair failed." },
+    ]);
+    expect(ctx.updateWarnings).toContain("Plugin session repair failed.");
   });
 });

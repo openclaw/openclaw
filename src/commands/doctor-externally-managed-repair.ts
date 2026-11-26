@@ -72,7 +72,11 @@ export function createExternallyManagedDoctorRepairEvidence(): {
     summarize(warnings) {
       sink.remaining(
         "doctor",
-        warnings.filter((warning) => !advisories.some((entry) => entry.message === warning)),
+        warnings.filter(
+          (warning) =>
+            !advisories.some((entry) => entry.message === warning) &&
+            !remaining.some((entry) => entry.message === warning),
+        ),
       );
     },
     remaining(stepId, messages) {

@@ -207,8 +207,10 @@ async function runDoctorHealthFlowWithResult(
   let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
-  const { buffer: startupFindings, reportFindings } =
-    createDoctorHealthFindingBuffer(effectiveRuntime);
+  const { buffer: startupFindings, reportFindings } = createDoctorHealthFindingBuffer(
+    effectiveRuntime,
+    repairEvidence,
+  );
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
