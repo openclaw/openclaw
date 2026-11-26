@@ -170,8 +170,12 @@ export async function runWithLocalStateOwner<T>(params: {
     // its implicit Gateway target, and detached work must lose that proof when it returns.
     let active = true;
     const holdsOfflineTarget = acquiredOffline
-      ? (database: string, config: string) => {
-          if (!active || database !== databasePath || config !== paths.configPath) {
+      ? (selectedDatabasePath: string, selectedConfigPath: string) => {
+          if (
+            !active ||
+            selectedDatabasePath !== databasePath ||
+            selectedConfigPath !== paths.configPath
+          ) {
             return false;
           }
           assertCurrent();
