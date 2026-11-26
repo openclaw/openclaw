@@ -147,13 +147,6 @@ private fun TalkModeRoute.toLaunchRoute(): TalkLaunchRoute =
     -> TalkLaunchRoute.Native
   }
 
-internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
-  val normalized = model?.trim()?.lowercase() ?: return true
-  // Older Gateways omit relay capability hints. Keep their native fallback;
-  // a positive Gateway hint overrides this legacy model check.
-  return normalized != "gpt-live" && !normalized.startsWith("gpt-live-")
-}
-
 fun gatewayTalkSetupStatusText(state: GatewayTalkSetupState): String =
   when (state) {
     is GatewayTalkSetupState.Ready -> nativeString("Ready")
