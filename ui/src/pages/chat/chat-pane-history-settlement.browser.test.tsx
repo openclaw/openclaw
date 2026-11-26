@@ -8,11 +8,11 @@ import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
 } from "./chat-history-request-params.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   connectPaneTestView,
   createTestChatPane,

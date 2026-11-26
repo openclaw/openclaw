@@ -172,7 +172,7 @@ it("refreshes cached compaction rows and native revisions across phase, savings 
   const persisted = marker("persisted", status.runId, undefined, status.startedAt);
   const withSavings = (tokensBefore: number, tokensAfter: number) => ({
     ...persisted,
-    __openclaw: { ...persisted.__openclaw, tokensBefore, tokensAfter },
+    __openclaw: { ...persisted["__openclaw"], tokensBefore, tokensAfter },
   });
   const complete = { ...status, phase: "complete" as const, completedAt: 2000 };
   const cases = [

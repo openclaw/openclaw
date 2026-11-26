@@ -140,7 +140,9 @@ it.each([false, true])(
   "subscribes authenticated people with only session read (recipient capability: %s)",
   async (advertised) => {
     const key = "agent:main:creator";
-    const messages = [{ role: "assistant", content: "Readable conversation" }];
+    const messages = [
+      { role: "assistant", content: "Readable conversation", __openclaw: { seq: 1 } },
+    ];
     const state = makeChatHost({
       sessionKey: key,
       requestHandlers: {

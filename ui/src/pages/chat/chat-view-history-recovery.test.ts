@@ -97,7 +97,7 @@ describe("chat history pagination", () => {
     const thread = requireElement(container, ".chat-thread", "chat thread");
     const boundary = requireElement(container, ".chat-history-boundary", "history boundary");
 
-    expect(boundary.querySelector("button")).toBeNull();
+    expect(boundary.querySelector("button.chat-history-boundary__action")?.tagName).toBe("BUTTON");
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);

@@ -769,7 +769,7 @@ it.each(["disk", "memory"] as const)(
     const observed = new Set(restored.messages.map(nativeHistorySeq));
     applyChatCacheSnapshot(state, restored);
     const observeWindow = () => {
-      state.chatMessages.forEach((message) => observed.add(nativeHistorySeq(message)));
+      state.chatMessages.forEach((entry) => observed.add(nativeHistorySeq(entry)));
       expect(state.chatMessages.length).toBeLessThanOrEqual(400);
       expect(
         new TextEncoder().encode(JSON.stringify(state.chatMessages)).length,

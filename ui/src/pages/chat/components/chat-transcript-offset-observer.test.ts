@@ -243,12 +243,13 @@ it.each([
   const element = document.createElement("div");
   let delivered = false;
   const geometryReads: boolean[] = [];
-  for (const key of ["scrollHeight", "clientHeight"]) {
+  const nativeViewport = { clientHeight: 100, scrollHeight: 120 };
+  for (const key of ["scrollHeight", "clientHeight"] as const) {
     Object.defineProperty(element, key, {
       configurable: true,
       get: () => {
         geometryReads.push(delivered);
-        return key === "scrollHeight" ? 120 : 100;
+        return nativeViewport[key];
       },
     });
   }
@@ -274,8 +275,7 @@ it.each([
   const onNativeScroll = vi.fn((scroll: TranscriptNativeScroll) => {
     expect(scroll.viewport).toEqual({
       scrollTop: element.scrollTop,
-      clientHeight: 100,
-      scrollHeight: 120,
+      ...nativeViewport,
     });
     paneRecordedEnd.push(endAnchor.isRecordedEnd(scroll.viewport.scrollTop));
     order.push("pane");
@@ -386,10 +386,8 @@ it.each([
   element.dispatchEvent(new Event("scroll"));
   expect(onOffset).toHaveBeenCalledExactlyOnceWith(1);
   if (logicalDrift) {
-    Object.defineProperties(element, {
-      clientHeight: { value: 200 },
-      scrollHeight: { value: 1000 },
-    });
+    nativeViewport.clientHeight = 200;
+    nativeViewport.scrollHeight = 1000;
     virtualizer.scrollOffset = 40;
     deliver.mockClear();
     state.syncNativeOffset?.();

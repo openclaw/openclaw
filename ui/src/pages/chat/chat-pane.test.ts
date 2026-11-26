@@ -887,7 +887,7 @@ describe("chat pane session creation lifecycle", () => {
 describe("chat pane history pagination intent", () => {
   function scrollFixture() {
     const fixture = createPaneWithRequest(vi.fn());
-    const { pane, state } = fixture;
+    const { state } = fixture;
     state.handleChatScroll = vi.fn();
     const thread = document.createElement("div");
     Object.defineProperties(thread, {

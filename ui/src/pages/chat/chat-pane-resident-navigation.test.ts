@@ -283,7 +283,7 @@ it("reopens a refreshed partial segment before recovering its discarded successo
 });
 
 it("keeps a detached reader on background refresh and restores the durable tail for Latest", async () => {
-  const { pane, state, append } = await residentAt(6);
+  const { state, append } = await residentAt(6);
   const held = state.chatMessages;
   append(40);
   await loadChatHistory(state, { deferBranches: true });
@@ -417,7 +417,7 @@ it("keeps observed source-reset authority when a reader cancels Latest", async (
 });
 
 it("keeps attachment coverage partial at the oldest source while newer history is evicted", async () => {
-  const { pane, state } = await residentAt(7);
+  const { state } = await residentAt(7);
   expect(state.chatHistoryPagination.hasMore).toBe(false);
   expect(state.chatHistoryPagination.hasNewer).toBe(true);
   expect(readChatTranscriptAttachmentSource(state).coverage).toBe("partial");
