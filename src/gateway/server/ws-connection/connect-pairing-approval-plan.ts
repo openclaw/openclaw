@@ -54,13 +54,18 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
   if (!params.hasRequestedScopes) {
     return configuredScopes;
   }
-  const configured = new Set(configuredScopes);
-  // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
-  // required default UI scopes without widening an explicitly configured cap.
+  if (params.configuredScopes !== undefined) {
+    const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
+    // Publication transport pairs separately and cannot enter an ordinary device grant by implication.
+    return intersectOperatorScopes(requestedScopes, configuredScopes)
+      .filter((scope) => !isPublicationTransportScope(scope))
+      .toSorted();
+  }
+  // Older Control UI tabs omit questions. Keep the implicit policy's other grants literal.
   return normalizeSortedUniqueTrimmedStringList([
     ...params.requestedScopes,
-    ...(params.configuredScopes === undefined ? ["operator.questions"] : []),
-  ]).filter((scope) => configured.has(scope));
+    "operator.questions",
+  ]).filter((scope) => configuredScopes.includes(scope));
 }
 
 // Owner devices pair with what they request; members with their role's ceiling.

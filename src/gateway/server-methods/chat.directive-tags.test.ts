@@ -95,12 +95,15 @@ import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalizatio
 import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media.suite.js";
 import {
   ChatDirectiveDedupe,
+  createAdmittedAcpClient,
   createChatDirectiveReplyBackend,
   createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   deniedChatCronAuthorityCases,
+  lazyChatCronAuthorityCases,
+  admittedInternal,
   handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -4166,11 +4169,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send({
       idempotencyKey: "idem-system-provenance-acp",
       message: "bench update",
-      client: createScopedCliClient(["operator.admin"], {
-        id: "cli",
-        displayName: "ACP",
-        version: "acp",
-      }),
+      client: createAdmittedAcpClient(),
       requestParams: {
         systemInputProvenance: provenance,
         systemProvenanceReceipt:
@@ -4190,6 +4189,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         content: "bench update",
         idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
+        operatorProfileId: "acp-owner",
         provenance,
       }),
     );
@@ -4836,9 +4836,7 @@ describe("chat.send local operator client sender context", () => {
         },
       );
       const probe = vi.fn();
-      mockState.cronAuthorityProbe = async (_runId, capability) => {
-        probe(capability);
-      };
+      mockState.cronAuthorityProbe = async (_runId, capability) => probe(capability);
       await createChatRequestFixture().send({
         idempotencyKey: "child-chat-scheduling",
         sessionKey,
@@ -4852,7 +4850,7 @@ describe("chat.send local operator client sender context", () => {
             },
             scopes: [scope],
           },
-          internal: { authenticatedControlUi: true, controlUiAdmin: scope === "operator.admin" },
+          internal: admittedInternal(scope, { authenticatedControlUi: true }),
         },
         expectBroadcast: false,
       });
@@ -4863,13 +4861,7 @@ describe("chat.send local operator client sender context", () => {
     },
   );
 
-  it.each([
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", false],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.write", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.cron", false],
-  ] as const)(
+  it.each(lazyChatCronAuthorityCases)(
     "binds lazy configured-MCP cron authority for %s/%s/%s with %s (local: %s)",
     async (clientId, mode, platform, scope, local) => {
       await createSqliteTranscriptFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
@@ -4877,10 +4869,10 @@ describe("chat.send local operator client sender context", () => {
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
       mockState.cronAuthorityProbe = async (runId, capability) => {
-        const localOwner = local && scope === "operator.admin";
+        const localOwner = local === true && scope === "operator.admin";
         expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
         expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
-        expect(capability?.managementEntitlement).toBeUndefined();
+        expect(capability?.managementEntitlement?.source).toBe(localOwner ? "operator" : undefined);
         await new Promise<void>((resolveTick) => {
           setTimeout(resolveTick, 0);
         });
@@ -4920,8 +4912,12 @@ describe("chat.send local operator client sender context", () => {
             client: { id: clientId, mode, version: "dev", platform },
             scopes: [scope],
           },
-          internal: local ? { isLocalClient: true } : {},
+          internal: admittedInternal(scope, local === true ? { isLocalClient: true } : {}),
         },
+        requestParams:
+          local === "resumed"
+            ? { sessionId: mockState.sessionId, __controlUiReconnectResume: true }
+            : {},
         expectBroadcast: false,
       });
 

@@ -675,7 +675,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     const current = request();
     await vi.advanceTimersByTimeAsync(0);
     await current.completion;
-    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
+      { ...row, exportPolicy: { origin: "federated", automatic: false } },
+    ]);
     expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))

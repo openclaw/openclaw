@@ -112,9 +112,7 @@ describe("presence tool source authority", () => {
       const capability = createCronCreatorAuthorityCapability(
         "presence-channel-run",
         origin,
-        origin.kind === "external"
-          ? { source: "channel-owner", isCurrent: () => current }
-          : undefined,
+        origin.kind === "external" ? { source: "channel-owner" } : undefined,
         () => current,
       )!;
       await run(undefined, () =>

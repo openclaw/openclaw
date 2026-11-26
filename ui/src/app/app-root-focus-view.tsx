@@ -67,7 +67,7 @@ export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
             <Match when={ambiguous()}>
               {(data) => (
                 <main class="board-document">
-                  <section class="card board-document__state">
+                  <section class="card board-document__state board-document__choices">
                     <h2>{t("chat.sessionRoute.chooseTitle")}</h2>
                     <p>
                       {data().candidates.length > 1
@@ -76,11 +76,14 @@ export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
                     </p>
                     <For each={data().candidates}>
                       {(candidate) => (
-                        <p>
-                          <a href={candidate.href}>{candidate.displayName}</a>
-                          <br />
+                        <p class="board-document__choice">
+                          <a href={candidate.href} title={candidate.displayName}>
+                            {candidate.displayName}
+                          </a>
                           <small>
-                            {candidate.agentId} · {candidate.idPrefix}
+                            <span title={candidate.agentId}>{candidate.agentId}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>{candidate.idPrefix}</span>
                           </small>
                         </p>
                       )}

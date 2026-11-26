@@ -8,6 +8,7 @@ import {
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
+  onceMessage,
   openWs,
   rpcReq,
   testState,
@@ -37,16 +38,19 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
     { allowedAgentRosterRemovals: ["main"] },
   );
   await withGatewayServer(async ({ port }) => {
-    const socket = await openWs(port, {
+    const headers = {
       origin,
       "x-forwarded-for": "203.0.113.50",
       "x-forwarded-proto": "https",
       "x-forwarded-user": "preferences-reader@example.test",
-    });
+    };
+    const socket = await openWs(port, headers);
+    const nativeSockets: (typeof socket)[] = [];
     try {
       const connected = await connectReq(socket, {
         skipDefaultAuth: true,
         client: CONTROL_UI_CLIENT,
+        caps: ["personal-session-pins"],
         prePairDevice: true,
         scopes,
         browserOrigin: origin,
@@ -84,7 +88,104 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
         );
         expect(await rpcReq(socket, "sessions.preview", { keys: [key] })).toMatchObject(expected);
       }
+      const rail = "ui.railShortcuts";
+      const own = "agent:research:own";
+      const foreignKey = "agent:research:foreign";
+      const layout = [`session:${foreignKey}`, `session-rail:${own}`, `session:${own}`];
+      expect(
+        await rpcReq(socket, "users.prefs.set", { entries: { [rail]: layout } }),
+      ).toMatchObject({ ok: true, payload: { status: "ok" } });
+      const list = await rpcReq(socket, "sessions.list", { pinned: true, agentId: "research" });
+      expect(list).toMatchObject({
+        ok: true,
+        payload: { totalCount: 1, sessions: [{ key: own, pinned: true }] },
+      });
+      expect(
+        await rpcReq(socket, "sessions.patch", {
+          key: own,
+          expectedSessionId: "own-session",
+          pinned: false,
+        }),
+      ).toMatchObject({
+        ok: true,
+        payload: { entry: { sessionId: "own-session", pinned: false } },
+      });
+      const after = await rpcReq(socket, "users.prefs.get", { keys: [rail] });
+      expect(after).toMatchObject({
+        ok: true,
+        payload: { status: "ok", entries: { [rail]: layout.slice(0, 2) } },
+      });
+      // Both native handshakes belong to the same person. Only the negotiated wire contract differs.
+      const connectNative = async (personal: boolean) => {
+        const ws = await openWs(port, headers);
+        nativeSockets.push(ws);
+        const reply = await connectReq(ws, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          scopes,
+          client: { id: "openclaw-android", mode: "ui", platform: "android", version: "1.0.0" },
+          caps: personal ? ["personal-session-pins"] : [],
+        });
+        expect(reply, JSON.stringify(reply.error)).toMatchObject({
+          ok: true,
+          payload: {
+            auth: { method: "trusted-proxy" },
+            features: { capabilities: expect.arrayContaining(["personal-session-pins"]) },
+          },
+        });
+        expect(await rpcReq(ws, "sessions.subscribe", {})).toMatchObject({ ok: true });
+        return ws;
+      };
+      const personal = await connectNative(true);
+      const legacy = await connectNative(false);
+      const rowChanged = (ws: typeof socket) =>
+        onceMessage(
+          ws,
+          (frame) =>
+            frame.event === "sessions.changed" &&
+            frame.payload?.sessionKey === own &&
+            frame.payload?.reason === "patch",
+        );
+      const [currentEvent, historicalEvent, historicalWrite] = await Promise.all([
+        rowChanged(personal),
+        rowChanged(legacy),
+        rpcReq(legacy, "sessions.patch", { key: own, pinned: true }),
+      ]);
+      expect(historicalWrite).toMatchObject({ ok: true });
+      expect(historicalEvent.payload).toMatchObject({
+        pinned: true,
+        session: { key: own, pinned: true },
+      });
+      expect(currentEvent.payload).toMatchObject({ session: { key: own } });
+      for (const field of ["pinned", "pinnedAt", "session.pinned", "session.pinnedAt"]) {
+        expect(currentEvent.payload).not.toHaveProperty(field);
+      }
+      const readHistory = (ws: typeof socket) =>
+        rpcReq(ws, "chat.history", { sessionKey: own, agentId: "research", limit: 1 });
+      expect(await readHistory(legacy)).toMatchObject({
+        ok: true,
+        payload: { sessionInfo: { key: own, pinned: true } },
+      });
+      const history = await readHistory(personal);
+      expect(history).toMatchObject({ ok: true, payload: { sessionInfo: { key: own } } });
+      expect(history.payload?.sessionInfo).not.toHaveProperty("pinned");
+      expect(history.payload?.sessionInfo).not.toHaveProperty("pinnedAt");
+      const roster = () => rpcReq(personal, "sessions.list", { pinned: true, agentId: "research" });
+      expect(await roster()).toMatchObject({ ok: true, payload: { totalCount: 0, sessions: [] } });
+      const [notification, personalWrite] = await Promise.all([
+        onceMessage(personal, (frame) => frame.event === "users.prefs.changed"),
+        rpcReq(socket, "sessions.patch", { key: own, pinned: true }),
+      ]);
+      expect(personalWrite).toMatchObject({ ok: true });
+      expect(notification.payload).toMatchObject({ profileId: reader.id, keys: [rail] });
+      expect(await roster()).toMatchObject({
+        ok: true,
+        payload: { totalCount: 1, sessions: [{ key: own, pinned: true }] },
+      });
     } finally {
+      for (const ws of nativeSockets) {
+        ws.close();
+      }
       socket.close();
     }
   });

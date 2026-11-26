@@ -366,6 +366,11 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      getCurrentUserIdempotencyKey: () =>
+        (
+          attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          attempt.userTurnTranscriptRecorder?.message
+        )?.idempotencyKey,
       // Only the outer accepted-turn owner may advance an admitted engine.
       deferredTurn: attempt.onContextEngineTurnCandidate
         ? {

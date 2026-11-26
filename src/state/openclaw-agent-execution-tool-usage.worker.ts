@@ -20,6 +20,15 @@ export async function loadAgentToolUsageOperations() {
         admit("commit");
         return applied;
       }),
+    "toolUsage.firstSeen": (
+      input: Parameters<typeof kernel.recordAgentToolFirstSeenInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("tool-usage.first-seen", "Tool usage", ({ db }) => {
+        const firstSeen = kernel.recordAgentToolFirstSeenInDatabase(db, input);
+        admit("commit");
+        return firstSeen;
+      }),
     "toolUsage.reset": (input: { now: number }, { writeTransaction, admit }) =>
       writeTransaction("tool-usage.reset", "Tool usage", ({ db }) => {
         const state = kernel.resetAgentToolUsageInDatabase(db, input.now);

@@ -51,7 +51,11 @@ import {
   createSessionGenerationReadBatch,
   type GenerationRead,
 } from "./session-delivery-generation-read-batch.js";
-import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
+import type {
+  LeaseFacts,
+  SessionGenerationEntry,
+  SessionGenerationLease,
+} from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
@@ -88,21 +92,7 @@ async function prepareSessionGenerationLease(
   input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
   initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
-): Promise<{
-  assertCurrent: SessionSourceAssertion;
-  assertNativeTransactionCurrent: SessionSourceAssertion;
-  assertDeliveryCurrent: () => void;
-  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
-  prepareRead: () => Promise<void> | undefined;
-  release: () => void;
-  bindCreation: (
-    operation: SessionEntryCreationOperation,
-    publishBinding?: (
-      binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">,
-    ) => void,
-  ) => SessionSourceAssertion;
-  isCreationAdopted: () => boolean;
-}> {
+): Promise<SessionGenerationLease> {
   if (!isLeaseFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }

@@ -10,6 +10,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as userProfileList from "../state/user-profile-list.native.js";
 import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
@@ -119,6 +120,25 @@ it("keeps top-level tool argument names distinct from the required schema keywor
     }
   }
 });
+
+it.each([
+  ["without", undefined, "this run has no yield owner"],
+  ["with", () => {}, undefined],
+] as const)(
+  "keeps the yield owner's availability through tool assembly (%s onYield)",
+  (_label, onYield, reason) => {
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      sessionId: "session",
+      ...(onYield ? { onYield } : {}),
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(getAgentToolExecutionLocation(expectToolNamed(tools, "sessions_yield"))).toEqual(
+      reason ? { kind: "gateway", unavailableReason: reason } : { kind: "gateway" },
+    );
+  },
+);
 
 describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {

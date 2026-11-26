@@ -44,7 +44,10 @@ import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
+import {
+  resolveCurrentUserTurnContextKey,
+  sessionMessagesContainIdempotencyKey,
+} from "./pre-persisted-user-turn.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import {
   createRequestBoundaryCompaction,
@@ -381,10 +384,12 @@ export async function runEmbeddedAttemptPromptPhase(
     let compactionRequestBudget: CompactionRequestBudget | undefined;
     if (!state.skipPromptSubmission) {
       const userTurnRecorder = attempt.userTurnTranscriptRecorder;
-      const pendingUserIdempotencyKey =
+      const pendingUserIdempotencyKey = resolveCurrentUserTurnContextKey(
+        activeSession.messages,
         attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
           ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
-          : undefined;
+          : undefined,
+      );
       const foregroundBudget = {
         contextWindow: promptContext.contextTokenBudget,
         reserveTokens,

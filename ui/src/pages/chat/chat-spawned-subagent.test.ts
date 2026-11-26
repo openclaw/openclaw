@@ -313,12 +313,14 @@ describe("a launched subagent", () => {
       return selectActivityHeadline([item], new Map([[card, item]]), rows)?.title;
     };
     const send = { sessionKey: c.key, message: "Hi" };
-    expect(headline("sessions_send", send, "Send to session")).toBe(`Session Send ${label}`);
+    expect(headline("sessions_send", send, "Send to session")).toBe(`Sending message to ${label}`);
     // Before the roster holds it, the action stands in; the key never does.
     expect(headline("sessions_send", send, "Send to session", [])).toBe("Send to session");
     // Through the catalog dispatcher, and for history reads and steering.
     const dispatch = { id: "sessions_send", args: send };
-    expect(headline("dispatch_action", dispatch, "Send to session")).toBe(`Session Send ${label}`);
+    expect(headline("dispatch_action", dispatch, "Send to session")).toBe(
+      `Sending message to ${label}`,
+    );
     const read = { sessionKey: c.key };
     expect(headline("sessions_history", read, "Read session history")).toBe(
       `Reading chat ${label}`,

@@ -14,6 +14,51 @@ import {
   unmountPage,
 } from "./model-providers-page.test-support.tsx";
 
+it.each([
+  { provider: "audit-provider", id: "audit-provider" },
+  { provider: "minimax-portal", id: "minimax" },
+  { provider: "minimax-portal", id: "minimax-portal" },
+])("opens $provider as $id before a sibling sharing its auth owner", async ({ provider, id }) => {
+  const { context } = loginHarness({
+    capabilities: [
+      {
+        provider: id,
+        apiKeySupported: true,
+        quickApiKeySetup: true,
+        loginOptions: [
+          loginOption(
+            "audit-team-login",
+            id === "minimax-portal" ? "minimax" : `${id}-team`,
+            "Audit Team API key",
+            "secret",
+            {
+              groupLabel: "A Shared Team",
+            },
+          ),
+          loginOption("audit-login", id, "Audit Provider API key", "secret", {
+            groupLabel: "Audit Provider",
+          }),
+        ],
+      },
+      { provider: "unrelated", apiKeySupported: true, quickApiKeySetup: true },
+    ],
+  });
+  const page = appendPage(context);
+  page.routeData = { ...createEmptyModelProvidersRouteData(context), connect: true, provider };
+  await waitForSolid(() =>
+    expect(page.querySelector(".model-provider-login h2")?.textContent).toContain("Audit Provider"),
+  );
+  expect(page.querySelector("[data-models-login-search]")).toBeNull();
+  expect(page.querySelector(".model-provider-login")?.textContent).toContain(
+    "Audit Provider API key",
+  );
+  expect(page.querySelector(".model-provider-login")?.textContent).not.toContain(
+    "Audit Team API key",
+  );
+  expect(page.querySelector(".model-provider-login")?.textContent).not.toContain("unrelated");
+  expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
+});
+
 it("opens the plugin-owned sign-in and offers a chat model without changing the default", async () => {
   const { context, request, answer } = loginHarness({
     capabilities: [

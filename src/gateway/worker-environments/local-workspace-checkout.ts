@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
@@ -197,8 +198,8 @@ export async function prepareLocalWorkspaceCheckout(
         "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
       ]);
     }
-    const input = await fs.open(pack, "r");
-    try {
+    {
+      await using input = await openCommandStdinFile(pack);
       await prepare();
       current();
       const result = await withGitProcessOperation(
@@ -210,7 +211,7 @@ export async function prepareLocalWorkspaceCheckout(
               params.idleIoPriority,
             ),
             {
-              stdinFileDescriptor: input.fd,
+              stdinFile: input.stdinFile,
               baseEnv: gitEnvironment(cleanEnv),
               signal,
               timeoutMs: 300_000,
@@ -225,8 +226,6 @@ export async function prepareLocalWorkspaceCheckout(
       if (result.code !== 0 || result.termination !== "exit") {
         throw commandError("git index-pack", result);
       }
-    } finally {
-      await input.close();
     }
     await prepare();
     current();

@@ -28,11 +28,13 @@ import {
   startCronEdit,
   toggleCronJob,
 } from "../../lib/cron/index.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
 import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../../lib/cron/inventory-connection.ts";
-import { loadCronRuns, selectCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
+  loadCronRuns,
+  retryCronRuns,
+  selectCronRunsForJob,
+  updateCronRunsFilter,
+} from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -204,9 +206,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         if (
           active &&
           context() === currentContext &&
-          (event.event === "cron" ||
-            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
-              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
+          (event.event === "cron" || isCronInventoryInvalidation(event))
         ) {
           void refreshCron({
             coalesce: true,
@@ -307,7 +307,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         .then(() => ensureEditorSources());
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
-      void refreshCron({ coalesce: true });
+      void refreshCron({ coalesce: true, refresh: forceRefresh });
     }
     onSettled(() => ensureEditorSources(forceRefresh));
   }
@@ -706,6 +706,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     },
     onLoadMoreRuns: () =>
       void presentation.runTask((cronState) => loadCronRuns(cronState, { append: true })),
+    onRetryRuns: () => void presentation.runTask(retryCronRuns),
     onRunsFiltersChange: (patch: Parameters<typeof updateCronRunsFilter>[1]) =>
       void presentation.runTask(async (cronState) => {
         updateCronRunsFilter(cronState, patch);

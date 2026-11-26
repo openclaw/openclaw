@@ -16,6 +16,7 @@ import * as rootModule from "../infra/openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
@@ -116,7 +117,9 @@ afterEach(async () => {
   }
 });
 
-it("lets a launcher child exit naturally while its IPC peer remains connected", async () => {
+it("lets a launcher child exit naturally while its IPC peer remains connected", async ({
+  signal,
+}) => {
   const child = spawn(
     process.execPath,
     [
@@ -142,11 +145,13 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = once(child, "exit", { signal: AbortSignal.timeout(10_000) });
+  // No wall-clock deadline: a child the IPC channel keeps alive fails at the test timeout,
+  // and the tsx import of the module graph on a loaded runner cannot lose a race.
+  const exited = once(child, "exit");
   try {
-    const [message] = await once(child, "message");
+    const [message] = await withinTest(once(child, "message"), signal);
     expect(message).toBe("loaded");
-    expect(await exited, stderr).toEqual([0, null]);
+    expect(await withinTest(exited, signal), stderr).toEqual([0, null]);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       const stopped = once(child, "exit");
@@ -157,14 +162,24 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
 }, 15_000);
 
 it.each(["succeeded", "rolled-back"] as const)(
-  "durably finishes a %s trial and marks its outcome reported",
+  "settles a %s trial at ready without letting its expired preparation lock win",
   async (status) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
     directories.push(state);
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
-    const run = await createUpdateRunAsync({ trigger: "cli" }, options);
+    const releaseAdmission: NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]> = {
+      owner: "candidate",
+      candidateVersion: VERSION,
+      verdict: "admit",
+      warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+    };
+    const run = await createUpdateRunAsync(
+      { trigger: "cli", origin: { releaseAdmission } },
+      options,
+    );
     const trial: Trial = {
       v: 2,
       runId: run.runId,
@@ -185,13 +200,15 @@ it.each(["succeeded", "rolled-back"] as const)(
       },
     };
     await writeTrial(trial);
+    await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
     const work = new AsyncWorkScope();
-    await work.run(() => settleRunFromTrial(trial));
+    await work.run(() => announceReady(null));
     await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
       status: status === "succeeded" ? "succeeded" : "failed",
       phase: "finished",
+      origin: { releaseAdmission },
     });
     if (status === "succeeded") {
       expect(finished).toMatchObject({
@@ -227,6 +244,32 @@ it.each(["succeeded", "rolled-back"] as const)(
     expect((await getUpdateRunAsync(run.runId, options))?.finishedAtMs).toBe(
       finished?.finishedAtMs,
     );
+  },
+);
+
+it.each(["pending", "trial", "restoring"] as const)(
+  "leaves a %s trial running when its preparation lock expires",
+  async (phase) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+    openOpenClawStateDatabase({ env: process.env });
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    await writeTrial({
+      v: 2,
+      runId: run.runId,
+      phase,
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+      attempts: 1,
+      createdAt: Date.now(),
+    });
+    await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
+    await announceReady(null);
+    expect(await getUpdateRunAsync(run.runId)).toMatchObject({ status: "running" });
+    expect(await readTrial()).toMatchObject({ runId: run.runId, phase });
   },
 );
 
@@ -297,7 +340,7 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
       await acquireUpdateLock({
         runId: run.runId,
         pid: ownerState === "same-pid" || ownerState === "own-live" ? process.pid : owner.pid!,
-        deadlineMs: 60_000,
+        deadlineMs: ownerState === "same-pid" ? Number.MAX_SAFE_INTEGER : 60_000,
       });
       if (ownerState === "same-pid") {
         // A previous Gateway with this PID took the lock before this process started.
@@ -311,7 +354,7 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
 
       await announceReady(null);
 
-      if (ownerState === "live" || ownerState === "own-live") {
+      if (ownerState !== "dead") {
         // This Gateway's own update in progress (or a live CLI) keeps running and keeps its lock.
         expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({ status: "running" });
         expect(await readUpdateLock()).toMatchObject({

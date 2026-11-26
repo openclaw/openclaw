@@ -16,7 +16,6 @@ import {
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -326,7 +325,7 @@ describe("cron method validation", () => {
     ["cron.get", false, "channel-owner", true],
     ["cron.update", false, "channel-owner", false],
     ["cron.run", false, "channel-owner", true],
-    ["cron.remove", true, "control-ui-admin", true],
+    ["cron.remove", true, "operator", true],
   ] as const)(
     "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
     async (method, closeAfterCommit, source, trusted) => {
@@ -338,16 +337,7 @@ describe("cron method validation", () => {
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         source === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: "local" },
-        source === "channel-owner"
-          ? {
-              source,
-              isCurrent: () =>
-                isConfiguredCommandOwner(getRuntimeConfig(), {
-                  channel: "discord",
-                  senderId: "owner-1",
-                }),
-            }
-          : { source },
+        { source },
       );
       const job = createCronJob({
         agentId: "telegram-agent",

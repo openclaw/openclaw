@@ -239,25 +239,17 @@ describeLive("openai plugin live", () => {
     expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
   }, 150_000);
 
-  it("transcribes synthesized speech through the registered media provider", async () => {
-    const { speechProviders, mediaProviders } = await registerOpenAIPlugin();
-    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
+  it("transcribes fixture speech through the registered media provider", async () => {
+    const { mediaProviders } = await registerOpenAIPlugin();
     const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
-
-    const cfg = createLiveConfig();
-    const ttsConfig = createLiveTtsConfig();
-
-    const synthesized = await speechProvider.synthesize({
-      text: "Speech transcription check okay.",
-      cfg,
-      providerConfig: ttsConfig.providerConfigs.openai ?? {},
-      target: "audio-file",
-      timeoutMs: ttsConfig.timeoutMs,
-    });
+    // Keep the batch STT proof independent of the live TTS endpoint.
+    const audio = await fs.readFile(
+      new URL("./test-fixtures/batch-transcription.mp3", import.meta.url),
+    );
 
     const transcription = await mediaProvider.transcribeAudio?.({
-      buffer: synthesized.audioBuffer,
-      fileName: "openai-plugin-live.mp3",
+      buffer: audio,
+      fileName: "batch-transcription.mp3",
       mime: "audio/mpeg",
       apiKey: OPENAI_API_KEY,
       language: "en",

@@ -629,10 +629,9 @@ export async function handleSlackAction(
           after,
           threadId,
           messageId,
+          includeAuthorProfiles: true,
         });
-        const messages = result.messages.map((message) =>
-          withNormalizedTimestamp(message, message.ts),
-        );
+        const messages = result.messages.map((m) => withNormalizedTimestamp(m, m.ts));
         return jsonResult({
           ok: true,
           channelId,

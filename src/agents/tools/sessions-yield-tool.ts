@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
 import { normalizeToolPolicyName } from "../tool-policy-shared.js";
 import { readToolResultDetails, readToolResultStatus } from "../tool-result-error.js";
@@ -134,7 +135,7 @@ export function createSessionsYieldTool(opts?: {
   ) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
   onYield?: SessionsYieldCallback;
 }): AnyAgentTool {
-  return {
+  const tool: AnyAgentTool = {
     label: "Yield",
     name: "sessions_yield",
     // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
@@ -231,4 +232,12 @@ export function createSessionsYieldTool(opts?: {
       });
     },
   };
+  if (!opts?.onYield) {
+    // No yield owner: every call would answer "Yield not supported in this context".
+    bindAgentToolExecutionLocation(tool, {
+      kind: "gateway",
+      unavailableReason: "this run has no yield owner",
+    });
+  }
+  return tool;
 }

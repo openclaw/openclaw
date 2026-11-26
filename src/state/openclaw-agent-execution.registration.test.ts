@@ -3,6 +3,7 @@ import { serialize } from "node:v8";
 import { MessagePort } from "node:worker_threads";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import type * as BrokerAdmissionModule from "../infra/sqlite-worker-broker-admission.js";
 import {
   failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
@@ -119,7 +120,8 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
     },
   };
 });
-vi.mock("../infra/sqlite-worker-broker-admission.js", () => ({
+vi.mock("../infra/sqlite-worker-broker-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BrokerAdmissionModule>()),
   prepareSqliteWorkerActorContext: edge.forbidden,
 }));
 vi.mock("./openclaw-agent-db.js", () => ({

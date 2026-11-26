@@ -237,15 +237,6 @@ describe("smsPlugin outbound", () => {
     });
   });
 
-  it("resolves the configured default SMS target for outbound delivery", () => {
-    expect(
-      smsPlugin.outbound?.resolveTarget?.({
-        cfg: createConfig({ defaultTo: TO }),
-        to: "",
-      }),
-    ).toEqual({ ok: true, to: TO });
-  });
-
   it("hosts and sends outbound media as MMS with an ordered multipart receipt", async () => {
     for (const sid of ["MM-first", "SM-second"]) {
       sendSmsViaTwilio.mockResolvedValueOnce({

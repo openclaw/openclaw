@@ -79,6 +79,7 @@ export function sessionPlacementActionReason(
   }
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
+    missingScopeReasonKey: "sessionsView.movePermissionDenied",
     requiredScope:
       action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
         ? "operator.admin"

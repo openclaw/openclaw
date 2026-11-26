@@ -26,6 +26,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import {
   sessionControllerMailboxes,
   reserveSessionControllerSource,
+  submitSessionControllerTask,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -471,6 +472,25 @@ describe("Goal queue custody", () => {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     },
   );
+  // Post-turn session maintenance waits in the mailbox as a native task. It never evaluates
+  // the Goal, so deferring to it would stall the Goal until the next message (#204319).
+  it("continues past queued post-turn upkeep but defers to a queued reply turn", async () => {
+    const f = fixture();
+    const upkeep = submitSessionControllerTask(f.params.queueKey, {
+      target: captureSessionTarget({
+        storeScope: f.params.storePath,
+        sessionKey: f.params.sessionKey,
+        agentId: f.params.base.run.agentId,
+        incarnation: f.params.expectedSession.sessionId,
+      }),
+      projectSessionActive: false,
+      start: () => {},
+    });
+    upkeep.catch(() => {});
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    f.reserveInput();
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+  });
   it("invalidates an enqueued nudge when source delivery subsequently fails", async () => {
     const f = fixture();
     await enqueueGoalContinuation(f.params);

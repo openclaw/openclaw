@@ -89,6 +89,8 @@ does not install it. The exact archive bytes bind the review to installation
 through the existing live Add owner; no publication or restart is needed. The
 origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
 leaving the page, or changing the connection drops the browser's pending archive.
+After a successful import, the Control UI opens the new agent's chat. If the UI
+can't open it, choose **Retry opening chat** to try again without reinstalling.
 After an uncertain installation result, inspect the agent before uploading again.
 
 For API clients, the same `templates.add.plan` and `templates.add.apply` methods

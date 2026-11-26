@@ -287,18 +287,14 @@ export async function loadCommandPaletteCatalogItems(params: {
   const [agents, automations, skills, plugins] = await Promise.all([
     params.agents().catch(() => null),
     params.methodAvailable("cron.list")
-      ? readCronInventory(
-          params.client,
-          {
-            includeDisabled: true,
-            compact: true,
-            limit: 200,
-            offset: 0,
-            sortBy: "name",
-            sortDir: "asc",
-          },
-          { legacyCache: true },
-        ).catch(() => null)
+      ? readCronInventory(params.client, {
+          includeDisabled: true,
+          compact: true,
+          limit: 200,
+          offset: 0,
+          sortBy: "name",
+          sortDir: "asc",
+        }).catch(() => null)
       : null,
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),

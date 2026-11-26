@@ -19,19 +19,19 @@ it("keeps hub labels live and navigates only after activating another tab", asyn
   try {
     document.body.append(container);
     const selected = container.querySelector<HTMLButtonElement>("#sessions-tab-sessions")!;
-    const worktrees = container.querySelector<HTMLButtonElement>("#sessions-tab-worktrees")!;
+    const projects = container.querySelector<HTMLButtonElement>("#sessions-tab-projects")!;
     selected.click();
     selected.focus();
     selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(document.activeElement).toBe(worktrees);
+    expect(document.activeElement).toBe(projects);
     expect(navigate).not.toHaveBeenCalled();
     await i18n.setLocale("pt-BR");
     await waitForSolid(() => {
       expect(selected.textContent).toBe(i18n.t("tabs.sessions"));
-      expect(worktrees.textContent).toBe(i18n.t("tabs.worktrees"));
+      expect(projects.textContent).toBe(i18n.t("tabs.projects"));
     });
-    worktrees.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("worktrees");
+    projects.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("projects");
   } finally {
     navigate.mockRestore();
     dispose();
