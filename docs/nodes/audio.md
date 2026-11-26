@@ -256,7 +256,7 @@ provider-wide rather than scoped to the audio model entry.
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
-- Leave `tools.media.audio.language` unset for language autodetection. Provider transcription requests omit the implicit “Transcribe the audio.” prompt, including when English is selected; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
+- Leave `tools.media.audio.language` unset for language autodetection. Auto-detected whisper.cpp runs with `--language auto` (English-only `*.en` models stay English). Deepgram batch models default to English; set `providerOptions.deepgram.detect_language: true` to autodetect. Provider transcription requests omit the implicit “Transcribe the audio.” prompt, including when English is selected; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.

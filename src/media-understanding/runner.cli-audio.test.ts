@@ -291,6 +291,7 @@ it.each([
   { language: "fr", request: { language: "" }, expected: undefined },
   { language: "pt-BR", expected: "pt" },
   { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
+  { command: "whisper-cli", expected: "auto" },
   { command: "whisper-cli", converted: true, expected: "auto" },
   { command: "whisper-cli", language: "fr", request: { language: "" }, expected: "auto" },
   { command: "sherpa-onnx-offline", expected: undefined },
