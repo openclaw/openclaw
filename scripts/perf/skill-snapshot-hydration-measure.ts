@@ -27,6 +27,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import type { SkillSnapshot } from "../../src/skills/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -138,12 +139,7 @@ try {
   await collect();
   const heapBefore = global.gc ? process.memoryUsage().heapUsed : undefined;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const iterations = values.fresh ? freshSessions : 3_200;
   const retained: SkillSnapshot[] = [];

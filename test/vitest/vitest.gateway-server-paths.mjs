@@ -323,6 +323,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.admission.test.ts",
   "src/gateway/session-restart-resume.scope.test.ts",
   "src/gateway/session-restart-resume.test.ts",
+  "src/gateway/session-restart-shell-admission.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
   "src/gateway/session-row-projection.accepted-facts.test.ts",
@@ -632,6 +633,7 @@ export const gatewayClientTestInclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
 ];
 export const gatewayClientTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/**/*server*.test.ts",
   "src/gateway/server-methods/**/*.test.ts",

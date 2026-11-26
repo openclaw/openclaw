@@ -845,6 +845,107 @@ ${body}
   };
 }
 
+// Exercise the real owner in an isolated Node process, including its native
+// lease helper. Faults affect only this fixture cache; no shared cache is opened.
+function metadataAdmissionProbe(f: ReturnType<typeof fixture>, fault: string) {
+  const result = spawnSync(
+    requireNodeTool("node"),
+    [
+      "--input-type=module",
+      "-e",
+      `
+import fs from "node:fs";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { withDependencyCacheLock } from ${JSON.stringify(lifetime)};
+const cache = ${JSON.stringify(f.cache)};
+const fault = ${JSON.stringify(fault)};
+const lock = cache + "/.metadata-lock";
+const original = { lstat: fs.lstatSync, mkdir: fs.mkdirSync, readdir: fs.readdirSync, spawn: childProcess.spawnSync };
+const ledger = fs.readFileSync(cache + "/lifetime.sqlite");
+const delay = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+let reads = 0, attempts = 0, inspections = 0, retirements = 0, callbacks = 0;
+if (fault === "released before inspection" || fault === "new owner after release") {
+  fs.mkdirSync(lock, { mode: 0o700 });
+}
+if (fault === "retired owner") {
+  const child = childProcess.spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
+  if (child.status !== 0) throw new Error("fixture child did not settle");
+  fs.mkdirSync(lock, { mode: 0o700 });
+  fs.mkdirSync(lock + "/owner-" + child.pid + "-abcdef", { mode: 0o700 });
+  fs.writeFileSync(lock + "/lifetime", "", { mode: 0o600 });
+}
+fs.lstatSync = function(path, ...args) {
+  if (path === cache && ++reads === 2 && ["slow validation", "replaced cache", "mkdir failure"].includes(fault)) {
+    delay();
+    if (fault === "replaced cache") {
+      fs.renameSync(cache, cache + ".retained");
+      original.mkdir(cache, { mode: 0o700 });
+    }
+  }
+  return original.lstat(path, ...args);
+};
+fs.mkdirSync = function(path, ...args) {
+  if (path === lock) {
+    attempts++;
+    if (fault === "mkdir failure") throw Object.assign(new Error("fixture mkdir failure"), { code: "EACCES" });
+  }
+  return original.mkdir(path, ...args);
+};
+fs.readdirSync = function(path, ...args) {
+  if (path === lock) {
+    inspections++;
+    if (inspections === 1 && ["released before inspection", "new owner after release"].includes(fault)) {
+      fs.rmSync(lock, { recursive: true });
+      delay();
+      if (fault === "new owner after release") original.mkdir(lock, { mode: 0o700 });
+      throw Object.assign(new Error("fixture owner released"), { code: "ENOENT" });
+    }
+  }
+  return original.readdir(path, ...args);
+};
+childProcess.spawnSync = function(command, args, ...options) {
+  const result = original.spawn(command, args, ...options);
+  if (command === "python3" && args.at(-1) === "retire") {
+    retirements++;
+    delay();
+  }
+  return result;
+};
+syncBuiltinESMExports();
+let error = "", code = "";
+try {
+  withDependencyCacheLock(cache, () => { callbacks++; });
+} catch (failure) {
+  error = failure.message;
+  code = failure.code ?? "";
+} finally {
+  fs.lstatSync = original.lstat;
+  fs.mkdirSync = original.mkdir;
+  fs.readdirSync = original.readdir;
+  childProcess.spawnSync = original.spawn;
+  syncBuiltinESMExports();
+}
+const retained = fault === "replaced cache" ? cache + ".retained" : cache;
+process.stdout.write(JSON.stringify({ error, code, callbacks, attempts, inspections, retirements,
+  lockPresent: fs.existsSync(lock), ledgerSame: fs.readFileSync(retained + "/lifetime.sqlite").equals(ledger) }));
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as {
+    error: string;
+    code: string;
+    callbacks: number;
+    attempts: number;
+    inspections: number;
+    retirements: number;
+    lockPresent: boolean;
+    ledgerSame: boolean;
+  };
+}
+
 describePosix("frozen PR dependency identity", () => {
   it("reuses installs across source heads, invalidates inputs, and isolates unaudited hooks", () => {
     const { root, files, write, key } = dependencyIdentityFixture();
@@ -882,6 +983,52 @@ describePosix("frozen PR dependency identity", () => {
 });
 
 describePosix("PR cache anchor lifetime", () => {
+  it.each(["slow validation", "released before inspection", "retired owner"])(
+    "acquires a free metadata lock after the wait budget: %s",
+    (fault) => {
+      const result = metadataAdmissionProbe(fixture(), fault);
+      expect(result).toMatchObject({ error: "", callbacks: 1, lockPresent: false });
+      expect(result.attempts).toBe(fault === "slow validation" ? 1 : 2);
+      expect(result.retirements).toBe(fault === "retired owner" ? 1 : 0);
+    },
+  );
+
+  it("bounds a failed post-expiry attempt before inspecting another owner", () => {
+    const result = metadataAdmissionProbe(fixture(), "new owner after release");
+    expect(result.error).toContain("metadata is busy");
+    expect(result).toMatchObject({
+      callbacks: 0,
+      attempts: 2,
+      inspections: 1,
+      retirements: 0,
+      lockPresent: true,
+      ledgerSame: true,
+    });
+  });
+
+  it("retains cache identity refusal after slow validation", () => {
+    const result = metadataAdmissionProbe(fixture(), "replaced cache");
+    expect(result.error).toContain("cache directory changed");
+    expect(result).toMatchObject({
+      callbacks: 0,
+      attempts: 0,
+      lockPresent: false,
+      ledgerSame: true,
+    });
+  });
+
+  it("preserves a non-contention acquisition error after slow validation", () => {
+    expect(metadataAdmissionProbe(fixture(), "mkdir failure")).toMatchObject({
+      error: "fixture mkdir failure",
+      code: "EACCES",
+      callbacks: 0,
+      attempts: 1,
+      inspections: 0,
+      lockPresent: false,
+      ledgerSame: true,
+    });
+  });
+
   it("lets an overlapping initializer finish before a peer acquires the new namespace", async ({
     signal,
   }) => {

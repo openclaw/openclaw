@@ -16,6 +16,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { promiseHooks } from "node:v8";
 import type { wrapGuardedBodyStream as Wrap } from "../../src/infra/net/guarded-body-stream.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "cpu";
 assert(["cpu", "allocation", "promises"].includes(mode));
@@ -71,12 +72,7 @@ await run(100);
 const inspector = new Session();
 let promises = 0;
 if (mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const stopCounting =
   mode === "promises" ? promiseHooks.createHook({ init: () => promises++ }) : undefined;

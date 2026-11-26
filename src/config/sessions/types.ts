@@ -734,6 +734,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Admitted native shell calls whose terminal transcript write has not been acknowledged. */
+  pendingShellCalls?: import("./session-restart-resume-scope.js").PendingSessionShellCalls;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */

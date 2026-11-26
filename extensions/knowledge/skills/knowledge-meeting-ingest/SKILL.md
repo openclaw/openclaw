@@ -10,8 +10,8 @@ structured claims, then verify them. Read a reference only when its step needs i
 and don't reread one after compaction unless you are about to use it again:
 
 - [setup](references/setup.md): always, first (status, ontology, search)
-- [source acquisition](references/source-acquisition.md): fetching from an API, including Granola
-  through its plugin
+- [source acquisition](references/source-acquisition.md): acquiring originals, including
+  structured transcripts and Granola through its plugin
 - [sources](references/sources.md): retaining originals; citation format
 - [speakers](references/speakers.md): possible split, duplicate or unclear speaker
 - [identity](references/identity.md): resolving a person, company or project
@@ -58,8 +58,10 @@ say the meeting ingestion is not complete.
 
 Normalize in working context to: source, source_id, title, date, time, duration,
 attendees (source claims), ordered segments with `speaker`, `speaker_raw` and
-`text`, source summary, URL. Unknown values are null. Recorder-specific handling
-ends here; every recorder runs the same steps after this.
+`text`, source summary, URL. Preserve optional original speaker IDs and their
+provider/source scope alongside the labels. Unknown values are null; never invent
+IDs for label-only sources. Recorder-specific handling ends here; every recorder
+runs the same steps after this.
 
 Retain the original export and the transcript ([sources](references/sources.md)).
 Normalized text is a labeled derivative. Report acquisition, retention and

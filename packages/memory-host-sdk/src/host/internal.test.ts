@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -556,6 +557,17 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+  });
+
+  it.each([
+    { name: "valid UTF-8 with BOM", bytes: Buffer.from("\uFEFFcafé 🦊"), text: "\uFEFFcafé 🦊" },
+    { name: "invalid UTF-8", bytes: Buffer.from([0xe2, 0x82, 0x61, 0xff]), text: "\uFFFDa\uFFFD" },
+  ])("preserves the decoded Markdown digest for $name", async ({ bytes, text }) => {
+    const workspace = getTmpDir();
+    const file = path.join(workspace, "note.md");
+    await fs.writeFile(file, bytes);
+    const entry = await buildFileEntry(file, workspace);
+    expect(entry?.hash).toBe(sha256Hex(text));
   });
 
   it("retries transient markdown reads while building file entries", async () => {

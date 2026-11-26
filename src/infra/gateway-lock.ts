@@ -11,7 +11,7 @@ import {
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { getProcessStartTime, isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -458,6 +458,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     role,
     processNamespace: readGatewayLockProcessNamespace(),
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&

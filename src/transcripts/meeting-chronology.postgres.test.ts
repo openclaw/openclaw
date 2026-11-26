@@ -56,16 +56,20 @@ it.skipIf(!connection)("paginates PostgreSQL chronology with exact summaries", (
       const { threadId, ...proof } = result;
       expect(threadId).not.toBe(0);
       expect(proof).toEqual({
-        list: "later tie-a-iso tie-a-offset tie-b older invalid-a invalid-b".split(" "),
+        list: "speaker-identities later tie-a-iso tie-a-offset tie-b older invalid-a invalid-b".split(
+          " ",
+        ),
         filtered: ["tie-a-iso", "tie-a-offset", "tie-b"],
         invalidFilter: [],
         pages: [
-          { selectors: ["later", "tie-a-iso"], hasMore: true },
+          { selectors: ["speaker-identities", "later"], hasMore: true },
           { selectors: ["tie-a-offset", "tie-b"], hasMore: true },
           { selectors: ["older", "invalid-a"], hasMore: true },
           { selectors: ["invalid-b"], hasMore: false },
         ],
         retainedInstant: 1704067200000,
+        speakers: ["Sam", "Sam (2)"],
+        liveSequence: 3,
       });
     } finally {
       if (child.exitCode === null && child.signalCode === null) {

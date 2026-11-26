@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
@@ -450,7 +451,8 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: sha256Hex(buffer.toString("utf-8")),
+    // Existing indexes hash replacement characters for malformed UTF-8.
+    hash: sha256Hex(isUtf8(buffer) ? buffer : buffer.toString("utf-8")),
     kind: "markdown",
   };
 }

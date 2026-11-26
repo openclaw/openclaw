@@ -440,6 +440,7 @@ export function installEmbeddedAttemptStreamGuards(
     diagnosticOwner: callbacks.diagnosticOwner,
     onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
+    onOutputDelta: attempt.onMemoryFlushModelProgress,
     onTerminal: () => {
       modelResponseTerminal = true;
     },

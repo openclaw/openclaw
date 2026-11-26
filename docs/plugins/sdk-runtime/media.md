@@ -132,6 +132,14 @@ JavaScript-only host export; its declarations are excluded from the package.
     });
     ```
 
+    For a long-lived audio receiver, load `createAudioInputBudgetReader` from
+    `openclaw/plugin-sdk/media-understanding-runtime` during setup and pass the
+    runtime config reader. Call the returned function synchronously when admitting
+    each new stream. Keep that result for the stream's lifetime so a reload can
+    change the next stream's chunk size. Transcription applies the current provider
+    limits when it processes each chunk. A tighter limit can exclude an earlier
+    chunk that was already buffered.
+
     Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
 
     `describeImageFileWithModel(...)` describes an already-known image through a specific provider/model, bypassing the default active-model resolution that `describeImageFile(...)` uses.
