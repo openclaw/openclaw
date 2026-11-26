@@ -267,6 +267,20 @@ it("renders a CSV attachment as a table with a raw text view", async () => {
 });
 
 it.each([
+  { ending: "without a terminal CRLF", text: 'name\r\n""' },
+  { ending: "with a terminal CRLF", text: 'name\r\n""\r\n' },
+])("renders one empty CSV record $ending", async ({ text }) => {
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+  const panel = await mountAttachment({ title: "names.csv", mimeType: "text/csv" });
+  await vi.waitFor(() => expect(panel.querySelector("article table")).not.toBeNull());
+  expect(
+    [...panel.querySelectorAll("article tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
+    ),
+  ).toEqual([[""]]);
+});
+
+it.each([
   "",
   "?download=1",
   "?source=https://example.com/report",

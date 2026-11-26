@@ -131,6 +131,7 @@ function parseCsvRows(text: string): string[][] {
   let row: string[] = [];
   let field = "";
   let quoted = false;
+  let recordStart = 0;
   const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
   for (let index = 0; index < source.length; index += 1) {
     const char = source[index];
@@ -155,11 +156,12 @@ function parseCsvRows(text: string): string[][] {
       rows.push([...row, field]);
       row = [];
       field = "";
+      recordStart = index + 1;
     } else {
       field += char;
     }
   }
-  if (field || row.length > 0) {
+  if (recordStart < source.length) {
     rows.push([...row, field]);
   }
   return rows;
