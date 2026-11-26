@@ -15,7 +15,8 @@ struct ChatEffortBar: View {
         let level = shownIndex.map { options[$0].displayLabel }
             ?? OpenClawChatThinkingLevelOption.displayLabel(for: self.viewModel.thinkingLevel)
         let lockReason = self.viewModel.composerPhoneEffortLockReason
-        let isEnabled = lockReason == nil && !self.viewModel.isUpdatingSessionSettings
+        // Saves happen in the background; only a missing permission locks the controls.
+        let isEnabled = lockReason == nil
         VStack(alignment: .leading, spacing: 10) {
             if !options.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {

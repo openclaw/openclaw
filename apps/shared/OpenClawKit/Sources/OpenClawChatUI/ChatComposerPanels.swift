@@ -129,6 +129,7 @@ struct ChatComposerPanelHost: ViewModifier {
 
     @State private var controller = ChatComposerPanelController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openClawToastPresenter) private var toastPresenter
 
     func body(content: Content) -> some View {
         content
@@ -154,6 +155,11 @@ struct ChatComposerPanelHost: ViewModifier {
                         onClose: { self.controller.dismiss() })
                 })
             .onChange(of: self.viewModel.sessionKey) { _, _ in self.controller.dismiss() }
+            // A change to effort, speed or the model that didn't save says so in the app's toast.
+            .onChange(of: self.viewModel.settingsChangeFailure?.id) { _, _ in
+                guard let failure = self.viewModel.settingsChangeFailure else { return }
+                self.toastPresenter?.post(.failure(failure.text, retry: failure.retry))
+            }
     }
 
     @ViewBuilder

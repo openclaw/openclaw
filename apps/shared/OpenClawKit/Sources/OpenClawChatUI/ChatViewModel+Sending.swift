@@ -592,6 +592,12 @@ extension OpenClawChatViewModel {
                 return
             }
             guard isCurrentSession(attempt.draft.session) else { return }
+            // Effort travels with the message itself. A model or speed save still on its way gets a short
+            // moment to land first; past that the message goes out and the change applies to the next one.
+            await self.waitForPendingSessionSettings(
+                for: self.currentModelPatchTarget(),
+                atMost: Self.settingsFlushBeforeSend)
+            guard isCurrentSession(attempt.draft.session) else { return }
             let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
             preparedDelivery = (self.durableSessionSettingsExpectation(), thinkingLevel)

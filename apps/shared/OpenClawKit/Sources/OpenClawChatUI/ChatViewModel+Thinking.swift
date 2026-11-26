@@ -52,14 +52,22 @@ extension OpenClawChatViewModel {
         self.reconcileThinkingPreferenceRequests()
         enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
+            // Latest wins: a level that a newer pick replaced before its turn is never sent.
+            guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else {
+                self.thinkingPreferenceRequests.removeValue(forKey: requestID)
+                self.reconcileThinkingPreferenceRequests()
+                return
+            }
             var patchError: Error?
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-                let patchResult = try await routeLease.patchSessionSettings(
-                    target.canonicalSessionKey,
-                    target.agentID,
-                    OpenClawChatSessionSettingsPatch(
-                        thinkingLevel: .some(clearsOverride ? nil : next)))
+                let patchResult = try await Self.retryingOnce {
+                    try await routeLease.patchSessionSettings(
+                        target.canonicalSessionKey,
+                        target.agentID,
+                        OpenClawChatSessionSettingsPatch(
+                            thinkingLevel: .some(clearsOverride ? nil : next)))
+                }
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
                 let acceptedResult = self.mergedThinkingPatchSuccess(
                     patchResult,
@@ -109,7 +117,15 @@ extension OpenClawChatViewModel {
                 // the gateway-confirmed rollback value.
                 self.thinkingLevel = acceptedLevel
                 self.updateCurrentSessionThinkingLevel(sessionLevel, sessionKey: sessionKey)
+                #if os(iOS)
+                chatUILogger
+                    .error("sessions.patch(thinking) failed \(patchError.localizedDescription, privacy: .public)")
+                self.reportSettingsChangeFailure(String(localized: "Couldn’t change effort")) { [weak self] in
+                    self?.selectThinkingLevel(level)
+                }
+                #else
                 self.errorText = patchError.localizedDescription
+                #endif
             }
         }
     }

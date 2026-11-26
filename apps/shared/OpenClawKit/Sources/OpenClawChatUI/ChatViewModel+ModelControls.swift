@@ -140,14 +140,14 @@ extension OpenClawChatViewModel {
         self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID == model.selectionID
     }
 
-    /// Picking a model waits while settings save. A running reply does not lock it: the new model answers
+    /// On the Mac picking a model waits while settings save. A running reply does not lock it: the new model answers
     /// from the next message, as in the Control UI.
     var composerModelChoicesLocked: Bool {
-        let unavailable = !self.composerModelMutationAvailable || self.isUpdatingSessionSettings
         #if os(iOS)
-        return unavailable || !self.showsModelPicker
+        // A pick saves in the background: nothing waits for the previous save.
+        return !self.composerModelMutationAvailable || !self.showsModelPicker
         #else
-        return unavailable
+        return !self.composerModelMutationAvailable || self.isUpdatingSessionSettings
         #endif
     }
 
@@ -601,14 +601,19 @@ extension OpenClawChatViewModel {
             effective: next ?? baselineEffectiveFastMode,
             sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
+        self.latestFastModeRequestIDsByTarget[target] = requestID
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
+            // Latest wins: a speed that a newer pick replaced before its turn is never sent.
+            guard requestID == self.latestFastModeRequestIDsByTarget[target] else { return }
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-                let result = try await routeLease.patchSessionSettings(
-                    target.canonicalSessionKey,
-                    target.agentID,
-                    OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                let result = try await Self.retryingOnce {
+                    try await routeLease.patchSessionSettings(
+                        target.canonicalSessionKey,
+                        target.agentID,
+                        OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                }
                 let acceptedOverride = next == nil ? nil : (result?.fastMode ?? next)
                 let acceptedEffective = result?.effectiveFastMode
                     ?? result?.fastMode
@@ -623,7 +628,10 @@ extension OpenClawChatViewModel {
                     target: target,
                     fastModeOverride: .some(acceptedOverride),
                     effectiveFastMode: acceptedEffective)
-                if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
+                // A newer pick made while this one was saving keeps the screen.
+                if requestID == self.latestFastModeRequestIDsByTarget[target],
+                   let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
+                {
                     self.updateCurrentSessionFastMode(
                         acceptedOverride,
                         effective: acceptedEffective,
@@ -631,14 +639,23 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
-                if let state = self.modelControlState(for: target, originalSessionKey: sessionKey) {
+                if requestID == self.latestFastModeRequestIDsByTarget[target],
+                   let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
+                {
                     let accepted = self.acceptedFastModesByTarget[target]
                     self.updateCurrentSessionFastMode(
                         accepted?.override,
                         effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
-                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
+                    guard !state.exactMatchOnly else { return }
+                    #if os(iOS)
+                    self.reportSettingsChangeFailure(String(localized: "Couldn’t change effort")) { [weak self] in
+                        self?.selectFastMode(selectionID)
+                    }
+                    #else
+                    self.errorText = error.localizedDescription
+                    #endif
                 }
             }
         }

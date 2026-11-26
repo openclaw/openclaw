@@ -473,9 +473,12 @@ extension OpenClawChatComposer {
             return String(localized: "Changing the model requires operator.write or operator.admin access.")
             #endif
         }
+        #if !os(iOS)
+        // The phone saves in the background and never waits on a save.
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings…")
         }
+        #endif
         return nil
     }
 
@@ -489,10 +492,10 @@ extension OpenClawChatComposer {
         if !self.viewModel.composerEffortMutationAvailable {
             return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
         }
-        #endif
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings…")
         }
+        #endif
         return nil
     }
 

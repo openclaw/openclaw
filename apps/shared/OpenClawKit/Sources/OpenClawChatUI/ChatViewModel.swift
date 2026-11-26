@@ -67,6 +67,8 @@ public final class OpenClawChatViewModel {
     var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
     var modelCatalogInvalidated = false
     public internal(set) var modelCatalogMessage: String?
+    /// The last effort, speed or model change that could not be saved, for the app's toast.
+    public internal(set) var settingsChangeFailure: ChatSettingsChangeFailure?
     var agentCatalog: OpenClawChatAgentsListResponse?
     var isLoadingAgents = false
     var agentsErrorText: String?
@@ -425,6 +427,9 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
+    var latestFastModeRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
+    /// The model the server had when a run of picks began: a failure falls back to it.
+    var modelLaneBaselineSelectionIDsByTarget: [ModelPatchTarget: String] = [:]
     var confirmedThinkingPreference: PreferenceState
     var emittedThinkingPreference: PreferenceState
     var thinkingPreferenceRequests: [UInt64: PreferenceRequest] = [:]
@@ -795,7 +800,8 @@ public final class OpenClawChatViewModel {
               let request = reserveModelSelection(selectionID)
         else { return }
         enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
-            guard let self else { return }
+            // Latest wins: a model that a newer pick replaced before its turn is never sent.
+            guard let self, request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
             await self.performSelectModel(request, routeLease: routeLease)
         }
     }
@@ -1391,7 +1397,8 @@ extension OpenClawChatViewModel {
             agentID: session.deliveryAgentID,
             sessionRoutingContract: session.sessionRoutingContract)
         let previous = self.modelSelectionID
-        let rollbackSelectionID = self.lastSuccessfulModelSelectionIDsByTarget[target] ?? previous
+        let rollbackSelectionID = self.lastSuccessfulModelSelectionIDsByTarget[target]
+            ?? self.modelLaneBaseline(for: target, current: previous)
         let previousRequestID = self.latestModelSelectionRequestIDsByTarget[target]
         let requestID = self.reserveSessionSettingsRequest(for: target)
         let nextModelRef = self.modelRef(forSelectionID: next)
@@ -1416,10 +1423,9 @@ extension OpenClawChatViewModel {
     {
         do {
             guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-            let patchResult = try await routeLease.patchSessionSettings(
-                request.target.canonicalSessionKey,
-                request.target.agentID,
-                OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
+            let patch = OpenClawChatSessionSettingsPatch(model: .some(request.modelRef))
+            let patchResult = try await Self.retryingOnce { try await routeLease.patchSessionSettings(
+                request.target.canonicalSessionKey, request.target.agentID, patch) }
             self.lastSuccessfulSettingsPatchRequestIDsByTarget[request.target] = request.id
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else {
                 // Keep older successful patches as rollback state, but do not replay
@@ -1454,8 +1460,7 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(request.session) else { return }
             self.modelSelectionID = rollbackSelectionID
             syncThinkingLevelOptions()
-            self.errorText = error.localizedDescription
-            chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
+            self.reportModelChangeFailure(error, selectionID: request.selectionID)
         }
     }
 
@@ -1516,7 +1521,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
             self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
             self.acceptedFastModesByTarget.removeValue(forKey: target)
-            self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
+            self.clearOptimisticSettingsLane(for: target)
             let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
             for waiter in waiters {
                 waiter.resume()

@@ -12938,6 +12938,48 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
     }
 
+    @Test func `quick effort changes send only the latest after the one in flight`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayloadWithoutRunState()],
+            setSessionThinkingHook: { level in
+                if level == "medium" {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        await MainActor.run {
+            vm.selectThinkingLevel("high")
+            vm.selectThinkingLevel("low")
+        }
+        // The answer for medium arrives while low is waiting; the screen keeps low.
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
+
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "low"])
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
+    }
+
+    @Test func `a send waits for a slow settings save only up to its bound`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayloadWithoutRunState()],
+            setSessionThinkingHook: { level in
+                if level == "medium" {
+                    try await Task.sleep(for: .seconds(5))
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        let started = ContinuousClock.now
+        await vm.waitForPendingSessionSettings(
+            for: MainActor.run { vm.currentModelPatchTarget() },
+            atMost: .milliseconds(100))
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
+
     @Test func `default settings patch returns accepted thinking state`() async throws {
         let transport = TestChatTransport(historyResponses: [])
 
