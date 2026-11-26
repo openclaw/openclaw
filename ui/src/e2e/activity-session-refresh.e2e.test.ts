@@ -243,11 +243,11 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, serviceWorkers: "block", locale: "en-US" },
         async ({ page }) => {
-          const path = "/openclaw/activity";
+          const activityPath = "/openclaw/activity";
           const person = "profile-ada";
           const selected = action === "select";
-          const initialPath = selected ? path : `${path}/${person}`;
-          const nextPath = selected ? `${path}/${person}` : path;
+          const initialPath = selected ? activityPath : `${activityPath}/${person}`;
+          const nextPath = selected ? `${activityPath}/${person}` : activityPath;
           const mine = historyRow("agent:main:ada-title", "A B");
           const other = {
             ...historyRow("agent:main:other-title", "A B elsewhere"),
