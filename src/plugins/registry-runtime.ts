@@ -588,19 +588,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             params,
             commandRuntime,
           ) => {
-            const {
-              senderIsOwner: claimedOwner,
-              messageChannel,
-              toolBindings,
-              ...remainingParams
-            } = params;
+            const { senderIsOwner, messageChannel, toolBindings, ...remainingParams } = params;
             // The host resolves named-channel owner identity from its sender. A channel-less
             // bridge may claim owner only when the plugin has trusted official provenance.
-            const claimsBridgeOwner = messageChannel === undefined && claimedOwner === true;
+            const claimsBridgeOwner = messageChannel === undefined && senderIsOwner === true;
             // Validate and dispatch the same plugin-owned values; never re-read them later.
             const ingressParams = {
               ...remainingParams,
-              senderIsOwner: claimedOwner === true,
+              senderIsOwner: senderIsOwner === true,
               messageChannel,
               toolBindings,
             };
