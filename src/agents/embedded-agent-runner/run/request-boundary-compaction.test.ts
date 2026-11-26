@@ -8,6 +8,7 @@ import {
   clearBoundaryMaintenanceDeferral,
   declineBoundaryMaintenance,
 } from "../../context-pressure.js";
+import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import {
   createAssistant,
   createTestSession,
@@ -157,11 +158,19 @@ async function fixture(
       },
     ],
   });
-  session.agent.transformContext = async (messages) =>
-    normalizeMessagesForLlmBoundary(messages, {
-      appendOnlyRuntimeContext: true,
-      inHistorySystemUpdates: true,
+  const appendOnlyRuntimeContext = options.runtimeContext === undefined;
+  const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+  session.agent.convertToLlm = async (messages) => {
+    const normalized = normalizeMessagesForLlmBoundary(messages, {
+      appendOnlyRuntimeContext,
+      inHistorySystemUpdates: appendOnlyRuntimeContext,
     });
+    return convertToLlm(
+      appendOnlyRuntimeContext
+        ? normalized
+        : relocateCurrentRuntimeContextCarrierToTail(normalized),
+    );
+  };
   session[agentSessionDeferThresholdCompaction] = true;
   const providerStream: StreamFn = (activeModel, context, streamOptions) =>
     streamSimpleAnthropic(activeModel as Model<"anthropic-messages">, context, {
@@ -175,6 +184,8 @@ async function fixture(
     events.push(event);
   });
   const onPrecheck = vi.fn();
+  const onModelRequest =
+    vi.fn<NonNullable<Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"]>>();
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withSessionManagerWrite(sessionManager, write);
   const boundary =
@@ -209,6 +220,7 @@ async function fixture(
       modelPrompt: prompt,
       transcriptPrompt: prompt,
       onFinalPromptText: () => {},
+      onModelRequest,
       persistToolResultProjections: async () => {},
       withTranscriptWrite,
       runtimeOnly: false,
@@ -219,10 +231,10 @@ async function fixture(
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       trajectoryRecorder: null,
       transcriptLeafId: sessionManager.getLeafId(),
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext,
       promptActiveSession: (text, promptOptions) => session.prompt(text, promptOptions),
     });
-  return { session, sessionManager, events, onPrecheck, submit };
+  return { session, sessionManager, events, onPrecheck, onModelRequest, submit };
 }
 
 const completedCompactions = (events: AgentSessionEvent[]) =>
@@ -376,6 +388,12 @@ describe("warm text compaction at the request boundary", () => {
       });
       replies = ["tool", "done"];
       await f.submit();
+      if (carrier) {
+        expect(f.onModelRequest.mock.calls[1]?.[1].messages.at(-1)).toMatchObject({
+          role: "user",
+          runtimeContextCarrier: true,
+        });
+      }
       expect(requests.map(isSummaryRequest)).toEqual([false, false]);
       expect(JSON.stringify(requests[1]!.messages)).toContain(evidence);
       if (carrier) {
