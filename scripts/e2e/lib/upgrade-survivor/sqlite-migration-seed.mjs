@@ -16,6 +16,7 @@ const shutdownGraceMs = 120_000;
 // Serialized into the one trusted fixture plugin. All SDK URLs below come from
 // createRequire(installedBaseline/package.json), never the candidate checkout.
 function registerBaselineSeed(api, fixture) {
+  api.logger.info("nightly seed: fixture registered");
   let started = false;
   api.on("gateway_start", (_event, context) => {
     if (started) {
@@ -41,6 +42,24 @@ function registerBaselineSeed(api, fixture) {
   async function seed(context) {
     const { default: seedAssert } = await import("node:assert/strict");
     const { default: seedFiles } = await import("node:fs");
+    /**
+     * @param {string} stage
+     * @param {number} rowsWritten
+     * @param {number | null} measuredBytes
+     */
+    function progress(stage, rowsWritten, measuredBytes) {
+      seedFiles.appendFileSync(
+        fixture.progressPath,
+        JSON.stringify({
+          stage,
+          rowTable: "transcript_events",
+          rowsWritten,
+          occupiedBytes: measuredBytes,
+          elapsedMs: Date.now() - fixture.startedAt,
+        }) + "\n",
+      );
+    }
+    progress("load-sdk", 0, null);
     const { createHash, randomBytes: payloadBytes, randomUUID } = await import("node:crypto");
     const { resolveStorePath, upsertSessionEntry } = await import(fixture.sdk.sessionStore);
     const { appendSessionTranscriptMessagesByIdentity } = await import(fixture.sdk.transcript);
@@ -57,6 +76,7 @@ function registerBaselineSeed(api, fixture) {
     const sessionKey = "agent:nightly:migration";
     const sessionId = randomUUID();
     const storePath = resolveStorePath(undefined, { agentId, env: process.env });
+    progress("create-session", 0, null);
     await upsertSessionEntry({
       agentId,
       sessionKey,
@@ -64,6 +84,7 @@ function registerBaselineSeed(api, fixture) {
       env: process.env,
       entry: { sessionId, updatedAt: Date.now() },
     });
+    progress("session-created", 0, null);
     const shared = {
       pluginId: fixture.pluginId,
       namespace: "migration",
@@ -73,6 +94,7 @@ function registerBaselineSeed(api, fixture) {
         nonce: payloadBytes(32).toString("hex"),
       },
     };
+    progress("write-shared-sentinel", 0, null);
     const store = createPluginStateSyncKeyedStore(shared.pluginId, {
       namespace: shared.namespace,
       maxEntries: 1,
@@ -81,6 +103,7 @@ function registerBaselineSeed(api, fixture) {
     });
     store.register(shared.key, shared.value);
     seedAssert.deepEqual(store.lookup(shared.key), shared.value);
+    progress("shared-sentinel-written", 0, null);
 
     const hash = (text) => createHash("sha256").update(text).digest("hex");
     let firstWitness;
@@ -112,6 +135,7 @@ function registerBaselineSeed(api, fixture) {
       firstWitness ??= witness(messages[0]);
       // Expected hashes come from input before the real writer sees it.
       transcript = [firstWitness, witness(messages[32]), witness(messages[63])];
+      progress("append-batch", messageCount, batches === 0 ? null : occupiedBytes);
       const results = await appendSessionTranscriptMessagesByIdentity({
         agentId,
         sessionKey,
@@ -128,12 +152,12 @@ function registerBaselineSeed(api, fixture) {
       messageCount += messages.length;
       batches += 1;
       // Observational read-only PRAGMAs only; no harness checkpoint or seal.
+      progress("measure-bytes", messageCount, null);
       occupiedBytes = readOccupiedSqliteBytes(fixture.agentPath);
-      if (batches % 16 === 0) {
-        api.logger.info(`nightly seed: messages=${messageCount} occupiedBytes=${occupiedBytes}`);
-      }
+      progress("batch-complete", messageCount, occupiedBytes);
     }
     context.abortSignal.throwIfAborted();
+    progress("complete", messageCount, occupiedBytes);
     const receipt = {
       status: "complete",
       occupiedBytes,
@@ -203,13 +227,28 @@ export async function seedBaselineMigrationFixture({
   const workspace = path.join(root, "workspace");
   const tempDir = path.join(root, "tmp");
   const receiptPath = path.join(artifacts, "sqlite-migration-seed.json");
+  const progressPath = path.join(artifacts, "sqlite-migration-seed-progress.jsonl");
+  const runtimeLogDir = path.join(artifacts, "sqlite-migration-runtime");
   assert(!fs.existsSync(stateDir), "Refusing to seed existing state");
   assert(!fs.existsSync(receiptPath), "Refusing to reuse a previous seed receipt");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   fs.mkdirSync(artifacts, { recursive: true });
-  for (const directory of [home, stateDir, pluginRoot, workspace, tempDir]) {
+  for (const directory of [home, stateDir, pluginRoot, workspace, tempDir, runtimeLogDir]) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
+  const startedAt = Date.now();
+  // Initialization hands this journal to the fixture plugin before the Gateway starts.
+  fs.writeFileSync(
+    progressPath,
+    JSON.stringify({
+      stage: "controller-start",
+      rowTable: "transcript_events",
+      rowsWritten: 0,
+      occupiedBytes: null,
+      elapsedMs: 0,
+    }) + "\n",
+    { flag: "wx", mode: 0o600 },
+  );
   const writeJson = (file, value) =>
     fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   writeJson(path.join(pluginRoot, "package.json"), {
@@ -228,6 +267,8 @@ export async function seedBaselineMigrationFixture({
     agentPath,
     minimumBytes,
     receiptPath,
+    progressPath,
+    startedAt,
     factsUrl: new URL("./sqlite-migration-facts.mjs", import.meta.url).href,
   };
   fs.writeFileSync(
@@ -253,6 +294,7 @@ export async function seedBaselineMigrationFixture({
       maintenance: { mode: "warn", maxDiskBytes: false, coldStorage: { enabled: false } },
     },
     cron: { enabled: false },
+    logging: { level: "info", file: path.join(runtimeLogDir, "gateway.log") },
     plugins: {
       allow: [pluginId],
       load: { paths: [pluginRoot] },

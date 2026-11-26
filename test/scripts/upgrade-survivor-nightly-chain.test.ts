@@ -230,12 +230,12 @@ it.runIf(Boolean(sourceRoot))(
       );
       // Use the production writers and a real installed candidate, not a made-up release tree.
       await writeTrial({ ...trial, phase: "trial", createdAt: Date.now(), attempts: 1 }, prefix);
-      const copy = await import("../../src/infra/sqlite-file-copy.js");
-      const original = copy.copySqliteFile;
+      const copyModule = await import("../../src/infra/sqlite-file-copy.js");
+      const original = copyModule.copySqliteFile;
       const copies: CopyObservation[] = [];
       let started = Number.NaN;
       let elapsedMs = Number.NaN;
-      const spy = vi.spyOn(copy, "copySqliteFile").mockImplementation(async (...args) => {
+      const spy = vi.spyOn(copyModule, "copySqliteFile").mockImplementation(async (...args) => {
         const call: CopyObservation = {
           source: args[0],
           target: args[1],
