@@ -3,11 +3,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resolveAgentDir, resolveNativeModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "./model-selection.js";
+import { resolveModelRefWithConfiguredAliases } from "./model-selection-shared.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
 import type { AgentSimpleCompletionSelection } from "./simple-completion.types.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
@@ -54,19 +51,12 @@ export function resolveSimpleCompletionSelectionRequest(
       ? undefined
       : resolveNativeModelPrimary(params.cfg, params.agentId));
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: fallbackRef?.provider ?? DEFAULT_PROVIDER,
-    manifestPlugins: params.manifestPlugins,
-  });
   const resolved = split
-    ? resolveModelRefFromString({
+    ? resolveModelRefWithConfiguredAliases({
         cfg: params.cfg,
         agentId: params.agentId,
         raw: split.model,
         defaultProvider: fallbackRef?.provider ?? DEFAULT_PROVIDER,
-        aliasIndex,
         manifestPlugins: params.manifestPlugins,
       })
     : null;

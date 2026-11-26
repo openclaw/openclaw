@@ -37,7 +37,9 @@ import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-sh
 import {
   createModelAliasScope,
   type EffectiveModelAlias,
+  findIndexedModelAlias,
   findModelAliasCandidate,
+  type ModelAliasIndex,
   preferLiteralPrimary,
   providerAliasKey,
 } from "./model-selection-alias-scope.js";
@@ -70,12 +72,7 @@ type ModelSelectionParams = NonNullable<Parameters<typeof normalizeModelRef>[2]>
 type ConfiguredModelSelectionParams = ModelSelectionParams & { cfg: OpenClawConfig };
 type ParseModelRefParams = ModelSelectionParams & { raw: string };
 
-export type ModelAliasIndex = {
-  byAlias: Map<string, { alias: string; ref: ModelRef }>;
-  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
-  byKey: Map<string, string[]>;
-  disabledKeys?: Set<string>;
-};
+export type { ModelAliasIndex } from "./model-selection-alias-scope.js";
 
 type ModelManifestPluginContext = {
   peek: () => ModelManifestPlugins;
@@ -543,25 +540,28 @@ function applyModelCatalogMetadata(params: {
 export function resolveModelRefFromString(
   params: ParseModelRefParams & { aliasIndex?: ModelAliasIndex },
 ): { ref: ModelRef; alias?: string } | null {
+  return resolveModelRefWithAliasIndex(params);
+}
+
+/** Exact provider rows take precedence even when a caller requests configured alias lookup. */
+export function resolveModelRefWithConfiguredAliases(
+  params: ConfiguredModelSelectionParams & { raw: string },
+): { ref: ModelRef; alias?: string } | null {
+  return resolveModelRefWithAliasIndex(params, () => buildModelAliasIndex(params));
+}
+
+function resolveModelRefWithAliasIndex(
+  params: ParseModelRefParams & { aliasIndex?: ModelAliasIndex },
+  buildAliasIndex?: () => ModelAliasIndex,
+): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
     return null;
   }
-  const slash = model.indexOf("/");
   const aliasIndex = hasExactConfiguredProviderModelRef(params.cfg, model)
     ? undefined
-    : params.aliasIndex;
-  const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch =
-    aliasIndex?.byAlias.get(aliasKey) ??
-    (slash > 0
-      ? (aliasIndex?.byProviderAlias?.get(
-          providerAliasKey(model.slice(0, slash), params.raw.trim().slice(slash + 1)),
-        ) ??
-        aliasIndex?.byProviderAlias?.get(
-          providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
-        ))
-      : undefined);
+    : (params.aliasIndex ?? buildAliasIndex?.());
+  const aliasMatch = aliasIndex && findIndexedModelAlias(aliasIndex, params.raw, model);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
