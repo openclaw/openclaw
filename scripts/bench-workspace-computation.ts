@@ -521,6 +521,11 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
         "src/gateway/worker-environments/workspace-reconcile.ts",
       )
     : undefined;
+  const comparison = reconciliation
+    ? await importOwner<
+        typeof import("../src/gateway/worker-environments/workspace-manifest-comparison.js")
+      >(fixture.source, "src/gateway/worker-environments/workspace-manifest-comparison.ts")
+    : undefined;
   const baseRaw =
     staging || reconciliation
       ? await fs.readFile(path.join(fixture.root, "base.json"), "utf8")
@@ -538,10 +543,15 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
   // Uploads already retain raw manifests and decoded facts. Keep their parsing
   // outside the measured comparison, with independent facts for each caller.
   const comparisons = parser
-    ? Array.from({ length: fixture.concurrency }, () => ({
-        base: parser.parseWorkerWorkspaceManifest(baseRaw, fixture.baseRef),
-        current: parser.parseWorkerWorkspaceManifest(currentRaw, fixture.currentRef),
-      }))
+    ? Array.from({ length: fixture.concurrency }, () => {
+        const base = parser.parseWorkerWorkspaceManifest(baseRaw, fixture.baseRef);
+        const current = parser.parseWorkerWorkspaceManifest(currentRaw, fixture.currentRef);
+        return {
+          base,
+          current,
+          reconciliation: comparison?.prepareWorkspaceReconciliation(base, current),
+        };
+      })
     : undefined;
   const checkpointOwner =
     fixture.scenario === "checkpoint" || startup || baselineBuild
@@ -930,7 +940,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
             };
           }
           if (reconcile) {
-            const { current, base } = comparisons![lane]!;
+            const { current } = comparisons![lane]!;
             let committedRef: string | undefined;
             let began = false;
             const result = await reconcile.applyStagedWorkerWorkspace({
@@ -938,8 +948,8 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
               stagingRoot: path.join(fixture.root, `payload-${lane}`),
               baseManifestRef: fixture.baseRef,
               currentManifestRef: fixture.currentRef,
-              base,
-              current,
+              ...comparisons![lane]!,
+              reconciliation: comparisons![lane]!.reconciliation!,
               acceptance: { kind: "reconcile" },
               journal: {
                 load: async () => undefined,

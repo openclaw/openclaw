@@ -2,6 +2,7 @@ import {
   parseAvailableTags,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -71,6 +72,7 @@ export function readDiscordChannelCreateParams(
 
 export function readDiscordChannelEditParams(params: Record<string, unknown>): DiscordChannelEdit {
   const parentId = readDiscordParentIdParam(params);
+  const appliedTags = readStringArrayParam(params, "appliedTags", { allowEmpty: true });
   return {
     channelId: readStringParam(params, "channelId", { required: true }),
     name: readStringParam(params, "name"),
@@ -83,6 +85,7 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
     locked: asBoolean(params.locked),
     autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
     availableTags: parseAvailableTags(params.availableTags),
+    appliedTags,
   };
 }
 

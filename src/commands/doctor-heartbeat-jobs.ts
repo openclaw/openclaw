@@ -3,11 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.kernel.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
-import { loadCronRows, rowToCronJob } from "../cron/store/row-codec.js";
+import { rowToCronJob } from "../cron/store/row-codec.js";
 import type { CronJobReadRow } from "../cron/store/schema.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob } from "../cron/types.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 
 const LegacyHeartbeatPayloadSchema = z
   .object({
@@ -68,28 +68,13 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
   });
 }
 
-export function readDoctorHeartbeatJobs(
-  storePath: string,
-  env: NodeJS.ProcessEnv,
-): DoctorCronJob[] {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        decodeDoctorHeartbeatJobRows(
-          loadCronRows(db, resolveCronStoreKeyInDatabase(db, storePath, env)),
-        ),
-      { env },
-    ) ?? []
-  );
-}
-
-export function readDoctorHeartbeatCutoverReceipt(
+export async function readDoctorHeartbeatCutoverReceipt(
   storePath: string,
   agentId: string,
   env: NodeJS.ProcessEnv,
 ) {
   try {
-    return withExistingOpenClawStateDatabaseReadOnly(
+    return await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
       ({ db }) =>
         readDefaultProactiveJobReceiptInDatabase(
           db,

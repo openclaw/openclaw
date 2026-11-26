@@ -32,7 +32,7 @@ import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
 import { createSystemsRead } from "./systems-read.ts";
-import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
+import { systemKindLabel, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
 import type { Systems } from "./systems-state.ts";
 import "../../styles/systems.css";
 
@@ -66,7 +66,7 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
       const needsInventory = active.needsInventoryRefresh();
       if (needsInventory) {
         void active.refresh();
-      } else if (active.state.showStats || active.state.showDetails) {
+      } else if (active.statsVisible() || active.state.showDetails) {
         void active.refreshTelemetry();
       }
       if ((!active.selected() || active.state.selectedId === "gateway") && !needsInventory) {
@@ -238,7 +238,7 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
           );
         }}
       </Show>
-      {!props.row || props.row.environment.id === "gateway" ? (
+      {controller().connected() && (!props.row || props.row.environment.id === "gateway") ? (
         <SystemsBackups controller={controller()} />
       ) : null}
     </aside>
@@ -327,6 +327,7 @@ function SystemsWorkspace(props: {
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const inventoryKnown = () => controller().state.inventory !== null;
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -369,7 +370,11 @@ function SystemsWorkspace(props: {
                   ? "systems.noHostDesktopHint"
                   : "systems.noDesktopHint",
               )
-            : t("systems.accessHint");
+            : t(
+                controller().desktopAccessDenied()
+                  ? "systems.desktopAccessRequired"
+                  : "systems.accessHint",
+              );
   const Desktop = () => {
     let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
     onSettled(() => {
@@ -400,13 +405,17 @@ function SystemsWorkspace(props: {
         class="systems-page-header"
       />
       <header class="systems-toolbar">
-        <div class="systems-heading">
+        <div
+          class="systems-heading"
+          style={{ visibility: inventoryKnown() ? undefined : "hidden" }}
+        >
           <h2>{title()}</h2>
-          <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
+          <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
         </div>
         <select
-          class="systems-mobile-picker"
+          class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
+          title={row() ? systemName(row()!) : undefined}
           onChange={(event) => controller().select(event.currentTarget.value)}
         >
           <option value="" disabled selected={!row()}>
@@ -416,6 +425,7 @@ function SystemsWorkspace(props: {
             {(entry) => (
               <option
                 value={entry.environment.id}
+                title={systemName(entry)}
                 selected={entry.environment.id === controller().state.selectedId}
               >
                 {systemName(entry)}
@@ -425,12 +435,17 @@ function SystemsWorkspace(props: {
         </select>
         <button
           class="systems-icon-button"
-          title={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
-          aria-label={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
-          aria-pressed={controller().state.showStats ? "true" : "false"}
-          onClick={() =>
-            controller().updatePresentation({ showStats: !controller().state.showStats })
-          }
+          title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+          aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+          aria-pressed={controller().statsVisible() ? "true" : "false"}
+          onClick={() => {
+            const show = !controller().statsVisible();
+            controller().updatePresentation({ showStats: show });
+            if (show) {
+              // Hidden stats aren't polled, so revealing them must not show an old sample.
+              void controller().refreshTelemetry();
+            }
+          }}
         >
           <Icon name="activity" />
         </button>
@@ -447,7 +462,7 @@ function SystemsWorkspace(props: {
         </button>
       </header>
       <div
-        class={["systems-overview", { "systems-overview--compact": !controller().state.showStats }]}
+        class={["systems-overview", { "systems-overview--compact": !controller().statsVisible() }]}
         role="region"
         aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
         tabindex={0}
@@ -471,18 +486,13 @@ function SystemsWorkspace(props: {
             </Errored>
           )}
         </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
         {auxiliaryErrors().length ? (
           <details class="systems-callout">
             <summary>{t("systems.errors")}</summary>
             <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
           </details>
         ) : null}
-        {controller().state.showStats ? (
+        {controller().statsVisible() ? (
           <div class="systems-overview__telemetry">
             <Show
               when={row()}
@@ -507,7 +517,7 @@ function SystemsWorkspace(props: {
             </Show>
           </div>
         ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
+        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
           <SystemsBackups
             controller={controller()}
             onDetails={() => controller().updatePresentation({ showDetails: true })}
@@ -535,17 +545,14 @@ function SystemsWorkspace(props: {
               class="systems-state"
               role="status"
               style={{
-                visibility:
-                  props.inventoryRead.pending() && !controller().state.inventory
-                    ? "hidden"
-                    : undefined,
+                visibility: controller().connected() && !inventoryKnown() ? "hidden" : undefined,
               }}
             >
               <span class="systems-state__icon" aria-hidden="true">
                 <Icon name="monitor" />
               </span>
               <h2>{emptyTitle()}</h2>
-              <p>{emptyHint()}</p>
+              {controller().connected() ? <p>{emptyHint()}</p> : null}
               {row() ? (
                 <button
                   class="systems-text-button"

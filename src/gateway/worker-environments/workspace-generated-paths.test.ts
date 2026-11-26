@@ -42,18 +42,25 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
+  ...["_cacache", "_logs"].map((name) => `.npm/${name}`),
+  ...["pip", "uv", "bun-transpiler", "vitest"].map((name) => `.cache/${name}`),
+  ...["openclaw/bun", "ms-playwright", "convex/binaries"].map((name) => `.cache/${name}`),
+  ".pnpm-store",
+  ".bun/install/cache",
+  ...["registry", "git"].map((name) => `.cargo/${name}`),
+  ".gradle/caches",
+  ...["http-cache", "v3-cache"].map((name) => `.local/share/NuGet/${name}`),
+  ".nuget/packages",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
-  ".cache/openclaw/bun",
-  ".cache/ms-playwright",
-  ".cache/bun-transpiler",
-  ".artifacts/vitest-worker-cache",
-  ".artifacts/vitest-workers",
-  ".cache/vitest",
+  ...["vitest-worker-cache", "vitest-workers"].map((name) => `.artifacts/${name}`),
   ".artifacts/dist-artifacts.lock",
 ];
 const generatedPaths = [
   ...cacheRoots.map((root) => `${root}/cache.bin`),
+  ...["intermediates/x", "outputs/apk/x.apk", "outputs/bundle/x.aab"].map((p) => `m/build/${p}`),
+  ...["bin/Debug", "bin/Release", "obj/Debug", "obj/Release"].map((p) => `m/${p}/x`),
   ".artifacts/vitest-shard-timings.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
@@ -69,6 +76,11 @@ const userFiles = {
   ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
+  ".npm/npmrc": "user configuration\n",
+  ".cargo/config.toml": "user configuration\n",
+  ".gradle/gradle.properties": "user configuration\n",
+  "m/build/reports/summary.txt": "user report\n",
+  "m/bin/tool.sh": "user script\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],
@@ -219,7 +231,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
   } finally {
     split.mockRestore();
   }
-  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.changedPaths).toEqual(["src/components/file.ts"]);
   expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
     "src/components/file.ts",
     "src",
@@ -351,4 +363,36 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   const manifest = await fixture.readManifest(captured.stdout.trim());
   expect(manifest.baseCommit).toBeNull();
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
+});
+
+it("retains ignored result artifacts without enrolling other ignored project files", async () => {
+  const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
+  const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+  await writeWorkspaceFiles(fixture.workspace, {
+    ".gitignore": "dist/\n.cache/\n.artifacts/\nnotes/\n",
+  });
+  const initial = await fixture.runManifest([base, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+  await writeWorkspaceFiles(fixture.workspace, {
+    "source.txt": "edit\n",
+    "dist/tracked.txt": "tracked edit\n",
+    "dist/worker/sqlite-store.worker.mjs": "generated\n",
+    ".cache/openclaw-bun/runtime": "cached runtime\n",
+    "new.txt": "new source\n",
+    ".artifacts/proof/screenshot.png": "saved screenshot\n",
+    "notes/report.txt": "saved report\n",
+    ".cache/user-data.json": "saved data\n",
+  });
+  const result = await fixture.runManifest([base, "all", initial.stdout.trim().slice(7)]);
+  expect(result.code, result.stderr).toBe(0);
+  const manifest = await fixture.readManifest(result.stdout.trim());
+  expect(
+    manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
+  ).toEqual([
+    ".artifacts/proof/screenshot.png",
+    ".gitignore",
+    "dist/tracked.txt",
+    "new.txt",
+    "source.txt",
+  ]);
 });

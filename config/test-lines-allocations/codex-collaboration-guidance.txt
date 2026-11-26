@@ -1,0 +1,3 @@
+# Real native prompt/tool-surface regressions, retained-mode/compaction proof,
+# incognito/supervision boundaries, valid native fixtures and snapshot policy coverage.
+185

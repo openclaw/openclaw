@@ -2,13 +2,14 @@
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type {
   ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
   ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { copyWithPathPatch } from "../config-form-utils.ts";
+import { copyWithPathPatch, pruneEmptyConfigForm } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
@@ -84,7 +85,8 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsDirty: boolean;
   execApprovalsSnapshot: ExecApprovalsSnapshot | null;
   execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
+  execApprovalsError: string | null;
+  execApprovalsSavedNotice: boolean;
   lastError: string | null;
 };
 
@@ -111,7 +113,8 @@ export function createInitialDevicesState(
     execApprovalsDirty: false,
     execApprovalsSnapshot: null,
     execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
+    execApprovalsError: null,
+    execApprovalsSavedNotice: false,
   };
 }
 
@@ -310,7 +313,7 @@ export async function removeStaleInventoryEntries(
     state,
     failures.length > 0
       ? {
-          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+          error: `Couldn’t remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}. Review the remaining entries before trying again. Details: ${failures[0]}`,
         }
       : undefined,
   );
@@ -484,12 +487,12 @@ export async function loadExecApprovals(
     return;
   }
   state.execApprovalsLoading = true;
-  state.lastError = null;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
-      state.lastError = "Select a node before loading exec approvals.";
+      state.execApprovalsError = "Select a device before loading exec approvals.";
       return;
     }
     const res = await client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
@@ -498,7 +501,7 @@ export async function loadExecApprovals(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -537,34 +540,37 @@ export async function saveExecApprovals(
     return;
   }
   state.execApprovalsSaving = true;
-  state.lastError = null;
+  state.execApprovalsSavedNotice = false;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-      state.lastError =
-        "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
+      state.execApprovalsError =
+        "Device approvals are read-only here. Use the companion app or approvals set --node.";
       return;
     }
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {
-      state.lastError = "Exec approvals hash missing; reload and retry.";
+      state.execApprovalsError = "Exec approvals hash missing; reload and retry.";
       return;
     }
     const file = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
     const rpc = resolveExecApprovalsRpc(target, { file, baseHash });
     if (!rpc) {
-      state.lastError = "Select a node before saving exec approvals.";
+      state.execApprovalsError = "Select a device before saving exec approvals.";
       return;
     }
     await client.request(rpc.method, rpc.params);
     if (!isCurrentNodesRequest(state, client, generation)) {
       return;
     }
+    // Set together, so the row holding the Save a person just pressed stays mounted.
     state.execApprovalsDirty = false;
+    state.execApprovalsSavedNotice = true;
     await loadExecApprovals(state, target);
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -580,13 +586,18 @@ function mutateExecApprovalsForm(
   mode: "copy-set" | "copy-remove",
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-    state.lastError = "Host-native node approvals are read-only here.";
+    state.execApprovalsError =
+      "Device approvals are read-only here. Use the companion app or approvals set --node.";
     return;
   }
-  const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
+  const original = state.execApprovalsSnapshot?.file ?? {};
+  const base = state.execApprovalsForm ?? original;
   const next = copyWithPathPatch(base, path, value, mode);
   state.execApprovalsForm = (next.ok ? asOptionalRecord(next.value) : undefined) ?? base;
-  state.execApprovalsDirty = true;
+  state.execApprovalsDirty =
+    stableStringify(pruneEmptyConfigForm(state.execApprovalsForm, original)) !==
+    stableStringify(original);
+  state.execApprovalsSavedNotice = false;
 }
 
 export function updateExecApprovalsFormValue(

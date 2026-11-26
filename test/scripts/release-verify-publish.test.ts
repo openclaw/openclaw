@@ -29,9 +29,16 @@ it.each([
   // Detailed fault matrices belong to plugin-npm-publication-readback.test.ts.
   "missing-tarball",
   "missing-planned-job",
+  "deferred-auth",
+  "deferred-invalid",
 ])("gates release success on qualified plugin readback: %s", async (fault) => {
   const root = tempDirs.make("parent-publish-cli-");
-  const fixture = await createNpmPublicationReadbackFixture(root, "direct", fault);
+  const deferredAuth = fault.startsWith("deferred-");
+  const fixture = await createNpmPublicationReadbackFixture(
+    root,
+    deferredAuth ? "deferred-auth" : "direct",
+    fault === "deferred-auth" ? "none" : fault,
+  );
   const readback = await createPluginNpmPublicationReadback(fixture.options).catch(() => undefined);
   await readback?.verify(packageName, version, "beta").catch(() => undefined);
   fixtureIO.writeJson(join(root, "package.json"), { version });
@@ -94,11 +101,13 @@ globalThis.fetch = async (url) => {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         GITHUB_WORKFLOW_SHA: workflowSha,
+        GITHUB_RUN_ID: "300",
+        GITHUB_RUN_ATTEMPT: "1",
         GH_TOKEN: "synthetic-token",
       },
     },
   );
-  const succeeded = fault === "none" || fault === "no-publish";
+  const succeeded = fault === "none" || fault === "no-publish" || fault === "deferred-auth";
   expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
   const evidencePath = join(root, "parent-evidence.json");
   expect(existsSync(evidencePath)).toBe(succeeded);
@@ -120,9 +129,23 @@ globalThis.fetch = async (url) => {
     ]);
   } else if (fault === "no-publish") {
     expect(readbacks).toMatchObject([{ packageName, verification: "published-registry" }]);
+  } else if (fault === "deferred-auth") {
+    expect(result.stdout).toContain("deferred after npm ENEEDAUTH");
+    expect(readbacks).toMatchObject([
+      {
+        packageName,
+        verification: "deferred-auth",
+        deferredAuthArtifactId: 44,
+        recovery: { publishScope: "selected" },
+      },
+    ]);
   } else {
     expect(result.stderr).toContain(
-      fault === "missing-planned-job" ? "planned candidate" : "HTTP 404",
+      fault === "missing-planned-job"
+        ? "planned candidate"
+        : fault === "deferred-invalid"
+          ? "Deferred npm authentication checkpoint differs"
+          : "HTTP 404",
     );
   }
 });
@@ -132,12 +155,9 @@ it.each([true, false])("routes full publication=%s to its owning verifier", (ful
   const argsLog = join(root, "args");
   const script = `set -euo pipefail
 source "$HELPER"
-write_clawhub_runtime_state() { printf '%s\\n' '{"verifierArgs":["--skip-clawhub"]}' > "$1"; }
 node() { printf '%s\\n' "$@" > "$ARGS_LOG"; return 79; }
 plugin_npm_run_id=200
 openclaw_npm_run_id=""
-clawhub_workflow_ref=main
-bootstrap_plugins=""
 verify_published_release
 `;
   const result = fixtureIO.runProcess("bash", ["-c", script], {

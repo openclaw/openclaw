@@ -1,3 +1,4 @@
+import { isNativeMacWebChromeHost } from "./native-web-chrome.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 const INTERACTIVE_TARGET_SELECTOR =
@@ -34,6 +35,25 @@ export function beginNativeWindowDrag(event: MouseEvent): void {
   // The native drag session owns the rest of the gesture; without this the
   // page still starts a text selection underneath the moving window.
   event.preventDefault();
+}
+
+/** The shell owns the continuous native titlebar, including gaps between its controls. */
+export function beginNativeWindowDragFromTitlebar(event: MouseEvent): void {
+  const shell = event.currentTarget;
+  if (
+    !isNativeMacWebChromeHost() ||
+    !(shell instanceof HTMLElement) ||
+    shell.classList.contains("shell--mobile-nav")
+  ) {
+    return;
+  }
+  const height = Number.parseFloat(
+    getComputedStyle(shell).getPropertyValue("--openclaw-native-titlebar-height"),
+  );
+  const y = event.clientY - shell.getBoundingClientRect().top;
+  if (y >= 0 && y < height) {
+    beginNativeWindowDrag(event);
+  }
 }
 
 /**

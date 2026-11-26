@@ -13,8 +13,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
-
 /** Keeps secret resolution out of synchronous provider setup metadata imports. */
 export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
   async (...args) => (await import("./provider-auth-ref.js")).promptSecretRefForSetup(...args);

@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
@@ -17,7 +18,7 @@ import type { SubagentCoordinationDisplayResolver } from "./session-transcript-r
 
 export type SessionMessageProjectionState = {
   assistantErrorPending: boolean;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
 };
 
 function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefined {

@@ -264,7 +264,7 @@ it("preserves memory schema admission when a fresh handle reuses repair then rep
 });
 
 it.each(["valid", "invalid"])(
-  "retains reindexed memory admission with a %s seal without skipping required integrity",
+  "retains bounded reindexed memory admission with a %s seal",
   async (seal) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const target = openOpenClawAgentDatabase({
@@ -343,17 +343,24 @@ it.each(["valid", "invalid"])(
         fs.writeFileSync(`${target.path}.seal`, "interrupted seal write");
       }
       // Same-process reopen deliberately retains physical proof; only a new process tests the seal.
-      const { stdout } = await promisify(execFile)(process.execPath, [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(memoryAdmissionRestartEntrypoint)),
-        target.path,
-        String(verifiedAt),
-      ]);
-      expect(JSON.parse(stdout)).toEqual({
-        integrityChecked: seal === "invalid",
-        // An invalid seal requires full verification, but the published schema is still valid.
-        schemaRebuilt: false,
-        ftsAvailable: true,
-      });
+      const restart = async (mode: "runtime" | "full", verification: unknown) => {
+        const { stdout } = await promisify(execFile)(process.execPath, [
+          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(memoryAdmissionRestartEntrypoint)),
+          target.path,
+          mode,
+        ]);
+        const result = JSON.parse(stdout);
+        expect(result).toEqual({
+          verification,
+          schemaRebuilt: false,
+          ftsAvailable: true,
+        });
+        return result.verification;
+      };
+      await restart("runtime", seal === "valid" ? verifiedAt : null);
+      if (seal === "invalid") {
+        expect(await restart("full", expect.any(Number))).not.toBe(verifiedAt);
+      }
     });
   },
 );

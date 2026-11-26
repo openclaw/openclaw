@@ -167,6 +167,9 @@ export async function prepareCodexControlSessionAuth(
       };
     }
     const model = resolveSessionModelRef(config, entry, sessionAgentId);
+    if (!model) {
+      throw new Error("This session has no model. Choose a model before using Codex commands.");
+    }
     const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
     const store = await resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
     const { plan, attempts } = prepareAgentRuntimeAuth({

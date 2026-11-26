@@ -26,23 +26,34 @@ export function createWorkerSshBootstrap(
     provider: WorkerProvider,
     installation: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    beforeBootstrap?: () => void,
   ) => {
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
       throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
     }
     const { leaseId, sshEndpoint } = record;
+    const assertCurrent = () => {
+      cancellation?.assertActive();
+      beforeBootstrap?.();
+      const current = requireCurrentOwner(record);
+      if (current.destroyRequestedAtMs !== null) {
+        throw serviceError("invalid_state", "Worker bootstrap owner is stopping");
+      }
+    };
     let receipt: WorkerAdmissionHandshake;
     try {
-      receipt = await callBootstrap(installation, (signal) =>
-        options.bootstrapWorker({
+      receipt = await callBootstrap(installation, (signal) => {
+        assertCurrent();
+        return options.bootstrapWorker({
           operationId: record.provisionOperationId,
           sshEndpoint,
           installation,
           resolveIdentity: identityResolverFor(record, provider, leaseId),
           signal: cancellation ? AbortSignal.any([signal, cancellation.signal]) : signal,
-        }),
-      );
-      cancellation?.assertActive();
+          assertCurrent,
+        });
+      });
+      assertCurrent();
       if (!sameWorkerBuild(receipt, installation)) {
         throw new Error("Worker bootstrap receipt does not match the expected build identity");
       }
@@ -54,12 +65,6 @@ export function createWorkerSshBootstrap(
       }
       return await failBootstrap(record, leaseId, provider, error);
     }
-    return commitReady(record, { ...receipt, installKind: "bundle" }, {}, () => {
-      cancellation?.assertActive();
-      const current = requireCurrentOwner(record);
-      if (current.destroyRequestedAtMs !== null) {
-        throw serviceError("invalid_state", "Worker bootstrap owner is stopping");
-      }
-    });
+    return commitReady(record, { ...receipt, installKind: "bundle" }, {}, assertCurrent);
   };
 }

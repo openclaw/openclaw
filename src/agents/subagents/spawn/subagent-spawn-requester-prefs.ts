@@ -3,6 +3,7 @@ import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/s
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import { DEFAULT_PROVIDER } from "../../defaults.js";
 import { resolveFastModeState } from "../../fast-mode.js";
 import {
   type ModelRef,
@@ -36,7 +37,7 @@ function resolveRequesterModel(params: RequesterPreferencesContext) {
     routeResolution: entry.modelOverrideRouteResolution,
   });
   const selectedModel = resolvePersistedSelectedModelRef({
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     runtimeProvider: entry.modelProvider,
     runtimeModel: entry.model,
     overrideProvider: normalizedOverride.providerOverride,
@@ -50,6 +51,10 @@ export function resolveRequesterPreferences(params: RequesterPreferencesContext)
   const entry = params.requesterEntry;
   const { defaultModel, selectedModel } = resolveRequesterModel(params);
   const model = selectedModel ?? defaultModel;
+  if (!model) {
+    // No requester model leaves no thinking preference to inherit.
+    return { model: undefined, thinkingLevel: undefined, thinkingExplicit: false };
+  }
   const thinkingParams = {
     cfg: params.cfg,
     agentId: params.requesterAgentId,
@@ -92,7 +97,7 @@ export function resolveSubagentCyberAccessProgram(
     const { defaultModel, selectedModel } = resolveRequesterModel(params);
     model = selectedModel ?? defaultModel;
   }
-  return params.childModel === `${model.provider}/${model.model}` ? inherited : undefined;
+  return model && params.childModel === `${model.provider}/${model.model}` ? inherited : undefined;
 }
 
 export function resolveRequesterFastMode(
@@ -104,7 +109,7 @@ export function resolveRequesterFastMode(
     const { defaultModel, selectedModel } = resolveRequesterModel(params);
     model = selectedModel ?? defaultModel;
   }
-  if (params.childModel !== `${model.provider}/${model.model}`) {
+  if (!model || params.childModel !== `${model.provider}/${model.model}`) {
     return undefined;
   }
   return resolveFastModeState({

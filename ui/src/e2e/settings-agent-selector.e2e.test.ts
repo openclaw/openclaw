@@ -99,7 +99,7 @@ suite.define(() => {
   it.each([1440, 390])("closes only the agent menu on Escape at %ipx", async (width) => {
     await withSettingsPage(width, "appearance", async (page) => {
       if (width === 390) {
-        await page.locator(".topbar-nav-toggle").click();
+        await page.locator(".topbar-nav-toggle").press("Enter");
       }
       const picker = page.locator(".settings-sidebar openclaw-agent-select");
       const trigger = picker.locator(".agent-select__trigger");
@@ -150,16 +150,20 @@ suite.define(() => {
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Set Default", exact: true }).isEnabled())
+        .poll(() => page.getByRole("menuitem", { name: "Set default", exact: true }).isEnabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await expectSidebarPickerOnly(page);
 
       await chooseAgent(page, /^Clawd(?:,|$)/);
       await expectAgentRoute(page, "main");
+      await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Default", exact: true }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Default", exact: true }).isDisabled())
         .toBe(true);
+      await page.keyboard.press("Escape");
       await chooseAgent(page, "Research");
       await expectAgentRoute(page, "research");
       await page.goBack();

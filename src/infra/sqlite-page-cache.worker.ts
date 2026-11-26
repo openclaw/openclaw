@@ -214,6 +214,18 @@ function* warm(
     return progress;
   };
   try {
+    if (
+      input.kind === "state" &&
+      progress.residency &&
+      progress.residency.sizeBytes > input.maxBytes
+    ) {
+      // A partial sequential scan repeats the same prefix without warming the whole store.
+      // Leave that I/O budget for the remaining databases instead.
+      progress.complete = true;
+      progress.limited = true;
+      yield { ...update() };
+      return;
+    }
     if (input.kind === "agent") {
       db = openNodeSqliteDatabase(pathname, { readOnly: true, timeout: 0 });
       db.exec("PRAGMA cache_size = -1024; PRAGMA mmap_size = 0;"); // sqlite-allow-raw -- Bound the private cache and account for pread bytes.

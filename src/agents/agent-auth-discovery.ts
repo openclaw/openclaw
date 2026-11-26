@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -45,7 +46,7 @@ export type DiscoverAuthStorageOptions = {
 type SyntheticAuth =
   | {
       apiKey?: string;
-      nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
+      nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"];
     }
   | undefined;
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {

@@ -586,6 +586,7 @@ enum ManagedNodeGatewayMigration {
                         replaceRuntime: true),
                     timeout: self.serviceInstallTimeout,
                     runtime: runtime,
+                    serviceRuntime: runtime,
                     installedCLI: candidate.snapshot == nil ? .init(
                         prefix: runtime.cliCommand,
                         sqliteLibrary: runtime.sqliteLibrary.path,

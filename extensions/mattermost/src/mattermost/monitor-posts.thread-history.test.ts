@@ -387,12 +387,12 @@ it("excludes later, foreign-thread and system posts even when returned by the se
     { ...posts[1]!, id: "foreign", channel_id: "different-room" },
     { ...posts[1]!, id: "different-thread", root_id: "elsewhere" },
     { ...posts[1]!, id: "system", type: "system_join_channel" },
+    { ...makePost("attachment", "preview", 25), type: "slack_attachment" },
   );
   await f.recover(f.turn);
-  expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply"]);
+  expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply", "attachment"]);
   const query = new URL(requests[0]!, baseUrl).searchParams;
-  expect(query.get("fromPost")).toBe("current");
-  expect(query.get("fromCreateAt")).toBe("30");
+  expect([query.get("fromPost"), query.get("fromCreateAt")]).toEqual(["current", "30"]);
   expect(Number(query.get("perPage"))).toBeLessThanOrEqual(200);
 });
 

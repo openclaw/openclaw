@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { renderTranscriptsMarkdown, summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";
@@ -62,6 +62,22 @@ it("keeps plain transcript content unchanged", () => {
     decisions: ["Sam: We decided to ship the CLI."],
     overview: "We decided to ship the CLI.",
   });
+});
+
+it("distinguishes an empty live capture from a finished capture without usable speech", () => {
+  const stopped = { stoppedAt: "2026-01-01T12:00:00Z" };
+  expect(summarize([]).overview).toBe("No transcript captured yet.");
+  for (const rows of [[], ["context:", "###"]]) {
+    expect(summarize(rows, stopped)).toMatchObject({
+      overview: "No usable speech was captured.",
+      transcript: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      utteranceCount: rows.length,
+    });
+  }
+  expect(summarize(["採用します。"], stopped).overview).toBe("採用します。");
 });
 
 it("lists participants once in first-appearance order after the overview", () => {

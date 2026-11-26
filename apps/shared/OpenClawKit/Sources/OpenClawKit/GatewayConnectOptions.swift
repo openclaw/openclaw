@@ -4,6 +4,7 @@ public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
     public static let modelSelectionPolicy = "model-selection-policy"
+    public static let personalSessionPins = "personal-session-pins"
     public static let ultrafast = "ultrafast"
     public static let usageRefreshing = "usage-refreshing"
 }
@@ -26,7 +27,7 @@ public struct GatewayConnectOptions: Sendable, Equatable {
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
     /// Set false for an endpoint handoff whose explicit credentials (including none) must be
-    /// tried without loading a previously stored device token.
+    /// tried without using a previously stored device token as authentication.
     public var allowStoredDeviceAuth: Bool
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.

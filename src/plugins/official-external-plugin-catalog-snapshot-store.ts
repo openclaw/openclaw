@@ -1,5 +1,4 @@
 /** Persists hosted official plugin catalog snapshots through the shared-state worker. */
-import { existsSync } from "node:fs";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -30,9 +29,6 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
   return {
     async read(url) {
       const databaseOptions = resolveDatabaseOptions(options);
-      if (!existsSync(databaseOptions.path)) {
-        return null;
-      }
       const context = captureOpenClawStateWorkerContext(databaseOptions);
       const { runOpenClawStateWorkerOperation } =
         await import("../state/openclaw-state-worker-store.js");

@@ -121,7 +121,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   function confirmButton() {
     return waitForFast(() =>
-      requiredElement(document.body, "openclaw-modal-dialog .exec-approval-actions .btn.danger"),
+      requiredElement(document.body, "openclaw-modal-dialog openclaw-modal-actions .btn.danger"),
     );
   }
 
@@ -291,7 +291,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       } else {
         const cancel = await waitForFast(() => {
           const buttons = document.body.querySelectorAll<HTMLButtonElement>(
-            "openclaw-modal-dialog .exec-approval-actions .btn",
+            "openclaw-modal-dialog openclaw-modal-actions .btn",
           );
           expect(buttons).toHaveLength(2);
           return buttons[1]!;
@@ -311,9 +311,11 @@ describe("AppSidebar group mutation collapsed state", () => {
         });
         await waitForFast(() =>
           expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-            'Gateway connection replaced before "Alpha" was deleted. Try again.',
+            "The connection changed before “Alpha” was deleted.",
           ),
         );
+        expect(toast.querySelector(".app-toast__description")?.textContent).toBe("Try again.");
+        expect(toast.querySelector('.app-toast[role="alert"]')).not.toBeNull();
         toast.remove();
       }
     },

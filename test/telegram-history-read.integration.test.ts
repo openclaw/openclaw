@@ -322,7 +322,7 @@ describe("Telegram retained history through shared message dispatch", () => {
         }
       };
       await expect(read({ conversationReadOrigin: "direct-operator" })).rejects.toThrow(
-        /policy changed|authenticated current|authority|revoked/i,
+        /policy changed|authenticated current|authority|revoked|reloaded/i,
       );
     },
   );

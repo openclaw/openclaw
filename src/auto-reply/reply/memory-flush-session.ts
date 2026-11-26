@@ -10,6 +10,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_BYTES,
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
 } from "../../config/sessions/session-accessor.sqlite-visible-cursor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -52,15 +53,17 @@ export async function prepareMemoryFlushSession(params: {
   await waitForSessionTranscriptProjection(params.source, params.signal);
   params.signal?.throwIfAborted();
   const sessionManager = await withSessionContextAdmission(params.source, params.admission, () =>
-    SessionManager.openDetachedBoundedAsync(params.source, {
-      signal: params.signal,
-      cwd: params.workspaceDir,
-      maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
-      maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-      onTruncated: () => {
-        throw new Error("Memory flush exceeds the bounded conversation view.");
-      },
-    }),
+    withSessionTranscriptHydrationCaller("memory-flush", () =>
+      SessionManager.openDetachedBoundedAsync(params.source, {
+        signal: params.signal,
+        cwd: params.workspaceDir,
+        maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
+        maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+        onTruncated: () => {
+          throw new Error("Memory flush exceeds the bounded conversation view.");
+        },
+      }),
+    ),
   );
   const identity = resolveInternalSessionEffectsIdentity({
     agentId: params.source.agentId,

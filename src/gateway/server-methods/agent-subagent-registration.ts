@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type {
   SubagentAdmissionRejection,
   SubagentSessionEffects,
@@ -199,6 +200,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
   runId: string;
   childSessionKey: string;
   childAgentId: string;
+  agentDir: string;
+  workspaceDir: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
@@ -262,6 +265,14 @@ export async function registerPluginSubagentRunFromGateway(params: {
       requesterDisplayKey: params.requester ? requesterSessionKey : "main",
       task: params.task,
       cleanup: "keep",
+      // Completion must use the admitted runtime's directory scope, including session workspaces.
+      agentDir: params.agentDir,
+      workspaceDir:
+        resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: sessionEntry?.spawnedBy,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+          cwd: sessionEntry?.spawnedCwd,
+        }) ?? params.workspaceDir,
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",

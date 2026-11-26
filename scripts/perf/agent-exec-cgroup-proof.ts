@@ -130,7 +130,6 @@ try {
     mode: "child",
     argv: [process.execPath, "-e", code],
     cwd: process.env.OPENCLAW_STATE_DIR,
-    memoryLimitBytes: 1024 ** 3,
     timeoutMs: 30_000,
   });
   const outcome = await run.wait();
@@ -143,7 +142,6 @@ try {
     mode: "child",
     argv: [process.execPath, "-e", `require('node:fs').readFileSync(3); ${code}`],
     cwd: process.env.OPENCLAW_STATE_DIR,
-    memoryLimitBytes: 1024 ** 3,
     timeoutMs: 30_000,
     secretInput: { fd: 3, createData: () => Buffer.from("synthetic-input") },
   });

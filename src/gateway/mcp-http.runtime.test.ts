@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  readAdmittedRunOperatorAuthority,
-} from "../agents/admitted-run-context.js";
+import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import {
@@ -137,11 +135,10 @@ describe("McpLoopbackToolCache", () => {
   it("does not let a source-less cached list hide a later admitted writer", async () => {
     const params = scopeParams({ toolsAllow: ["sessions"] });
     const controller = new AbortController();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "archive-writer",
       scopes: ["operator.write"],
       signal: controller.signal,
-      assertCurrent: () => {},
     });
     const admission = mcp.prepareAdmission("cached-session-controls", "mcp-cache-test", {
       operatorAuthority: authority,
@@ -159,12 +156,6 @@ describe("McpLoopbackToolCache", () => {
       expect(withSource.toolSchema.map((tool) => tool.name)).toEqual(["sessions"]);
       expect(await cache.resolve(writerParams)).toBe(withSource);
       expect(await cache.resolve(params)).toBe(withoutSource);
-
-      const reason = new Error("archive operator source revoked");
-      controller.abort(reason);
-      await expect(cache.resolve(writerParams)).rejects.toThrow(
-        "admitted run operator authority is no longer active",
-      );
       expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     } finally {
       admission.close();

@@ -1,7 +1,7 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
-import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
+import { migrateLegacyConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestTemplateValue } from "./digest.js";
 import {
@@ -20,8 +20,10 @@ function mcpServerFromActionDetails(
   return "command" in server || "url" in server ? (server as TemplateMcpServer) : undefined;
 }
 
+// A manifest declares `timeout` and `connectTimeout` in seconds, under the names
+// config retired for `requestTimeoutMs` and `connectionTimeoutMs`.
 export function digestTemplateMcpServer(server: Record<string, unknown>): string {
-  return digestTemplateValue(canonicalizeConfiguredMcpServer(server));
+  return digestTemplateValue(migrateLegacyConfiguredMcpServer(server));
 }
 
 /**
@@ -55,7 +57,8 @@ export async function installTemplateMcpServersStateless(
       if (!listed.ok) {
         throw new Error(listed.error);
       }
-      const configured = listed.mcpServers[action.id];
+      // `listed.mcpServers` has `${VAR}` references substituted; a manifest keeps them.
+      const configured = listed.authoredConfig?.mcp?.servers?.[action.id];
       const configDigest = digestTemplateMcpServer(server);
       if (configured && digestTemplateMcpServer(configured) !== configDigest) {
         throw new Error(
@@ -79,7 +82,7 @@ export async function installTemplateMcpServersStateless(
       if (!configured) {
         const result = await setConfiguredMcpServer({
           name: action.id,
-          server,
+          server: migrateLegacyConfiguredMcpServer(server),
           createOnly: true,
           skipLifecycleLease: true,
           assertCurrent,
@@ -121,7 +124,7 @@ export async function rollbackStatelessTemplateMcpServers(
         if (!listed.ok) {
           throw new Error(listed.error);
         }
-        const configured = listed.mcpServers[ref.name];
+        const configured = listed.authoredConfig?.mcp?.servers?.[ref.name];
         if (!configured) {
           refs.splice(refs.indexOf(ref), 1);
           return;
@@ -131,7 +134,8 @@ export async function rollbackStatelessTemplateMcpServers(
         }
         const removed = await unsetConfiguredMcpServer({
           name: ref.name,
-          expectedServer: configured,
+          // The config writer checks this against the substituted entry.
+          expectedServer: listed.mcpServers[ref.name],
           skipLifecycleLease: true,
           assertCurrent,
           assertCurrentAsync: async () => {

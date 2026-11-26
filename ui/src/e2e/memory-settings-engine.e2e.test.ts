@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -56,6 +57,64 @@ const memoryPlugins = [
 ];
 
 suite.define(() => {
+  it("does not ask to reconnect while the memory catalog is still loading", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        colorScheme: "dark",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 1000 },
+      },
+      async ({ page }) => {
+        const catalog = { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true };
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["plugins.list"],
+          methodResponses: {
+            "config.get": configResponse("memory-lancedb", "catalog-readiness"),
+            "config.schema": configSchema(
+              objectSchema("", {
+                memory: objectSchema("", {
+                  search: objectSchema("", {
+                    enabled: { type: "boolean", title: "Enable Memory Search", default: true },
+                  }),
+                }),
+              }),
+              { "memory.search.enabled": { advanced: false } },
+            ),
+            "plugins.list": catalog,
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/memory/settings");
+        await gateway.waitForRequest("plugins.list");
+        const surface = page.locator("openclaw-memory-settings");
+        await surface.getByText("memory-lancedb", { exact: true }).waitFor();
+        const advice = surface.getByText("Reconnect to change the memory engine.", { exact: true });
+        const prematureAdvice = await advice.count();
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            surface.locator(".settings-section").first(),
+            [surface.getByText("memory-lancedb", { exact: true })],
+            { animations: "disabled" },
+          );
+          writeFileSync(path.join(uiProofArtifactDir, "catalog-pending.png"), frame.png);
+        }
+        await gateway.resolveDeferred("plugins.list", catalog);
+        const engine = surface.getByRole("combobox", { name: "Memory engine", exact: true });
+        await expect.poll(() => engine.inputValue()).toBe("memory-lancedb");
+        expect(await advice.count()).toBe(0);
+        await gateway.setOnline(false);
+        await advice.waitFor();
+        expect(await engine.count()).toBe(0);
+        await gateway.setOnline(true);
+        await expect.poll(() => engine.inputValue()).toBe("memory-lancedb");
+        expect(await advice.count()).toBe(0);
+        expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+        expect(prematureAdvice, "An in-flight catalog read does not require reconnecting").toBe(0);
+      },
+    );
+  });
+
   it.each(["success", "failure"] as const)(
     "keeps engine focus and blocks repeated selection until save %s",
     async (outcome) => {
@@ -78,37 +137,28 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-          const group = page.getByRole("radiogroup").first();
-          const current = group.getByRole("radio", { name: "Memory LanceDB", exact: true });
-          const next = group.getByRole("radio", { name: "OpenClaw Memory", exact: true });
-          await expect.poll(() => current.isChecked()).toBe(true);
-          await current.focus();
+          const engine = page.getByRole("combobox", { name: "Memory engine", exact: true });
+          await expect.poll(() => engine.inputValue()).toBe("memory-lancedb");
+          await engine.focus();
           await gateway.deferNext("plugins.setEnabled");
-          await page.keyboard.press("ArrowLeft");
+          await engine.selectOption("memory-core");
           await gateway.waitForRequest("plugins.setEnabled");
-          await expect.poll(() => next.getAttribute("aria-disabled")).toBe("true");
-          expect(await next.evaluate((element) => document.activeElement === element)).toBe(true);
-          await page.keyboard.press("ArrowRight");
-          await page.keyboard.press("Space");
-          expect(await next.evaluate((element) => document.activeElement === element)).toBe(true);
-          expect(await next.isChecked()).toBe(true);
+          await expect.poll(() => engine.getAttribute("aria-busy")).toBe("true");
+          expect(await engine.evaluate((element) => document.activeElement === element)).toBe(true);
+          await page.keyboard.press("ArrowDown");
+          await page.keyboard.press("Enter");
+          expect(await engine.evaluate((element) => document.activeElement === element)).toBe(true);
+          expect(await engine.inputValue()).toBe("memory-core");
           if (captureUiProofEnabled) {
-            const section = page.locator(".settings-section").filter({ has: next });
-            const frame = await takeControlUiScreenshotFrame(page, section, [group], {
+            const section = page.locator(".settings-section").filter({ has: engine });
+            const frame = await takeControlUiScreenshotFrame(page, section, [engine], {
               animations: "disabled",
             });
             writeFileSync(path.join(uiProofArtifactDir, "saving.png"), frame.png);
           }
-          // Send a physical click: locator.click waits for aria-disabled to clear.
-          const label = group.locator("label").filter({ hasText: /^Memory LanceDB$/ });
-          const bounds = await label.boundingBox();
-          if (!bounds) {
-            throw new Error("Memory LanceDB label is not visible");
-          }
-          await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+          await engine.selectOption("memory-lancedb");
           expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(1);
-          expect(await next.isChecked()).toBe(true);
-          const focused = await page.evaluate(() => document.activeElement?.getAttribute("value"));
+          expect(await engine.inputValue()).toBe("memory-core");
           if (outcome === "success") {
             await gateway.setMethodResponse(
               "config.get",
@@ -126,12 +176,11 @@ suite.define(() => {
             });
             await page.getByText("Memory setting could not be saved", { exact: true }).waitFor();
           }
-          await expect.poll(() => next.getAttribute("aria-disabled")).toBeNull();
-          expect(await next.isChecked()).toBe(outcome === "success");
-          expect(await current.isChecked()).toBe(outcome === "failure");
-          expect(await page.evaluate(() => document.activeElement?.getAttribute("value"))).toBe(
-            focused,
+          await expect.poll(() => engine.getAttribute("aria-busy")).toBeNull();
+          expect(await engine.inputValue()).toBe(
+            outcome === "success" ? "memory-core" : "memory-lancedb",
           );
+          expect(await engine.evaluate((element) => document.activeElement === element)).toBe(true);
           expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(1);
         },
       );
@@ -152,21 +201,21 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
       expect(response?.status()).toBe(200);
 
-      const engineGroup = page.getByRole("radiogroup").first();
+      const engineGroup = page.getByRole("combobox", { name: "Memory engine", exact: true });
       await engineGroup.waitFor();
       await expect
         .poll(async () =>
-          (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
+          (await engineGroup.locator("option").allTextContents()).map((label) => label.trim()),
         )
         .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
 
       await gateway.deferNext("config.set");
       await gateway.deferNext("plugins.setEnabled");
-      await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
-      // Click again immediately, before the 800 ms autosave debounce. The
+      await engineGroup.selectOption("");
+      // Select again immediately, before the 800 ms autosave debounce. The
       // write barrier must flush Off first instead of letting the plugin RPC
       // race a still-scheduled config.set.
-      await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
+      await engineGroup.selectOption("memory-core");
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
       const pendingOffSave = await gateway.waitForRequest("config.set");
@@ -191,12 +240,10 @@ suite.define(() => {
         restartRequired: false,
       });
 
-      const selected = engineGroup.getByRole("radio", {
-        name: "OpenClaw Memory",
-        exact: true,
-      });
-      await expect.poll(() => selected.isChecked()).toBe(true);
-      await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
+      await expect.poll(() => engineGroup.inputValue()).toBe("memory-core");
+      await expect
+        .poll(() => page.getByText("Couldn’t change the memory engine. Try again.").count())
+        .toBe(0);
 
       if (captureUiProofEnabled) {
         await page
@@ -268,9 +315,9 @@ suite.define(() => {
       await expect.poll(() => toggle.isChecked()).toBe(true);
       await page.getByText("Needs attention", { exact: true }).first().waitFor();
       await page
-        .getByText("Could not refresh Control UI configuration: authoritative snapshot unavailable")
+        .getByText("Couldn’t refresh settings. Try again. authoritative snapshot unavailable")
         .waitFor();
-      expect(await page.getByText("Could not update Active memory").count()).toBe(0);
+      expect(await page.getByText("Couldn’t update Active memory. Try again.").count()).toBe(0);
       expect(pageErrors).toEqual([]);
 
       if (captureUiProofEnabled) {
@@ -298,20 +345,14 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
       expect(response?.status()).toBe(200);
 
-      const engineGroup = page.getByRole("radiogroup").first();
+      const engineGroup = page.getByRole("combobox", { name: "Memory engine", exact: true });
       await engineGroup.waitFor();
       await expect
         .poll(async () =>
-          (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
+          (await engineGroup.locator("option").allTextContents()).map((label) => label.trim()),
         )
         .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
-      await expect
-        .poll(() =>
-          engineGroup
-            .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
-            .isChecked(),
-        )
-        .toBe(true);
+      await expect.poll(() => engineGroup.inputValue()).toBe("memory-core");
 
       if (captureUiProofEnabled) {
         await page

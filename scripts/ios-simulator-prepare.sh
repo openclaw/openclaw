@@ -22,8 +22,22 @@ fi
 simulator_id="$1"
 # Disable only Spotlight search and Family/Screen Time, retaining app capabilities.
 readonly kept_categories="widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other"
+
+run_timed() {
+  local phase="$1"
+  shift
+  local status=0
+  local TIMEFORMAT
+  # Bash's elapsed wall time adds no timer subprocesses or command-output capture.
+  time {
+    "$@" || status=$?
+    TIMEFORMAT=$'\n'"OPENCLAW_SIMULATOR_TIMING phase=$phase seconds=%3R exit=$status"
+  }
+  return "$status"
+}
+
 # Finish the initial cold boot before starting SimSlim's reconfiguration deadline.
-xcrun simctl bootstatus "$simulator_id" -b
-"$simslim_binary" on "$simulator_id" --except "$kept_categories"
-xcrun simctl bootstatus "$simulator_id" -b
-"$simslim_binary" verify "$simulator_id" --except "$kept_categories"
+run_timed cold-boot xcrun simctl bootstatus "$simulator_id" -b
+run_timed configure "$simslim_binary" on "$simulator_id" --except "$kept_categories"
+run_timed ready xcrun simctl bootstatus "$simulator_id" -b
+run_timed verify "$simslim_binary" verify "$simulator_id" --except "$kept_categories"

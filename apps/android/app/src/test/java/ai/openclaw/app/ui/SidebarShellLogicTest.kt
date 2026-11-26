@@ -357,6 +357,161 @@ class SidebarShellLogicTest {
     assertEquals(SidebarSessionActivity.Unread, sidebarSessionActivity("queued", null, false, true))
   }
 
+  @Test
+  fun childSessionsNestUnderTheirListedParentInsteadOfTheirOwnRows() {
+    val parent = session("agent:main:dashboard:parent", 50)
+    val child = session("agent:main:subagent:child", 90).copy(parentSessionKey = parent.key)
+    val grandchild = session("agent:main:subagent:grandchild", 80).copy(spawnedBy = child.key)
+    val other = session("agent:main:dashboard:other", 40)
+
+    val presentation = sidebarSessionPresentation(listOf(parent, child, grandchild, other), emptyList())
+
+    assertEquals(listOf(parent.key, other.key), presentation.recent.map { it.key })
+    assertEquals(listOf(child.key), presentation.childrenByParent[parent.key].orEmpty().map { it.key })
+    assertEquals(listOf(grandchild.key), presentation.childrenByParent[child.key].orEmpty().map { it.key })
+    assertEquals(parent.key, presentation.rootKeyOf(grandchild.key))
+    assertEquals(
+      listOf(parent.key, child.key, grandchild.key, other.key),
+      presentation.withDescendants(presentation.recent).map { it.key },
+    )
+  }
+
+  @Test
+  fun explicitPlacementAndUnlistedParentsKeepChildSessionsAtTheTopLevel() {
+    val parent = session("agent:main:dashboard:parent", 10)
+    val pinnedChild = session("agent:main:subagent:pinned", 90, pinned = true).copy(parentSessionKey = parent.key)
+    val filedChild = session("agent:main:subagent:filed", 80, category = "Work").copy(parentSessionKey = parent.key)
+    val rootChild = session("agent:main:dashboard:root", 70).copy(parentSessionKey = parent.key, sidebarRoot = true)
+    val newChat =
+      session("agent:main:dashboard:new", 60).copy(parentSessionKey = parent.key, createdVia = "operator", spawnDepth = 0)
+    val orphan = session("agent:main:subagent:orphan", 50).copy(parentSessionKey = "agent:main:dashboard:unloaded")
+    val catalogChild = session("agent:main:subagent:catalog-child", 40).copy(parentSessionKey = "agent:main:catalog")
+    val catalogParent = session("agent:main:catalog", 30)
+
+    val presentation =
+      sidebarSessionPresentation(
+        listOf(parent, pinnedChild, filedChild, rootChild, newChat, orphan, catalogChild, catalogParent),
+        emptyList(),
+        excludedSessionKeys = setOf(catalogParent.key),
+      )
+
+    assertEquals(listOf(pinnedChild.key), presentation.pinned.map { it.key })
+    assertEquals(
+      listOf(filedChild.key),
+      presentation.groups
+        .single()
+        .entries
+        .map { it.key },
+    )
+    // A parent shown in its catalog section cannot adopt rows into Recent.
+    assertEquals(
+      listOf(rootChild.key, newChat.key, orphan.key, catalogChild.key, parent.key),
+      presentation.recent.map { it.key },
+    )
+    assertTrue(presentation.childrenByParent.isEmpty())
+  }
+
+  @Test
+  fun homeChildrenStayTopLevelConversations() {
+    val home = session("agent:main:main", 10)
+    val conversation = session("agent:main:dashboard:work", 20).copy(parentSessionKey = home.key)
+    val legacyHome = session("main", 5)
+    val legacyChild = session("agent:main:subagent:legacy", 15).copy(spawnedBy = legacyHome.key)
+    val customHome = session("agent:main:custom-home", 1).copy(isMain = true)
+    val customChild = session("agent:main:subagent:custom", 25).copy(parentSessionKey = customHome.key)
+
+    val presentation = sidebarSessionPresentation(listOf(home, conversation, legacyHome, legacyChild, customHome, customChild), emptyList())
+
+    assertTrue(presentation.parentByKey.isEmpty())
+    assertEquals(
+      listOf(customChild.key, conversation.key, legacyChild.key, home.key, legacyHome.key, customHome.key),
+      presentation.recent.map { it.key },
+    )
+  }
+
+  @Test
+  fun aParentRanksByItsNewestChildActivity() {
+    val oldParent = session("agent:main:dashboard:old", 10)
+    val freshChild = session("agent:main:subagent:fresh", 100).copy(parentSessionKey = oldParent.key)
+    val newer = (1..3).map { session("agent:main:dashboard:newer-$it", 50 + it.toLong()) }
+
+    val presentation = sidebarSessionPresentation(listOf(oldParent, freshChild) + newer, emptyList())
+
+    assertEquals(oldParent.key, presentation.recent.first().key)
+    assertEquals(oldParent.key, sidebarSectionWindow(presentation.recent, visibleLimit = 1, activeSessionKey = "").rows.single().key)
+  }
+
+  @Test
+  fun aCollapsedSectionOpensForAnOpenChildOfOneOfItsSessions() {
+    val pinnedParent = session("agent:main:dashboard:pinned", 30, pinned = true)
+    val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = pinnedParent.key)
+    val other = session("agent:main:dashboard:other", 10)
+    val presentation = sidebarSessionPresentation(listOf(pinnedParent, child, other), emptyList())
+
+    assertEquals(listOf(pinnedParent.key), presentation.pinned.map { it.key })
+    assertTrue(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = child.key))
+    assertFalse(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = pinnedParent.key))
+    assertFalse(presentation.holdsNestedSession(presentation.recent, activeSessionKey = child.key))
+    assertFalse(presentation.holdsNestedSession(presentation.pinned, activeSessionKey = other.key))
+  }
+
+  @Test
+  fun aCollapsedSectionReportsWorkInItsSessionsHiddenChildren() {
+    val pinnedParent = session("agent:main:dashboard:pinned", 30, pinned = true)
+    val runningChild = session("agent:main:subagent:child", 20).copy(parentSessionKey = pinnedParent.key, status = "running")
+    val other = session("agent:main:dashboard:other", 10)
+    val presentation = sidebarSessionPresentation(listOf(pinnedParent, runningChild, other), emptyList())
+
+    assertEquals(SidebarSessionActivity.Running, presentation.collapsedSectionChildActivity(presentation.pinned))
+    assertNull(presentation.collapsedSectionChildActivity(presentation.recent))
+  }
+
+  @Test
+  fun aCollapsedParentReportsItsHiddenChildrensRequests() {
+    val parent = session("agent:main:dashboard:parent", 30)
+    val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = parent.key)
+    val grandchild = session("agent:main:subagent:grandchild", 10).copy(parentSessionKey = child.key)
+    val presentation = sidebarSessionPresentation(listOf(parent, child, grandchild), emptyList())
+
+    assertEquals(listOf(parent.key, child.key, grandchild.key), presentation.attentionRows(parent, childrenExpanded = false).map { it.key })
+    assertEquals(listOf(parent.key), presentation.attentionRows(parent, childrenExpanded = true).map { it.key })
+  }
+
+  @Test
+  fun parentsStartCollapsedUnlessTheyHoldTheOpenSessionAndHonorTheUsersChoice() {
+    val parent = session("agent:main:dashboard:parent", 50)
+    val child = session("agent:main:subagent:child", 40).copy(parentSessionKey = parent.key)
+    val grandchild = session("agent:main:subagent:grandchild", 30).copy(parentSessionKey = child.key)
+    val presentation = sidebarSessionPresentation(listOf(parent, child, grandchild), emptyList())
+
+    assertFalse(presentation.childrenExpanded(parent.key, activeSessionKey = parent.key, emptyList(), emptyList()))
+    assertTrue(presentation.childrenExpanded(parent.key, activeSessionKey = grandchild.key, emptyList(), emptyList()))
+    assertFalse(presentation.childrenExpanded(parent.key, activeSessionKey = grandchild.key, emptyList(), listOf(parent.key)))
+    assertTrue(presentation.childrenExpanded(parent.key, activeSessionKey = "", listOf(parent.key), emptyList()))
+  }
+
+  @Test
+  fun collapsedParentsShowHiddenWorkAndUnreadChildrenButNotFailures() {
+    fun activityFor(vararg children: ChatSessionEntry): SidebarSessionActivity? {
+      val parent = session("parent", 100)
+      val rows = listOf(parent) + children.map { it.copy(parentSessionKey = parent.key) }
+      return sidebarSessionPresentation(rows, emptyList()).collapsedChildActivity(parent.key)
+    }
+    val idle = session("agent:main:subagent:idle", 10)
+
+    assertNull(activityFor(idle))
+    assertNull(activityFor(idle.copy(status = "failed", lastRunError = "boom")))
+    // A failed child shows its failure on its own row, so its unread flag does not fold up either.
+    assertNull(activityFor(idle.copy(status = "failed", unread = true)))
+    assertEquals(SidebarSessionActivity.Unread, activityFor(idle.copy(unread = true)))
+    val queued = session("agent:main:subagent:queued", 30).copy(status = "queued", hasActiveRun = true)
+    assertEquals(SidebarSessionActivity.Queued, activityFor(idle.copy(unread = true), queued))
+    assertEquals(
+      SidebarSessionActivity.Running,
+      activityFor(queued, session("agent:main:subagent:busy", 20).copy(status = "running")),
+    )
+  }
+
   private fun agent(
     id: String,
     kind: String? = null,

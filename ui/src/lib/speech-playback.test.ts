@@ -9,16 +9,28 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "./speech-playback.ts";
 
+const chunking = vi.hoisted(() => ({ loaded: false }));
+vi.mock("../../../packages/markdown-core/src/chunk-text.js", async (importOriginal) => {
+  chunking.loaded = true;
+  return importOriginal<typeof import("../../../packages/markdown-core/src/chunk-text.js")>();
+});
+const chunkingLoadedAtBoot = chunking.loaded;
+
 let started = createDeferred();
+let primer: { promise: Promise<void> } | undefined;
 const audio: FakeAudio[] = [];
 const players: GatewaySpeechPlayback[] = [];
 const createUrl = vi.fn(() => "blob:synthetic-speech");
 const revokeUrl = vi.fn();
 
 class FakeAudio extends EventTarget {
-  play = vi.fn(async () => {
+  play = vi.fn(async (): Promise<void> => {
     if (this.src.startsWith("blob:")) {
       started.resolve();
+      return;
+    }
+    if (this.src.startsWith("data:")) {
+      await primer?.promise;
     }
   });
   pause = vi.fn();
@@ -32,6 +44,7 @@ class FakeAudio extends EventTarget {
 
 beforeEach(() => {
   started = createDeferred();
+  primer = undefined;
   audio.length = 0;
   createUrl.mockClear();
   revokeUrl.mockClear();
@@ -44,6 +57,7 @@ afterEach(() => {
   for (const playback of players.splice(0)) {
     playback.stop();
   }
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -62,8 +76,10 @@ it.each(["tts.speak", "talk.speak"] as const)(
     const request = createGatewayRequestMock(async () => speechResult);
     const client = createTestGatewayClient(request);
     const playback = player();
+    expect(chunkingLoadedAtBoot).toBe(false);
     const speaking = playback.speak(client, "a".repeat(5000), method);
     await started.promise;
+    expect(chunking.loaded).toBe(true);
     expect(request).toHaveBeenCalledExactlyOnceWith(method, { text: "a".repeat(4096) });
     const element = expectDefined(audio[0], "first speech element");
     started = createDeferred();
@@ -74,6 +90,42 @@ it.each(["tts.speak", "talk.speak"] as const)(
     element.dispatchEvent(new Event("ended"));
     await speaking;
     expect(revokeUrl).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([false, true])(
+  "plays speech after a stalled primer (late settlement: %s)",
+  async (settleLate) => {
+    vi.useFakeTimers();
+    const pendingPrimer = createDeferred();
+    primer = pendingPrimer;
+    const requested = createDeferred();
+    const request = createGatewayRequestMock(async () => {
+      requested.resolve();
+      return speechResult;
+    });
+    const speaking = player().speak(createTestGatewayClient(request), "Reply", "talk.speak");
+    await requested.promise;
+
+    const element = expectDefined(audio[0], "the primed speech element");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(element.play).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(element.play).toHaveBeenCalledTimes(2);
+    expect(element.pause).toHaveBeenCalledOnce();
+    expect(element.removeAttribute).toHaveBeenCalledExactlyOnceWith("src");
+    expect(element.load).toHaveBeenCalledTimes(2);
+    expect(element.load.mock.invocationCallOrder[0]).toBeLessThan(
+      element.play.mock.invocationCallOrder[1] ?? 0,
+    );
+
+    if (settleLate) {
+      pendingPrimer.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(element.pause).toHaveBeenCalledOnce();
+    }
+    element.dispatchEvent(new Event("ended"));
+    await speaking;
   },
 );
 
@@ -98,9 +150,15 @@ it("uses the configured speech bound and stops before another chunk is requested
 
 it("releases a cancelled pending synthesis without playing its late result", async () => {
   const pending = createDeferred<typeof speechResult>();
-  const request = createGatewayRequestMock(() => pending.promise);
+  const requested = createDeferred();
+  const request = createGatewayRequestMock(() => {
+    requested.resolve();
+    return pending.promise;
+  });
   const playback = player();
   const speaking = playback.speak(createTestGatewayClient(request), "Pending speech");
+  await requested.promise;
+  expect(request).toHaveBeenCalledOnce();
   playback.stop();
   await speaking;
   pending.resolve(speechResult);

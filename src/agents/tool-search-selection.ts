@@ -1,6 +1,6 @@
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
-import type { CatalogSource, ToolSearchConfig } from "./tool-search-types.js";
+import type { CatalogSource, ToolSearchConfig } from "./tool-search-protocol.js";
 
 export type ToolSearchSelection = Pick<ToolSearchConfig, "include" | "exclude">;
 

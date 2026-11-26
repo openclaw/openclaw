@@ -1,6 +1,7 @@
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { GatewayIngressPrincipal } from "../../plugins/gateway-ingress.types.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
+import type { OpenClawIdTunnelPrincipal } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 
@@ -13,17 +14,28 @@ export type GatewayAuthenticatedUserProfile = {
   updatedAt: number;
 };
 
-export type RemoteIngressPrincipalSnapshot = Readonly<{
+export type RemoteIngressPrincipalIdentity = Readonly<{
   bindingId: string;
-  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
-  preparedSessionProfile: UserProfileIdentity;
-  operatorRoleActor: GatewayOperatorRoleActor;
-  operatorRolePolicy?: GatewayOperatorRoleDefinition;
-  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
-  scopes: string[];
-  signal: AbortSignal;
-  assertCurrent(): void;
+  pluginId: string;
+  audienceId: string;
+  principal: GatewayIngressPrincipal;
 }>;
+
+export type RemoteIngressPrincipalSnapshot = RemoteIngressPrincipalIdentity &
+  Readonly<{
+    /** Host-captured original admission, carried across further app approvals. */
+    admission?: string;
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
+    authenticatedUserProfile: GatewayAuthenticatedUserProfile;
+    preparedSessionProfile: UserProfileIdentity;
+    operatorRoleActor: GatewayOperatorRoleActor;
+    operatorRolePolicy?: GatewayOperatorRoleDefinition;
+    operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
+    scopes: string[];
+    signal: AbortSignal;
+    assertCurrent(): void;
+  }>;
 
 /** Core-retained grant authority; browser headers cannot create this context. */
 export type RemoteControlUiIngressContext = Readonly<{
@@ -44,4 +56,6 @@ export type GatewayWsBrowserOrigin = {
   origin?: string;
   isLocalClient?: boolean;
   remoteControlUiIngress?: RemoteControlUiIngressContext;
+  /** The connection was relayed by the OpenClaw ID tunnel (attested by the private ingress listener). */
+  openclawIdTunnel?: boolean;
 };

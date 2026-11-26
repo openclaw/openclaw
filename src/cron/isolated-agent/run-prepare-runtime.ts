@@ -1,8 +1,9 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
+import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { bindSessionMcpStoreOwner } from "../../config/sessions/session-mcp-store-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
@@ -37,6 +38,7 @@ export type RunCronAgentTurnParams = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: CronLaneWaitCallback;
+  providerRunSlot?: import("../service/timer-execution-timeout.js").CronProviderRunSlot;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -64,7 +66,32 @@ export function createCronSessionRowWriter(params: {
 }): CronSessionRowWriter {
   const { agentId, agentSessionKey } = params;
   let baseSessionMaintenanceStarted = false;
-  return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+  return async ({
+    storePath,
+    sessionKey,
+    operation,
+    resetBoundary,
+    assertCommitAllowed,
+    storeAdmission,
+  }) => {
+    // Only the pre-run write requests a witness. Publication waits for the entire write to succeed.
+    if (storeAdmission) {
+      bindSessionMcpStoreOwner(storeAdmission, undefined);
+    }
+    let databaseIdentity: string | undefined;
+    let databaseBirthtime: string | undefined;
+    const publish = (entry: MutableCronSession["sessionEntry"] | null) => {
+      if (storeAdmission && entry && databaseIdentity !== undefined) {
+        bindSessionMcpStoreOwner(storeAdmission, {
+          agentId,
+          sessionId: entry.sessionId,
+          sessionKey,
+          databaseIdentity,
+          databaseBirthtime,
+        });
+      }
+      return entry;
+    };
     const assertCurrent = () => {
       params.assertCurrent?.();
       assertCommitAllowed?.();
@@ -81,6 +108,12 @@ export function createCronSessionRowWriter(params: {
         agentId,
         storePath,
         commitGuard: assertCurrent,
+        onLifecycleCommitted: storeAdmission
+          ? (source) => {
+              databaseIdentity = source?.physicalIdentity;
+              databaseBirthtime = source?.birthtime;
+            }
+          : undefined,
         upserts: [
           {
             sessionKey,
@@ -91,7 +124,7 @@ export function createCronSessionRowWriter(params: {
         ],
         skipMaintenance: true,
       });
-      return entry;
+      return publish(entry);
     }
     const { applySessionEntryOperation } =
       await import("../../config/sessions/session-accessor.sqlite-entry.js");
@@ -101,46 +134,42 @@ export function createCronSessionRowWriter(params: {
       // The maintenance owner follows later writes through its receipt subscription.
       skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
       workerGuard: { assertCurrent },
+      onCommittedSource: storeAdmission
+        ? (source) => {
+            if (source.agentId === agentId) {
+              databaseIdentity = source.databaseIdentity;
+              databaseBirthtime = source.databaseBirthtime;
+            }
+          }
+        : undefined,
     });
     if (sessionKey === agentSessionKey) {
       baseSessionMaintenanceStarted = true;
     }
-    return entry;
+    return publish(entry);
   };
 }
 
-function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
-  return (
-    Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
-    Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
-  );
-}
-
 /**
- * Resolves the run's auth profile, skipping the lazy runtime entirely when no
- * override, configured profile, or store source exists for it to find. Auth
- * resolution may mutate session state, so it uses the store and key that
- * persistence will write.
+ * The shared resolver validates explicit and matching default account selections
+ * even without a credential store. Resolution may mutate session state, so it
+ * uses the store and key that persistence will write.
  */
 export async function resolveCronAuthSelection(params: {
   agentId: string;
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentRuntime: string;
   configuredProfileId?: string;
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
   isNewSession: boolean;
 }) {
-  const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
-  if (
-    !hasSessionOverride &&
-    !hasConfiguredAuthProfiles(params.cfg) &&
-    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
-  ) {
-    return undefined;
-  }
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.agentRuntime,
+  )?.nativeAuthProfileIds;
   const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,
@@ -148,6 +177,7 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    nativeAuthProfileIds,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,

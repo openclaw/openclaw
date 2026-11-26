@@ -1,22 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathEntryExists } from "./path-existence.js";
 import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
-import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {
   decodeUpdateRecovery,
   isUpdateRecoveryPending,
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery-schema.js";
 import {
-  inspectPluginCohortRecoveryRows,
-  inspectRecoveryRows,
-} from "./update-run-recovery-store.js";
-import {
-  assertNoPendingUpdateRecovery,
+  assertUpdateRecoveryAdmissionFacts,
   pluginCohortRecoveryMatchesSource,
   type UpdateRecoveryAdmissionOptions,
 } from "./update-run-recovery.js";
@@ -34,8 +32,22 @@ export async function assertUpdateRecoveryAdmission(
   if (!parentExists) {
     return;
   }
-  assertNoPendingUpdateRecovery({ ...options, path: databasePath });
+  const selected = { ...options, path: databasePath };
+  const facts = await readUpdateRecoveryAdmissionFactsAsync(selected);
+  assertUpdateRecoveryAdmissionFacts(facts, selected);
   options.pluginCohort?.fence.assertCurrent();
+}
+
+/** Read facts in the fixed worker; live continuation authority never crosses that boundary. */
+export async function readUpdateRecoveryAdmissionFactsAsync(options: OpenClawStateDatabaseOptions) {
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.recoveryAdmission" },
+      { current: true },
+    ),
+  );
+  return reply?.facts;
 }
 
 /** Explicit repair may inspect one bounded pair before acquiring custody. No facts grant effects. */
@@ -50,30 +62,27 @@ export async function inspectPluginCohortRecoveryAdmission(
     return undefined;
   }
   const selected = { ...options, path: databasePath };
-  return withUpdateRunRead(
-    ({ db }) => {
-      const cohorts = inspectPluginCohortRecoveryRows(db);
-      const pending = inspectRecoveryRows(db).filter((entry) =>
-        isUpdateRecoveryPending(entry.record),
-      );
-      const only = pending[0];
-      if (!only) {
-        return undefined;
-      }
-      const pair = cohorts.find(({ cohort }) => cohort.runId === only.record.runId);
-      if (
-        pending.length !== 1 ||
-        !pair ||
-        (expectedRunId !== undefined && pair.cohort.runId !== expectedRunId) ||
-        !pluginCohortRecoveryMatchesSource(pair, selected)
-      ) {
-        throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(only.raw, only.record.runId));
-      }
-      return pair;
-    },
-    selected,
-    openDoctorStateSchemaReadAdmission,
-  );
+  const facts = await readUpdateRecoveryAdmissionFactsAsync(selected);
+  const pending = facts?.recoveries.filter((entry) => isUpdateRecoveryPending(entry.record)) ?? [];
+  const only = pending[0];
+  if (!only) {
+    return undefined;
+  }
+  const pair = facts?.cohorts.find(({ cohort }) => cohort.runId === only.record.runId);
+  if (
+    pending.length !== 1 ||
+    !pair ||
+    (expectedRunId !== undefined && pair.cohort.runId !== expectedRunId) ||
+    !pluginCohortRecoveryMatchesSource(pair, selected)
+  ) {
+    throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(only.raw, only.record.runId));
+  }
+  return pair;
+}
+
+/** A restore directory beside the state database: evidence, unlike a failed listing. */
+export class InterruptedStateRestoreError extends Error {
+  override name = "InterruptedStateRestoreError";
 }
 
 /** Check publication before an admitted row reader; false means the parent is absent. */
@@ -89,7 +98,7 @@ export async function assertUpdateRecoveryDirectoryAdmission(
   // Do not swallow discovery races or recreate an absent canonical database.
   const family = (await fs.readdir(parent)).find((name) => name.startsWith(".openclaw-restore-"));
   if (family) {
-    throw new Error(
+    throw new InterruptedStateRestoreError(
       `Interrupted shared-database publication left ${path.join(parent, family)}, which may hold the only copy of the original state database; update commands stay read-only. Keep that directory and see https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore.`,
     );
   }

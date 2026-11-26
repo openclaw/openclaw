@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
@@ -99,6 +100,7 @@ function mapRun(
         }
       : undefined,
     deliveryStatus: run.delivery?.status,
+    requesterDelivery: run.delivery?.requesterDelivery,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
     ...(pausedForMs === undefined ? {} : { pausedForMs }),
@@ -292,10 +294,11 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     }
     return { cfg, controller, readable: [...readable.values()], controlled };
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Subagents",
     name: "subagents",
     parameters: SubagentsToolSchema,
+    repeatable: { actions: ["list", "wait"] },
     description:
       "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
     execute: async (_toolCallId, args, signal) => {
@@ -454,4 +457,10 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
     },
   };
+  // A worker reaches this tool over the Gateway; its call must outlive the requested wait.
+  bindAgentToolExecutionLocation(tool, {
+    kind: "gateway",
+    timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+  });
+  return tool;
 }

@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
@@ -27,17 +28,22 @@ export function stateLeaseWriteScope(
 }
 
 /** Publish owner facts in the caller's transaction without renewing or replacing its lease. */
-export function updateOpenClawStateLeasePayloadInTransaction(
+export function patchOpenClawStateLeasePayloadInTransaction(
   db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
-  payloadJson: string,
+  fields: Record<string, unknown>,
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [stateLeaseWriteScope(identity)], () => {
+    const row = readOpenClawStateLease(db, identity);
+    const payload = row?.owner === identity.owner && safeParseJsonRecord(row.payloadJson ?? "");
+    if (!payload) {
+      return false;
+    }
     const result = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<LeaseDatabase>(db)
         .updateTable("state_leases")
-        .set({ payload_json: payloadJson })
+        .set({ payload_json: JSON.stringify({ ...payload, ...fields }) })
         .where("scope", "=", identity.scope)
         .where("lease_key", "=", identity.key)
         .where("owner", "=", identity.owner),

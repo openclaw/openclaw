@@ -35,6 +35,7 @@ import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
@@ -364,12 +365,18 @@ export async function completeEmbeddedAttemptAfterTurn(
       entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
+    executionState.agentTerminal = captureAgentTerminalSnapshot({
+      terminalMessage: terminalEntry?.message,
+      reachedPromptBoundary,
+      success: !lifecycleForAgentEnd.aborted && !promptError,
+      hasHookError: agentEndError !== undefined,
+    });
     await runAgentEndSideEffectsAsync({
       [completedTurnMessageAnchor]:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? captureCompletedTurnMessageAnchor(sessionManager, terminalEntry.id)
           : undefined,
-      skillExperienceReviewSource:
+      completedTurnSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }
           : undefined,

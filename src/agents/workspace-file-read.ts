@@ -1,16 +1,38 @@
 import syncFs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
-import { openRootFile } from "../infra/boundary-file-read.js";
+import { isMainThread } from "node:worker_threads";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRootFileMissingFailure, openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { runFsSafeFilesystemTask } from "../infra/fs-safe-filesystem-worker.js";
+import { FsSafeError } from "../infra/fs-safe.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { retryAsync } from "../infra/retry.js";
+import { decodeNativeWorkerFailure } from "../infra/worker-native-error.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
-import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
+import {
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+  type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
+} from "./workspace-bootstrap-policy.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
 } from "./workspace-bootstrap-read.js";
-import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
+import type {
+  WorkspaceFileSourceIdentity,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceGuardedReadResult,
+} from "./workspace-filesystem.types.js";
+
+const workspaceLogger = createSubsystemLogger("workspace");
 
 const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
@@ -25,27 +47,8 @@ export function retryWorkspaceRead<T>(operation: () => Promise<T>): Promise<T> {
   });
 }
 
-type WorkspaceFileSourceIdentity = readonly [
-  canonicalPath: string,
-  stat: FileIdentityStat | undefined,
-  workspaceRelativePath?: string,
-];
 // Loader-owned records retain the pinned-open identity through final session filtering.
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
-
-type WorkspaceGuardedReadResult =
-  | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
-  | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
-
-function workspaceFileIdentity(
-  stat: syncFs.Stats,
-  identity: FileIdentityStat,
-  canonicalPath: string,
-): string {
-  // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
-  // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
-  return `${canonicalPath}|${identity.dev}:${identity.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-}
 
 export function createLoadedWorkspaceBootstrapFile(
   name: WorkspaceBootstrapFile["name"],
@@ -83,13 +86,9 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
   );
 }
 
-export async function readWorkspaceFileWithGuards(params: {
-  filePath: string;
-  workspaceDir: string;
-  useCache?: boolean;
-  /** Identity-scoped files must not alias another profile through parent symlinks. */
-  rejectAliases?: boolean;
-}): Promise<WorkspaceGuardedReadResult> {
+export async function readWorkspaceFileWithGuards(
+  params: WorkspaceFilesystemReadCommand["input"],
+): Promise<WorkspaceGuardedReadResult> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
     if (!access.bridge.readFileWithSource) {
@@ -128,6 +127,50 @@ export async function readWorkspaceFileWithGuards(params: {
       return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
     }
   }
+  return isMainThread
+    ? await runWorkspaceFilesystemRead(params)
+    : await readLocalWorkspaceFileWithGuards(params);
+}
+
+/** Capture native policy before dispatch; physical read admission stays in the worker. */
+async function runWorkspaceFilesystemRead(
+  input: WorkspaceFilesystemReadCommand["input"],
+  nativeMode = getFsSafeNativeConfig().mode,
+): Promise<WorkspaceGuardedReadResult> {
+  try {
+    const { result } = await runFsSafeFilesystemTask({
+      type: "workspace-read",
+      nativeMode,
+      input: {
+        filePath: input.filePath,
+        workspaceDir: input.workspaceDir,
+        rejectAliases: input.rejectAliases,
+      },
+    });
+    if (result.ok) {
+      return result;
+    }
+    const error = result.error === undefined ? undefined : decodeNativeWorkerFailure(result.error);
+    return {
+      ok: false,
+      reason: result.reason,
+      error:
+        result.fsCode && error instanceof Error
+          ? new FsSafeError(result.fsCode, error.message, {
+              cause: error.cause,
+              details: result.details,
+            })
+          : error,
+    };
+  } catch (error) {
+    return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
+  }
+}
+
+/** Existing filesystem workers consume the guarded read without dispatching another worker. */
+export async function readLocalWorkspaceFileWithGuards(
+  params: WorkspaceFilesystemReadCommand["input"],
+): Promise<WorkspaceGuardedReadResult> {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
@@ -152,15 +195,9 @@ export async function readWorkspaceFileWithGuards(params: {
         return opened;
       }
 
-      const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
       const sourceIdentity = [opened.path, opened.exactIdentity] as const;
-      const cached =
-        params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
       try {
-        const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
-        if (cached === undefined && params.useCache !== false) {
-          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
-        }
+        const content = await readWorkspaceBootstrapFile(opened.fd);
         return { ok: true, content, sourceIdentity };
       } finally {
         syncFs.closeSync(opened.fd);
@@ -190,4 +227,73 @@ function isTransientWorkspaceReadError(error: unknown): boolean {
     }
   }
   return error instanceof Error && TRANSIENT_WORKSPACE_READ_MESSAGE.test(error.message);
+}
+
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  names?: readonly WorkspaceBootstrapFileName[],
+): Promise<WorkspaceBootstrapFile[]> {
+  const resolvedDir = resolveUserPath(dir);
+  const access = getAgentWorkspaceAccess(resolvedDir);
+  // Select names before opening their guarded descriptors.
+  const entries = WORKSPACE_BOOTSTRAP_FILENAMES.filter(
+    (name) => names === undefined || names.includes(name),
+  ).map((name) => ({ name, filePath: path.join(resolvedDir, name) }));
+
+  // The canonical list bounds fan-out. Join every read before releasing workspace
+  // access on failure, then project results in prompt order, not completion order.
+  const loadedFiles = await settleCurrentReadPreparations(
+    entries.map(async (entry) => {
+      if (
+        !access &&
+        (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
+        // Lookup failures still need a guarded read for content or an unreadable diagnostic.
+        !(await exactWorkspaceEntryExists(resolvedDir, entry.name).catch(() => true))
+      ) {
+        return undefined;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
+      });
+      return { entry, loaded };
+    }),
+  );
+  const result: WorkspaceBootstrapFile[] = [];
+  for (const file of loadedFiles) {
+    if (!file) {
+      continue;
+    }
+    const { entry, loaded } = file;
+    if (loaded.ok) {
+      result.push(createLoadedWorkspaceBootstrapFile(entry.name, entry.filePath, loaded));
+    } else if (isRootFileMissingFailure(loaded)) {
+      if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
+        continue;
+      }
+      result.push({ name: entry.name, path: entry.filePath, missing: true });
+    } else {
+      const fallbackReason = `workspace file could not be read (${loaded.reason})`;
+      const rawReason = loaded.error instanceof Error ? loaded.error.message : fallbackReason;
+      const reason = truncateUtf16Safe(
+        rawReason.replaceAll(/\s+/gu, " ").trim() || fallbackReason,
+        300,
+      );
+      workspaceLogger.warn("Workspace bootstrap file is unreadable.", {
+        fileName: entry.name,
+        filePath: entry.filePath,
+        reason,
+        consoleMessage: `Workspace bootstrap file is unreadable: file=${entry.filePath} reason=${reason}`,
+      });
+      result.push({
+        name: entry.name,
+        path: entry.filePath,
+        content: `[UNREADABLE: ${reason}]`,
+        missing:
+          loaded.error instanceof FsSafeError &&
+          (loaded.error.code === "symlink" || loaded.error.code === "outside-workspace"),
+      });
+    }
+  }
+  return result;
 }

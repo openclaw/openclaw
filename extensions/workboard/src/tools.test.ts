@@ -473,9 +473,22 @@ describe("workboard tools", () => {
     const read = await runTool(tools, "read", { id: parent.id });
     expect(read.workerContext).toContain("Parent");
     expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
-    const released = await runTool(tools, "release", {
+    const claimOnlyRelease = await runTool(tools, "release", {
       id: parent.id,
       token: claimed.token,
+    });
+    expect(claimOnlyRelease.card).toMatchObject({ status: "running" });
+    expect((await store.get(parent.id))?.metadata?.claim).toBeUndefined();
+    expect(tools.get("workboard_release")).toMatchObject({
+      description:
+        "Release this agent's Workboard claim. Omitting status only clears the claim and preserves the current card status, including running. Pass status (e.g. todo, ready, or review) to pause or hand off work.",
+      parameters: {
+        properties: { status: { description: "Omit: clear claim only, preserve status." } },
+      },
+    });
+    const released = await runTool(tools, "release", {
+      id: parent.id,
+      token: (await runTool(tools, "claim", { id: parent.id })).token,
       status: "review",
     });
     expect(released.card).toMatchObject({ status: "review" });
@@ -696,6 +709,68 @@ describe("workboard tools", () => {
       });
     }
     expect(await previousStore.list()).toEqual([]);
+  });
+
+  it("refuses a late completion from a run the card has already retried", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Quiet slow job", status: "ready" });
+    const sessionKey = "agent:alpha:subagent:workboard-quiet-slow";
+    // Dispatch an attempt the way the dispatcher does: claim, prepare, accept.
+    const launch = async (runId: string) => {
+      const claim = await store.claim(card.id, { ownerId: "alpha" });
+      const prepared = await store.prepareExecutionLaunch(card.id, {
+        requestedSessionKey: sessionKey,
+        now: claim.card.updatedAt + 1,
+        scope: { ownerId: "alpha", token: claim.token },
+      });
+      await store.acceptExecutionLaunch(card.id, {
+        expectedLaunch: prepared.launch,
+        expectedSessionKey: prepared.launch.requestedSessionKey,
+        expectedRunId: prepared.launch.provisionalRunId,
+        sessionKey,
+        runId,
+        execution: { ...prepared.card.execution!, sessionKey, runId },
+        acceptedAt: prepared.launch.preparedAt + 1,
+      });
+    };
+    await launch("old-run");
+    // The operator gives up on the silent first run and retries the card.
+    await store.block(card.id, { reason: "Silent; retrying." }, null);
+    await store.unblock(card.id);
+    await store.move(card.id, "ready", undefined);
+    await launch("new-run");
+
+    const oldRun = toolsByName(
+      createWorkboardTools({ store, context: { agentId: "alpha", runId: "old-run" } }),
+    );
+    await expect(
+      executeTool(oldRun, "complete", { id: card.id, summary: "OLD-17" }),
+    ).rejects.toThrow("superseded");
+    expect(await store.get(card.id)).toMatchObject({
+      status: "running",
+      runId: "new-run",
+      metadata: {
+        attempts: [
+          { runId: "old-run", status: "blocked" },
+          { runId: "new-run", status: "running" },
+        ],
+      },
+    });
+
+    const newRun = toolsByName(
+      createWorkboardTools({ store, context: { agentId: "alpha", runId: "new-run" } }),
+    );
+    const completed = await runTool(newRun, "complete", { id: card.id, summary: "NEW-62" });
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: {
+        automation: { summary: "NEW-62" },
+        attempts: [
+          { runId: "old-run", status: "blocked" },
+          { runId: "new-run", status: "succeeded" },
+        ],
+      },
+    });
   });
 });
 

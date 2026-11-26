@@ -21,8 +21,8 @@ const snapshot = () => (${value});
 export function createConfigIO() { return { loadConfig: snapshot${factory ? ", readConfigFileSnapshot: async () => snapshot()" : ""} }; }
 export async function readConfigFileSnapshot() { return snapshot(); }
 export function readCurrentConfigForPolicyCheck() { return snapshot(); }`;
-async function candidateFixture(code: string, files: Record<string, string> = {}) {
-  const root = tempDirs.make("openclaw-update-config-");
+async function candidateFixture(code: string, files: Record<string, string> = {}, nestedPath = "") {
+  const root = path.join(tempDirs.make("openclaw-update-config-"), nestedPath);
   const dist = path.join(root, "dist");
   for (const [name, contents] of Object.entries({
     "package.json": '{"type":"module"}',
@@ -171,6 +171,8 @@ export function normalRuntimeApi() { return process.pid; }
      export function createConfigIO() { return { readBestEffortConfig: async () => ({ generation }) }; }
      export async function readConfigFileSnapshot() { return { generation }; }`,
     },
+    // Keep the diagnostic over 500 code points even under a short temp root.
+    path.join("nested-fixture-".repeat(12), "candidate-".repeat(12)),
   );
   const dependencyFile = path.join(root, "node_modules", "handoff-dependency", "advanced.js");
   const currentEntry = path.join(dist, "current-consumer.mjs");
@@ -206,13 +208,13 @@ await fs.writeFile(candidatePath, candidateBytes);
 await fs.writeFile(aliasPath, aliasBytes);
 await fs.writeFile(new URL(dependency), "export function probePathCaseInsensitiveSync() { return 2; }\\n");
 assert.equal((await io.readBestEffortConfig()).generation, 2);`;
+  const missingModule = `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}`;
+  const reasonCharacters = Array.from(missingModule);
+  expect(reasonCharacters.length).toBeGreaterThan(500);
+  const boundedReason = reasonCharacters.slice(0, 499).join("") + "…";
   runScript(
     script,
-    [
-      warning(
-        `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}`,
-      ),
-    ],
+    [warning(boundedReason)],
     {
       OPENCLAW_UPDATE_IN_PROGRESS: process.env.OPENCLAW_UPDATE_IN_PROGRESS,
       NODE_DISABLE_COMPILE_CACHE: "1",

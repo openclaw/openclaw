@@ -297,9 +297,10 @@ it("rejects conflicting bundled dependencies before setup and reads only the sel
 it("normalizes release-check package mode and guards the source resolver", () => {
   const runReleaseInputCapture = createReleaseInputCapture();
   const { step, before } = jobSteps("openclaw-release-checks", "prepare_release_package");
+  const materialize = step("Materialize release package source");
   const preflight = step("Validate release package source metadata");
   const packageStep = step("Resolve release package artifact");
-  before(preflight, step("Setup Node environment"), packageStep);
+  before(materialize, preflight, step("Setup Node environment"), packageStep);
   const expectMode = (
     input: Parameters<typeof runReleaseInputCapture>[0],
     package_mode: string,
@@ -320,6 +321,13 @@ it("normalizes release-check package mode and guards the source resolver", () =>
     if: "needs.resolve_target.outputs.package_mode == 'source'",
     env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
     run: expect.stringContaining("node scripts/package-source-preflight.mjs"),
+  });
+  expect(materialize).toMatchObject({
+    if: "needs.resolve_target.outputs.package_mode == 'source'",
+    env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
+    run: expect.stringContaining(
+      "git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter",
+    ),
   });
 });
 

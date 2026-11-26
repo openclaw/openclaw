@@ -56,8 +56,8 @@ export function createThemedChatOpener(suite: ReturnType<typeof createControlUiE
     const gateway = await installMockGateway(page, {
       ...scenario,
       methodResponses: {
-        ...scenario.methodResponses,
         "config.get": themeConfigResponse(theme, mode),
+        ...scenario.methodResponses,
       },
     });
     return { themeRequests, gateway, page };

@@ -74,7 +74,7 @@ function parseIgnorePatterns(
 ): { patterns: string[]; chars: number } | typeof COMPLEX_IGNORE_FILE {
   const patterns: string[] = [];
   let patternChars = 0;
-  let lineStart = 0;
+  let lineStart = content.startsWith("\uFEFF") ? 1 : 0;
 
   while (lineStart <= content.length) {
     const newline = content.indexOf("\n", lineStart);
@@ -160,8 +160,7 @@ function readIgnoreFileContent(ignorePath: string): string | typeof OVERSIZED_IG
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string {
-  const trimmed = line.trim();
-  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) {
+  if (!line.trim() || line.startsWith("#")) {
     return "";
   }
 
@@ -172,7 +171,7 @@ function prefixIgnorePattern(line: string, prefix: string): string {
   // Git trims spaces only; escaped slashes still anchor rather than broaden nested rules.
   const matchPattern = normalized.replace(/ +$/, "");
   const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
-  // At the scan root, keep the leading slash so anchored rules stay top-level only.
-  const prefixed = prefix ? `${prefix}${depthGlob}${normalized}` : pattern;
-  return negated ? `!${prefixed}` : prefixed;
+  // Escape the literal parent only; authored patterns and scan-root anchors retain their syntax.
+  const literalPrefix = prefix.replace(/[\\*?[\]#!]/g, "\\$&");
+  return (negated ? "!" : "") + (prefix ? `${literalPrefix}${depthGlob}${normalized}` : pattern);
 }

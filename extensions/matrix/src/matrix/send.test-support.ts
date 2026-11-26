@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
-import type { MatrixClient, MessageEventContent } from "./sdk.js";
+import type { MatrixClient } from "./sdk.js";
 import type { sendMessageMatrix } from "./send.js";
 
 export function createEncryptedMediaPayload() {
@@ -27,7 +27,9 @@ export const makeClient = () => {
   const getRelations = vi.fn().mockResolvedValue({ events: [], nextBatch: null });
   const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
   const uploadContent = vi.fn().mockResolvedValue("mxc://example/file");
-  const prepareRoomForMessageSend = vi.fn();
+  const prepareRoomForMessageSend = vi
+    .fn<MatrixClient["prepareRoomForMessageSend"]>()
+    .mockResolvedValue("m.room.message");
   // SAFETY: This test fixture implements the Matrix client methods exercised by outbound sends.
   const client = {
     sendMessage,
@@ -45,24 +47,6 @@ export const makeClient = () => {
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
   } as unknown as MatrixClient;
-  prepareRoomForMessageSend.mockImplementation(
-    async (roomId: string, content?: MessageEventContent) => {
-      const eventType = await client.getMessageWireEventType(roomId);
-      if (eventType === "m.room.encrypted" && !client.crypto) {
-        throw new Error("Encrypted Matrix room: enable encryption before sending messages");
-      }
-      if (
-        eventType === "m.room.encrypted" &&
-        (typeof content?.url === "string" ||
-          (content?.info &&
-            "thumbnail_url" in content.info &&
-            typeof content.info.thumbnail_url === "string"))
-      ) {
-        throw new Error("Encrypted Matrix room contains unencrypted media; retry the send");
-      }
-      return eventType;
-    },
-  );
   return {
     client,
     sendMessage,
@@ -71,6 +55,7 @@ export const makeClient = () => {
     getRelations,
     getJoinedRoomMembers,
     uploadContent,
+    prepareRoomForMessageSend,
   };
 };
 
@@ -81,7 +66,7 @@ export function makeEncryptedMediaClient() {
   client.crypto = {
     encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
   };
-  vi.spyOn(result.client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+  result.prepareRoomForMessageSend.mockResolvedValue("m.room.encrypted");
   return result;
 }
 
@@ -136,7 +121,7 @@ function buildAifcFixture(
   return Buffer.concat([form, chunks]);
 }
 
-export function registerMatrixMediaMetadataTests(context: {
+export function registerMatrixMediaTests(context: {
   send: (
     text: string,
     opts?: Partial<Parameters<typeof sendMessageMatrix>[2]>,
@@ -147,6 +132,71 @@ export function registerMatrixMediaMetadataTests(context: {
   isVoiceCompatibleAudioMock: Mock;
   readonly sendMessage: ReturnType<typeof makeClient>["sendMessage"];
 }) {
+  describe("sendMessageMatrix media", () => {
+    it("propagates initial room preparation failure before loading or reporting dispatch", async () => {
+      const { client, uploadContent, sendMessage, prepareRoomForMessageSend } = makeClient();
+      const failure = new Error("room preparation failed");
+      prepareRoomForMessageSend.mockRejectedValue(failure);
+      const onPlatformSendDispatch = vi.fn();
+      await expect(
+        context.send("secret", {
+          client,
+          mediaUrl: "file:///tmp/photo.png",
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBe(failure);
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      expect(context.loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+      expect(uploadContent).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "rechecks room preparation after media loading (crypto=%s)",
+      async (crypto) => {
+        const failure = new Error("room preparation failed after media loading");
+        const { client, uploadContent, sendMessage, prepareRoomForMessageSend } = crypto
+          ? makeEncryptedMediaClient()
+          : makeClient();
+        prepareRoomForMessageSend.mockResolvedValue("m.room.message");
+        context.loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
+          if (crypto) {
+            prepareRoomForMessageSend.mockResolvedValue("m.room.encrypted");
+          } else {
+            prepareRoomForMessageSend.mockRejectedValue(failure);
+          }
+          return {
+            buffer: Buffer.from("secret media"),
+            fileName: "secret.png",
+            contentType: "image/png",
+            kind: "image",
+          };
+        });
+        const onPlatformSendDispatch = vi.fn();
+        const sending = context.send("secret", {
+          client,
+          mediaUrl: "file:///tmp/secret.png",
+          onPlatformSendDispatch,
+        });
+        if (crypto) {
+          await sending;
+          expect(uploadContent).toHaveBeenCalledWith(
+            Buffer.from("encrypted"),
+            "application/octet-stream",
+          );
+          const content = sendMessage.mock.calls[0]?.[1];
+          expect(content).toHaveProperty("file", expect.anything());
+          expect(content).not.toHaveProperty("url");
+        } else {
+          await expect(sending).rejects.toBe(failure);
+          expect(uploadContent).not.toHaveBeenCalled();
+          expect(sendMessage).not.toHaveBeenCalled();
+          expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        }
+      },
+    );
+  });
+
   describe("sendMessageMatrix media metadata", () => {
     it.each([
       ["mono IMA4 packet count", { channels: 1 }, 640],

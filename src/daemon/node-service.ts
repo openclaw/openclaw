@@ -30,13 +30,15 @@ export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService("node");
   const { hasInstalledDefinition, isAbsent, readDefinitionMutationCapability } = base;
   const owned = <
-    T extends { env: Record<string, string | undefined>; beforeMutation?: () => Promise<void> },
+    T extends {
+      env: Record<string, string | undefined>;
+      beforeMutation?: () => void | Promise<void>;
+    },
   >(
     args: T,
   ) => ({
     ...args,
     beforeMutation: async () => {
-      await args.beforeMutation?.();
       const command = await base.readCommand(args.env);
       const kind = command?.environment?.OPENCLAW_SERVICE_KIND?.trim();
       // A profile's node name can also name another profile's legacy Gateway.
@@ -50,6 +52,8 @@ export function resolveNodeService(): GatewayService {
           `${command.sourcePath ?? "The selected service"} is not an OpenClaw node service. Node commands left it unchanged; move the conflicting service before managing this node.`,
         );
       }
+      // The caller's hook may replace files the service runs, so it follows this admission.
+      await args.beforeMutation?.();
     },
   });
   return {

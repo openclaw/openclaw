@@ -149,9 +149,13 @@ install. Packaging verifies the installed patch identity and packs its bytes
 into the temporary dependency install, then restores the original public
 version specifier in the published manifest. This also applies when bundling
 all runtime dependencies is disabled; unrelated dependencies retain their
-normal install behavior. A stale source install or an explicit
-`bundleRuntimeDependencies: false` opt-out stops packaging rather than
-publishing an unpatched dependency.
+normal install behavior. With `bundleRuntimeDependencies: false`, every patched
+dependency must be explicitly named in the package's `bundleDependencies` or
+`bundledDependencies` array. Otherwise packaging stops rather than publishing an
+unpatched dependency. An explicit array ships only its selected dependencies and
+their required closure; a blanket `true` is not a selective opt-in. A global
+bundling request never overrides the native-heavy opt-out. Stale source installs
+still stop packaging.
 
 Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
 memory-lancedb, Microsoft Teams, Tlon) opt out with

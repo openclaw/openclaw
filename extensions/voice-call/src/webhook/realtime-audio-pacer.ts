@@ -47,6 +47,7 @@ export class RealtimeAudioPacer {
   private streamClockMs: number | null = null;
   private playbackSegments: RealtimePlaybackSegment[] = [];
   private sentAudioMs = 0;
+  private carrierAudioEndsAt = 0;
   private retiredAudioMs = 0;
   private confirmedPlayedMs = 0;
   private readonly playbackMarkPrefix = `openclaw-playout-${randomUUID()}`;
@@ -187,6 +188,10 @@ export class RealtimeAudioPacer {
     return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
   }
 
+  hasPlaybackAudio(tailMs: number): boolean {
+    return this.hasPendingAudio() || Date.now() < this.carrierAudioEndsAt + tailMs;
+  }
+
   close(): void {
     this.closed = true;
     this.resetPlaybackState();
@@ -209,6 +214,7 @@ export class RealtimeAudioPacer {
   }
 
   private resetPlaybackState(): void {
+    this.carrierAudioEndsAt = Math.min(this.carrierAudioEndsAt, Date.now());
     this.clearTimer();
     this.resetQueue();
     this.playbackSegments = [];
@@ -301,6 +307,8 @@ export class RealtimeAudioPacer {
       this.params.serializer.serializeMedia(item.chunk.toString("base64")),
     );
     if (sent) {
+      // A drained local queue can still leave audio buffered at the carrier.
+      this.carrierAudioEndsAt = Math.max(Date.now(), this.carrierAudioEndsAt) + item.durationMs;
       this.params.onAudioSent?.(item.chunk);
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;

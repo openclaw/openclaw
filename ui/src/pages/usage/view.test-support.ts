@@ -83,7 +83,6 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       scope: "family",
       selectedSessions: [],
       selectedDays: [],
-      selectedHours: [],
       creatorKey: null,
       query: "",
       queryDraft: "",
@@ -94,12 +93,11 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       dailyChartMode: "total",
       sessionSort: "tokens",
       sessionSortDir: "desc",
-      recentSessions: [],
-      sessionsTab: "all",
       contextExpanded: false,
       headerPinned: false,
     },
     detail: {
+      conversationHref: null,
       context: {
         weight: undefined,
         read: null,
@@ -115,8 +113,6 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       sessionLogs: null,
       sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      sessionLogsExpanded: false,
-      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
     callbacks: {
       filters: {
@@ -125,9 +121,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
         onRefresh: noop,
         onToggleHeaderPinned: noop,
         onSelectDay: noop,
-        onSelectHour: noop,
         onClearDays: noop,
-        onClearHours: noop,
         onClearSessions: noop,
         onClearFilters: noop,
         onQueryDraftChange: noop,
@@ -137,8 +131,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       display: { onExportJson: noop, onExportCsv: noop, onPageChange: noop, onChange: noop },
       details: {
         onToggleContextExpanded: noop,
-        onToggleSessionLogsExpanded: noop,
-        onLogFiltersChange: noop,
+        onOpenConversation: noop,
         onSelectSession: noop,
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,

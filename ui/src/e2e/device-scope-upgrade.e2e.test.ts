@@ -39,8 +39,7 @@ const SCOPE_UPGRADE_METHODS = [
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
 ] as const;
-const MANUAL_UPGRADE_GUIDANCE =
-  "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
+const MANUAL_UPGRADE_GUIDANCE = "Ask an admin to approve this browser in Devices.";
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -111,7 +110,9 @@ async function closeInbox(page: Page) {
 async function waitForPendingUpgradeItem(item: Locator) {
   await item
     .locator(".sidebar-issues-panel__body")
-    .getByText(/Approve this browser by running openclaw devices approve upgrade-1 on the Gateway/u)
+    .getByText(
+      /Ask an admin to approve this browser in Devices or run openclaw devices approve upgrade-1 on the Gateway/u,
+    )
     .waitFor();
   await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
   await item.getByRole("button", { name: "Cancel", exact: true }).waitFor();
@@ -149,10 +150,7 @@ suite.define(() => {
         await item.getByRole("button", { name: "Cancel", exact: true }).click();
       } else {
         await item
-          .getByText(
-            "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
-            { exact: true },
-          )
+          .getByText("Only admins can manage access. Ask an admin for access.", { exact: true })
           .waitFor();
         expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
         await item.getByRole("button", { name: "Dismiss Limited access" }).click();
@@ -175,7 +173,8 @@ suite.define(() => {
     const desktopItem = await openLimitedAccessItem(desktopPanel);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access.png", desktopPanel);
-    await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
+    await desktopPanel.locator(".sidebar-issues-panel__more").click();
+    await desktopPanel.getByRole("menuitem", { name: "Dismiss shown" }).click();
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await expect.poll(() => desktopItem.count()).toBe(0);
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
@@ -281,7 +280,8 @@ suite.define(() => {
     });
     await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(clearedPage);
-    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
+    const clearedInbox = clearedPage.locator(".sidebar-rail .sidebar-issues-button");
+    await expect.poll(() => clearedInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();
@@ -341,15 +341,13 @@ suite.define(() => {
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);
-    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
-    await captureProof(
-      page,
-      "settings-without-inbox-pending.png",
-      page.locator(".settings-workspace"),
-    );
+    const settingsItem = await openLimitedAccessItem(await openInbox(page));
+    await waitForPendingUpgradeItem(settingsItem);
+    await captureProof(page, "settings-inbox-pending.png", page.locator(".settings-workspace"));
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
+    await closeInbox(page);
     await page.keyboard.press("Escape");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     const returnedItem = await openLimitedAccessItem(await openInbox(page));
@@ -389,7 +387,8 @@ suite.define(() => {
 
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).click();
-    const message = "Administrator access request failed: missing scope: operator.read";
+    const message =
+      "Couldn’t request admin access. Try again. Couldn’t complete this request. Ask an admin to grant read access.";
     await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
 
     expect(await item.getByText(message, { exact: true }).count()).toBe(1);

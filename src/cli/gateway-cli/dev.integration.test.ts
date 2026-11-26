@@ -3,8 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AGENTS_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
+import type {
+  WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
+  WorkspaceFilesystemReply,
+} from "../../agents/workspace-filesystem.types.js";
+import { executeWorkspaceFilesystemOperation } from "../../agents/workspace-filesystem.worker.js";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type {
+  FsSafeStoreCommand,
+  FsSafeStoreReply,
+} from "../../infra/fs-safe-copy-worker-contract.js";
+import * as filesystemWorker from "../../infra/fs-safe-filesystem-worker.js";
+import { withWorkerFsSafeNativeMode } from "../../infra/worker-fs-safe.js";
+import { workerMutationAssertion } from "../../infra/worker-mutation-authority.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { ensureDevGatewayConfig } from "./dev.js";
@@ -49,7 +64,7 @@ describe("ensureDevGatewayConfig integration", () => {
     });
   });
 
-  it("can retry after a partial dev workspace write fails", async () => {
+  it("can retry after a partial dev workspace write fails", async ({ signal }) => {
     const resolvedDevWorkspace = path.join(await fs.realpath(root), path.basename(devWorkspace));
     const realOpen = fs.open.bind(fs);
     let injected = false;
@@ -75,6 +90,53 @@ describe("ensureDevGatewayConfig integration", () => {
       return handle;
     });
 
+    const run = filesystemWorker.runFsSafeFilesystemTask;
+    type Options = Parameters<typeof run>[1];
+    function intercept(
+      command: WorkspaceFilesystemReadCommand,
+      options?: Options,
+    ): Promise<WorkspaceFilesystemReadReply>;
+    function intercept(
+      command: WorkspaceFilesystemCommand,
+      options?: Options,
+    ): Promise<WorkspaceFilesystemReply>;
+    function intercept(command: FsSafeStoreCommand, options?: Options): Promise<FsSafeStoreReply>;
+    function intercept(
+      command: WorkspaceFilesystemReadCommand | WorkspaceFilesystemCommand | FsSafeStoreCommand,
+      options?: Options,
+    ) {
+      if (command.type === "workspace") {
+        const operation = command.operation;
+        if (
+          operation.kind === "publish" &&
+          operation.dir === devWorkspace &&
+          operation.name === DEFAULT_AGENTS_FILENAME &&
+          !injected
+        ) {
+          const notify = options?.onNotification;
+          if (!notify) {
+            throw new Error("Bootstrap publication must retain its live authority callback");
+          }
+          // Keep the actual publication/cleanup owner in the isolate with the injected I/O failure.
+          return withWorkerFsSafeNativeMode(command.nativeMode, () =>
+            executeWorkspaceFilesystemOperation(
+              command,
+              workerMutationAssertion(
+                command.decision,
+                () => notify("authority"),
+                () => signal.throwIfAborted(),
+              ),
+            ),
+          );
+        }
+        return run(command, options);
+      }
+      return command.type === "workspace-read" ? run(command, options) : run(command, options);
+    }
+    const dispatch = vi
+      .spyOn(filesystemWorker, "runFsSafeFilesystemTask")
+      .mockImplementation(intercept);
+
     await expect(
       withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => ensureDevGatewayConfig({})),
     ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
@@ -85,6 +147,7 @@ describe("ensureDevGatewayConfig integration", () => {
     });
     expect(await fs.readdir(devWorkspace)).toEqual([]);
     vi.mocked(fs.open).mockRestore();
+    dispatch.mockRestore();
 
     await ensureDevGatewayConfig({});
     const agents = await fs.readFile(path.join(devWorkspace, "AGENTS.md"), "utf8");

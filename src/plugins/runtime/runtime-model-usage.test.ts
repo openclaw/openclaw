@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PreparedDecisionBillingFacts } from "../../decisions/host-billing.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -25,28 +26,30 @@ const finalize = (rawUsage: unknown, facts: PreparedDecisionBillingFacts | undef
 
 it.each(["direct", "aggregate"] as const)(
   "estimates %s cost when no billed total is recorded",
-  (estimate) => {
-    const usage = finalizePluginModelUsage({
-      cfg: {
-        models: {
-          providers: {
-            fixture: {
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "native",
-                  name: "Native",
-                  reasoning: false,
-                  input: ["text"],
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                  cost: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
+  async (estimate) => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.invalid/v1",
+            models: [
+              {
+                id: "native",
+                name: "Native",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 8192,
+                maxTokens: 1024,
+                cost: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
           },
         },
       },
+    };
+    const usage = await finalizePluginModelUsage({
+      cfg,
+      assertCurrent: () => undefined,
       estimate,
       target,
       rawUsage: { input: 100 },

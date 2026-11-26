@@ -1,17 +1,67 @@
 // @vitest-environment node
 // Control UI tests cover custom theme behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
   createTweakcnThemePayload as createTweakcnPayload,
 } from "../test-helpers/custom-theme.ts";
-import { parseImportedCustomTheme, syncCustomThemeStyleTag } from "./custom-theme.ts";
+import {
+  describeThemeLabel,
+  parseImportedCustomTheme,
+  syncCustomThemeStyleTag,
+} from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+describe("custom theme localized validation", () => {
+  it("routes validation through the lazy importer without translating token names", async () => {
+    const translate = vi
+      .spyOn(i18n, "t")
+      .mockImplementation((key, params) => key + ":" + (params?.token ?? ""));
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/invalid%20theme"),
+    ).rejects.toThrow("configView.appearance.themeImport.invalidLink:");
+    for (const value of ["", "x".repeat(241), "url(x)", "red;", "re\nd", "invalid-color"]) {
+      const payload = createTweakcnPayload();
+      payload.cssVars.light.background = value;
+      vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+      await expect(importCustomThemeFromUrl("test-theme")).rejects.toThrow(
+        value === ""
+          ? "configView.appearance.themeImport.missingToken:background"
+          : "configView.appearance.themeImport.invalidToken:background",
+      );
+    }
+    const payload = createTweakcnPayload();
+    vi.mocked(fetch).mockResolvedValue(
+      createResponse(
+        JSON.stringify({
+          ...payload,
+          cssVars: {
+            ...payload.cssVars,
+            light: { ...payload.cssVars.light, "font-sans": "font!" },
+          },
+        }),
+      ),
+    );
+    await expect(importCustomThemeFromUrl("test-theme")).rejects.toThrow(
+      "configView.appearance.themeImport.invalidToken:font-sans",
+    );
+    expect(translate).toHaveBeenCalledWith("configView.appearance.themeImport.invalidToken", {
+      token: "background",
+    });
+  });
+
+  it("preserves missing and user-supplied names for localized display", () => {
+    expect(describeThemeLabel(undefined)).toBe("");
+    expect(describeThemeLabel("  My theme  ")).toBe("My theme");
+  });
+});
 
 beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -142,7 +192,7 @@ describe("custom theme import helpers", () => {
 
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
-    ).rejects.toThrow("unreadable theme payload");
+    ).rejects.toThrow("unreadable theme file");
     expect(response["text"]).not.toHaveBeenCalled();
   });
 
@@ -154,7 +204,7 @@ describe("custom theme import helpers", () => {
 
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
-    ).rejects.toThrow("Unexpected redirect");
+    ).rejects.toThrow("redirected to an unexpected URL");
   });
 
   it.each([

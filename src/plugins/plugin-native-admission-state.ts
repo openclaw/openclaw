@@ -18,6 +18,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import type { PluginNativeCaptureRoot as NativeSnapshot } from "./plugin-native-root.types.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -30,7 +31,6 @@ import {
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 
-type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
   readonly captureStorage: PluginSourceCaptureStorage;
@@ -47,6 +47,7 @@ export type AdmissionState = {
   >;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
+  receiptInventoryComplete: boolean;
   files: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   pins: Map<string, () => void>;
@@ -94,6 +95,7 @@ export function adoptPluginNativeAdmissions(
     state.roots.add(root);
   }
   for (const [key, receipt] of transfer.receipts) {
+    const replaced = state.receipts.get(key);
     state.receipts.set(key, receipt);
     for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
       state.files.set(source, fact);
@@ -103,10 +105,33 @@ export function adoptPluginNativeAdmissions(
       state.namespaces.set(directory, namespace);
       retainNativePath(state, path.join(directory, "content"));
     }
+    releaseReplacedNamespaces(state, replaced);
   }
   if (publish) {
     for (const publication of transfer.publications) {
       queuePluginNativeAdmissionPublication(state, publication, publish);
+    }
+  }
+}
+
+/** A replaced receipt retires unreferenced file facts before pruning namespace maps. */
+export function releaseReplacedNamespaces(
+  state: AdmissionState,
+  replaced: PluginSourceAdmissionReceipt | undefined,
+): void {
+  if (state.receiptInventoryComplete) {
+    for (const source of Object.keys(replaced?.nativeArtifacts ?? {})) {
+      if (![...state.receipts.values()].some((receipt) => source in receipt.nativeArtifacts)) {
+        state.files.delete(source);
+      }
+    }
+  }
+  for (const id of Object.keys(replaced?.nativeNamespaces ?? {})) {
+    if (
+      ![...state.receipts.values()].some((receipt) => id in receipt.nativeNamespaces) &&
+      ![...state.files.values()].some((file) => file.namespace === id)
+    ) {
+      state.namespaces.delete(id);
     }
   }
 }
@@ -157,11 +182,9 @@ export function queuePluginNativeAdmissionPublication(
     data,
     run: () =>
       publish(data)
-        .then((accepted) => {
+        .then(async (accepted) => {
           if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
+            await Promise.all(roots.map(async (root) => root.commit()));
             if (state.publications.get(data.key) === publication) {
               state.publications.delete(data.key);
             }
@@ -261,6 +284,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
       owners: new Map(),
       managedRoots: new Map(),
       receipts: new Map(),
+      receiptInventoryComplete: true,
       files: new Map(),
       namespaces: new Map(),
       pins: new Map(),

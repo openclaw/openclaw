@@ -1,12 +1,20 @@
+import { Show, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Popover } from "../../components/solid/popover.tsx";
 import "../../components/tooltip.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import * as catalog from "./catalog-target.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
+import type { NewSessionPageOwner } from "./new-session-page-owner.ts";
 
 registerNewSessionSetupEnglish();
 
-type NewSessionVisibilityControl = {
+/** Matches the docked layout in new-session.css, where the inline notice would move the draft. */
+export const NEW_SESSION_DOCKED_LAYOUT_QUERY =
+  "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+
+export type NewSessionVisibilityControl = {
   visibility: NewSessionVisibility;
   submitting: boolean;
   pendingPlacement: { sessionKey: string };
@@ -17,6 +25,7 @@ type NewSessionVisibilityControl = {
 function VisibilityToggle(props: {
   submission: NewSessionVisibilityControl;
   mode: "draft" | "incognito";
+  inHeader?: boolean;
 }) {
   const draft = () => props.mode === "draft";
   const active = () => props.submission.visibility === props.mode;
@@ -29,17 +38,14 @@ function VisibilityToggle(props: {
   const description = () =>
     draft()
       ? t("newSession.draftDescription")
-      : (reason() ?? t("sessionsView.incognitoDescription"));
+      : (reason() ?? t("sessionsView.incognitoDescriptionTooltip"));
   const toggleClass = () => `new-session-page__${props.mode}-toggle`;
   return (
-    <openclaw-tooltip
-      class={draft() ? "new-session-page__draft-tooltip" : undefined}
-      prop:content={description()}
-    >
+    <openclaw-tooltip prop:content={description()}>
       <button
         type="button"
         class={[
-          "shell-chrome-controls__button",
+          props.inHeader ? "mobile-header__control" : "shell-chrome-controls__button",
           toggleClass(),
           { [`${toggleClass()}--active`]: active() },
         ]}
@@ -54,12 +60,28 @@ function VisibilityToggle(props: {
           }
         }}
       >
-        <Icon name={draft() ? "pencil" : "incognito"} />
-        {active() ? (
+        <Icon name={draft() ? "draft" : "incognito"} />
+        {active() && !props.inHeader ? (
           <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}
       </button>
     </openclaw-tooltip>
+  );
+}
+
+/** Bare toggles; chat's phone header puts them in its capsule, with the on state on the icon alone. */
+export function NewSessionVisibilityToggles(props: {
+  submission: NewSessionVisibilityControl;
+  draftAvailable: boolean;
+  inHeader?: boolean;
+}) {
+  return (
+    <>
+      {props.draftAvailable || props.submission.visibility === "draft" ? (
+        <VisibilityToggle submission={props.submission} mode="draft" inHeader={props.inHeader} />
+      ) : undefined}
+      <VisibilityToggle submission={props.submission} mode="incognito" inHeader={props.inHeader} />
+    </>
   );
 }
 
@@ -69,10 +91,10 @@ export function NewSessionIncognitoControl(props: {
 }) {
   return (
     <div class="new-session-page__incognito-rail">
-      {props.draftAvailable || props.submission.visibility === "draft" ? (
-        <VisibilityToggle submission={props.submission} mode="draft" />
-      ) : undefined}
-      <VisibilityToggle submission={props.submission} mode="incognito" />
+      <NewSessionVisibilityToggles
+        submission={props.submission}
+        draftAvailable={props.draftAvailable}
+      />
     </div>
   );
 }
@@ -98,5 +120,52 @@ export function NewSessionIncognitoNotice(props: {
         {t("sessionsView.incognitoDescription")} {t("sessionsView.incognitoLimits")}
       </span>
     </div>
+  );
+}
+
+/** Reuse the hint slot, or float status-only help so Incognito never moves the identity. */
+export function DraftWelcomeHint(props: {
+  page: NewSessionPageOwner;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const hint = createMemo(() => props.page.welcomeHint());
+  return (
+    <Show when={!catalog.isTarget(props.page.data)} fallback={hint()}>
+      <Show when={hint() || props.page.submission.visibility === "incognito"}>
+        <span
+          class={[
+            "new-session-page__welcome-hint",
+            { "new-session-page__welcome-hint--floating": !hint() },
+          ]}
+        >
+          <Show when={hint()}>
+            <span class="new-session-page__welcome-hint-text">{hint()}</span>
+          </Show>
+          <Popover
+            id="new-session-incognito-note"
+            lazy="while-open"
+            label={t("sessionsView.incognitoLabel")}
+            class="new-session-page__incognito-note"
+            triggerClass="new-session-page__incognito-status"
+            trigger={
+              <>
+                <span>{t("sessionsView.incognitoLabel")}</span>
+                <Icon name="info" />
+              </>
+            }
+            placement="bottom"
+            open={props.open}
+            onOpenChange={props.setOpen}
+          >
+            {/* Read-only, and it can cover the composer on short screens: any tap dismisses it. */}
+            <div onClick={() => props.setOpen(false)}>
+              <p>{t("sessionsView.incognitoDescription")}</p>
+              <p>{t("sessionsView.incognitoLimits")}</p>
+            </div>
+          </Popover>
+        </span>
+      </Show>
+    </Show>
   );
 }

@@ -171,7 +171,7 @@ function harness() {
     },
     seed: (sessionId: string, options?: LegacyOptions) =>
       seedLegacySession(stateDir, sessionId, options),
-    migrate: (
+    migrate: async (
       options: Pick<
         Parameters<typeof migrateLegacyMeetingTranscripts>[0],
         "detected" | "now" | "testHooks"
@@ -181,7 +181,7 @@ function harness() {
         stateDir,
         env,
         ...options,
-        detected: options.detected ?? detect(),
+        detected: options.detected ?? (await detect()),
       }),
   };
 }
@@ -236,7 +236,7 @@ it.runIf(unix).each([
     await fs.writeFile(path.join(path.dirname(target), "summary.md"), "keep me\n");
   }
   await fs.symlink(source, target, isFile ? undefined : "dir");
-  expect(() => h.detect()).toThrow(error);
+  await expect(h.detect()).rejects.toThrow(error);
   if (isFile) {
     await expectFile(path.join(path.dirname(target), "summary.md"), "keep me\n");
   }
@@ -282,7 +282,7 @@ it("imports shipped dot-only session layouts into reserved SQLite selectors", as
   for (const sessionId of [".", "..", "session"]) {
     await h.seed(sessionId, { emptyMarkdown: true, omitSummaryJson: true });
   }
-  const detected = h.detect();
+  const detected = await h.detect();
   expect(detected.hasLegacy).toBe(true);
 
   await migrateClean({ detected });
@@ -316,7 +316,7 @@ it.runIf(process.platform !== "win32" && process.platform !== "darwin")(
     const upperArtifacts = await h.store.materializeSessionArtifacts(upper, "metadata");
     await h.store.materializeSessionArtifacts(lower, "metadata");
     await fs.rename(upperArtifacts.sessionDir, path.join(h.root, "2026-07-01", "CAPITAL"));
-    expect(h.detect()).toMatchObject({ hasLegacy: false });
+    expect(await h.detect()).toMatchObject({ hasLegacy: false });
   },
 );
 
@@ -410,7 +410,7 @@ it("resumes durable imported receipts after a native archive rename failure", as
 it("detects and recovers a partial-only legacy transcript tree", async () => {
   const partialDir = await mkdir(h.root, "2026-07-01", "partial-only");
   await fs.writeFile(path.join(partialDir, "transcript.jsonl"), '{"text":"partial"}\n');
-  const detected = h.detect();
+  const detected = await h.detect();
   expect(detected.hasLegacy).toBe(true);
 
   const result = await migrateClean({
@@ -479,7 +479,7 @@ it.each(["import", "archive"] as const)(
     if (stage === "import") {
       expect(interrupted.changes.join("\n")).toContain("modified meeting transcript export");
     }
-    const pending = h.detect();
+    const pending = await h.detect();
     if (stage === "archive") {
       expect(pending.hasLegacy).toBe(true);
     }
@@ -504,7 +504,7 @@ it("refuses to archive a new legacy session added after a pending import", async
   await h.migrate({ testHooks: { afterImport: interrupt } });
   const lateDir = await h.seed("pending-late");
 
-  const pending = h.detect();
+  const pending = await h.detect();
   const resumed = await h.migrate({ detected: pending });
 
   expect(resumed.changes).toEqual([]);
@@ -522,7 +522,7 @@ it("does not classify an interrupted export of an advancing transcript as legacy
   const transcriptPath = path.join(h.store.sessionDir(session), "transcript.jsonl");
   await fs.writeFile(transcriptPath, '{"text":');
 
-  const detected = h.detect();
+  const detected = await h.detect();
   expect(detected).toMatchObject({ hasLegacy: false });
   await expect(h.migrate({ detected })).resolves.toEqual({ changes: [], warnings: [] });
 
@@ -542,7 +542,7 @@ it("migrates legacy sessions while preserving coexisting SQLite exports", async 
   );
   const artifacts = await h.store.materializeSessionArtifacts(native, "all");
   await fs.rm(artifacts.metadataPath);
-  expect(h.detect()).toMatchObject({ hasLegacy: false });
+  expect(await h.detect()).toMatchObject({ hasLegacy: false });
   await h.seed("legacy-alongside-export");
 
   await migrateClean();
@@ -563,12 +563,12 @@ it("resolves a case-renamed export directory by metadata identity", async () => 
   await fs.rename(artifacts.sessionDir, renamedDir);
   await fs.rename(path.join(renamedDir, "metadata.json"), renamedMetadata);
 
-  expect(h.detect()).toMatchObject({ hasLegacy: false });
+  expect(await h.detect()).toMatchObject({ hasLegacy: false });
   await fs.rm(renamedMetadata);
-  const metadataLessDetected = h.detect();
+  const metadataLessDetected = await h.detect();
   expect(metadataLessDetected.hasLegacy).toBe(!fsSync.existsSync(artifacts.sessionDir));
   await fs.writeFile(renamedMetadata, `${JSON.stringify(session, null, 2)}\n `);
-  const detected = h.detect();
+  const detected = await h.detect();
   expect(detected.hasLegacy).toBe(true);
 
   const recovered = await migrateClean({ detected });
@@ -626,8 +626,8 @@ it("detects and repairs encoded rows without an export root", async () => {
   await seedStoredSession("ordinary:notes");
   const before = h.snapshot();
   await expectMissing(h.root);
-  expect(detectLegacyMeetingTranscripts({ stateDir: h.stateDir }).hasLegacy).toBe(false);
-  expect(h.detect()).toMatchObject({ hasLegacy: true });
+  expect((await detectLegacyMeetingTranscripts({ stateDir: h.stateDir })).hasLegacy).toBe(false);
+  expect(await h.detect()).toMatchObject({ hasLegacy: true });
   expect(h.snapshot()).toEqual(before);
 
   const result = await migrateClean();
@@ -645,7 +645,7 @@ it("detects and repairs encoded rows without an export root", async () => {
   );
   expect(h.snapshot()).toEqual(expected);
   await expectMissing(h.root);
-  expect(h.detect().hasLegacy).toBe(false);
+  expect((await h.detect()).hasLegacy).toBe(false);
   await expect(h.migrate()).resolves.toEqual({ changes: [], warnings: [] });
   expect(h.snapshot()).toEqual(expected);
   const entry = await h.store.readSessionEntry(`2026-07-01/${slug}`);
@@ -664,7 +664,7 @@ it("rolls back all projection repairs when a bounded selector already has anothe
   expect(result.warnings).toEqual([expect.stringMatching(/UNIQUE constraint failed.*selector/i)]);
   await closeDatabase();
   expect(h.snapshot()).toEqual(before);
-  expect(h.detect().hasLegacy).toBe(true);
+  expect((await h.detect()).hasLegacy).toBe(true);
   await expectMissing(h.root);
 });
 
@@ -683,7 +683,7 @@ it("keeps committed repair messages and receipts when pending import recovery ca
   expect(after.sessions.find((row) => row.session_id === sessionId)?.session_slug).toBe(
     safeTranscriptPathSegment(sessionId),
   );
-  expect(h.detect()).toMatchObject({ hasLegacy: true });
+  expect(await h.detect()).toMatchObject({ hasLegacy: true });
   expect((await h.migrate()).changes).toEqual([]);
   expect(h.snapshot()).toEqual(after);
 });
@@ -701,5 +701,5 @@ it("requires exclusive state ownership before repairing projections", async () =
     expect(h.snapshot()).toEqual(before);
   });
   expect((await h.migrate()).warnings).toEqual([]);
-  expect(h.detect().hasLegacy).toBe(false);
+  expect((await h.detect()).hasLegacy).toBe(false);
 });

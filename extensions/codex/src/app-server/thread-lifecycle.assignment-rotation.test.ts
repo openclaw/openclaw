@@ -313,7 +313,6 @@ describe("native assignment custody across parent rotation", () => {
           ? await bindProductionHarnessHostCapabilitiesForTest(f.options.params, {
               profileId: "rotation-operator",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
             })
           : undefined;
       if (closeHost) {

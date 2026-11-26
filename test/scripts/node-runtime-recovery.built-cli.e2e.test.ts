@@ -90,6 +90,8 @@ it.each([
      syncBuiltinESMExports();`,
     );
     instance.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    // The instrumented legacy child must reach runtime admission before any cache respawn.
+    instance.env.NODE_DISABLE_COMPILE_CACHE = "1";
     delete instance.env.OPENCLAW_NODE_UPDATE_RESPAWNED;
     const result = legacy
       ? await instance

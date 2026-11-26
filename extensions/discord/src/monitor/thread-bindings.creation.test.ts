@@ -13,6 +13,7 @@ import {
   createTestThreadBindingManager,
   hoisted,
   installThreadBindingLifecycleTestHooks,
+  useRealAcpSessionEntryRead,
 } from "./thread-bindings.lifecycle.test-support.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
@@ -122,6 +123,203 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps approved opaque plugin ownership through refresh and persistent reload", async () => {
+  const { createInteractiveConversationBindingHelpers } =
+    await import("openclaw/plugin-sdk/plugin-runtime");
+  const { resolvePluginConversationBindingApproval } =
+    await import("openclaw/plugin-sdk/conversation-runtime");
+  useRealAcpSessionEntryRead();
+  const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+  let manager = await createTestThreadBindingManager({ cfg, persist: true });
+  const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+  const helpers = createInteractiveConversationBindingHelpers({
+    registration: owner,
+    senderId: "user-1",
+    conversation,
+  });
+  const requested = await helpers.requestConversationBinding();
+  expect(requested.status).toBe("pending");
+  if (requested.status !== "pending") {
+    throw new Error("Expected plugin binding approval");
+  }
+  await expect(
+    resolvePluginConversationBindingApproval({
+      approvalId: requested.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    }),
+  ).resolves.toMatchObject({ status: "approved", binding: owner });
+  expect(manager.getByThreadId(conversation.conversationId)).toMatchObject({
+    targetKind: "session",
+    targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
+  });
+  const record = await service.resolveByConversationAsync(conversation);
+  expect(record?.metadata?.agentId).toBeUndefined();
+  if (!record) {
+    throw new Error("Expected approved plugin binding");
+  }
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: record.targetSessionKey,
+      targetKind: "session",
+      metadata: { label: "updated" },
+    }),
+  ).resolves.toMatchObject({
+    metadata: { pluginBindingOwner: "plugin", ...owner, label: "updated" },
+  });
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+      targetKind: "session",
+      metadata: { label: "replacement" },
+    }),
+  ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+  await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
+    status: "bound",
+    binding: owner,
+  });
+  await resetThreadBindingsForTests();
+  manager = await createTestThreadBindingManager({ cfg, persist: true });
+  expect(manager.getByThreadId(conversation.conversationId)?.agentId).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
+  await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+  expect(manager.listBindings()).toEqual([]);
+  const subagentKey = "agent:alpha:subagent:kind-change";
+  await service.bind({
+    conversation,
+    targetSessionKey: subagentKey,
+    targetKind: "session",
+    metadata: { pluginBindingOwner: "plugin", ...owner },
+  });
+  const changedKind = await service.bind({
+    conversation,
+    targetSessionKey: subagentKey,
+    targetKind: "subagent",
+    metadata: { label: "new kind" },
+  });
+  expect(changedKind.targetKind).toBe("subagent");
+  expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+  await service.unbind({
+    bindingId: changedKind.bindingId,
+    scope: conversation,
+    reason: "manual",
+  });
+  await manager.stop();
+});
+
+it.each([
+  ["agent:main:fork:ordinary", "session"],
+  ["agent:main:discord:channel:acp:ordinary", "session"],
+  ["agent:codex:acp:binding:discord:default:configured", "acp"],
+  ["global", "acp"],
+  ["agent:main:subagent:child", "subagent"],
+] as const)(
+  "preserves classified %s through child creation, reload, and ACP cleanup",
+  async (targetSessionKey, targetKind) => {
+    let manager = await createTestThreadBindingManager({ persist: true });
+    hoisted.resolveThreadBindingTargetKind.mockResolvedValueOnce(targetKind);
+    const binding = await service.bind({
+      targetSessionKey,
+      targetKind: targetKind === "subagent" ? "subagent" : "session",
+      conversation: { channel: "discord", accountId: "default", conversationId: "parent-1" },
+      placement: "child",
+    });
+    try {
+      expect(hoisted.resolveThreadBindingTargetKind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: EMPTY_DISCORD_TEST_CONFIG,
+          targetSessionKey,
+          targetKind: targetKind === "subagent" ? "subagent" : "session",
+          metadata: {},
+          agentId: undefined,
+          channel: "Discord",
+          assertCurrent: expect.any(Function),
+        }),
+      );
+      expect(binding.conversation.conversationId).toBe("thread-created");
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      await resetThreadBindingsForTests();
+      manager = await createTestThreadBindingManager({ persist: true });
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      expect(await reconcile()).toMatchObject({
+        checked: targetKind === "acp" ? 1 : 0,
+        removed: targetKind === "acp" ? 1 : 0,
+      });
+      const resolved = await service.resolveByConversationAsync(binding.conversation);
+      if (targetKind === "acp") {
+        expect(resolved).toBeNull();
+      } else {
+        expect(resolved).toMatchObject({ targetSessionKey });
+      }
+    } finally {
+      await manager.unbindBySessionKey({ targetSessionKey, sendFarewell: false });
+    }
+  },
+);
+
+it("refreshes legacy ACP-coerced ordinary bindings without dropping target metadata", async () => {
+  const manager = await createTestThreadBindingManager();
+  const targetSessionKey = "agent:main:fork:legacy";
+  await bindTestThread(manager, {
+    threadId: "user:123",
+    channelId: "user:123",
+    targetSessionKey,
+    targetKind: "acp",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+  await service.bind({
+    targetSessionKey,
+    targetKind: "session",
+    conversation,
+    placement: "current",
+  });
+  expect(manager.getByThreadId("user:123")).toMatchObject({
+    targetKind: "session",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+});
+
+it("forwards classification facts/current authority and refuses native creation on failure", async () => {
+  await createTestThreadBindingManager();
+  const assertCurrent = vi.fn();
+  let forwardedAuthorityCalls = 0;
+  const metadata = { agentId: "main", label: "classify this target" };
+  hoisted.resolveThreadBindingTargetKind.mockImplementationOnce(async (input) => {
+    const calls = assertCurrent.mock.calls.length;
+    input.assertCurrent();
+    forwardedAuthorityCalls = assertCurrent.mock.calls.length - calls;
+    throw new Error("Classification refused");
+  });
+  await expect(
+    service.bind({
+      targetSessionKey: "global",
+      targetKind: "session",
+      conversation: { ...conversation, conversationId: "parent-1" },
+      placement: "child",
+      metadata,
+      assertCurrent,
+    }),
+  ).rejects.toThrow("Classification refused");
+  expect(hoisted.resolveThreadBindingTargetKind).toHaveBeenCalledOnce();
+  expect(hoisted.resolveThreadBindingTargetKind).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      targetSessionKey: "global",
+      targetKind: "session",
+      metadata,
+      agentId: "main",
+      channel: "Discord",
+    }),
+  );
+  expect(forwardedAuthorityCalls).toBe(1);
+  expect(hoisted.createThreadDiscord).not.toHaveBeenCalled();
+});
 
 it("keeps current config and refreshed tokens after a retired manager stops again", async () => {
   const startupCfg = { channels: { discord: { token: "startup-token" } } };

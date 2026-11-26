@@ -6,10 +6,11 @@ import Testing
 struct DashboardFailurePageTests {
     @Test func `generic failure page offers reload through the native bridge`() {
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable", message: "The Gateway returned HTTP 503.",
+            title: "OpenClaw unavailable", message: "The Gateway returned HTTP 503.",
             detail: "Choose Reload to try again.", url: nil)
         #expect(html.contains("class=\"primary\""))
-        #expect(html.contains(">Reload</button>"))
+        #expect(html.contains("id=\"dashboard-reload\""))
+        #expect(html.contains(">Reload</span>"))
         #expect(html.contains("window.webkit.messageHandlers.openclawGateways"))
         #expect(html.contains(".postMessage({type:'reload'})"))
         #expect(html.contains("Connection Settings…"))
@@ -27,7 +28,7 @@ struct DashboardFailurePageTests {
         #expect(html.contains("Your browser sign-in to gateway.example expired 2m ago. Sign in again to continue."))
         #expect(html.contains("Connection Settings…"))
         #expect(html.contains("data-id=\"profile:test&quot;&#39;&amp;&lt;&gt;\""))
-        #expect(!html.contains(">Reload</button>"))
+        #expect(!html.contains("id=\"dashboard-reload\""))
         #expect(!html.contains("type:'reload'"))
         #expect(!html.contains("<script>"))
         if signingIn {
@@ -79,7 +80,7 @@ struct DashboardFailurePageTests {
             for: (endpointURL, fragmentAuth ? token : nil, nil),
             mode: .remote)
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
+            title: "OpenClaw unavailable",
             message: "Could not connect to the server.",
             detail: nil,
             url: url)

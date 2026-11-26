@@ -15,8 +15,8 @@ export const PHASES = [
   "publish",
   "flip-github",
   "sync-beta",
-  "macos",
   "closeout",
+  "macos",
 ] as const;
 export const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -175,13 +175,6 @@ export const macosWait = (id: number, conclusion = "success", attempt = 1): Fake
   actionRun("openclaw/releases", id, conclusion, attempt),
 ];
 
-export const compatibilityInventory = (version = RELEASE): FakeStep[] => [
-  fetchMain(),
-  jsonStep("git", ["show", "origin/main:scripts/lib/update-compat-inventory.json"], {
-    releases: [{ version }],
-  }),
-];
-
 export const closeoutMain = (version = RELEASE, notes = `## ${RELEASE}\n`): FakeStep[] => [
   actionRun(REPOSITORY, 301),
   fetchMain(),
@@ -198,8 +191,7 @@ export const CANDIDATE_COMMAND =
   -f npm_dist_tag=latest \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \
-  -f finalize_release_before_docker=true \
-  -f wait_for_clawhub=true`.replaceAll("\\`", "`");
+  -f finalize_release_before_docker=true`.replaceAll("\\`", "`");
 
 export const publishParentRun = () => ({
   ...workflowRun("openclaw-release-publish.yml", 301, `Publish v${RELEASE}`),

@@ -497,7 +497,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       writeLegacyProfiles(state, { "openai:default": localCredential }, "unconfigured"),
       writeLegacyProfiles(state, {}, "empty"),
     ]);
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir: state.stateDir,
       env: state.env,
       doctorOnlyStateMigrations: true,
@@ -952,7 +952,7 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
     const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-    const reader = prepareAgentAuthProfileRowsRead({
+    const reader = await prepareAgentAuthProfileRowsRead({
       databasePath,
       agentId: "main",
       env: state.env,
@@ -1206,7 +1206,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai-codex:default",
     });
 
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir: state.stateDir,
       doctorOnlyStateMigrations: true,
     });
