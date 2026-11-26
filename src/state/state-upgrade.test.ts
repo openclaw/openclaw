@@ -240,12 +240,12 @@ describe("canonical in-place migration", () => {
       }
       {
         using state = new DatabaseSync(statePath);
-        state.exec(getOpenClawStatePredecessorSchema(41));
+        state.exec(getOpenClawStatePredecessorSchema(40));
         state.exec(`PRAGMA journal_mode = WAL;
-          PRAGMA user_version = 41;
+          PRAGMA user_version = 40;
           INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-            VALUES ('primary', 'global', 41, 1, 1);
-          INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);
+            VALUES ('primary', 'global', 40, 1, 1);
+          INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '40', 1);
           INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1);`);
         runSqliteImmediateTransactionSync(state, () =>
           bindFreshClientCredentialStore(state, { env, path: statePath }),
@@ -274,7 +274,7 @@ describe("canonical in-place migration", () => {
         if (String(destination) === manifestPath) {
           // The durable restore intent must precede the first canonical mutation.
           using live = new DatabaseSync(statePath, { readOnly: true });
-          expect(live.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+          expect(live.prepare("PRAGMA user_version").get()).toEqual({ user_version: 40 });
           using agent = new DatabaseSync(agentPath, { readOnly: true });
           expect(agent.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
           expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authoredConfig);
@@ -342,9 +342,11 @@ describe("canonical in-place migration", () => {
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
           user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
-        expect(
-          agent.prepare("SELECT min_reader FROM schema_meta WHERE meta_key = 'primary'").get(),
-        ).toEqual({ min_reader: 43 });
+        const agentMetadata = agent
+          .prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'")
+          .get();
+        expect(agentMetadata).toMatchObject({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+        expect(agentMetadata).not.toHaveProperty("min_reader");
       }
       await expect(
         executeExistingOpenClawStateRead(
@@ -378,7 +380,7 @@ describe("canonical in-place migration", () => {
         expect(fs.statSync(preimage).ino).not.toBe(stateIdentity.ino);
         {
           using image = new DatabaseSync(preimage, { readOnly: true });
-          expect(image.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+          expect(image.prepare("PRAGMA user_version").get()).toEqual({ user_version: 40 });
           expect(
             image
               .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
@@ -405,7 +407,7 @@ describe("canonical in-place migration", () => {
         );
         expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authoredConfig);
         using restored = new DatabaseSync(statePath, { readOnly: true });
-        expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+        expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 40 });
         expect(
           restored
             .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")

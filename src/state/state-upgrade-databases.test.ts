@@ -66,12 +66,7 @@ it.each(["external", "logs", "tmp", "npm", "node_modules", "git-install", "deep"
       using db = new DatabaseSync(file);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
     }
-    // The derived nullable-CHECK step retains the agent's existing floor.
-    await preflightStateUpgrade(env, {});
-    {
-      using db = new DatabaseSync(file);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 2}`);
-    }
+    // Release v43 raises the v42 reader floor and must have a restorable path.
     const before = fs.readFileSync(file);
     await expect(preflightStateUpgrade(env, {})).rejects.toThrow(/cannot restore.*Move.*retry/is);
     expect(fs.readFileSync(file)).toEqual(before);

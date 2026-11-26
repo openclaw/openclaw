@@ -7,6 +7,7 @@ import * as processRole from "../infra/database-engine/admission-scope.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import { stateApprovalProfileMigration } from "./openclaw-state-db-schema-v41-approval-profile.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 
@@ -40,11 +41,11 @@ it("retains the WAL commit from a shipped interrupted plan before the startup gu
   {
     using source = new DatabaseSync(path.join(root, "source.sqlite"));
     source.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-    source.exec(getOpenClawStatePredecessorSchema(41));
-    source.exec(`PRAGMA user_version = 41;
+    source.exec(getOpenClawStatePredecessorSchema(40));
+    source.exec(`PRAGMA user_version = 40;
       INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-        VALUES ('primary', 'global', 41, 1, 1);
-      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);
+        VALUES ('primary', 'global', 40, 1, 1);
+      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '40', 1);
       INSERT INTO config_machine_state VALUES ('auth.sharedStore', '{"location":"state-db"}', 1);
       PRAGMA wal_checkpoint(TRUNCATE);`);
     source
@@ -52,10 +53,10 @@ it("retains the WAL commit from a shipped interrupted plan before the startup gu
       .run("replay.committed", '"committed-before-crash"', 1);
     expect(fs.statSync(path.join(root, "source.sqlite-wal")).size).toBeGreaterThan(0);
     fs.copyFileSync(path.join(root, "source.sqlite"), live);
-    source.exec(`ALTER TABLE worker_session_placements ADD COLUMN confirmed_loss_recovery_json TEXT;
-      PRAGMA user_version = 42;
-      UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
-      UPDATE config_machine_state SET value_json = '42'
+    expect(stateApprovalProfileMigration.migrate(source, 40)).toBe(true);
+    source.exec(`PRAGMA user_version = 41;
+      UPDATE schema_meta SET schema_version = 41 WHERE meta_key = 'primary';
+      UPDATE config_machine_state SET value_json = '41'
         WHERE state_key = 'state.schema.contentVersion';`);
     source.prepare("VACUUM INTO ?").run(next);
     for (const suffix of ["-wal", "-shm"]) {

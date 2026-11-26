@@ -93,12 +93,12 @@ describe("startup canonical ownership", () => {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     {
       using state = new DatabaseSync(statePath);
-      state.exec(getOpenClawStatePredecessorSchema(41));
-      // The shared catalog is v41; the registered agent database is already current.
-      state.exec(`PRAGMA user_version = 41;
+      state.exec(getOpenClawStatePredecessorSchema(40));
+      // The shared catalog is v40; the registered agent database is already current.
+      state.exec(`PRAGMA user_version = 40;
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-          VALUES ('primary', 'global', 41, 1, 1);
-        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
+          VALUES ('primary', 'global', 40, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '40', 1);`);
       state
         .prepare("INSERT INTO agent_databases VALUES ('main', ?, ?, 1, ?)")
         .run(

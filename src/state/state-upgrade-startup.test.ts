@@ -69,11 +69,11 @@ it.each([
     {
       using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
-      db.exec(getOpenClawStatePredecessorSchema(41));
-      db.exec(`PRAGMA user_version = 41;
+      db.exec(getOpenClawStatePredecessorSchema(40));
+      db.exec(`PRAGMA user_version = 40;
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-          VALUES ('primary', 'global', 41, 1, 1);
-        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
+          VALUES ('primary', 'global', 40, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '40', 1);`);
       db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
         "auth.sharedStore",
         JSON.stringify({ location: "state-db" }),
@@ -106,7 +106,7 @@ it.each([
         });
         using original = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
         expect(original.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: 41,
+          user_version: 40,
         });
         expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authored);
         return;
@@ -126,7 +126,7 @@ it.each([
             entry.live === path.join(stateDir, "state", "openclaw.sqlite"),
         ).preimage;
         using original = new DatabaseSync(previous, { readOnly: true });
-        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(41);
+        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(40);
         await upgradeStateOnGatewayStart(env, () => true);
         expect(fs.readFileSync(manifestFile, "utf8")).toBe(encoded);
       } else {

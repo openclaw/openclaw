@@ -476,28 +476,22 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         }
         expect(await page.locator(".community-invite-card").count()).toBe(0);
         expect(await page.getByText("OpenClaw was updated", { exact: true }).count()).toBe(0);
-        const paneState = await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-          .evaluate(async (pane) => {
-            const chatPane = pane as HTMLElement & {
-              transcriptReady: boolean;
-              updateComplete: Promise<unknown>;
-            };
-            await chatPane.updateComplete;
-            const constructor = customElements.get("openclaw-chat-pane");
-            return {
-              connected: chatPane.isConnected,
-              transcriptReady: chatPane.transcriptReady,
-              registered: constructor !== undefined,
-              upgraded: constructor !== undefined && chatPane instanceof constructor,
-            };
-          });
-        expect(paneState).toEqual({
-          connected: true,
-          transcriptReady: true,
-          registered: true,
-          upgraded: true,
-        });
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        // Composer readiness can precede the asynchronous transcript load.
+        await expect
+          .poll(() =>
+            pane.evaluate((element) => {
+              const chatPane = element as HTMLElement & { transcriptReady: boolean };
+              const constructor = customElements.get("openclaw-chat-pane");
+              return {
+                connected: chatPane.isConnected,
+                transcriptReady: chatPane.transcriptReady,
+                registered: constructor !== undefined,
+                upgraded: constructor !== undefined && chatPane instanceof constructor,
+              };
+            }),
+          )
+          .toEqual({ connected: true, transcriptReady: true, registered: true, upgraded: true });
         expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
 
         const prompt = "generic mock send probe";

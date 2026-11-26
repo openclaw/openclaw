@@ -4,7 +4,14 @@ import type * as NodeServiceModule from "../../daemon/node-service.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { appendNodeOnlyPackageUpdateAdvice } from "./update-command-post-update-maintenance.js";
+import { completePostUpdateMaintenance } from "./update-command-post-update-maintenance.js";
+
+vi.mock("./update-command-service.js", () => ({
+  tryInstallShellCompletion: vi.fn(async () => undefined),
+}));
+vi.mock("./update-command-owed.js", () => ({
+  retryOwedUpdateSteps: vi.fn(async () => []),
+}));
 
 // Final result guidance consumes captured ownership; it must not reopen native inspection.
 vi.mock("../../daemon/node-service.js", async (original) => ({
@@ -26,11 +33,12 @@ function fixture(json = true) {
     steps: [],
     durationMs: 1,
   };
-  const params: Parameters<typeof appendNodeOnlyPackageUpdateAdvice>[0] & {
+  const params: Parameters<typeof completePostUpdateMaintenance>[0] & {
     result: UpdateRunResult;
   } = {
     root,
     result,
+    installKindChanged: false,
     opts: { json, run: { runId: "node-only-update", env: { OPENCLAW_PROFILE: "work" } } },
     preManagedServiceStop: {
       stopped: false,
@@ -45,10 +53,10 @@ function fixture(json = true) {
 
 it.each([false, true])(
   "names node installation and restart in the package result, json=%s",
-  (json) => {
+  async (json) => {
     const params = fixture(json);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    appendNodeOnlyPackageUpdateAdvice(params, params.result);
+    await completePostUpdateMaintenance(params, params.result, () => {}, { root: params.root });
     const advice = params.result.steps[0]?.stdoutTail;
     expect(advice).toContain("does not restart a retained node runtime");
     expect(advice).toContain(path.join(params.root, "openclaw.mjs"));
@@ -62,7 +70,7 @@ it.each([false, true])(
 
 it.each(["failure", "git", "uninspected"] as const)(
   "does not invent node activation after %s",
-  (kind) => {
+  async (kind) => {
     const params = fixture();
     if (kind === "failure") {
       params.result.status = "error";
@@ -73,16 +81,18 @@ it.each(["failure", "git", "uninspected"] as const)(
     if (kind === "uninspected") {
       delete params.preManagedServiceStop;
     }
-    appendNodeOnlyPackageUpdateAdvice(params, params.result);
-    expect(params.result.steps).toEqual([]);
+    await completePostUpdateMaintenance(params, params.result, () => {}, { root: params.root });
+    expect(
+      params.result.steps.find((step) => step.name === "advisory:node-restart"),
+    ).toBeUndefined();
   },
 );
 
-it("prints separate executable PowerShell commands for Windows paths", () => {
+it("prints separate executable PowerShell commands for Windows paths", async () => {
   mockProcessPlatform("win32");
   const params = fixture();
   params.result.root = "C:\\Updated Package";
-  appendNodeOnlyPackageUpdateAdvice(params, params.result);
+  await completePostUpdateMaintenance(params, params.result, () => {}, { root: params.root });
   expect(params.result.steps[0]?.stdoutTail).toContain("`& '");
   expect(params.result.steps[0]?.stdoutTail).toContain("node install --force`, then `& '");
   expect(params.result.steps[0]?.stdoutTail).not.toContain("&&");

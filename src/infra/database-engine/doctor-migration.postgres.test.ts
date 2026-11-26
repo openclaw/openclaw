@@ -47,10 +47,7 @@ import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import type { StoreSchema } from "./contract.js";
-import {
-  readAgentCatalog,
-  readAgentReferenceCatalog,
-} from "./doctor-migration.postgres.test-support.js";
+import { readAgentCatalog } from "./doctor-migration.postgres.test-support.js";
 import { openEngineStore } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
@@ -214,7 +211,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       }
     });
     namespaces.add(targetNamespace);
-    targetAgentCatalog = await readAgentReferenceCatalog(client, targetNamespace);
+    targetAgentCatalog = await readAgentCatalog(client, targetNamespace);
   });
 
   afterAll(async () => {

@@ -51,7 +51,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     await client.end();
   });
 
-  it("migrates an additive SQLite agent beside canonical PostgreSQL state without copying either", async () => {
+  it("migrates a SQLite agent in place beside canonical PostgreSQL state and retains its rollback image", async () => {
     const root = directories.make("postgres-state-upgrade-");
     const statePath = path.join(root, "state", "openclaw.sqlite");
     const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -88,10 +88,10 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
         .run(storeId, namespace);
       using agent = openNodeSqliteDatabase(agentPath);
-      agent.exec(getOpenClawAgentMigrationSchema(43));
-      agent.exec(`PRAGMA user_version = 43;
+      agent.exec(getOpenClawAgentMigrationSchema(42));
+      agent.exec(`PRAGMA user_version = 42;
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 43, 'main', 1, 1);`);
+          VALUES ('primary', 'agent', 42, 'main', 1, 1);`);
     }
     const configPath = path.join(root, "openclaw.json");
     const config: OpenClawConfig = {
@@ -159,17 +159,21 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     expect(upgradedAgent.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
-    expect(
-      upgradedAgent.prepare("SELECT min_reader FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual({ min_reader: 43 });
-    for (const file of [statePath, agentPath]) {
-      expect(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".pre-"))).toEqual(
-        [],
-      );
-    }
-    expect(
-      JSON.parse(fs.readFileSync(path.join(path.dirname(target), ".restore"), "utf8")),
-    ).toEqual({ v: 1, runId: pending.runId, files: [] });
+    const metadata = upgradedAgent
+      .prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'")
+      .get();
+    expect(metadata).toMatchObject({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    expect(metadata).not.toHaveProperty("min_reader");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(target), ".restore"), "utf8"),
+    ) as { v: number; runId: string; files: Array<{ live: string; preimage: string | null }> };
+    expect(manifest).toMatchObject({ v: 1, runId: pending.runId });
+    expect(manifest.files.some(({ live }) => live.startsWith(statePath))).toBe(false);
+    const preimage = manifest.files.find(({ live }) => live === agentPath)?.preimage;
+    assert(preimage);
+    expect(fs.statSync(preimage).ino).not.toBe(originalAgentInode);
+    using rollbackAgent = openNodeSqliteDatabase(preimage, { readOnly: true });
+    expect(rollbackAgent.prepare("PRAGMA user_version").get()).toEqual({ user_version: 42 });
     expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
   }, 60_000);
 
@@ -184,11 +188,11 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     {
       using state = openNodeSqliteDatabase(statePath);
-      state.exec(getOpenClawStatePredecessorSchema(41));
-      state.exec(`PRAGMA user_version = 41;
+      state.exec(getOpenClawStatePredecessorSchema(40));
+      state.exec(`PRAGMA user_version = 40;
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-          VALUES ('primary', 'global', 41, 1, 1);
-        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
+          VALUES ('primary', 'global', 40, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '40', 1);`);
       runSqliteImmediateTransactionSync(state, () =>
         bindFreshClientCredentialStore(state, { path: statePath, env }),
       );

@@ -40,7 +40,7 @@ import {
 import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 
 /** The package route leaves node-owned runtimes alone and names their activation commands. */
-export function appendNodeOnlyPackageUpdateAdvice(
+function appendNodeOnlyPackageUpdateAdvice(
   params: Pick<FinishUpdateParams, "root" | "opts" | "preManagedServiceStop">,
   result: UpdateRunResult,
 ): void {
@@ -219,7 +219,15 @@ export function reportCurrentCoreServiceSkip(
 
 /** Shell integration changes follow settled restart and health recovery. */
 export async function completePostUpdateMaintenance(
-  params: FinishUpdateParams,
+  params: Pick<
+    FinishUpdateParams,
+    | "root"
+    | "opts"
+    | "preManagedServiceStop"
+    | "coreAlreadyCurrent"
+    | "installKindChanged"
+    | "previousInstallRoot"
+  >,
   result: UpdateRunResult,
   assertCurrent: () => void,
   context: { root: string },

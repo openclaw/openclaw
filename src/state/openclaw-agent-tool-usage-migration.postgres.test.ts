@@ -45,10 +45,10 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
         schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
-      // v42/v43 are strict; v44 only adds nullable member access.
-      expect(upgraded.prepare("SELECT min_reader FROM openclaw_schema_meta").get()).toEqual({
-        min_reader: 43,
-      });
+      // Release stops at strict v43; only an additive migration creates min_reader.
+      const metadata = upgraded.prepare("SELECT * FROM openclaw_schema_meta").get();
+      expect(metadata).toMatchObject({ version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(metadata).not.toHaveProperty("min_reader");
       expect(readAgentToolUsageInDatabase(upgraded, 100).rows).toEqual([]);
       upgraded.runTransaction(() => {
         const state = beginAgentToolUsageInDatabase(upgraded, 100, "synthetic-live-run");

@@ -462,6 +462,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
   "scripts/e2e/lib/upgrade-survivor/run.sh!",
+  // upgrade-survivor-docker.sh selects this runner by filename.
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // The upgrade-survivor runner invokes the session-share baseline and checks by path.
   "scripts/e2e/lib/upgrade-survivor/session-share.mjs!",
