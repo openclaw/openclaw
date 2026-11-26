@@ -280,6 +280,31 @@ it.each([true, false])(
   },
 );
 
+it("keeps a typed Discord owner current only while the owner entry remains configured", async () => {
+  const registry = createTestPluginRegistry().registry;
+  registry.plugins.push(createPluginRecord({ id: "discord", status: "error" }));
+  registry.diagnostics.push({
+    level: "error",
+    pluginId: "discord",
+    message: "pending",
+    code: "plugin-state-migration",
+  });
+  const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+  vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(
+    new PluginLoadFailureError(registry, registry.plugins),
+  );
+  setActivePluginRegistry(registry);
+  try {
+    await writeConfig({ commands: { ownerAllowFrom: ["discord:user:100000000000000001"] } });
+    const authority = await authorityFor({ channel: "discord", senderId: "100000000000000001" });
+    expect(authority.isCurrent()).toBe(true);
+    await writeConfig({ commands: { ownerAllowFrom: ["discord:user:100000000000000002"] } });
+    expect(authority.isCurrent()).toBe(false);
+  } finally {
+    await clearActivePluginRegistry(registry);
+  }
+});
+
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",
   async (failure) => {
