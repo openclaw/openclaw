@@ -186,7 +186,6 @@ async function runCapturedSessionActorUsage(
         return [file.filePath, { file, instance }] as const;
       }),
     );
-    const selectedFiles = requested?.map((file) => files.get(file)?.file);
     if (operation.kind === "inventory") {
       return {
         kind: "inventory",
@@ -281,7 +280,7 @@ async function runCapturedSessionActorUsage(
               ...(await projectSessionCostSummaries({
                 ...source,
                 ...operation,
-                files: selectedFiles ?? [],
+                files: operation.sessions.map(({ sessionFile }) => files.get(sessionFile)?.file),
               })),
               remainingReportBytes: Math.max(0, decodeBudget.remainingBytes),
             };
@@ -291,9 +290,6 @@ async function runCapturedSessionActorUsage(
     }
     if (!binding.actor) {
       return { kind: "refresh", changed: false };
-    }
-    if (selectedFiles?.some((file) => !file)) {
-      throw new Error("Chat history for the requested usage is unavailable");
     }
     const rebuild = new Set(operation.rebuildRows?.map((row) => row.key));
     const selected = requested && new Set(requested);

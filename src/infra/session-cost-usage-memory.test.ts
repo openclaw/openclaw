@@ -390,7 +390,7 @@ describe("actor memory usage", () => {
     await expectRefresh(refresh(), false);
   });
 
-  it("refreshes and reports every selected memory session through the worker adapter", async () => {
+  it("refreshes surviving selected memory sessions through the worker adapter", async () => {
     const first = await fixture();
     const second = await fixture({}, anotherSession("usage-2"));
     const cost = { input: 0.8, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 1 };
@@ -402,11 +402,22 @@ describe("actor memory usage", () => {
       env,
     });
     const sessionFiles = [first.sessionFile, second.sessionFile];
+    const missingFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      storePath: first.binding.path,
+      sessionId: "removed",
+    });
     const pricingFingerprint = await resolveUsageCostPricingFingerprint(
       prepared.config,
       prepared.agentDir,
     );
-    await expectRefresh(runUsageCostWorker(prepared, { kind: "refresh", sessionFiles }), true);
+    await expectRefresh(
+      runUsageCostWorker(prepared, {
+        kind: "refresh",
+        sessionFiles: [missingFile, ...sessionFiles],
+      }),
+      true,
+    );
     const cached = await runUsageCostWorker(
       prepared,
       sessionReport(sessionFiles, pricingFingerprint),

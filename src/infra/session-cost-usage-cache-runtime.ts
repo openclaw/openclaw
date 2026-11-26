@@ -655,6 +655,10 @@ async function runQueuedUsageCostRefresh(
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
             background: true,
             maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
+            onMissingTranscripts: () => {
+              // Inventory reconciliation can prune a missing transcript's old rollup.
+              state.fullRefreshRequested = true;
+            },
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
                 state.pendingSessionFiles.set(sessionFile, null);
@@ -716,8 +720,8 @@ async function runQueuedUsageCostRefresh(
         if (signal?.aborted || !partialBatch || recoveredPartialFailure) {
           return;
         }
-        // A queued identity can disappear on reset or deletion. Rediscover once;
-        // persistent failures wait for the next publication instead of spinning.
+        // Retry against the current inventory once; persistent failures wait
+        // for the next publication instead of spinning.
         recoveredPartialFailure = true;
         state.fullRefreshRequested = true;
         for (const file of state.readingSessionFiles.keys()) {

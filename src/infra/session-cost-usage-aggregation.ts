@@ -20,6 +20,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   databasePath?: string;
   background?: true;
   maxFiles?: number;
+  onMissingTranscripts?: () => void;
   onRemaining?: (files: UsageCostPendingFile[]) => void;
   storePath?: string;
   sessionFiles?: string[];
@@ -51,6 +52,9 @@ export async function refreshCostUsageCacheForAgent(params: {
     }
     if (result.remainingFiles?.length) {
       params.onRemaining?.(result.remainingFiles);
+    }
+    if (result.missingTranscripts) {
+      params.onMissingTranscripts?.();
     }
     for (const { sessionFile, message } of result.unreadableFiles ?? []) {
       if (!reportedUnreadableFiles.has(sessionFile)) {

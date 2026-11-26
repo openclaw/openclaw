@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerPreparedModelRuntimePublicationListener } from "../agents/prepared-model-runtime.publication-events.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,7 +65,11 @@ export function startSessionCostUsageProjectionLifetime(params: {
     });
   const offTranscript = onInternalSessionTranscriptUpdate((update) => {
     const target = update.target;
-    if (!target || isIncognitoSessionKey(target.sessionKey)) {
+    if (
+      !target ||
+      isIncognitoSessionKey(target.sessionKey) ||
+      isInternalSessionEffectsKey(target.sessionKey)
+    ) {
       return;
     }
     // User/metadata rows join the next usage scan; unqualified publications can

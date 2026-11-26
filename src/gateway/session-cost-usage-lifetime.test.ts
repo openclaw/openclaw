@@ -466,6 +466,30 @@ it("projects committed usage after startup preparation without borrowing its exp
   });
 });
 
+it("queues usage for visible transcript updates only", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = mainConfig();
+    const visible = seedUsage("visible-usage");
+    const internal = seedUsage("hidden-usage", "main", "internal-session-effects:run");
+    const requested = vi
+      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
+      .mockImplementation(() => {});
+    const lifetime = startProjection(config);
+    try {
+      await appendUsage(visible, timestamp, 10);
+      await appendUsage(internal, timestamp, 100);
+      expect(requested.mock.calls.flatMap(([request]) => request.sessionFiles ?? [])).toEqual([
+        formatSqliteSessionFileMarker({
+          ...visible,
+          storePath: resolveSessionStorePathForScope(visible, config),
+        }),
+      ]);
+    } finally {
+      await lifetime.stop();
+    }
+  });
+});
+
 it("routes startup, shared selectors, invalidations, and admitted topology owners", async ({
   signal,
 }) => {

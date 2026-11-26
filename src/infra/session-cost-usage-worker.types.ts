@@ -138,6 +138,7 @@ export type UsageCostWorkerResult =
       kind: "refresh";
       changed: boolean;
       remainingFiles?: UsageCostPendingFile[];
+      missingTranscripts?: true;
       /** Archives that cannot be decoded; their last rollup is kept and the batch completes. */
       unreadableFiles?: Array<{ sessionFile: string; message: string }>;
     };
