@@ -1,4 +1,5 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sessionAuthFields } from "./auth-bridge.js";
 
 export type CopilotSessionBinding = {
@@ -14,13 +15,6 @@ export type CopilotSessionBinding = {
   updatedAt: number;
 };
 
-type LegacyCopilotSessionBinding = {
-  schemaVersion: 1;
-  sdkSessionId: string;
-  compatKey: string;
-  updatedAt: number;
-};
-
 type CopilotAttemptSessionBinding = Pick<
   CopilotSessionBinding,
   "compatKey" | "journalVersion" | "sdkSessionId"
@@ -30,11 +24,11 @@ export type CopilotSessionBindingStore = Pick<
   "delete" | "lookup" | "register"
 >;
 
-function normalizeBinding(
-  value: CopilotSessionBinding | undefined,
-): CopilotSessionBinding | undefined {
+function normalizeBinding(value: Record<string, unknown>): CopilotSessionBinding | undefined {
+  const authProfileId = typeof value.authProfileId === "string" ? value.authProfileId : undefined;
+  const authProfileVersion =
+    typeof value.authProfileVersion === "string" ? value.authProfileVersion : undefined;
   if (
-    !value ||
     value.schemaVersion !== 2 ||
     typeof value.sdkSessionId !== "string" ||
     value.sdkSessionId.trim() === "" ||
@@ -47,10 +41,7 @@ function normalizeBinding(
       value.authMode !== "byok" &&
       value.authMode !== "useLoggedInUser") ||
     ((value.authMode === "gitHubToken" || value.authMode === "byok") &&
-      (typeof value.authProfileId !== "string" ||
-        value.authProfileId.trim() === "" ||
-        typeof value.authProfileVersion !== "string" ||
-        value.authProfileVersion.trim() === "")) ||
+      (!authProfileId?.trim() || !authProfileVersion?.trim())) ||
     typeof value.updatedAt !== "number" ||
     !Number.isFinite(value.updatedAt)
   ) {
@@ -62,19 +53,21 @@ function normalizeBinding(
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
     compactKey: value.compactKey,
-    ...sessionAuthFields(value),
+    ...sessionAuthFields({ authMode: value.authMode, authProfileId, authProfileVersion }),
     updatedAt: value.updatedAt,
   };
 }
 
 function normalizeAttemptBinding(value: unknown): CopilotAttemptSessionBinding | undefined {
-  const current = normalizeBinding(value as CopilotSessionBinding | undefined);
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const current = normalizeBinding(value);
   if (current) {
     return current;
   }
-  const legacy = value as LegacyCopilotSessionBinding | undefined;
+  const legacy = value;
   if (
-    !legacy ||
     legacy.schemaVersion !== 1 ||
     typeof legacy.sdkSessionId !== "string" ||
     legacy.sdkSessionId.trim() === "" ||
