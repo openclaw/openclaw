@@ -1,0 +1,30 @@
+.dictation-cleanup {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dictation-cleanup h3,
+.dictation-cleanup p {
+  margin: 0;
+}
+
+.dictation-cleanup h3 {
+  font-size: 1rem;
+}
+
+.dictation-cleanup textarea {
+  resize: vertical;
+  max-height: 240px;
+}
+
+.dictation-cleanup__removals {
+  margin: 0;
+  padding-inline-start: 24px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.dictation-cleanup q {
+  white-space: pre-wrap;
+}

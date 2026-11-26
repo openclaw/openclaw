@@ -143,6 +143,7 @@ export function SessionRailComposer(props: {
   const submit = () => {
     const active = dictationControl.dictation;
     if (!active?.active) {
+      dictationControl.dismissCleanup();
       props.submit();
       return;
     }
@@ -150,8 +151,14 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
+    const requiresReview = active.requiresCleanupReview;
     void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+      if (
+        !requiresReview &&
+        props.sessionKey === sessionKey &&
+        dictationControl.dictation === active
+      ) {
+        dictationControl.dismissCleanup();
         props.submit();
       }
     });

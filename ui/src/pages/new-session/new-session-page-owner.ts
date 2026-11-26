@@ -62,7 +62,15 @@ export class NewSessionPageOwner {
     this.submissionLifetimeValue = Promise.withResolvers<void>();
     this.listeners.publish();
   };
-  submit(background = false) {
+  submit(background = false): Promise<void> {
+    const active = this.dictation.dictation;
+    if (active?.active && active.requiresCleanupReview) {
+      if (active.finalizing) {
+        return Promise.resolve();
+      }
+      return active.finishActive().then(() => undefined);
+    }
+    this.dictation.dismissCleanup();
     const lifetime = this.submissionLifetime;
     const textarea = this.submission.composerTextarea.getTextarea();
     const restoreFocus = background && this.host.ownerDocument.activeElement === textarea;

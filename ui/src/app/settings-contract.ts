@@ -22,6 +22,25 @@ export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
+export type DictationCleanupPolicy = {
+  version: 1;
+  mode: "off" | "conservative";
+  locale: "en" | null;
+};
+
+/** Cleanup is an explicit English opt-in, never inferred from the interface language. */
+export function normalizeDictationCleanupPolicy(value: unknown): DictationCleanupPolicy {
+  if (
+    isRecord(value) &&
+    value.version === 1 &&
+    value.mode === "conservative" &&
+    value.locale === "en"
+  ) {
+    return { version: 1, mode: "conservative", locale: "en" };
+  }
+  return { version: 1, mode: "off", locale: null };
+}
+
 function normalizeChoice<T extends string>(
   values: readonly T[],
   fallback: T,
@@ -213,6 +232,8 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  // Browser-local, Gateway-scoped preference; transcript/review content is never persisted here.
+  dictationCleanup?: DictationCleanupPolicy;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;

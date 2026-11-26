@@ -310,6 +310,10 @@ export function createChatComposerContext(
     if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
       return false;
     }
+    if (state.dictation?.cleanupReview || state.dictation?.awaitingCleanup) {
+      // Submission retires the unsent-draft restoration receipt before dispatch.
+      state.dictation.dismissCleanup();
+    }
     state.composerComposing = false;
     state.tasks()?.clearAccepted();
     interaction.setComposition(null);
