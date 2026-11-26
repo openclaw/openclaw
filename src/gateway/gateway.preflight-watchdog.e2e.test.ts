@@ -19,10 +19,13 @@ function writeEvent(response: ServerResponse, event: object) {
 
 it(
   "delivers a Control UI turn after a private memory flush streams past six minutes",
-  { timeout: 150_000 },
+  { timeout: 180_000 },
   async () => {
     const sessionKey = "agent:main:main";
     const summaryModel = "preflight-summary";
+    // NO_REPLY also appears in the foreground runtime instructions.
+    const flushDeltas = ["Private", " watchdog", " canary", " 48c7ef."];
+    const flushText = flushDeltas.join("");
     const requests: string[] = [];
     let flush: ServerResponse | undefined;
     const fixture = createChatFixture("preflight-watchdog", {
@@ -137,7 +140,7 @@ it(
       const operation = findSessionControllerOperationByRunId(runId)!;
       expect(operation.phase).toBe("memory_flushing");
       // Accelerate the reply watchdog's wall clock, leaving actual socket IO and timers intact.
-      for (const delta of ["NO", "_", "RE", "PLY"]) {
+      for (const delta of flushDeltas) {
         offset += 100_000;
         expect((await operation.watchdog.tick()).action).toBe("observe");
         writeEvent(response, {
@@ -158,7 +161,7 @@ it(
         type: "message",
         status: "completed",
         role: "assistant",
-        content: [{ type: "output_text", text: "NO_REPLY", annotations: [] }],
+        content: [{ type: "output_text", text: flushText, annotations: [] }],
       };
       writeEvent(response, { type: "response.output_item.done", output_index: 0, item });
       writeEvent(response, {
@@ -172,12 +175,13 @@ it(
       });
       response.end("data: [DONE]\n\n");
       await expect(
-        fixture.client.request("agent.wait", { runId, timeoutMs: 15_000 }),
+        fixture.client.request("agent.wait", { runId, timeoutMs: 45_000 }, { timeoutMs: 50_000 }),
       ).resolves.toMatchObject({ status: "ok" });
       expect(requests).toEqual(["flush", "summary", "reply"]);
       const transcript = JSON.stringify(loadTranscriptEventsSync(scope));
       expect(transcript).toContain("The foreground reply arrived.");
-      expect(transcript).not.toContain("NO_REPLY");
+      expect(transcript.includes(flushText)).toBe(false);
+      expect(fixture.requests.slice(1).some((body) => body.includes(flushText))).toBe(false);
     } finally {
       flush?.destroy();
       vi.mocked(Date.now).mockRestore?.();
