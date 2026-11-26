@@ -87,6 +87,11 @@ async function prepareSettledTurnFinalization(
     });
     if (costUsd !== undefined) {
       meta.costUsd = costUsd;
+      if (meta.usage) {
+        meta.usage.cost = { ...meta.usage.cost, total: costUsd };
+      }
+    } else if (meta.usage) {
+      delete meta.usage.cost;
     }
   };
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;

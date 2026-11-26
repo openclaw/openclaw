@@ -87,18 +87,26 @@ function setCompactionStatus(
   host: ToolStreamHost,
   runId: string,
   phase: CompactionStatus["phase"],
-  itemId?: string,
+  { itemId, manualOperation }: Pick<CompactionStatus, "itemId" | "manualOperation"> = {},
 ) {
   const completed = phase === "complete";
   const previous = host.compactionStatus;
+  // A new itemless start must not inherit a completed row's item identity.
+  const startsUnkeyedOperation =
+    phase === "active" && !itemId && (previous?.phase !== "active" || Boolean(previous.itemId));
   const sameOperation =
-    previous?.runId === runId && (!itemId || !previous.itemId || previous.itemId === itemId);
+    previous?.runId === runId &&
+    !startsUnkeyedOperation &&
+    (!itemId || !previous.itemId || previous.itemId === itemId);
   const currentItemId = itemId ?? (sameOperation ? previous?.itemId : undefined);
   clearCompactionTimer(host);
   host.compactionStatus = {
     phase,
     runId,
     ...(currentItemId ? { itemId: currentItemId } : {}),
+    ...(manualOperation || (sameOperation && previous.manualOperation)
+      ? { manualOperation: true }
+      : {}),
     startedAt: sameOperation ? previous.startedAt : Date.now(),
     completedAt: completed ? Date.now() : null,
   };
@@ -127,21 +135,25 @@ export function handleSessionOperationEvent(
     return;
   }
 
-  const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
+  const operationId = toTrimmedString(payload.operationId);
+  const runId = operationId ?? `session-compact:${sessionKey}`;
+  const details: Pick<CompactionStatus, "manualOperation"> = {
+    manualOperation: operationId ? true : undefined,
+  };
 
   if (payload.phase === "start") {
-    setCompactionStatus(host, operationId, "active");
+    setCompactionStatus(host, runId, "active", details);
     return;
   }
 
   if (payload.phase !== "end") {
     return;
   }
-  if (host.compactionStatus?.runId && host.compactionStatus.runId !== operationId) {
+  if (host.compactionStatus?.runId && host.compactionStatus.runId !== runId) {
     return;
   }
   if (payload.completed === true) {
-    setCompactionStatus(host, operationId, "complete");
+    setCompactionStatus(host, runId, "complete", details);
     return;
   }
   clearCompactionTimer(host);
@@ -160,18 +172,15 @@ function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload)
   clearCompactionTimer(host);
 
   if (phase === "start") {
-    setCompactionStatus(host, payload.runId, "active", itemId);
+    setCompactionStatus(host, payload.runId, "active", { itemId });
     return;
   }
   if (phase === "end") {
     if (completed) {
       // Successful compaction can precede a retry; only lifecycle end completes it.
-      setCompactionStatus(
-        host,
-        payload.runId,
-        data.willRetry === true ? "retrying" : "complete",
+      setCompactionStatus(host, payload.runId, data.willRetry === true ? "retrying" : "complete", {
         itemId,
-      );
+      });
     } else {
       host.compactionStatus = null;
     }

@@ -643,3 +643,96 @@ it("routes only the authenticated publication and matching instruction identity 
     await close();
   }
 });
+
+it("publishes one reviewed PNG for a shared reader, preserves packet bytes and checks access on the next read", async () => {
+  const { store, close } = await persistentBeamTestStore();
+  let actor = beamTestAuthority({ personProfileId: "alice", scopes: ["operator.write"] });
+  const handler = createBeamV2Handler({
+    ...store,
+    currentAuthority: () => actor,
+    controlUiBasePath: () => undefined,
+  });
+  await using server = http.createServer((req, res) => void handler(req, res));
+  try {
+    const origin = `http://127.0.0.1:${await listenOnLoopback(server)}`;
+    const upload = sampleUpload();
+    const packet = JSON.stringify({ ...upload, version: 2 });
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNQCGiAIwZkDgBemgeBLDSLhAAAAABJRU5ErkJggg==";
+    const target = origin + "/api/v2/beam/snapshots/" + upload.beamId;
+    const put = (name: string, key: string, revision?: string) =>
+      fetch(target, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/vnd.openclaw.beam.screenshot+json",
+          "idempotency-key": key,
+          ...(revision ? { "if-match": revision } : { "if-none-match": "*" }),
+        },
+        body: JSON.stringify({ packet, name, png }),
+      });
+    const id = "12345678-1234-4123-abcd-000000000007";
+    const response = await put("review.png", id);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const publication = await response.json();
+    expect(await (await put("review.png", id)).json()).toEqual(publication);
+    expect((await put("renamed.png", id)).status).toBe(409);
+    const renamed = await (
+      await put("renamed.png", "12345678-1234-4123-abcd-000000000008", publication.revision)
+    ).json();
+    expect(renamed.presentationDigest).not.toBe(publication.presentationDigest);
+    expect(renamed.digest).toBe(publication.digest);
+    const resource = new URL(renamed.apiUrl, target).href;
+    const catalog = createBeamSessionCatalog(store);
+    const request = { hostId: "gateway", threadId: upload.beamId };
+    expect(await catalog.read(request)).not.toHaveProperty("previewImage");
+    expect((await catalog.read({ ...request, includePreviewImage: true })).previewImage).toEqual({
+      mimeType: "image/png",
+      name: "renamed.png",
+      data: png,
+      digest: renamed.presentationDigest,
+    });
+    actor = beamTestAuthority({ personProfileId: "bob", scopes: ["operator.read"] });
+    expect(await (await fetch(resource + "/snapshot")).text()).toBe(packet);
+    const image = await fetch(resource + "/image");
+    expect(image.status).toBe(200);
+    expect(image.headers.get("cache-control")).toContain("no-store");
+    expect(Buffer.from(await image.arrayBuffer()).toString("base64")).toBe(png);
+    actor = beamTestAuthority({ personProfileId: "bob", scopes: [] });
+    expect((await fetch(resource + "/image")).status).toBe(404);
+    actor = beamTestAuthority({
+      personProfileId: "charlie",
+      scopes: ["operator.sessions.write"],
+      requiredGrantPluginId: "visitor-access",
+    });
+    expect((await fetch(resource + "/image")).status).toBe(404);
+    actor = beamTestAuthority({ personProfileId: "alice", scopes: ["operator.write"] });
+    const removed = await fetch(target, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "if-match": renamed.revision,
+        "idempotency-key": "12345678-1234-4123-abcd-000000000009",
+      },
+      body: packet,
+    });
+    expect(removed.status).toBe(200);
+    const plain = await removed.json();
+    expect(plain.digest).toBe(renamed.digest);
+    expect(plain).not.toHaveProperty("presentationDigest");
+    expect(plain.revision).not.toBe(renamed.revision);
+    expect((await fetch(resource + "/image")).status).toBe(404);
+    expect(await store.getScreenshot?.(upload.beamId, renamed.presentationDigest)).toBeUndefined();
+    const restored = await put(
+      "renamed.png",
+      "12345678-1234-4123-abcd-000000000010",
+      plain.revision,
+    );
+    expect(restored.status).toBe(200);
+    expect(await store.delete(upload.beamId)).toBe(true);
+    expect(await store.getScreenshot?.(upload.beamId, renamed.presentationDigest)).toBeUndefined();
+    actor = beamTestAuthority({ personProfileId: "alice", scopes: ["operator.read"] });
+    expect((await fetch(resource + "/image")).status).toBe(404);
+  } finally {
+    await close();
+  }
+});

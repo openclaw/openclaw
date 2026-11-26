@@ -696,14 +696,6 @@ openclaw-templates-detail-view .plugin-capabilities .settings-row__text {
   }
 }
 
-/* An automation's prompt opens under its row: the row's text column and description type. */
-openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
-  margin: -6px 28px 0 46px;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.5;
-}
-
 /* The whole soul reads as the plugin page's Readme does; status lines sit under the excerpt. */
 .templates-personality__markdown {
   max-width: 680px;
@@ -744,10 +736,4 @@ openclaw-templates-detail-view .plugin-capability__details > .template-automatio
   margin: 10px 0 0;
   color: var(--muted);
   font-size: 13px;
-}
-
-@container (max-width: 560px) {
-  openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
-    margin: -6px 26px 0 42px;
-  }
 }

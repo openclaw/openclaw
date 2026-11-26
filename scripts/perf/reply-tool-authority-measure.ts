@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { createAdmittedRunOperatorAuthority } from "../../src/agents/admitted-run-context.js";
 import type { ReplyToolAuthorityInput } from "../../src/auto-reply/reply/reply-tool-authority.types.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { decideTurnGrant } from "../../src/gateway/operator-admission.js";
 import type { ReplyToolAuthorityOverlay } from "../../src/sessions/session-controller.contracts.js";
 
 const { values } = parseArgs({
@@ -47,6 +48,7 @@ const authority = createAdmittedRunOperatorAuthority({
   canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
+  grant: decideTurnGrant(["operator.read", "operator.write", "operator.admin"]),
 });
 const config = captureRuntimeConfig({
   plugins: {

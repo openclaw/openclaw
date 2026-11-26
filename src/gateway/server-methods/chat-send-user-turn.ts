@@ -159,6 +159,7 @@ export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
+    | "participating"
     | "inboundMessage"
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
@@ -167,8 +168,7 @@ export function prepareChatSendUserTurn(params: {
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
     Partial<Pick<PreparedChatSendSession, "cfg">>;
-  admission: Pick<AdmittedChatSend, "originatingRoute"> &
-    Partial<Pick<AdmittedChatSend, "assertWorkAdmissionCurrent" | "assertClientUploadAllowed">>;
+  admission: Pick<AdmittedChatSend, "originatingRoute"> & Partial<AdmittedChatSend>;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -222,10 +222,9 @@ export function prepareChatSendUserTurn(params: {
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
+  const suppressCommands = request.suppressCommandInterpretation || Boolean(request.participating);
   const commandSource =
-    !request.suppressCommandInterpretation && commandBody.trim().startsWith("/")
-      ? "text"
-      : undefined;
+    !suppressCommands && commandBody.trim().startsWith("/") ? "text" : undefined;
   const buildTextContext = (text: string) => {
     // The attachment parser appends managed-media hints after the original input.
     const parsedMessage =
@@ -271,7 +270,7 @@ export function prepareChatSendUserTurn(params: {
     AccountId: accountId,
     MessageThreadId: messageThreadId,
     ...(commandSource ? { CommandSource: commandSource } : {}),
-    CommandAuthorized: !request.suppressCommandInterpretation,
+    CommandAuthorized: !suppressCommands,
     CommandTurn: commandSource
       ? {
           kind: "text-slash",
@@ -285,13 +284,17 @@ export function prepareChatSendUserTurn(params: {
           authorized: false,
           body: commandBody,
         },
-    ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
+    ...(suppressCommands ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: session.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
+    TurnGrant: admission.operatorAuthority?.grant,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  if (request.participating) {
+    delete ctx.ApprovalReviewerDeviceId;
+  }
   const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
   const externalInput =

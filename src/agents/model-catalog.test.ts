@@ -33,7 +33,7 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
-import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   resolveLogicalVisibleModelCatalog,
@@ -726,16 +726,6 @@ it("uses the lifecycle auth snapshot for provider catalog augmentation", async (
   expect(mocks.augmentModelCatalogWithProviderPlugins).toHaveBeenCalledWith(
     expect.objectContaining({ metadataSnapshot }),
   );
-});
-
-it("reports image capability from the prepared row", () => {
-  const entry: ModelCatalogEntry = {
-    id: "media",
-    name: "Media",
-    provider: "test",
-    input: ["text", "image", "document"],
-  };
-  expect(modelSupportsVision(entry)).toBe(true);
 });
 
 describe("model catalog metadata projection", () => {

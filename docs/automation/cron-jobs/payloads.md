@@ -278,6 +278,16 @@ scheduled model falls back without retaining that model's account.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
+To list accounts while the Gateway runs, use `openclaw gateway call models.authStatus`.
+
+If the recorded account was removed or signed out, an explicit plain-model edit
+such as `openclaw automations edit <jobId> --model openai/gpt-4.1` can release the
+dead binding when that model selects a key in the environment or provider config.
+The edit preserves the job and its history, and cannot change its recorded runtime
+on the same provider. A remaining stored account still requires an explicit
+`model@profile` selection. Valid bindings, unrelated edits, and
+`--clear-model` keep the recorded account.
+
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
 the account the job's next unbound run would use: an explicit selection, or else the
 first account in the run's normal account order, ignoring temporary rate-limit
@@ -334,7 +344,7 @@ An explicit update from an authorized native creator can adopt its runtime autho
 An authorized `--model anthropic/<model>@anthropic:claude-cli` edit can replace a
 stored account with Claude CLI’s native login when the job’s execution route uses
 that CLI. This preserves the job’s identity, history and tool cap; ordinary
-model or default changes never clear a stored account.
+model or default changes never clear an available stored account.
 Moving a job to an agent with a different credential owner requires explicit account adoption.
 Tool and delivery accounts remain separate from the inference account.
 
@@ -484,6 +494,11 @@ The script may return an object with these optional fields:
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+
+Before starting a script or condition check that reuses a prepared Docker sandbox,
+OpenClaw checks the container's state. If it has stopped, sandbox provisioning starts
+the existing container before the evaluation begins. A stop during an evaluation
+can still fail that run. Recovery happens before the next evaluation begins.
 
 Plugin reloads invalidate cached script preparation. If a plugin retires during setup,
 OpenClaw refreshes the tools once before starting the script, within the original

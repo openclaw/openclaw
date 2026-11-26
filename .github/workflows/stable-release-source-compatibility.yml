@@ -1,0 +1,121 @@
+name: Stable Release Source Compatibility
+run-name: Stable Release Source Compatibility ${{ inputs.dispatch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact candidate Gateway commit (dispatch ref pins qualification tooling)
+        type: string
+        required: true
+      dispatch_id:
+        description: Caller correlation ID
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  select:
+    name: Select stable client source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      DISPATCH_ID: ${{ inputs.dispatch_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+      - name: Find this run's frozen client source
+        id: saved
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo, run_id: context.runId, per_page: 100,
+              name: 'stable-client-source-' + context.runId,
+            });
+            const matches = artifacts.filter(a => a.name === 'stable-client-source-' + context.runId);
+            if (matches.length > 1 || matches.some(a => a.expired)) throw new Error('Invalid saved source selection');
+            if (!matches.length && Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
+              throw new Error('Missing frozen source selection; start a new workflow run');
+            }
+            core.setOutput('id', matches.length ? String(matches[0].id) : '');
+      - name: Restore frozen client source
+        if: steps.saved.outputs.id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.saved.outputs.id }}
+          path: ${{ runner.temp }}/stable-client-source
+          digest-mismatch: error
+      - name: Select or validate exact stable source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORE: ${{ steps.saved.outputs.id != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/stable-client-source"
+          args=()
+          if [[ "$RESTORE" == true ]]; then args+=(--restore); fi
+          node scripts/stable-release-source.mjs --output "$RUNNER_TEMP/stable-client-source/selection.json" "${args[@]}"
+      - name: Retain frozen source for retries
+        if: steps.saved.outputs.id == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stable-client-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/stable-client-source/selection.json
+          if-no-files-found: error
+          retention-days: 30
+
+  ios:
+    needs: select
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ inputs.target_sha }}
+      client_sha: ${{ needs.select.outputs.sha }}
+      client_release_tag: ${{ needs.select.outputs.tag }}
+      mode: stock
+
+  android:
+    needs: select
+    uses: ./.github/workflows/android-release-e2e.yml
+    with:
+      target_sha: ${{ inputs.target_sha }}
+      client_sha: ${{ needs.select.outputs.sha }}
+      client_release_tag: ${{ needs.select.outputs.tag }}
+
+  verify:
+    name: Verify stable client compatibility
+    needs: [select, ios, android]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      RESULTS: ${{ join(needs.*.result, ',') }}
+    steps:
+      - name: Require both native runtime proofs
+        run: |
+          if [[ "$RESULTS" != "success,success,success" ]]; then
+            echo "::error::Stable client selection and both native platforms must pass; got $RESULTS"
+            exit 1
+          fi
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs: [select, ios, android, verify]
+    if: ${{ always() && !cancelled() && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: stableClientCompatibility
+      target_sha: ${{ inputs.target_sha }}

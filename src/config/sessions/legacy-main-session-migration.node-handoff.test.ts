@@ -249,6 +249,7 @@ describe("legacy main session node artifact handoff", () => {
             expect(changedArtifacts.members).toContainEqual({
               session_key: target.key,
               identity_id: "late-member",
+              access: null,
               added_by: "owner",
               added_at: 30,
             });

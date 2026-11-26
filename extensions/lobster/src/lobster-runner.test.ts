@@ -119,10 +119,12 @@ describe("createEmbeddedLobsterRunner", () => {
   });
 
   it("applies a numeric-string timeout through the tool and aborts embedded work", async () => {
+    let aborted = false;
     runRequest.mockImplementation(
       ({ ctx: context }) =>
         new Promise((_resolve, reject) => {
           context?.signal?.addEventListener("abort", () => {
+            aborted = true;
             reject(
               toErrorObject(context.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
             );
@@ -130,5 +132,6 @@ describe("createEmbeddedLobsterRunner", () => {
         }),
     );
     await expect(run({ timeoutMs: "200" })).rejects.toThrow(/timed out|aborted/);
+    expect(aborted).toBe(true);
   });
 });

@@ -17,8 +17,8 @@ import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
+import { OperatorRefusalError, operatorRefusalText } from "../../gateway/operator-refusal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
@@ -186,7 +186,7 @@ export async function handleAgentExecutionError(params: {
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
   }
-  if (err instanceof GatewayOperatorRecoveryAuthorizationError) {
+  if (err instanceof OperatorRefusalError) {
     return settleFailure({ text: err.message });
   }
   if (isChannelRunAuthorizationError(err)) {
@@ -196,8 +196,7 @@ export async function handleAgentExecutionError(params: {
       });
     }
     takePendingLifecycleTerminal().emit("error", err, {
-      errorNotice:
-        "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.",
+      errorNotice: operatorRefusalText("channel-access-ended", "start this request"),
     });
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);

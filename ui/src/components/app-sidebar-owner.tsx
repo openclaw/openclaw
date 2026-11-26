@@ -20,7 +20,6 @@ import {
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/sidebar-reorder.css";
@@ -437,10 +436,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
     this.invalidate();
-  }
-
-  hideSessionCatalog(catalogId: string): void {
-    hidePersonalSidebarCatalog(this, catalogId);
   }
 
   renderSessionsBody() {

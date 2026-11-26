@@ -81,7 +81,25 @@ export async function runPluginForkedTurn<T>(
     sessionKey: params.sessionKey,
     config: context.getRuntimeConfig(),
   });
+  // A session-scoped RPC admitted this existing session for writing; its fork runs as that
+  // session's own run, whatever other scopes the caller holds. Without that admission the fork
+  // stays a sessionless agent launch: a session key named by a plugin is not an execution grant.
+  const resource = scope?.sessionResourceForFork;
+  const source = resource?.target;
+  if (source && (source.sessionKey !== params.sessionKey || source.agentId !== agentId)) {
+    throw new Error("Plugin fork must use the admitted session.");
+  }
+  // The fork may outlive its RPC. Let the resource owner fence resets and replacements.
+  const sessionLifetime = resource?.retainSession();
+  using _ = sessionLifetime && { [Symbol.dispose]: sessionLifetime.release };
+  const sessionRun = source && {
+    sessionKey: source.sessionKey,
+    sessionId: source.sessionId,
+    lifecycleRevision: source.lifecycleRevision ?? null,
+    runId,
+  };
   const execution = await prepareInProcessAgentExecution({
+    sessionRun,
     agentId,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -89,6 +107,7 @@ export async function runPluginForkedTurn<T>(
   try {
     const assertExecutionCurrent = () => {
       assertOwnerCurrent();
+      sessionLifetime?.assertCurrent();
       runtimeLifetime?.throwIfAborted();
       execution.assertCurrent();
       assertConversationAccess(execution.context.getRuntimeConfig());
@@ -142,11 +161,12 @@ export async function runPluginForkedTurn<T>(
             : {}),
           authorizeModelOverride: deps.authorizeModelOverride,
           operatorAuthority: execution.operatorAuthority,
+          caller: source && scope?.client?.authenticatedUserProfile?.profileId,
           runId,
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
           abortSignal: AbortSignal.any(
-            [params.signal, runtimeLifetime, execution.signal].filter(
+            [params.signal, runtimeLifetime, execution.signal, sessionLifetime?.signal].filter(
               (candidate): candidate is AbortSignal => candidate !== undefined,
             ),
           ),
@@ -179,6 +199,8 @@ export async function forkPluginSession<T>(input: {
   override?: { provider: string; model: string };
   authorizeModelOverride?: (model: ModelRef, authProfileId?: string) => void;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  /** The authenticated person whose session-scoped request started the fork. */
+  caller?: string;
   runId: string;
   timeoutMs: number;
   maxTokens?: number;
@@ -268,6 +290,7 @@ export async function forkPluginSession<T>(input: {
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     ...(turn?.requester ? { requester: turn.requester } : {}),
+    caller: input.caller,
     ...(input.runtimePluginToolGrant
       ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
       : {}),

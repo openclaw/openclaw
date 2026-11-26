@@ -18,7 +18,7 @@ import type {
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { buildSandboxContainerEngineArgv } from "./container-engine.js";
-import { containerHasTerminated } from "./container-inspect.js";
+import { containerHasTerminated, dockerSandboxIsStopped } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
   removeSandboxContainerRuntime,
@@ -53,6 +53,15 @@ import { createSandboxProcessCleanup } from "./process-cleanup.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 
 type ContainerExecFinalizeToken = () => Promise<void>;
+
+const dockerSandboxReadiness = new WeakMap<
+  SandboxBackendHandle,
+  (signal: AbortSignal) => Promise<boolean>
+>();
+
+export function getDockerSandboxProvisioningCheck(backend: SandboxBackendHandle) {
+  return dockerSandboxReadiness.get(backend);
+}
 
 async function createContainerSandboxBackend(
   engine: SandboxContainerEngine,
@@ -327,6 +336,11 @@ async function createContainerSandboxBackend(
         );
         return bridge;
       };
+      if (boundEngine.id === "docker") {
+        dockerSandboxReadiness.set(handle, (signal) =>
+          dockerSandboxIsStopped(boundEngine, containerId, signal, dockerTarget?.endpoint),
+        );
+      }
       if (dockerTarget && configHash && currentConfig) {
         phases.mark("attempt.setup.sandbox.backend.persistent_generation");
         const container = await readDockerPersistentContainer(

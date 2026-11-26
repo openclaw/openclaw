@@ -55,7 +55,7 @@ export function normalizeOperatorScopeList(
 }
 
 /** Authenticated UI administration is separate from browser identity and local execution. */
-export function resolveGatewayUiAdminSource(
+export function isGatewayUiAdmin(
   client:
     | {
         connect: { scopes?: readonly string[]; client: { id?: string; mode?: string } };
@@ -63,15 +63,11 @@ export function resolveGatewayUiAdminSource(
       }
     | null
     | undefined,
-): "control-ui-admin" | "native-app-admin" | undefined {
-  if (!hasGatewayAdminScope(client)) {
-    return undefined;
-  }
-  if (client?.internal?.controlUiAdmin === true) {
-    return "control-ui-admin";
-  }
-  return client?.internal?.authenticatedOperator === true &&
-    isNativeAppUiClient(client.connect.client)
-    ? "native-app-admin"
-    : undefined;
+): boolean {
+  return (
+    hasGatewayAdminScope(client) &&
+    (client?.internal?.controlUiAdmin === true ||
+      (client?.internal?.authenticatedOperator === true &&
+        isNativeAppUiClient(client.connect.client)))
+  );
 }

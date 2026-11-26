@@ -65,7 +65,7 @@ describe("cron form validation", () => {
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
     expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
-    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
+    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlProtocol");
     expect(errors.activeHoursStart).toBe("cron.errors.activeHoursTime");
     expect(errors.activeHoursEnd).toBe("cron.errors.activeHoursTime");
     expect(errors.activeHoursTimezone).toBe("cron.errors.activeHoursTimezone");

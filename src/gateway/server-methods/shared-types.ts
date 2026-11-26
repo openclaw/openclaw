@@ -343,7 +343,7 @@ type GatewayTransportContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
-  isConnectionActive?: (connId: string) => boolean;
+  isConnectionActive?: (connId: string, expectedClient?: GatewayClient) => boolean;
   /** Server-stamped activity from an accepted request on the exact live person connection. */
   recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
@@ -509,12 +509,21 @@ export type SessionMutationAuthorization = {
     sessionKey: string;
     agentId?: string;
   }) => import("../session-sharing-read.js").PreparedMutationSharing;
+  /** Host-resolved bounded participation, not public request data. */
+  participationCeiling?: import("../../agents/participation-ceiling.js").ParticipationCeiling;
+  participationSignal?: AbortSignal;
   /** Release the request's retained sharing facts after its final effect. */
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
   retain?: () => () => void;
   /** Retain published sharing facts for a run, independently of request and writer guards. */
-  retainForRun?: () => { assertCurrent: () => void; release: () => void };
+  retainForRun?: () => {
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    release: () => void;
+    participationAuthority?: import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+    participationCeiling?: import("../../agents/participation-ceiling.js").BoundParticipationCeiling;
+  };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;
   bindCreation?: (
@@ -676,6 +685,8 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Host-only exact live exec binding; does not replace session disclosure checks. */
+  participationApprovalRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

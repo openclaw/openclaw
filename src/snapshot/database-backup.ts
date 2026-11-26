@@ -23,7 +23,6 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
-import { isPrivateDoctorPostgresStore } from "../infra/update-doctor-private-store.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type {
   BackupTask,
@@ -189,7 +188,7 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
   config: OpenClawConfig;
   assertCurrent: () => void;
   validate: SqliteSnapshotValidator;
-}): Promise<{ path: string } | undefined> {
+}): Promise<{ path: string }> {
   params.assertCurrent();
   if (readBackupEngine(params.sourcePath).engine === "sqlite") {
     const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
@@ -200,10 +199,6 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
       beforePublish: params.assertCurrent,
       validate: params.validate,
     });
-  }
-  if (isPrivateDoctorPostgresStore(params.sourcePath)) {
-    // Startup already owns the original namespace; this pass only changes its private copy.
-    return undefined;
   }
   await capturePostgresBackup({
     sourcePath: params.sourcePath,
@@ -357,17 +352,6 @@ export function clonePostgresUpgrade(
 ) {
   return runBackupTask<{ namespace: string }>(
     { operation: "clone-upgrade", params: { sourcePath, anchorPath, config } },
-    () => {},
-  );
-}
-
-export function validatePostgresUpgrade(
-  anchorPath: string,
-  config: OpenClawConfig,
-  expectedVersion: number,
-) {
-  return runBackupTask<void>(
-    { operation: "validate-upgrade", params: { anchorPath, config, expectedVersion } },
     () => {},
   );
 }
