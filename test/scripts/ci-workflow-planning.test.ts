@@ -302,6 +302,8 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/database-engine/deleted.test.ts", "src/unrelated/renamed.test.ts"], true],
     [["src/infra/database-engine/unrelated.spec.ts"], false],
     [["src/transcripts/meeting-chronology.postgres.test.ts"], true],
+    [["src/transcripts/meeting-chronology.postgres.test-support.ts"], true],
+    [["src/transcripts/store-sqlite-read.ts"], true],
     [["src/new-owner/future.postgres.test.ts"], true],
     [["src/infra/postgres-sync/locks.test.ts"], true],
     [["src/infra/postgres-sync/nested/renamed.spec.ts"], true],

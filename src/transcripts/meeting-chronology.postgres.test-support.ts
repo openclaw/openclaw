@@ -39,6 +39,7 @@ export type ChronologyProof = {
   pages: { selectors: string[]; hasMore: boolean }[];
   retainedInstant: unknown;
   speakers: string[];
+  liveSequence: number | undefined;
 };
 
 async function runChronologyHost(input: { path: string; connection: string }): Promise<void> {
@@ -201,7 +202,6 @@ if (parentPort) {
         ?.participants ?? [];
     assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
     const snapshot = readTranscriptSummarySnapshot(postgresDb, speakerSession, 2, nextLiveSequence);
-    assert.equal(snapshot?.nextSequence, nextLiveSequence);
     assert.deepEqual(
       snapshot?.turns.map((turn) => turn.speakerLabel),
       ["Sam (2)", "Sam"],
@@ -222,6 +222,7 @@ if (parentPort) {
         .prepare("SELECT started_at_ms FROM meeting_transcript_sessions WHERE selector = ?")
         .get("tie-a-iso")?.started_at_ms,
       speakers,
+      liveSequence: snapshot?.nextSequence,
     } satisfies ChronologyProof);
   } catch (error) {
     port.postMessage({ error: error instanceof Error ? error.stack : String(error) });
