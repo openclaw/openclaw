@@ -14,6 +14,7 @@ import {
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
+import { shouldPreserveGatewayProcessArgv } from "../gateway-run-argv.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
@@ -60,10 +61,9 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-    // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-    // operators can tell it apart from ordinary commands.
-    if (process.title !== CLI_NAME) {
+    // Present ordinary commands as `openclaw`. Foreground Gateways can retain
+    // their original Linux command line for installation ownership checks.
+    if (process.title !== CLI_NAME && !shouldPreserveGatewayProcessArgv(process.argv)) {
       process.title = CLI_NAME;
     }
     const argv = process.argv;
