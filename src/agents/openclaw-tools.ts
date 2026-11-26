@@ -5,7 +5,6 @@ import {
   resolveCurrentChannelWidgetPresenter,
 } from "../canvas/widget-tool.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
-import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -43,6 +42,7 @@ import {
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { createOpenClawSessionLookupTools } from "./openclaw-tools.session-lookup.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
@@ -61,7 +61,6 @@ import { createHostedConversationTools } from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
-import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
 import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
@@ -71,7 +70,6 @@ import {
 } from "./tools/goal-tools.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
-import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 import { createMessageTool, createMessageToolAsync } from "./tools/message-tool-execution.js";
 import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
@@ -84,9 +82,6 @@ import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
-import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
-import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -456,13 +451,6 @@ function* createOpenClawToolsSteps(
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const sessionLookupToolOptions = {
-    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-    sandboxed: options?.sandboxed,
-    config: sessionConfig,
-    callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
-    sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
-  };
   const progressCardAvailable =
     preparedProgressCardAvailable ??
     shouldIncludeProgressCardToolForOpenClawTools({
@@ -648,22 +636,12 @@ function* createOpenClawToolsSteps(
           })
         : null,
     ),
-    createSessionsListTool({
-      ...sessionLookupToolOptions,
-      requesterAgentIdOverride: sessionAgentId,
-      requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
-      supportsActiveOnly: !embedded,
-      requireSessionReadOwner: embedded,
-    }),
-    createSessionsHistoryTool({
-      ...sessionLookupToolOptions,
-      requesterAgentIdOverride: sessionAgentId,
-      sessionReadScopeKey: options?.sessionReadScopeKey,
-    }),
-    createSessionsSearchTool({
-      ...sessionLookupToolOptions,
-      agentId: sessionAgentId,
-      sessionReadScopeKey: options?.sessionReadScopeKey,
+    ...createOpenClawSessionLookupTools({
+      options,
+      embedded,
+      requesterSessionKey,
+      sessionAgentId,
+      sessionConfig,
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
