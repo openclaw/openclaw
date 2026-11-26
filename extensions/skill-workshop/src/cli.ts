@@ -260,10 +260,18 @@ function registerSkillsWorkshopCommands(skills: Command): void {
                 }),
               );
             },
-            ({ change }) =>
-              archive
-                ? `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName} --agent ${change.agentId}`)}\n`
-                : `Restored ${change.skillName}.\n`,
+            ({ change }) => {
+              if (!archive) {
+                return `Restored ${change.skillName}.\n`;
+              }
+              if (!change.versionId) {
+                return `Archived ${change.skillName}. No saved version was reported for Undo.\n`;
+              }
+              const undo = formatCliCommand(
+                `openclaw skills workshop restore ${change.skillName} --agent ${change.agentId} --version ${change.versionId}`,
+              );
+              return `Archived ${change.skillName}. Undo with: ${undo}\n`;
+            },
           ),
       );
   }
