@@ -418,11 +418,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           this.ctx.callbacks.onStatus?.("error", this.lastRelayError);
           return;
         case "close":
-          this.abortConsults();
-          this.ctx.callbacks.onStatus?.(
-            event.reason === "error" ? "error" : "idle",
-            event.reason === "error" ? (this.lastRelayError ?? "Realtime relay closed") : undefined,
-          );
+          // Retire the remote relay before the call owner releases its local session.
+          this.stopLocal();
+          if (event.reason === "error") {
+            this.ctx.callbacks.onStatus?.("error", this.lastRelayError ?? "Realtime relay closed");
+          } else {
+            this.ctx.callbacks.onStatus?.("ended");
+          }
         default:
       }
     } catch (error) {

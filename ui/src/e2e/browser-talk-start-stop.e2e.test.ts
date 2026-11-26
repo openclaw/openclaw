@@ -7,6 +7,7 @@ import {
   captureComposerProof,
   captureMicrophoneLossProof,
   captureVideoTalkProof,
+  dispatchOpenAiTalkEvent,
   installBlockedMicrophoneFixture,
   installOpenAiTalkFixture,
   installTalkBrowserFixtures,
@@ -493,6 +494,76 @@ suite.define(() => {
       expect(turnBounds?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(120);
     });
   });
+
+  it.each(["gateway-relay", "webrtc"] as const)(
+    "restarts Talk on the first click after a remote %s close",
+    async (transport) => {
+      await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+        const relaySessionId = "relay-e2e-remote-end";
+        const gateway = await installTalkGateway(
+          page,
+          transport === "gateway-relay"
+            ? relaySession(relaySessionId)
+            : {
+                provider: "openai",
+                transport,
+                voiceSessionId: "voice-remote-end",
+                clientSecret: "test-client-secret",
+                offerUrl: "https://api.openai.com/v1/realtime/calls",
+              },
+        );
+        if (transport === "gateway-relay") {
+          await installTalkBrowserFixtures(page);
+        } else {
+          await installOpenAiTalkFixture(page);
+        }
+        await openTalk(page);
+        const start = page.getByRole("button", { name: "Start voice input" });
+        await start.click();
+        await gateway.waitForRequest("talk.client.create");
+        if (transport === "gateway-relay") {
+          await expect.poll(() => inputReady(page)).toBe(true);
+          await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+          await gateway.emitGatewayEvent("talk.event", {
+            relaySessionId,
+            type: "transcript",
+            role: "user",
+            text: "Keep this caption",
+            final: true,
+          });
+          await gateway.emitGatewayEvent("talk.event", {
+            relaySessionId,
+            type: "close",
+            reason: "completed",
+          });
+        } else {
+          await page.waitForFunction(() =>
+            Boolean((window as TalkWindow).openclawVideoTalkE2e?.dataChannelCreated),
+          );
+          await dispatchOpenAiTalkEvent(page, {
+            type: "session.closed",
+            reason: "close_requested",
+          });
+        }
+        await expect.poll(() => start.isVisible()).toBe(true);
+        const notice = page.getByText("The remote Talk session ended.");
+        const showedNotice = await notice.isVisible();
+        if (transport === "gateway-relay") {
+          await expect
+            .poll(() => page.getByText("Keep this caption").first().isVisible())
+            .toBe(true);
+        }
+        await captureComposerProof(suite, page, `remote-ended-${transport}.png`);
+        await start.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("talk.client.create")).length)
+          .toBe(2);
+        expect(showedNotice).toBe(true);
+        expect(await notice.count()).toBe(0);
+        expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+      });
+    },
+  );
 
   it("keeps the call alive while relay microphone appends stall", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {

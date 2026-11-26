@@ -208,6 +208,11 @@ export async function startChatRealtimeSession(
     sessionKey,
     {
       onStatus: forCurrentSession((status, detail) => {
+        if (status === "ended") {
+          stopRealtimeTalk(state, { preserveConversation: true });
+          state.realtimeTalk.update({ realtimeTalkStatus: "ended" });
+          return;
+        }
         state.realtimeTalk.update({
           realtimeTalkStatus: status,
           realtimeTalkDetail:

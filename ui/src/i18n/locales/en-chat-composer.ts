@@ -262,6 +262,7 @@ const catalog = {
     },
     permissions: {},
     voice: {
+      remoteEnded: "The remote Talk session ended.",
       asking: "Asking the agent…",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       replyTimedOut:
