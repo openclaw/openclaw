@@ -82,4 +82,18 @@ describe("cronFailureDetailLines", () => {
   it("uses the generic fallback without a classified or producer-authored fact", () => {
     expect(cronFailureDetailLines(undefined)).toEqual([GENERIC_DETAIL]);
   });
+
+  it("lets producer-authored stall or script detail win over generic unknown error reasons", () => {
+    expect(
+      cronFailureDetailLines("unknown", {
+        kind: "agent-stall",
+        classification: "blocked_tool_call",
+      }),
+    ).toEqual([
+      "Cause: blocked_tool_call",
+      "The agent was blocked waiting on a tool call that made no progress.",
+      "Review the tool's permissions and any blocked invocation, then rerun the automation.",
+    ]);
+    expect(cronFailureDetailLines("unknown")).toEqual(["Cause: unknown"]);
+  });
 });

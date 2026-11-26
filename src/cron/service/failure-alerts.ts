@@ -21,6 +21,7 @@ import {
 } from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
+import { classifyCronJobStagnation, normalizeCronFailureSignatureCause } from "../stagnation.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
   CronCompletionStatus,
@@ -379,8 +380,8 @@ function failureIncident(params: {
   failureNotificationDetail?: CronFailureNotificationDetail;
   route: ResolvedFailureAlert;
 }): FailureAlertSignal {
-  // Classified causes ignore changing provider prose; unknown errors stay private.
-  const cause = params.errorReason ?? params.failureNotificationDetail ?? params.error?.trim();
+  // Specific classified causes ignore changing provider prose; generic or unclassified causes normalize volatile tokens while keeping raw errors hashed.
+  const cause = normalizeCronFailureSignatureCause(params);
   const scope = failureRecoveryScope(params.failureNotificationDetail);
   return {
     signature: sha256Hex(
@@ -446,6 +447,9 @@ function maybeEmitFailureAlert(
     return;
   }
   const incident = failureIncident({ ...params, route: alertConfig });
+  const sameNotifiedFailure =
+    params.job.state.failureAlertIncident?.signature !== undefined &&
+    params.job.state.failureAlertIncident.signature === incident.signature;
   if (terminal) {
     // The retries' earlier notice shares this incident signature; the final outcome is still news.
     startFailureAlertCycle(params.job, incident, state.deps.nowMs());
@@ -490,6 +494,16 @@ function maybeEmitFailureAlert(
     hasFailureRepairOwner(params.job) &&
     (terminal || isJobEnabled(params.job))
   ) {
+    const stagnation = classifyCronJobStagnation({
+      enabled: isJobEnabled(params.job),
+      terminalOneShot: terminal,
+      status: params.status,
+      consecutiveErrors: params.consecutiveCount,
+      sameSignature: sameNotifiedFailure,
+      error: params.error,
+      errorReason: params.errorReason,
+      failureNotificationDetail: params.failureNotificationDetail,
+    });
     // If the owner turn cannot start, the user still gets the plain alert.
     params.deferredNotifications.push({
       kind: "failure-repair",
@@ -501,6 +515,8 @@ function maybeEmitFailureAlert(
         error: params.error,
         errorReason: params.errorReason,
         terminal,
+        stagnation:
+          stagnation.kind === "repeated_failure_stagnation" ? stagnation.disposition : undefined,
       }),
     });
     return;
