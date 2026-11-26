@@ -20,7 +20,8 @@ import { createUpdateRun } from "./update-run-ledger.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
-const now = Date.parse("2026-10-16T12:00:00Z");
+// Ages are relative to the real clock: the retention owner reads no injected time.
+const now = Date.now();
 
 function retire(f: ReturnType<typeof fixture>, keepRunId = "", assertCurrent = vi.fn()) {
   return retireExpiredStandaloneDoctorCaptures({ ...f, keepRunId, assertCurrent });
