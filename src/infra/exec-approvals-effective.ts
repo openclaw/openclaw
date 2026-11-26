@@ -5,6 +5,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolConfig } from "../config/types.tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
@@ -137,23 +138,33 @@ export function collectExecPolicyScopeSnapshots(params: {
   ];
   const globalExecConfig = params.cfg.tools?.exec;
   const configuredAgents = listAgentEntries(params.cfg);
-  const configAgentIds = new Set(
-    configuredAgents
-      .filter((agent) => agent.id !== defaultAgentId || agent.tools?.exec !== undefined)
-      .map((agent) => agent.id),
-  );
+  // Roster keys stay verbatim in config, but runtime and approvals use the normalized id.
+  // Grouping by that id keeps one mixed-case entry from becoming two reported scopes.
+  const configuredByAgentId = new Map<
+    string,
+    { agent: (typeof configuredAgents)[number]; key: string }
+  >();
+  for (const agent of configuredAgents) {
+    const agentId = normalizeAgentId(agent.id);
+    if (agentId === defaultAgentId && agent.tools?.exec === undefined) {
+      continue;
+    }
+    if (!configuredByAgentId.has(agentId)) {
+      configuredByAgentId.set(agentId, { agent, key: agent.id });
+    }
+  }
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
     (agentId) => agentId !== "*" && agentId !== "default" && agentId !== defaultAgentId,
   );
-  const agentIds = sortUniqueStrings([...configAgentIds, ...approvalAgentIds]);
+  const agentIds = sortUniqueStrings([...configuredByAgentId.keys(), ...approvalAgentIds]);
   for (const agentId of agentIds) {
-    const agentConfig = configuredAgents.find((agent) => agent.id === agentId);
+    const configured = configuredByAgentId.get(agentId);
     snapshots.push(
       resolveExecPolicyScopeSnapshot({
         approvals: params.approvals,
-        scopeExecConfig: agentConfig?.tools?.exec,
+        scopeExecConfig: configured?.agent.tools?.exec,
         globalExecConfig,
-        configPath: `agents.entries.${agentId}.tools.exec`,
+        configPath: `agents.entries.${configured?.key ?? agentId}.tools.exec`,
         hostPath: params.hostPath,
         hostDefaults: params.hostDefaults,
         hostDefaultSource: params.hostDefaultSource,

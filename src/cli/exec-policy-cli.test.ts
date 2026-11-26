@@ -422,6 +422,41 @@ describe("exec-policy CLI", () => {
     },
   );
 
+  it("reports one scope for an agent whose config key is mixed case", async () => {
+    mocks.state.config = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: {},
+          Ops: { tools: { exec: { security: "allowlist", ask: "always" } } },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.state.approvals = { version: 1, agents: { ops: { security: "deny" } } };
+
+    await runExecPolicyCommand(["show", "--json"]);
+
+    const scopes = (
+      readLastJsonWrite() as {
+        effectivePolicy: {
+          scopes: Array<{
+            scopeLabel: string;
+            configPath: string;
+            security: { requested: string; effective: string };
+            ask: { requested: string; effective: string };
+          }>;
+        };
+      }
+    ).effectivePolicy.scopes;
+    expect(scopes.map((scope) => scope.scopeLabel)).toEqual(["tools.exec", "agent:ops"]);
+    const ops = scopes.find((scope) => scope.scopeLabel === "agent:ops");
+    // The runtime id is normalized, the display path keeps the literal config key.
+    expect(ops?.configPath).toBe("agents.entries.Ops.tools.exec");
+    expect(ops?.security).toMatchObject({ requested: "allowlist", effective: "deny" });
+    expect(ops?.ask).toMatchObject({ requested: "always", effective: "always" });
+  });
+
   it("rejects mismatched explicit agent and session targets", async () => {
     mocks.state.config = { agents: { entries: { main: {}, work: {} } } };
 
