@@ -27,10 +27,6 @@ export function registerMeetingPluginRuntime<
   let enabled = api.config.transcripts?.enabled !== false;
   let runtime: Runtime | undefined;
   let policy: Promise<void> | undefined;
-  const load = createLazyPromise(async () => {
-    runtime = await options.createRuntime({ api, config });
-    return runtime;
-  });
   const reconcile = (next: boolean) => {
     enabled = next;
     const transition = runtime?.reconcileTranscriptPolicy?.(next);
@@ -43,19 +39,23 @@ export function registerMeetingPluginRuntime<
     });
     return transition;
   };
-  const ensureRuntime = async () => {
-    if (!config.enabled) {
-      throw new Error(options.disabledMessage);
-    }
-    const current = await load();
-    // A reload may arrive while the first caller is waiting. All callers must observe its policy.
+  const initialize = createLazyPromise(async () => {
+    runtime ??= await options.createRuntime({ api, config });
+    // A reload can replace the initial policy while callers wait. Once published,
+    // the runtime stays accessible so a later transcript drain cannot block leave.
     for (;;) {
       const transition = policy ?? reconcile(enabled);
       await transition;
       if (transition === policy) {
-        return current;
+        return runtime;
       }
     }
+  });
+  const ensureRuntime = async () => {
+    if (!config.enabled) {
+      throw new Error(options.disabledMessage);
+    }
+    return await initialize();
   };
   if (options.transcriptSource) {
     api.registerService({
