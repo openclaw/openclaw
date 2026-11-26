@@ -599,10 +599,20 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
         ),
       }
     : selectBilledUsageEntries(records);
-  await scan.addEntries(billed.entries, billed.timing);
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
     : (scanSessionTranscriptTree(records).leafId ?? undefined);
+  // Release the navigation projection before building timestamp buckets. Drain
+  // the selected entries in billing order so completed pricing batches can be
+  // collected while those buckets grow.
+  records.length = 0;
+  billed.entries.reverse();
+  function* drainBilledEntries() {
+    while (billed.entries.length > 0) {
+      yield billed.entries.pop()!;
+    }
+  }
+  await scan.addEntries(drainBilledEntries(), billed.timing);
   // A rewrite arriving during this background scan is handled by its publication;
   // the next refresh observes the new generation and rebuilds this derived cache.
   return scan.finish({
