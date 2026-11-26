@@ -124,13 +124,15 @@ it("keeps retained catalog status readable without retaining acquisition callbac
          { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
          () => true, () => assert.ok(acquisition.active));
        reporter.setPending(["synthetic"]);
+       reporter.failed(new Error("synthetic native failure"), ["native-provider"], "native");
        const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
        return { catalog, acquisition: new WeakRef(acquisition) };
      }
      const retained = publish();
      await expectCollected(retained.acquisition);
      assert.deepEqual(retained.catalog.pendingProviders, ["synthetic"]);
-     assert.equal(retained.catalog.refreshFailed, undefined);
+     assert.equal(retained.catalog.refreshFailed, true);
+     assert.deepEqual(retained.catalog.refreshFailures, [{ acquisition: "native", provider: "native-provider" }]);
      console.log("Acquisition released; status retained");`,
     { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
   );
