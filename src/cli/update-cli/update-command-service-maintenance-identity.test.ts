@@ -420,6 +420,52 @@ describe("service fingerprint", () => {
     }),
   );
 
+  it.each([
+    { scenario: "the selected Gateway", startupPid: 4242, accepted: true },
+    { scenario: "another live Gateway", startupPid: 5151, accepted: false },
+  ])(
+    "treats a leftover Startup entry observing $scenario before the Task stop",
+    ({ startupPid, accepted }) =>
+      withServiceHome(async (home) => {
+        mockProcessPlatform("win32");
+        const taskEnv = { HOME: home, OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" };
+        const startup =
+          "C:\\Users\\dev\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\OpenClaw Gateway.cmd";
+        const command: Command = {
+          ...gatewayCommand(home),
+          environment: taskEnv,
+          sourcePath: "C:\\Users\\dev\\.openclaw\\gateway.cmd",
+        };
+        const live = (pid: number): GatewayServiceState => ({
+          installed: true,
+          loadState: { status: "loaded" },
+          running: true,
+          env: taskEnv,
+          command,
+          runtime: { status: "running", pid },
+        });
+        vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
+          { env: taskEnv, scope: "system" },
+          { env: { HOME: home }, scope: "user", windowsStartupEntry: startup },
+        ]);
+        vi.spyOn(gatewayService, "readGatewayServiceState").mockImplementation(
+          async (_service, args) => live(args?.windowsStartupEntry ? startupPid : 4242),
+        );
+        const admission = publish(taskEnv, {
+          phase: "before-stop",
+          selected: selected(command, false, { servicePid: 4242 }),
+        });
+        if (accepted) {
+          await expect(admission).resolves.toBeUndefined();
+        } else {
+          await expect(admission).rejects.toMatchObject({
+            reason: "runtime-artifact-publication",
+            message: expect.stringContaining("another managed Gateway (Startup entry"),
+          });
+        }
+      }),
+  );
+
   it.each(["unjoined native read", "authority revoked during read"])(
     "preserves the update fence after %s",
     (scenario) =>
