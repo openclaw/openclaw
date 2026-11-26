@@ -1,6 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer, request, type IncomingMessage, type Server } from "node:http";
+import {
+  createServer,
+  request,
+  ServerResponse,
+  type IncomingMessage,
+  type Server,
+} from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
@@ -77,6 +83,9 @@ describe.each([
     await write("assets/selected.js", assetBody);
     await write("assets/selected.js.gz", gzipSync(assetBody));
     await write("assets/selected.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Br123456.js", assetBody);
+    await write("assets/shared-Br123456.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Id123456.js", assetBody);
     await write("assets/cold.js", assetBody);
     for (const name of ["get", "head", "forbidden"]) {
       await write(`assets/cold-${name}-A1234567.js`, assetBody);
@@ -188,6 +197,38 @@ describe.each([
         rootState.publicAssetBuildId = "fixture-build";
       }
     });
+
+    it.each([
+      { file: "shared-Br123456.js", encoding: "br" },
+      { file: "shared-Id123456.js", encoding: "identity" },
+    ])(
+      "shares a bundled $encoding body across different client preferences",
+      async ({ file, encoding }) => {
+        const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+        const sent = vi.spyOn(ServerResponse.prototype, "end");
+        for (const accept of ["br, gzip", "br", "br, gzip", "br"]) {
+          const { response, body } = await requestAsset(`${baseUrl}/assets/${file}`, "GET", {
+            "Accept-Encoding": accept,
+          });
+          expect(response.statusCode).toBe(200);
+          expect(response.headers.vary).toBe("Accept-Encoding");
+          expect(response.headers["content-encoding"]).toBe(encoding === "br" ? "br" : undefined);
+          expect(encoding === "br" ? brotliDecompressSync(body) : body).toEqual(assetBody);
+        }
+        const bodies = sent.mock.calls.flatMap((args) =>
+          args.filter((arg) => Buffer.isBuffer(arg)),
+        );
+        expect(bodies).toHaveLength(4);
+        const uniqueBodies = new Set(bodies);
+        const workerBodyReads = read.mock.calls.filter(
+          ([input]) => (input as ControlUiFileRead).readBody,
+        ).length;
+        expect({ workerBodyReads, uniqueBuffers: uniqueBodies.size }).toEqual({
+          workerBodyReads: 1,
+          uniqueBuffers: 1,
+        });
+      },
+    );
 
     it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
       const read = vi.spyOn(WorkerTaskPool.prototype, "run");
