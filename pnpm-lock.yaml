@@ -317,9 +317,6 @@ importers:
       acorn:
         specifier: 8.19.0
         version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
-      agentprofiles:
-        specifier: 0.1.0
-        version: 0.1.0
       chalk:
         specifier: 6.0.1
         version: 6.0.1
@@ -540,6 +537,9 @@ importers:
       acpx:
         specifier: 0.21.1
         version: 0.21.1
+      agentprofiles:
+        specifier: 0.1.0
+        version: 0.1.0
       ajv:
         specifier: 8.20.0
         version: 8.20.0
