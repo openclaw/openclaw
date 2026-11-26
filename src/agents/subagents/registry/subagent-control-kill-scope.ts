@@ -89,12 +89,18 @@ export async function withSubagentKillScope<T>(
   const runInScope = AsyncLocalStorage.snapshot();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const stateContext = captureOpenClawStateWorkerContext();
+  // The caller's authority is checked while the Stop selects its tree. Once the kill runs,
+  // the admitted Stop finishes; a later revocation applies to the caller's next request.
+  let admitted = false;
   const assertCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    params.assertCurrent?.();
+    if (!admitted) {
+      params.assertCurrent?.();
+    }
   };
   const cancellationControl = {
-    prepareRead: params.prepareRead,
+    // The caller's read preparation also checks its authority, so it ends with admission.
+    prepareRead: () => (admitted ? undefined : params.prepareRead?.()),
     assertCurrent,
   };
   const selected = new Map<string, Set<string | undefined>>();
@@ -323,7 +329,7 @@ export async function withSubagentKillScope<T>(
     capture(pending, runs, trees, owner, parent, ownsRoot);
     captureResidentDescendants(pending);
     // Hold every resident target before preparing the caller's source generation.
-    const preparation = params.prepareRead?.();
+    const preparation = cancellationControl.prepareRead();
     if (preparation) {
       await preparation;
     }
@@ -339,26 +345,7 @@ export async function withSubagentKillScope<T>(
       for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
         await pending;
       }
-      assertSubagentRegistryWriteSourceCurrent(stateContext);
-      try {
-        params.assertCurrent?.();
-      } catch (error) {
-        if (
-          !hasSqliteWorkerOutcomeUnknown(error) &&
-          tree.entry.execution.status === "terminal" &&
-          tree.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-          tree.entry.killReconciliation?.taskCancellationAccepted === true &&
-          tree.canTraverse()
-        ) {
-          // A retired caller cannot discover new work. Already accepted outcomes remain
-          // observable; every unfinished captured descendant still checks its caller.
-          for (const child of tree.children) {
-            await refreshTree(child);
-          }
-          return;
-        }
-        throw error;
-      }
+      assertCurrent();
       if (!tree.canTraverse()) {
         return;
       }
@@ -510,6 +497,9 @@ export async function withSubagentKillScope<T>(
       sealRootSelection,
     };
     await scope.refresh();
+    // Admission: a caller revoked while the tree was selected is refused before any effect.
+    assertCurrent();
+    admitted = true;
     const result = await run(scope, trees);
     refreshClosed = true;
     await refreshWork;
