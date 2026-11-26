@@ -191,14 +191,14 @@ export async function collectSupplementalStateDatabasePaths(
   // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
   // Prepared lists, including [], already own discovery; workers must not reload its graph.
+  // Shipped 9.37 drivers omit the list while holding maintenance custody in the
+  // parent. Read plugin facts through this child's source-preserving inspector,
+  // not the ordinary shared-state reader, which correctly refuses that lease.
   const additionalPaths =
     input.additionalPaths ??
     (await (
-      await import("./backup-sqlite-snapshot.js")
-    ).discoverBackupDatabasePaths({
-      ...input,
-      agentRegistry: [],
-    }));
+      await import("./update-candidate-state.plugin-discovery.js")
+    ).discoverUpdateSupplementalDatabasePaths(input));
   for (const file of additionalPaths) {
     // Supplemental realpaths must not add aliases to the legacy versions inventory.
     // Registry discovery below still preserves every explicitly recorded spelling.
