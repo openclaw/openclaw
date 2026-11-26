@@ -366,13 +366,20 @@ run_update_smoke() {
 # another executable on PATH or a fresh process warning is still real skew.
 verify_historical_self_update_warning() {
   local stderr="$1" outcome="$2" updater_status="$3"
-  [[ "$PACKAGE_NAME" == "openclaw" && "$UPDATE_BASELINE_VERSION" == "2026.9.4" &&
-     "$UPDATE_EXPECT_VERSION" == "2026.9.5" &&
+  # Exact published updaters that re-read the candidate-stamped config after the
+  # candidate's Doctor ran: 2026.9.4 (#150757) and 2026.11.10, whose recoverable
+  # post-install Doctor advisory leads to a parent-process config read. Their
+  # shipped bytes cannot be changed; prove the fresh install instead.
+  case "$UPDATE_BASELINE_VERSION:$UPDATE_EXPECT_VERSION" in
+    2026.9.4:2026.9.5 | 2026.11.10:2026.11.11) ;;
+    *) return 1 ;;
+  esac
+  [[ "$PACKAGE_NAME" == "openclaw" &&
      "$outcome" == "applied" && "$updater_status" == "0" ]] || return 1
   local line warning_count=0
   while IFS= read -r line; do
     [[ "$line" == *"config was written by version"* ]] || continue
-    [[ "$line" == "Your OpenClaw config was written by version 2026.9.5, but this command is running 2026.9.4." ]] || return 1
+    [[ "$line" == "Your OpenClaw config was written by version $UPDATE_EXPECT_VERSION, but this command is running $UPDATE_BASELINE_VERSION." ]] || return 1
     warning_count=$((warning_count + 1))
   done <<<"$stderr"
   [[ "$warning_count" == "1" ]] || return 1
@@ -553,7 +560,7 @@ NODE
 
   if [[ "$update_stderr" == *"config was written by version"* ]]; then
     if verify_historical_self_update_warning "$update_stderr" "$expected_outcome" "$update_status"; then
-      echo "WARN: published 2026.9.4 updater emitted its old-process warning; fresh PATH and global install verified as 2026.9.5" >&2
+      echo "WARN: published $UPDATE_BASELINE_VERSION updater emitted its old-process warning; fresh PATH and global install verified as $UPDATE_EXPECT_VERSION" >&2
     else
       echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
       return 1
