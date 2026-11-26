@@ -63,26 +63,37 @@ it.each(["DELETE", "WAL"])(
           "CREATE TABLE agent_databases(path TEXT, agent_id TEXT); CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);",
         );
         db.prepare("INSERT INTO agent_databases VALUES (?, ?)").run(agent, "main");
-        db.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)").run(
-          "plugins.installedIndex",
-          JSON.stringify({
-            revision: 1,
-            index: {
-              installRecords: {
-                "lease-fixture": {
-                  source: "path",
-                  sourcePath: pluginRoot,
-                  installPath: pluginRoot,
-                },
-              },
-            },
-          }),
-        );
       }
     }
-    using sharedHandle = openNodeSqliteDatabase(shared);
-    sharedHandle.exec(`PRAGMA journal_mode=${journal}; PRAGMA wal_autocheckpoint=0;`);
-    sharedHandle.prepare("UPDATE retained SET value=?").run("survives capture");
+    const walFiles = [shared, `${shared}-wal`, `${shared}-shm`];
+    let walFamily: Buffer[] | undefined;
+    {
+      using sharedHandle = openNodeSqliteDatabase(shared);
+      sharedHandle.exec(`PRAGMA journal_mode=${journal}; PRAGMA wal_autocheckpoint=0;`);
+      sharedHandle.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      sharedHandle.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)").run(
+        "plugins.installedIndex",
+        JSON.stringify({
+          revision: 1,
+          index: {
+            installRecords: {
+              "lease-fixture": { source: "path", sourcePath: pluginRoot, installPath: pluginRoot },
+            },
+          },
+        }),
+      );
+      sharedHandle.prepare("UPDATE retained SET value=?").run("survives capture");
+      if (journal === "WAL") {
+        walFamily = walFiles.map((file) => fs.readFileSync(file));
+      }
+    }
+    if (walFamily) {
+      walFiles.forEach((file, index) => fs.writeFileSync(file, walFamily[index]!));
+      const mainOnly = path.join(root, "main-only.sqlite");
+      fs.copyFileSync(shared, mainOnly);
+      using image = openNodeSqliteDatabase(mainOnly, { readOnly: true });
+      expect(image.prepare("SELECT value_json FROM config_machine_state").get()).toBeUndefined();
+    }
     const sources = [shared, agent, retained, ...(journal === "WAL" ? [`${shared}-wal`] : [])];
     const before = sources.map((file) => fs.readFileSync(file));
     const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
@@ -93,10 +104,28 @@ it.each(["DELETE", "WAL"])(
       backupRoot,
       stagingRoot,
     };
+    const discoveryPreload = path.join(root, "discovery-source-guard.cjs");
+    fs.writeFileSync(
+      discoveryPreload,
+      `const sqlite = require("node:sqlite");
+const { fileURLToPath } = require("node:url");
+sqlite.DatabaseSync = new Proxy(sqlite.DatabaseSync, {
+  construct(target, args, newTarget) {
+    const file = String(args[0]);
+    const pathname = file.startsWith("file:") ? fileURLToPath(file) : file;
+    if (pathname === ${JSON.stringify(shared)}) {
+      throw new Error("Discovery opened the source SQLite database");
+    }
+    return Reflect.construct(target, args, newTarget);
+  },
+});
+require("node:module").syncBuiltinESMExports();`,
+    );
     const run = async (request: Record<string, unknown>): Promise<unknown> => {
       const result = await runCommandBuffered(
         [
           process.execPath,
+          ...(request.mode === "discover" ? ["--require", discoveryPreload] : []),
           ...resolveRuntimeWorkerArgv(
             resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
           ),
@@ -128,7 +157,10 @@ it.each(["DELETE", "WAL"])(
         ),
         sharedVersion: legacyVersion,
       });
+      const discoveryFiles = journal === "WAL" ? walFiles : [shared];
+      const discoveryBefore = discoveryFiles.map((file) => fs.readFileSync(file));
       const inspectionPlan = legacyPlan.parse(await run({ mode: "discover" }));
+      expect(discoveryFiles.map((file) => fs.readFileSync(file))).toEqual(discoveryBefore);
       expect(inspectionPlan.files.flatMap(([, file]) => file.spellings)).toContain(retained);
       const backup = UpdateDatabaseBackupSchema.parse(
         await run({ mode: "database-backup", inspectionPlan }),

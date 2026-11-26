@@ -79,7 +79,7 @@ it("discovers supplemental paths only when the prepared list is absent", async (
     await import("./update-candidate-state.shared.js");
   expect(await collectSupplementalStateDatabasePaths(input, files)).toBe(files);
   expect(discover).toHaveBeenCalledOnce();
-  expect(discover).toHaveBeenCalledWith(input);
+  expect(discover).toHaveBeenCalledWith(input, []);
   expect([...files.values()].map(({ spellings }) => spellings)).toEqual([[known], [supplemental]]);
 });
 
