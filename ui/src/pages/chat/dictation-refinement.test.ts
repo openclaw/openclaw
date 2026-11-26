@@ -23,19 +23,6 @@ function fixture() {
       value = `${value} ${text}`;
       revision += 1;
       writes.push(value);
-      const receiptRevision = revision;
-      return {
-        isCurrent: () => authorized && revision === receiptRevision,
-        restore: (raw: string) => {
-          if (!authorized || revision !== receiptRevision) {
-            return false;
-          }
-          value = `Existing draft ${raw}`;
-          revision += 1;
-          writes.push(value);
-          return true;
-        },
-      };
     },
   };
   const changed = vi.fn();
@@ -60,25 +47,28 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("owned dictation refinement", () => {
-  it("stages one immutable-source candidate and restores only its unsent insertion", async () => {
+  it("keeps the original recoverable once when semantic cleanup is unavailable", async () => {
     const h = fixture();
     h.prepare();
     expect(h.writes).toEqual([]);
     await Promise.resolve();
     expect(h.owner.review).toMatchObject({
       rawText: source.text,
-      candidateText: "please call me tomorrow",
-      canAccept: true,
-      removals: [{ start: 0, end: 3, category: "hesitation" }],
+      candidateText: source.text,
+      status: "ready",
+      reason: "semantic-unavailable",
+      canAccept: false,
+      canUseRaw: true,
+      canRetry: false,
+      removals: [],
     });
-    expect(h.owner.accept()).toBe(true);
     expect(h.owner.accept()).toBe(false);
-    expect(h.owner.review).toMatchObject({ applied: true, canUseRaw: true, canAccept: false });
+    h.owner.retry(policy);
+    expect(h.owner.review?.status).toBe("ready");
+    expect(h.writes).toEqual([]);
     expect(h.owner.chooseRaw()).toBe(true);
-    expect(h.writes).toEqual([
-      "Existing draft please call me tomorrow",
-      `Existing draft ${source.text}`,
-    ]);
+    expect(h.owner.chooseRaw()).toBe(false);
+    expect(h.writes).toEqual([`Existing draft ${source.text}`]);
     expect(h.owner.review).toBeNull();
   });
 
@@ -93,16 +83,13 @@ describe("owned dictation refinement", () => {
     expect(h.owner.review).toBeNull();
   });
 
-  it.each(["before result", "after result", "after accept"])(
+  it.each(["before result", "after result"])(
     "does not overwrite an edit-and-undo %s",
     async (when) => {
       const h = fixture();
       h.prepare();
       if (when !== "before result") {
         await Promise.resolve();
-      }
-      if (when === "after accept") {
-        h.owner.accept();
       }
       const previous = h.binding.readDraft().value;
       h.edit("User changed this");
@@ -121,11 +108,14 @@ describe("owned dictation refinement", () => {
     h.prepare();
     h.edit("My replacement");
     await Promise.resolve();
+    expect(h.owner.review?.canRetry).toBe(true);
     h.owner.retry(policy);
     await Promise.resolve();
     expect(h.writes).toEqual([]);
-    expect(h.owner.accept()).toBe(true);
-    expect(h.writes).toEqual(["My replacement please call me tomorrow"]);
+    expect(h.owner.accept()).toBe(false);
+    expect(h.owner.review).toMatchObject({ reason: "semantic-unavailable", canRetry: false });
+    expect(h.owner.chooseRaw()).toBe(true);
+    expect(h.writes).toEqual([`My replacement ${source.text}`]);
   });
 
   it("cancel retains eligible raw text but cannot publish a late candidate", async () => {
@@ -140,16 +130,13 @@ describe("owned dictation refinement", () => {
     expect(h.writes).toEqual([`Existing draft ${source.text}`]);
   });
 
-  it.each(["before result", "after result", "after accept"])(
+  it.each(["before result", "after result"])(
     "hides revoked source and rejects both choices %s",
     async (when) => {
       const h = fixture();
       h.prepare();
       if (when !== "before result") {
         await Promise.resolve();
-      }
-      if (when === "after accept") {
-        h.owner.accept();
       }
       h.revoke();
       const writes = h.writes.length;
@@ -158,6 +145,7 @@ describe("owned dictation refinement", () => {
         rawText: "",
         candidateText: "",
         removals: [],
+        reason: undefined,
         canAccept: false,
         canUseRaw: false,
         canRetry: false,
@@ -169,14 +157,19 @@ describe("owned dictation refinement", () => {
     },
   );
 
-  it("only the latest source revision can become the candidate", async () => {
+  it("keeps deliberate repetition in only the latest recoverable source revision", async () => {
     const h = fixture();
     h.prepare();
     h.prepare({ ...source, revision: 2, text: "I I need the invoice" });
     await Promise.resolve();
-    expect(h.owner.review?.candidateText).toBe("I need the invoice");
-    expect(h.owner.accept()).toBe(true);
-    expect(h.writes).toEqual(["Existing draft I need the invoice"]);
+    expect(h.owner.review).toMatchObject({
+      candidateText: "I I need the invoice",
+      reason: "semantic-unavailable",
+      canAccept: false,
+    });
+    expect(h.owner.accept()).toBe(false);
+    expect(h.owner.chooseRaw()).toBe(true);
+    expect(h.writes).toEqual(["Existing draft I I need the invoice"]);
   });
 
   it("keeps provisional and timed-out results available only as original text", async () => {
@@ -192,7 +185,12 @@ describe("owned dictation refinement", () => {
     vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(2_501);
     h.prepare();
     await Promise.resolve();
-    expect(h.owner.review).toMatchObject({ status: "failed", canAccept: false, canUseRaw: true });
+    expect(h.owner.review).toMatchObject({
+      status: "failed",
+      canAccept: false,
+      canUseRaw: true,
+      canRetry: true,
+    });
     expect(h.writes).toEqual([]);
   });
 
@@ -232,7 +230,7 @@ describe("owned dictation refinement", () => {
   });
 
   it.each(["refused", "uncertain"])(
-    "never reports a %s draft write as accepted",
+    "never reports a %s original-text write as published",
     async (outcome) => {
       const h = fixture();
       const publish = vi.fn(() => {
@@ -244,12 +242,21 @@ describe("owned dictation refinement", () => {
       h.owner.prepare(source, policy, { ...h.binding, publish }, h.binding.readDraft());
       await Promise.resolve();
       expect(h.owner.accept()).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      expect(h.owner.chooseRaw()).toBe(false);
       expect(h.owner.review).toMatchObject({ status: "failed", canAccept: false });
       expect(h.owner.accept()).toBe(false);
       expect(publish).toHaveBeenCalledTimes(1);
       if (outcome === "uncertain") {
         expect(h.owner.chooseRaw()).toBe(false);
         expect(h.owner.review?.canRetry).toBe(false);
+        expect(h.owner.review?.publicationUncertain).toBe(true);
+      } else {
+        expect(h.owner.review).toMatchObject({
+          canUseRaw: true,
+          canRetry: true,
+          publicationUncertain: false,
+        });
       }
     },
   );

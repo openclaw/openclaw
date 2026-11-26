@@ -2,6 +2,7 @@ import type { DictationCleanupPolicy } from "../../app/settings-contract.ts";
 import {
   refineDictation,
   isCleanupSourceBounded,
+  type CleanupReason,
   type CleanupRemoval,
   type CleanupResult,
   type DictationCleanupSource,
@@ -19,6 +20,7 @@ export type DictationCleanupReview = {
   rawText: string;
   candidateText: string;
   removals: readonly CleanupRemoval[];
+  reason?: CleanupReason;
   status: "pending" | "ready" | "failed" | "unavailable";
   applied: boolean;
   publicationUncertain: boolean;
@@ -73,6 +75,7 @@ export class DictationRefinement {
       rawText: authorized ? preparation.source.text : "",
       candidateText: authorized ? (preparation.result?.candidate ?? preparation.source.text) : "",
       removals: authorized ? (preparation.result?.removals ?? []) : [],
+      reason: authorized ? preparation.result?.reason : undefined,
       status:
         !authorized || preparation.status === "unavailable"
           ? "unavailable"
@@ -81,11 +84,19 @@ export class DictationRefinement {
             : preparation.status,
       applied: preparation.applied,
       publicationUncertain: preparation.applied && preparation.status === "failed",
-      canAccept: unedited && !preparation.applied && preparation.status === "ready",
+      canAccept:
+        unedited &&
+        !preparation.applied &&
+        preparation.status === "ready" &&
+        preparation.result?.status === "refined",
       canUseRaw: preparation.applied
         ? restorable
         : unedited && preparation.status !== "unavailable",
-      canRetry: authorized && !preparation.applied && preparation.source.isFinal,
+      canRetry:
+        authorized &&
+        !preparation.applied &&
+        preparation.source.isFinal &&
+        preparation.result?.reason !== "semantic-unavailable",
     };
   }
 

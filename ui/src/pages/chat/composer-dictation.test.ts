@@ -293,11 +293,21 @@ describe("ComposerDictationOwner", () => {
       expect(controller.cleanupReview).toBeNull();
     });
 
-    it.each(["accept", "raw", "edit", "cancel", "disable", "uncertain write", "auth change"])(
+    it.each([
+      "unavailable semantics",
+      "raw",
+      "edit",
+      "cancel",
+      "disable",
+      "uncertain write",
+      "auth change",
+      "destination change",
+    ])(
       "keeps the real session delivery boundary owned after %s",
       async (choice) => {
         let value = "Existing draft";
         let revision = 0;
+        const original = "um I I need the invoice";
         const publish = vi.fn((text: string) => {
           if (choice === "uncertain write") {
             throw new Error("Draft owner failed after an uncertain write");
@@ -310,7 +320,7 @@ describe("ComposerDictationOwner", () => {
           onCommit: publish,
         });
         await startHold(target);
-        transcript("um please call me tomorrow");
+        transcript(original);
         if (choice === "auth change") {
           Object.defineProperty(options.client, "auth", { value: { scopes: ["operator.read"] } });
         }
@@ -330,17 +340,33 @@ describe("ComposerDictationOwner", () => {
           controller.cancel();
         } else if (choice === "disable") {
           controller.setCleanupPolicy({ mode: "off", locale: null });
+        } else if (choice === "destination change") {
+          controller.update({ ...options, draftKey: "replacement" });
         }
         emit({ type: "close", reason: "completed" });
         await expect(finished).resolves.toBe(false);
         await vi.advanceTimersByTimeAsync(0);
-        if (choice === "accept") {
-          expect(controller.cleanupReview?.candidateText).toBe("please call me tomorrow");
+        if (choice === "unavailable semantics") {
+          expect(controller.cleanupReview).toMatchObject({
+            status: "ready",
+            rawText: original,
+            candidateText: original,
+            reason: "semantic-unavailable",
+            removals: [],
+            canAccept: false,
+            canUseRaw: true,
+            canRetry: false,
+          });
           expect(publish).not.toHaveBeenCalled();
-          expect(controller.acceptCleanup()).toBe(true);
-          expect(publish).toHaveBeenCalledExactlyOnceWith("please call me tomorrow", true);
+          expect(controller.acceptCleanup()).toBe(false);
+          controller.retryCleanup();
+          expect(controller.cleanupReview?.status).toBe("ready");
+          expect(controller.chooseCleanupRaw()).toBe(true);
+          expect(controller.chooseCleanupRaw()).toBe(false);
+          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+          expect(controller.cleanupReview).toBeNull();
         } else if (choice === "raw") {
-          expect(publish).toHaveBeenCalledExactlyOnceWith("um please call me tomorrow", true);
+          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
           expect(controller.cleanupReview).toBeNull();
         } else if (choice === "uncertain write") {
           expect(controller.acceptCleanup()).toBe(false);
@@ -351,9 +377,16 @@ describe("ComposerDictationOwner", () => {
         } else {
           expect(controller.acceptCleanup()).toBe(false);
           expect(publish).not.toHaveBeenCalled();
-          if (choice === "auth change") {
+          if (choice === "auth change" || choice === "destination change") {
             expect(controller.chooseCleanupRaw()).toBe(false);
             expect(controller.cleanupReview?.rawText ?? "").toBe("");
+          } else if (choice === "edit") {
+            expect(controller.chooseCleanupRaw()).toBe(false);
+            expect(value).toBe("User replacement");
+            expect(controller.cleanupReview?.rawText).toBe(original);
+          } else {
+            expect(controller.chooseCleanupRaw()).toBe(true);
+            expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
           }
         }
         expect(

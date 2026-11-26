@@ -18,8 +18,8 @@ const source: DictationCleanupSource = {
 const removal = { start: 0, end: 3, category: "hesitation", evidence: "text" };
 const plan = { version: 1, sourceId: source.id, revision: source.revision, removals: [removal] };
 
-describe("conservative dictation cleanup", () => {
-  it.each(DICTATION_CLEANUP_CORPUS)("$label: $id", (sample) => {
+describe("dictation preservation without a semantic owner", () => {
+  it.each(DICTATION_CLEANUP_CORPUS)("preserves the complete source: $id", (sample) => {
     const result = refineDictation(
       {
         ...source,
@@ -30,32 +30,26 @@ describe("conservative dictation cleanup", () => {
       },
       conservative,
     );
-    expect(result.candidate).toBe(sample.expected);
-    expect(result.raw).toBe(sample.raw);
-    expect(
-      result.sourceMap
-        .map((range) => sample.raw.slice(range.sourceStart, range.sourceEnd))
-        .join(""),
-    ).toBe(sample.expected);
-    for (const range of result.sourceMap) {
-      expect(sample.raw.slice(range.sourceStart, range.sourceEnd)).toBe(
-        result.candidate.slice(range.candidateStart, range.candidateEnd),
-      );
-    }
-    if (sample.label === "safe-remove") {
-      expect(result.status).toBe("refined");
-      expect(result.removals.length).toBeGreaterThan(0);
-    } else {
-      expect(result.removals).toEqual([]);
-    }
+    expect(result).toMatchObject({
+      sourceId: source.id,
+      revision: source.revision,
+      raw: sample.raw,
+      candidate: sample.raw,
+      removals: [],
+      status: "retained",
+      sourceMap: [
+        {
+          sourceStart: 0,
+          sourceEnd: sample.raw.length,
+          candidateStart: 0,
+          candidateEnd: sample.raw.length,
+        },
+      ],
+    });
   });
 
-  it("keeps all recognizer bytes with Off, including already formatted and oversized text", () => {
-    for (const text of [
-      ...DICTATION_CLEANUP_CORPUS.map((sample) => sample.raw),
-      " um\n",
-      "x".repeat(33000),
-    ]) {
+  it("keeps Off unchanged, including already formatted and oversized text", () => {
+    for (const text of [" um\n", "x".repeat(33000)]) {
       expect(refineDictation({ ...source, text }, { version: 1, mode: "off" })).toMatchObject({
         raw: text,
         candidate: text,
@@ -80,59 +74,58 @@ describe("conservative dictation cleanup", () => {
     });
   });
 
-  it("retains a longer repeated construction that is not one exact restart", () => {
-    for (const text of ["I I I need the invoice", "um I I I need the invoice"]) {
-      expect(refineDictation({ ...source, text }, conservative)).toMatchObject({
-        candidate: text,
+  it("reports unavailable semantics without normalizing or classifying the text", () => {
+    const original = Object.freeze({
+      ...source,
+      text: " \tum I I need fifteen sorry fifty copies\n\n",
+      tokens: [{ start: 2, end: 4, confidence: 0.98, startTimeMs: 0, endTimeMs: 180 }],
+    });
+    expect(refineDictation(original, conservative)).toMatchObject({
+      raw: original.text,
+      candidate: original.text,
+      removals: [],
+      status: "retained",
+      reason: "semantic-unavailable",
+    });
+  });
+
+  it("does not treat valid source ranges or recognizer metadata as removal authority", () => {
+    const original = {
+      ...source,
+      tokens: [{ start: 0, end: 2, confidence: 0.98, startTimeMs: 0, endTimeMs: 180 }],
+    };
+    for (const removals of [
+      [],
+      [removal],
+      [{ ...removal, start: 3, end: 9 }],
+      [{ ...removal, evidence: "text-and-provider-metadata" }],
+    ]) {
+      expect(validateCleanupPlan(original, conservative, { ...plan, removals })).toMatchObject({
+        candidate: source.text,
         removals: [],
+        status: "retained",
+        reason: "semantic-unavailable",
       });
     }
   });
 
-  it("maps combined removals to the immutable original instead of shifted candidate offsets", () => {
-    const original = Object.freeze({ ...source, text: "um I I need the invoice tomorrow" });
-    expect(refineDictation(original, conservative)).toMatchObject({
-      candidate: "I need the invoice tomorrow",
-      removals: [
-        { start: 0, end: 3, category: "hesitation", evidence: "text" },
-        { start: 3, end: 5, category: "exact_restart", evidence: "text" },
-      ],
-      sourceMap: [{ sourceStart: 5, sourceEnd: 32, candidateStart: 0, candidateEnd: 27 }],
-    });
-    expect(original.text).toBe("um I I need the invoice tomorrow");
-  });
-
-  it("honors declared literal spans without inferring or inventing provider evidence", () => {
+  it("validates protected spans and claimed provider metadata without semantic inference", () => {
     expect(
-      refineDictation({ ...source, protectedSpans: [{ start: 0, end: 2 }] }, conservative),
-    ).toMatchObject({
-      candidate: source.text,
-      reason: "protected-text",
-    });
-    const withTiming = refineDictation(
-      {
-        ...source,
-        tokens: [{ start: 0, end: 2, confidence: 0.98, startTimeMs: 0, endTimeMs: 180 }],
-      },
-      conservative,
-    );
-    expect(withTiming.candidate).toBe("please call me tomorrow");
-    expect(withTiming.removals).toEqual([{ ...removal, evidence: "text" }]);
+      validateCleanupPlan(
+        { ...source, protectedSpans: [{ start: 0, end: 2 }] },
+        conservative,
+        plan,
+      ),
+    ).toMatchObject({ candidate: source.text, status: "rejected", reason: "protected-text" });
     expect(
       validateCleanupPlan(source, conservative, {
         ...plan,
         removals: [{ ...removal, evidence: "text-and-provider-metadata" }],
       }),
-    ).toMatchObject({ candidate: source.text, reason: "invalid-plan" });
-    expect(
-      refineDictation(
-        { ...source, tokens: [{ start: 10, end: 14, confidence: 0.1 }] },
-        conservative,
-      ),
-    ).toMatchObject({ candidate: source.text, reason: "low-confidence" });
+    ).toMatchObject({ candidate: source.text, status: "rejected", reason: "invalid-plan" });
   });
 
-  it("retains source for malformed metadata and enforces bounded input before processing", () => {
+  it("retains source for malformed metadata and enforces input bounds", () => {
     for (const tokens of [
       [{ start: 0, end: 2, confidence: Number.NaN }],
       [{ start: 0, end: 2, confidence: 1.1 }],
@@ -152,7 +145,7 @@ describe("conservative dictation cleanup", () => {
     });
   });
 
-  it("rejects stale, overlapping, unsupported, unbounded and semantic deletion plans", () => {
+  it("rejects stale, overlapping, unsupported and unbounded plans", () => {
     for (const proposed of [
       null,
       { ...plan, version: 2 },
@@ -162,8 +155,9 @@ describe("conservative dictation cleanup", () => {
       { ...plan, removals: Array.from({ length: 65 }, () => removal) },
       { ...plan, removals: [{ ...removal, start: 0.5 }] },
       { ...plan, removals: [{ ...removal, end: Number.POSITIVE_INFINITY }] },
-      { ...plan, removals: [{ ...removal, end: 4 }] },
-      { ...plan, removals: [{ ...removal, start: 3, end: 10 }] },
+      { ...plan, removals: [{ ...removal, end: 30 }] },
+      { ...plan, removals: [{ ...removal, start: 3, end: 2 }] },
+      { ...plan, removals: [{ ...removal, end: 7 }] },
       { ...plan, removals: [{ ...removal, category: "rewrite" }] },
       { ...plan, removals: [{ ...removal, evidence: "model-confidence" }] },
     ]) {
@@ -175,27 +169,24 @@ describe("conservative dictation cleanup", () => {
     }
   });
 
-  it("keeps critical and literal text even when an external plan requests its removal", () => {
-    for (const text of [
-      "not",
-      "15",
-      "kg",
-      "maybe",
-      "like",
-      "well",
-      "no",
-      "sorry",
-      "😀",
-      "e\u0301",
-      "👩‍💻",
-    ]) {
-      const critical = { ...source, text };
-      expect(
-        validateCleanupPlan(critical, conservative, {
-          ...plan,
-          removals: [{ ...removal, end: Math.min(1, text.length) }],
-        }),
-      ).toMatchObject({ candidate: text, removals: [] });
-    }
+  it.each(["😀", "e\u0301", "👩‍💻"])("rejects ranges that split the grapheme %s", (grapheme) => {
+    const original = { ...source, text: grapheme + " please call me tomorrow" };
+    expect(
+      validateCleanupPlan(original, conservative, {
+        ...plan,
+        removals: [{ ...removal, end: 1 }],
+      }),
+    ).toMatchObject({
+      candidate: original.text,
+      status: "rejected",
+      reason: "invalid-plan",
+    });
+    expect(
+      refineDictation({ ...original, tokens: [{ start: 0, end: 1 }] }, conservative),
+    ).toMatchObject({
+      candidate: original.text,
+      status: "rejected",
+      reason: "invalid-source",
+    });
   });
 });

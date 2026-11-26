@@ -7,18 +7,20 @@ const enChatDictation = {
     dictation: {
       busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
       cleanupDescription:
-        "Review suggested removals before adding recognized text to this unsent draft.",
+        "Review the original recognized text before adding it to this unsent draft.",
       cleanupMode: "Cleanup mode",
       cleanupOff: "Off",
-      cleanupConservative: "Conservative — English",
+      cleanupConservative: "Conservative — English (unavailable)",
       cleanupPolicyHelp:
-        "Conservative cleanup supports English only. Choose it only when dictating English; other languages and mixed-language speech should use Off. Changes apply to the next recording.",
+        "Cleanup is unavailable. Conservative keeps the original text for review. Changes apply to the next recording.",
       cleanupOffHelp:
         "Off keeps the recognizer’s text. It cannot restore words the recognizer already omitted.",
-      cleanupPending: "Checking suggested removals…",
-      cleanupReady: "Choose the original text or the cleaned draft. Nothing has been sent.",
-      cleanupApplied: "Cleaned text is in the unsent draft. You can still restore the original.",
-      cleanupFailed: "Cleanup could not finish. Review the original text or retry cleanup.",
+      cleanupPending: "Preparing original text…",
+      cleanupReady: "Choose the original text. Nothing has been sent.",
+      cleanupApplied: "Text is in the unsent draft. You can still restore the original.",
+      cleanupFailed: "Review could not finish. The original text is still available.",
+      cleanupSemanticUnavailable:
+        "Cleanup is unavailable. The original recognized text is unchanged.",
       cleanupUncertain:
         "The draft update could not be confirmed. Check your draft before copying text. It will not be applied again.",
       cleanupUnavailable:
@@ -26,13 +28,12 @@ const enChatDictation = {
       cleanupOriginal: "Original recognized text",
       cleanupCandidate: "Cleaned draft",
       cleanupRemovals: "Suggested removals",
-      cleanupNoRemovals: "No safe removals were found. The original text is unchanged.",
       cleanupHesitation: "Hesitation",
       cleanupRestart: "Exact restart",
-      cleanupUseOriginal: "Use original — restore all removals",
+      cleanupUseOriginal: "Use original",
       cleanupRestoreOriginal: "Restore original",
       cleanupUseCandidate: "Use cleaned draft",
-      cleanupRetry: "Retry cleanup",
+      cleanupRetry: "Review again",
       cleanupDismiss: "Dismiss review",
       cleanupCopy: "Copy original text",
       cleanupManualRecovery:

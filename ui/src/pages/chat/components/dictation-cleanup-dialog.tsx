@@ -33,6 +33,9 @@ export function DictationCleanupDialog(props: {
     if (current.applied) {
       return "chat.dictation.cleanupApplied";
     }
+    if (current.reason === "semantic-unavailable") {
+      return "chat.dictation.cleanupSemanticUnavailable";
+    }
     return current.status === "failed"
       ? "chat.dictation.cleanupFailed"
       : "chat.dictation.cleanupReady";
@@ -84,34 +87,29 @@ export function DictationCleanupDialog(props: {
                     text={current().rawText}
                     idleLabel={t("chat.dictation.cleanupCopy")}
                   />
-                  <Show when={current().status === "ready"}>
+                  <Show when={current().status === "ready" && current().removals.length > 0}>
                     <label class="field">
                       <span>{t("chat.dictation.cleanupCandidate")}</span>
                       <textarea readonly rows="4" value={current().candidateText} />
                     </label>
-                    <Show
-                      when={current().removals.length > 0}
-                      fallback={<p>{t("chat.dictation.cleanupNoRemovals")}</p>}
-                    >
-                      <h3>{t("chat.dictation.cleanupRemovals")}</h3>
-                      <ul class="dictation-cleanup__removals">
-                        <For each={current().removals}>
-                          {(removal) => (
-                            <li>
-                              <span>
-                                {t(
-                                  removal.category === "hesitation"
-                                    ? "chat.dictation.cleanupHesitation"
-                                    : "chat.dictation.cleanupRestart",
-                                )}
-                              </span>
-                              {": "}
-                              <q>{current().rawText.slice(removal.start, removal.end)}</q>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
+                    <h3>{t("chat.dictation.cleanupRemovals")}</h3>
+                    <ul class="dictation-cleanup__removals">
+                      <For each={current().removals}>
+                        {(removal) => (
+                          <li>
+                            <span>
+                              {t(
+                                removal.category === "hesitation"
+                                  ? "chat.dictation.cleanupHesitation"
+                                  : "chat.dictation.cleanupRestart",
+                              )}
+                            </span>
+                            {": "}
+                            <q>{current().rawText.slice(removal.start, removal.end)}</q>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
                   </Show>
                 </Show>
                 <p class="muted">{t("chat.dictation.cleanupReviewHint")}</p>

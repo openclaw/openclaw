@@ -1,4 +1,4 @@
-// Local synthetic qualification, without capture or provider requests:
+// Local preservation/resource checks, without semantic classification or provider requests:
 // node --expose-gc --import ./scripts/tsx.mjs scripts/bench-dictation-cleanup.mts
 // Off is a current-revision control, not a measurement of a pre-feature checkout.
 import assert from "node:assert/strict";
@@ -68,7 +68,9 @@ function measureOne(mode: Mode): TimedSample {
   const used = process.cpuUsage(cpu);
   // Oracle work is deliberately outside the measured cleanup interval.
   verifySourceMapping(result, text);
-  assert.equal(result.candidate, mode === "off" ? text : text.slice(3));
+  assert.equal(result.candidate, text);
+  assert.equal(result.removals.length, 0);
+  assert.equal(result.reason, mode === "off" ? "off" : "semantic-unavailable");
   return { elapsedMs, cpuMs: (used.user + used.system) / 1_000 };
 }
 
@@ -194,7 +196,7 @@ function memoryRun() {
   const last = samples.at(-1)!;
   return {
     scope:
-      "Pure cleanup results released after each synthetic session; not browser or audio retention",
+      "Pure preservation results released after each synthetic session; not browser or audio retention",
     warmupCalls,
     sessionsPerBatch,
     before,
@@ -210,17 +212,9 @@ function memoryRun() {
 }
 
 function corpusReport() {
-  const byLabel = Object.fromEntries(
-    (["safe-remove", "must-retain", "ambiguous-retain"] as const).map((label) => [
-      label,
-      { cases: 0, expectedMatches: 0, changedCases: 0 },
-    ]),
-  );
+  let retainedCases = 0;
   let removedSpans = 0;
-  let correctRemovalSpans = 0;
-  let removedCharacters = 0;
-  const falseDeletionCases: string[] = [];
-  const mismatches: string[] = [];
+  const changedCases: string[] = [];
   for (const fixture of DICTATION_CLEANUP_CORPUS) {
     const result = refineDictation(
       {
@@ -235,47 +229,31 @@ function corpusReport() {
       policy("conservative"),
     );
     verifySourceMapping(result, fixture.raw);
-    const matches = result.candidate === fixture.expected;
-    const changed = result.candidate !== fixture.raw;
-    const label = byLabel[fixture.label]!;
-    label.cases++;
-    label.expectedMatches += Number(matches);
-    label.changedCases += Number(changed);
+    const retained = result.candidate === fixture.raw;
+    retainedCases += Number(retained);
     removedSpans += result.removals.length;
-    removedCharacters += result.removals.reduce(
-      (sum, removal) => sum + removal.end - removal.start,
-      0,
-    );
-    if (matches && fixture.label === "safe-remove") {
-      correctRemovalSpans += result.removals.length;
-    }
-    if (!matches) {
-      mismatches.push(fixture.id);
-      if (changed) {
-        falseDeletionCases.push(fixture.id);
-      }
+    if (!retained) {
+      changedCases.push(fixture.id);
     }
   }
   return {
-    corpus: "Authored synthetic cases; not consented recordings or independent human annotation",
+    corpus:
+      "Authored source-preservation cases; no semantic-removal labels or independent annotation",
     corpusSha256: createHash("sha256")
       .update(JSON.stringify(DICTATION_CLEANUP_CORPUS))
       .digest("hex"),
-    byLabel,
-    mismatches,
-    falseDeletionCases,
+    cases: DICTATION_CLEANUP_CORPUS.length,
+    retainedCases,
+    changedCases,
     removedSpans,
-    correctRemovalSpans,
-    removalSpanPrecision: removedSpans ? correctRemovalSpans / removedSpans : null,
-    precisionDefinition:
-      "A span is correct only when its safe-remove case exactly matches the expected complete candidate",
-    removedCharacters,
+    semanticQualification:
+      "NOT AVAILABLE: no semantic owner or removal decisions; no precision claim",
     sourceCharacters: DICTATION_CLEANUP_CORPUS.reduce(
       (sum, fixture) => sum + fixture.raw.length,
       0,
     ),
-    criticalPreservation:
-      "Exact expected-candidate checks include all retained source characters; no inference of a real-world error rate",
+    preservationScope:
+      "Exact source preservation only; not semantic quality or a real-world error rate",
   };
 }
 
@@ -317,7 +295,7 @@ if (argument === "--memory-child") {
         },
       ]),
     );
-  const quality = corpusReport();
+  const preservation = corpusReport();
   const memory = child("--memory-child", decodeMemoryReport);
   const coldConservativeP95 = distribution(cold.conservative.map((sample) => sample.elapsedMs)).p95;
   const warmConservativeP95 = distribution(warm.conservative.map((sample) => sample.elapsedMs)).p95;
@@ -340,7 +318,7 @@ if (argument === "--memory-child") {
       utf8Bytes: Buffer.byteLength(text),
       sha256: createHash("sha256").update(text).digest("hex"),
       description:
-        "English source-prefix hesitation followed by repeated neutral sentences and space padding",
+        "English transcript followed by repeated neutral sentences and original space padding",
     },
     method: {
       rounds,
@@ -349,20 +327,22 @@ if (argument === "--memory-child") {
       cold: "First cleanup call in each fresh Node process, excluding module import and process startup",
       warm: { warmupCallsPerMode: warmupCalls, callsPerRound },
       percentile: "Nearest-rank order statistic; cold p95 is the maximum of five samples",
-      stage: "Cleanup policy admission, proposal, deterministic validation, and source mapping",
+      stage:
+        "Cleanup policy admission, source validation and original preservation; no semantic decision",
       providerLatency:
         "NOT RUN: no microphone, transcription provider, or refinement provider invoked",
     },
     cold: { summary: summarize(cold), samples: cold },
     warm: summarize(warm),
     memory,
-    quality,
+    preservation,
     acceptance: {
       stageBudgetMs,
       status: "Proposed local qualification rule, not an agreed reference-hardware launch gate",
       coldP95WithinBudget: coldConservativeP95 <= stageBudgetMs,
       warmP95WithinBudget: warmConservativeP95 <= stageBudgetMs,
-      exactCorpusMatches: quality.mismatches.length === 0,
+      exactSourcePreservation:
+        preservation.changedCases.length === 0 && preservation.removedSpans === 0,
       retainedHeapWithinBudget: memory.retainedHeapWithinBudget,
     },
   };
@@ -370,7 +350,8 @@ if (argument === "--memory-child") {
   if (
     coldConservativeP95 > stageBudgetMs ||
     warmConservativeP95 > stageBudgetMs ||
-    quality.mismatches.length ||
+    preservation.changedCases.length ||
+    preservation.removedSpans ||
     !memory.retainedHeapWithinBudget
   ) {
     process.exitCode = 1;

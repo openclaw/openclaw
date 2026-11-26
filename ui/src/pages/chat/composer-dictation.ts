@@ -4,6 +4,7 @@ import {
   type DictationCleanupPolicy,
 } from "../../app/settings-contract.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -385,6 +386,8 @@ export class ComposerDictationOwner extends EventTarget {
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
     if (
       event.key !== "Escape" ||
+      event.defaultPrevented ||
+      hasModalSurface(document) ||
       (this.phase === "idle" && !this.transcribing && !this.awaitingCleanup)
     ) {
       return;

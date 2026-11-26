@@ -1,4 +1,4 @@
-/** Private, local-only dictation transform. Publication remains with the composer owner. */
+/** Private dictation validation. Publication remains with the composer owner. */
 export type CleanupPolicy = {
   readonly version: 1;
   readonly mode: "off" | "conservative";
@@ -39,12 +39,10 @@ export type CleanupReason =
   | "unsupported-locale"
   | "input-limit"
   | "invalid-source"
-  | "ambiguous-context"
   | "invalid-plan"
   | "stale-plan"
   | "protected-text"
-  | "low-confidence"
-  | "unsafe-removal";
+  | "semantic-unavailable";
 export type CleanupResult = {
   readonly sourceId: string;
   readonly revision: number;
@@ -65,15 +63,6 @@ export function isCleanupSourceBounded(text: string): boolean {
   );
 }
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-const hesitationPrefix = /^(?:um|uh)(?:,[ \t]+|[ \t]+)/;
-const restartPrefix = /^I[ \t]+(?=I[ \t]+)/;
-// These small constructions are deliberately narrower than an English filler blacklist.
-const continuation =
-  /^(?:please[ \t]+(?:call|send|bring|schedule|remind|show|save|check)\b|I[ \t]+(?:I[ \t]+)?(?:need|want|have|will|would[ \t]+like)\b)/;
-const correctionEvidence =
-  /\b(?:no|sorry|actually|rather|instead|correction|correcting)\b|\bI[ \t]+mean\b/i;
-const literalEvidence =
-  /["“”`]|(?:^|\W)'|'(?:\W|$)|\b(?:quote|unquote|word|words|letter|letters|spell|spelled|identifier|variable|project|named|lyrics|code|repeat)\b|\w[_/\\@]\w|https?:/i;
 
 function retained(
   source: DictationCleanupSource,
@@ -149,67 +138,10 @@ function sourceReason(
   ) {
     return "invalid-source";
   }
-  // Mixed-script input, literal language, and correction evidence require a richer
-  // semantic owner. Leave the complete source available to that owner unchanged.
-  if (
-    /[^\x20-\x7E\t\n\r]/.test(source.text) ||
-    correctionEvidence.test(source.text) ||
-    literalEvidence.test(source.text)
-  ) {
-    return "ambiguous-context";
-  }
   return undefined;
 }
 
-function removalReason(
-  source: DictationCleanupSource,
-  removal: CleanupRemoval,
-): CleanupReason | undefined {
-  const hesitation = source.text.match(hesitationPrefix)?.[0];
-  const start = removal.start;
-  const rest = source.text.slice(start);
-  if (removal.category === "hesitation") {
-    if (
-      start !== 0 ||
-      !hesitation ||
-      removal.end !== hesitation.length ||
-      !continuation.test(source.text.slice(removal.end))
-    ) {
-      return "unsafe-removal";
-    }
-  } else {
-    const restart = rest.match(restartPrefix)?.[0];
-    if (
-      (start !== 0 && start !== hesitation?.length) ||
-      !restart ||
-      removal.end !== start + restart.length ||
-      restartPrefix.test(source.text.slice(removal.end)) ||
-      !continuation.test(source.text.slice(removal.end))
-    ) {
-      return "unsafe-removal";
-    }
-  }
-  if (source.protectedSpans?.some((range) => overlaps(range, removal))) {
-    return "protected-text";
-  }
-  // Uncertain continuation evidence cannot justify deleting a correctly recognized
-  // neighboring token. Confidence can veto a deletion, never authorize one.
-  const evidenceLength = source.text.slice(removal.end).match(continuation)?.[0].length ?? 0;
-  const evidenceRange = { start, end: removal.end + evidenceLength };
-  const tokens = source.tokens?.filter((token) => overlaps(token, evidenceRange)) ?? [];
-  if (tokens.some((token) => token.confidence !== undefined && token.confidence < 0.85)) {
-    return "low-confidence";
-  }
-  const hasMetadata = tokens.some(
-    (token) => token.confidence !== undefined || token.startTimeMs !== undefined,
-  );
-  if (removal.evidence === "text-and-provider-metadata" && !hasMetadata) {
-    return "invalid-plan";
-  }
-  return undefined;
-}
-
-/** Validate proposed deletions against source text, never a model's preferred candidate. */
+/** Valid ranges do not establish semantic intent or authorize a text change. */
 export function validateCleanupPlan(
   source: DictationCleanupSource,
   policy: CleanupPolicy,
@@ -258,7 +190,6 @@ export function validateCleanupPlan(
       return retained(source, "rejected", "invalid-source");
     }
   }
-  const removals: CleanupRemoval[] = [];
   const proposedRemovals: readonly unknown[] = plan.removals;
   let previousEnd = 0;
   let removedLength = 0;
@@ -274,84 +205,39 @@ export function validateCleanupPlan(
     ) {
       return retained(source, "rejected", "invalid-plan");
     }
-    const removal: CleanupRemoval = {
-      start: value.start,
-      end: value.end,
-      category: value.category,
-      evidence: value.evidence,
-    };
-    const rejection = removalReason(source, removal);
-    if (rejection) {
-      return retained(source, "rejected", rejection);
+    if (source.protectedSpans?.some((range) => overlaps(range, value))) {
+      return retained(source, "rejected", "protected-text");
     }
-    removals.push(removal);
-    previousEnd = removal.end;
-    removedLength += removal.end - removal.start;
+    if (
+      value.evidence === "text-and-provider-metadata" &&
+      !source.tokens?.some(
+        (token) =>
+          overlaps(token, value) &&
+          (token.confidence !== undefined || token.startTimeMs !== undefined),
+      )
+    ) {
+      return retained(source, "rejected", "invalid-plan");
+    }
+    previousEnd = value.end;
+    removedLength += value.end - value.start;
   }
   if (removedLength > source.text.length / 4) {
     return retained(source, "rejected", "invalid-plan");
   }
-  const sourceMap: CleanupSourceMap[] = [];
-  const chunks: string[] = [];
-  let sourceStart = 0;
-  let candidateStart = 0;
-  for (const removal of [...removals, { start: source.text.length, end: source.text.length }]) {
-    if (removal.start > sourceStart) {
-      const chunk = source.text.slice(sourceStart, removal.start);
-      chunks.push(chunk);
-      sourceMap.push({
-        sourceStart,
-        sourceEnd: removal.start,
-        candidateStart,
-        candidateEnd: candidateStart + chunk.length,
-      });
-      candidateStart += chunk.length;
-    }
-    sourceStart = removal.end;
-  }
-  return {
-    sourceId: source.id,
-    revision: source.revision,
-    raw: source.text,
-    candidate: chunks.join(""),
-    removals,
-    status: removals.length ? "refined" : "unchanged",
-    sourceMap,
-  };
+  // No accepted semantic decision owner supplies removal intent. Preserve all
+  // recognized text, including intentional repetition and correction evidence.
+  return retained(source, "retained", "semantic-unavailable");
 }
 
-/** No provider calls, learned rules, persistent text, or publication side effects. */
+/** Validate the source without guessing semantic removals or calling a provider. */
 export function refineDictation(
   source: DictationCleanupSource,
   policy: CleanupPolicy,
 ): CleanupResult {
-  const reason = sourceReason(source, policy);
-  if (reason) {
-    return retained(source, reason === "off" ? "unchanged" : "retained", reason);
-  }
-  const removals: CleanupRemoval[] = [];
-  const hesitation = source.text.match(hesitationPrefix)?.[0];
-  if (hesitation && continuation.test(source.text.slice(hesitation.length))) {
-    removals.push({ start: 0, end: hesitation.length, category: "hesitation", evidence: "text" });
-  }
-  const start = removals[0]?.end ?? 0;
-  const restart = source.text.slice(start).match(restartPrefix)?.[0];
-  if (
-    restart &&
-    !restartPrefix.test(source.text.slice(start + restart.length)) &&
-    continuation.test(source.text.slice(start + restart.length))
-  ) {
-    removals.push({
-      start,
-      end: start + restart.length,
-      category: "exact_restart",
-      evidence: "text",
-    });
-  }
   return validateCleanupPlan(source, policy, {
     version: 1,
     sourceId: source.id,
     revision: source.revision,
-    removals,
+    removals: [],
   });
 }

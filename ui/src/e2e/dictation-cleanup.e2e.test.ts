@@ -21,7 +21,6 @@ const suite = createControlUiE2eSuite({
   },
 });
 const raw = "um please call me tomorrow";
-const candidate = "please call me tomorrow";
 const sessionId = "cleanup-dictation-fixture";
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Dictation cleanup", exact: true });
@@ -178,9 +177,9 @@ async function captureProof(
   );
 }
 
-async function tabToCleanedChoice(page: Page) {
+async function tabToOriginalChoice(page: Page) {
   const mode = page.getByLabel("Cleanup mode", { exact: true });
-  const choose = button(page, "Use cleaned draft");
+  const choose = button(page, "Use original");
   await mode.focus();
   for (let index = 0; index < 14 && !(await focused(choose)); index++) {
     await page.keyboard.press("Tab");
@@ -234,7 +233,7 @@ suite.define(() => {
     { mode: "dark", size: "narrow", width: 390, height: 844 },
     { mode: "light", size: "narrow", width: 390, height: 844 },
   ] as const)(
-    "reviews and restores an unsent draft in $mode at $size width",
+    "keeps original text available without semantic cleanup in $mode at $size width",
     ({ mode, size, width, height }) =>
       suite.withPage(
         {
@@ -257,9 +256,13 @@ suite.define(() => {
           await finishRecording();
           await openCleanupByKeyboard(page, true);
           const original = page.getByLabel("Original recognized text", { exact: true });
-          const cleaned = page.getByLabel("Cleaned draft", { exact: true });
           await expectDraft(original, raw);
-          await expectDraft(cleaned, candidate);
+          expect(await page.getByLabel("Cleaned draft", { exact: true }).count()).toBe(0);
+          expect(await button(page, "Use cleaned draft").isDisabled()).toBe(true);
+          expect(await button(page, "Review again").count()).toBe(0);
+          await expect
+            .poll(() => dialog(page).getByRole("status").textContent())
+            .toBe("Cleanup is unavailable. The original recognized text is unchanged.");
           expect(await original.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
             true,
           );
@@ -268,25 +271,48 @@ suite.define(() => {
             page,
             `current-review-text-${name}`,
             dialog(page),
-            cleaned,
-            "Review the suggested removal",
+            original,
+            "The original text remains unchanged",
           );
           await captureProof(
             page,
             `current-review-actions-${name}`,
             dialog(page),
-            button(page, "Use cleaned draft"),
+            button(page, "Use original"),
             "Explicit choice adds only to the draft",
           );
-          await tabToCleanedChoice(page);
-          await expectDraft(textarea, candidate);
-          await button(page, "Restore original").focus();
-          await page.keyboard.press("Enter");
+          await tabToOriginalChoice(page);
+          await dialog(page).waitFor({ state: "detached" });
           await expectDraft(textarea, raw);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },
       ),
   );
+
+  it("lets a ready review own Escape and keeps the original recoverable", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const { gateway, textarea, finishRecording } = await openFixture(page);
+      await enableCleanup(page);
+      await finishRecording();
+      const trigger = await openCleanupByKeyboard(page, true);
+      await page.getByLabel("Original recognized text", { exact: true }).focus();
+      await page.keyboard.press("Escape");
+      await dialog(page).waitFor({ state: "detached" });
+      await expect.poll(() => focused(trigger)).toBe(true);
+      await expectDraft(textarea, "");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await openCleanupByKeyboard(page, true);
+      await expect
+        .poll(() => dialog(page).getByRole("status").textContent())
+        .toBe("Cleanup is unavailable. The original recognized text is unchanged.");
+      await expectDraft(page.getByLabel("Original recognized text", { exact: true }), raw);
+      await tabToOriginalChoice(page);
+      await dialog(page).waitFor({ state: "detached" });
+      await expectDraft(textarea, raw);
+      expect(await button(page, "Review dictation").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    }));
 
   it("keeps original text recoverable when a user edit revokes replacement in New Session", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
@@ -294,15 +320,13 @@ suite.define(() => {
       await enableCleanup(page);
       await finishRecording();
       await openCleanupByKeyboard(page, true);
-      await tabToCleanedChoice(page);
-      await expectDraft(textarea, candidate);
       await page.keyboard.press("Escape");
       await dialog(page).waitFor({ state: "detached" });
-      const edited = `${candidate} and bring the approved agenda`;
+      const edited = "Please bring the approved agenda";
       await textarea.fill(edited);
       await openCleanupByKeyboard(page, true);
       await expectDraft(page.getByLabel("Original recognized text", { exact: true }), raw);
-      expect(await button(page, "Restore original").isDisabled()).toBe(true);
+      expect(await button(page, "Use original").isDisabled()).toBe(true);
       expect(await button(page, "Use cleaned draft").isDisabled()).toBe(true);
       expect(await button(page, "Copy original text").isEnabled()).toBe(true);
       await button(page, "Dismiss review").click();
