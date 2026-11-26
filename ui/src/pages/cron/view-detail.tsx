@@ -49,7 +49,9 @@ export function DetailView(
   const editing = () => props.mode !== "job" || props.detailTab !== "history";
   const attentionJob = () => {
     const job = selectedJob();
-    return job && resolveCronJobAttention(job) ? job : undefined;
+    // Show compares its condition by identity. Wrap the retained job so runtime
+    // refreshes reach its child accessor without remounting the open panel.
+    return job && resolveCronJobAttention(job) ? { job } : undefined;
   };
   const conditionActivity = () => {
     const job = selectedJob();
@@ -91,17 +93,18 @@ export function DetailView(
                 <>
                   <SavedPrompt {...props} job={job} />
                   <Show when={attentionJob()}>
-                    {(failed) => (
+                    {(current) => (
                       <AttentionDetails
-                        job={failed()}
+                        job={current().job}
                         onReviewRun={(() => {
+                          const job = current().job;
                           // A retained blocker may predate the last quiet run. Only execution
                           // failures identify that last run; never link an old result to it.
-                          if (resolveCronJobAttention(failed()) !== "error") {
+                          if (resolveCronJobAttention(job) !== "error") {
                             return undefined;
                           }
-                          const runId = failedRunId(failed());
-                          return runId ? () => props.onSelectJob(failed(), runId) : undefined;
+                          const runId = failedRunId(job);
+                          return runId ? () => props.onSelectJob(job, runId) : undefined;
                         })()}
                       />
                     )}

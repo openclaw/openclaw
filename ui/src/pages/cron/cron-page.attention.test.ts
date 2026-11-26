@@ -16,8 +16,8 @@ it("updates an open job's recorded attention across quiet runs, recovery and err
     cronRpc({ "cron.get": () => structuredClone(job) }),
   );
   const warning = () => page.querySelector(".cron-failure-details");
-  const publish = async () => {
-    job = { ...job, updatedAtMs: job.updatedAtMs + 1 };
+  const publish = async (state: Partial<typeof job.state>) => {
+    job = { ...job, state: { ...job.state, ...state }, updatedAtMs: job.updatedAtMs + 1 };
     emitEvent(gateway, "cron", {
       action: "finished",
       jobId: job.id,
@@ -30,43 +30,46 @@ it("updates an open job's recorded attention across quiet runs, recovery and err
   try {
     page.routeSearch = `?job=${job.id}`;
     await waitForCronPage(() => expect(warning()?.textContent).toContain("Source access required"));
+    const selectedJob = page.cron.cronEditingJob;
+    const blockedPanel = warning();
     for (const lastRunAtMs of [20, 30]) {
-      job = { ...job, state: { ...job.state, lastRunAtMs } };
-      await publish();
+      await publish({ lastRunAtMs });
       expect(warning()?.textContent).toContain("Source access required");
+      expect(warning()).toBe(blockedPanel);
       expect(page.querySelector('[data-test-id="cron-review-failed-run"]')).toBeNull();
     }
+    await publish({
+      lastMeaningfulResult: { outcome: "blocked", summary: "Source permission expired", atMs: 35 },
+    });
+    await waitForCronPage(() =>
+      expect(warning()?.textContent).toContain("Source permission expired"),
+    );
+    expect(warning()?.textContent).not.toContain("Source access required");
+    expect(warning()).toBe(blockedPanel);
+    expect(page.cron.cronEditingJob).toBe(selectedJob);
     for (const outcome of ["progress", "done"] as const) {
-      job = {
-        ...job,
-        state: {
-          lastRunStatus: "ok",
-          lastMeaningfulResult: { outcome, summary: "Source processed", atMs: 40 },
-        },
-      };
-      await publish();
+      await publish({ lastMeaningfulResult: { outcome, summary: "Source processed", atMs: 40 } });
       await waitForCronPage(() => expect(warning()).toBeNull());
     }
-    job = {
-      ...job,
-      state: {
-        lastRunStatus: "ok",
-        lastMeaningfulResult: {
-          outcome: "needs_attention",
-          summary: "Choose the source",
-          atMs: 50,
-        },
-      },
-    };
-    await publish();
+    await publish({
+      lastMeaningfulResult: { outcome: "needs_attention", summary: "Choose the source", atMs: 50 },
+    });
     await waitForCronPage(() => expect(warning()?.textContent).toContain("Choose the source"));
-    job = {
-      ...job,
-      state: { ...job.state, lastRunStatus: "error", lastError: "Execution interrupted" },
-    };
-    await publish();
+    const attentionPanel = warning();
+    await publish({ lastRunStatus: "error", lastError: "Execution interrupted" });
     await waitForCronPage(() => expect(warning()?.textContent).toContain("Last run failed"));
     expect(warning()?.textContent).not.toContain("Choose the source");
+    expect(warning()).toBe(attentionPanel);
+    page.querySelector<HTMLButtonElement>('[data-test-id="cron-failure-details-toggle"]')!.click();
+    await page.settle();
+    expect(warning()?.textContent).toContain("Execution interrupted");
+    const diagnostics = page.querySelector(".cron-error-details__text");
+    await publish({ lastError: "Retry budget exhausted" });
+    await waitForCronPage(() => expect(warning()?.textContent).toContain("Retry budget exhausted"));
+    expect(warning()?.textContent).not.toContain("Execution interrupted");
+    expect(warning()).toBe(attentionPanel);
+    expect(page.querySelector(".cron-error-details__text")).toBe(diagnostics);
+    expect(page.cron.cronEditingJob).toBe(selectedJob);
     const methods = vi.mocked(client).request.mock.calls.map(([method]) => method);
     expect(methods).not.toContain("cron.run");
     expect(methods).not.toContain("cron.update");
