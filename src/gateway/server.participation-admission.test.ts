@@ -268,12 +268,21 @@ it("readmits pending native child and scheduled work under current invitation bo
           });
         };
         const outputs: string[] = [];
+        const requestTrace: { phase: string; step: number; input: unknown[] }[] = [];
         let toolCalls = 0;
         const invokeStoredJob = async (phase: "permission" | "tools" | "wide") => {
           step = 0;
           providerReplies.reply = (body, response) => {
-            const input = (JSON.parse(body) as { input: { type?: string; output?: string }[] })
-              .input;
+            const input = (
+              JSON.parse(body) as {
+                input: { type?: string; output?: string; name?: string; call_id?: string }[];
+              }
+            ).input;
+            requestTrace.push({
+              phase,
+              step,
+              input: input.slice(-6).map(({ type, name, call_id }) => ({ type, name, call_id })),
+            });
             const output = input.findLast((item) => item.type === "function_call_output")?.output;
             if (output) {
               outputs.push(output);
@@ -326,7 +335,7 @@ it("readmits pending native child and scheduled work under current invitation bo
         expect(retainedJob.operatorSource?.executionRevision).not.toBe(
           job.operatorSource?.executionRevision,
         );
-        expect(toolCalls).toBe(10);
+        expect(toolCalls, JSON.stringify(requestTrace)).toBe(10);
         expect(afterParent).toBe(beforeRelease);
         // No membership is ever created on this independent owner-only session.
         const owner = await sender.request<{ key: string }>(
