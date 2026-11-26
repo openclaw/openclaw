@@ -3,13 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { checkDoctorStateSchemaPending } from "../flows/doctor-health-startup.js";
+import { resolvePendingLegacyStateDirMigrationPaths } from "../infra/state-migrations.state-dir.js";
 import {
   closeDatabases,
   databaseFixture,
   supportedVersions,
 } from "../state/database-preflight-fixtures.test-support.js";
 import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
-import { checkDoctorLegacyStateDirPending } from "./doctor-maintenance-state.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -85,7 +85,7 @@ describe("Doctor maintenance pending contract", () => {
 });
 
 describe("legacy state directory check", () => {
-  it("finds a pending move from path metadata without touching either root", async () => {
+  it("finds a pending move from path metadata without touching either root", () => {
     const home = tempDirs.make("doctor-pending-legacy-");
     const legacy = path.join(home, ".clawdbot");
     fs.mkdirSync(path.join(legacy, "agents"), { recursive: true });
@@ -93,12 +93,15 @@ describe("legacy state directory check", () => {
     const env = { HOME: home };
     const before = snapshotTree(home);
 
-    await expect(checkDoctorLegacyStateDirPending(env)).resolves.toBe("work");
+    expect(resolvePendingLegacyStateDirMigrationPaths({ env })).toEqual({
+      source: legacy,
+      target: path.join(home, ".openclaw"),
+    });
     expect(snapshotTree(home)).toEqual(before);
 
     fs.mkdirSync(path.join(home, ".openclaw"));
     const moved = snapshotTree(home);
-    await expect(checkDoctorLegacyStateDirPending(env)).resolves.toBe("none");
+    expect(resolvePendingLegacyStateDirMigrationPaths({ env })).toBeUndefined();
     expect(snapshotTree(home)).toEqual(moved);
   });
 
@@ -111,7 +114,7 @@ describe("legacy state directory check", () => {
         const trace = capturePendingTrace();
         await expect(
           traceDoctorMaintenancePending("legacy-state-dir", () =>
-            checkDoctorLegacyStateDirPending({ HOME: home }),
+            resolvePendingLegacyStateDirMigrationPaths({ env: { HOME: home } }) ? "work" : "none",
           ),
         ).resolves.toBe(true);
         expect(trace()).toEqual([expect.stringMatching(/pending=undecidable check=owner /u)]);
