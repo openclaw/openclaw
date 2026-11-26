@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -43,20 +44,6 @@ function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): str
   return matches;
 }
 
-function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
-  const sanitized: TranscriptUtterance = {
-    ...utterance,
-    text: sanitizeTerminalText(utterance.text),
-  };
-  if (utterance.speaker) {
-    sanitized.speaker = {
-      ...utterance.speaker,
-      label: sanitizeTerminalText(utterance.speaker.label),
-    };
-  }
-  return sanitized;
-}
-
 function formatSpeakerLine(utterance: TranscriptUtterance): string {
   const text = utterance.text.trim();
   if (!text) {
@@ -72,8 +59,18 @@ export function summarizeTranscripts(params: {
   utterances: TranscriptUtterance[];
 }): TranscriptsSummary {
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
+  const speakerLabel = createTranscriptSpeakerLabels();
+  // Reserve names in recording order, even if a particular line is filtered
+  // out of the notes. The roster and Markdown export use the same order.
   const utterances = params.utterances
-    .map(sanitizeUtterance)
+    .map((utterance) => ({
+      ...utterance,
+      text: sanitizeTerminalText(utterance.text),
+      speaker: utterance.speaker && {
+        ...utterance.speaker,
+        label: speakerLabel(utterance.speaker.id, utterance.speaker.label),
+      },
+    }))
     .filter((utterance) => !isTranscriptArtifactText(utterance.text));
   const overview =
     firstSentences(utterances, 4) ||

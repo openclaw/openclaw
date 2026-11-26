@@ -346,7 +346,10 @@ so bounded readers see the notes before long transcripts.
 Gateway shutdown, restart, and capture-disable drainage save final heuristic notes
 without starting new model inference. You can regenerate model notes from the saved
 transcript with the tool's `summarize` action after the Gateway is available again.
-Participants come from speaker labels in first-appearance order, not model guesses.
+Notes use the first recorded name for each speaker ID. If two speakers have the
+same name, the second appears as `Sam (2)`, for example. Recorders that supply
+only labels keep label-based attribution. JSONL exports preserve the original
+speaker ID and name on each utterance.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.
 

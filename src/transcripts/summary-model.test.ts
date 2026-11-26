@@ -208,6 +208,24 @@ describe("model-backed transcript summaries", () => {
     expect(request.prompt).toContain("Zoe: We agreed to ship the CLI.");
   });
 
+  it("gives the model distinct speaker names without exposing account IDs", async () => {
+    runIsolatedCompletion.mockResolvedValue(completion(JSON.stringify(notes)));
+    const summary = await summarizeTranscriptsWithModel({
+      ...params,
+      utterances: [
+        { text: "I will send the patch.", speaker: { id: "account-a", label: "Sam" } },
+        { text: "I will send the notes.", speaker: { id: "account-b", label: "Sam" } },
+        { text: "Patch sent.", speaker: { id: "account-a", label: "New nickname" } },
+      ],
+    });
+    expect(summary?.participants).toEqual(["Sam", "Sam (2)"]);
+    const { prompt } = runIsolatedCompletion.mock.calls[0]![0];
+    expect(prompt).toContain(
+      "Sam: I will send the patch.\nSam (2): I will send the notes.\nSam: Patch sent.",
+    );
+    expect(prompt).not.toContain("account-");
+  });
+
   it("bounds and sanitizes every model note field before persistence", async () => {
     runIsolatedCompletion.mockResolvedValue(
       completion(
