@@ -92,6 +92,9 @@ export function syncExecutionAttemptMetadata(
   if (existingIndex >= 0) {
     attempts[existingIndex] = nextAttempt;
   } else {
+    if (attempts.length >= MAX_CARD_ATTEMPTS) {
+      throw new Error(`card attempt limit exceeded: ${MAX_CARD_ATTEMPTS}`);
+    }
     attempts.push(nextAttempt);
   }
   const previousFailed =
@@ -106,7 +109,7 @@ export function syncExecutionAttemptMetadata(
       : metadata.failureCount;
   return removeUndefinedMetadataFields({
     ...metadata,
-    attempts: attempts.slice(-MAX_CARD_ATTEMPTS),
+    attempts,
     failureCount,
   });
 }

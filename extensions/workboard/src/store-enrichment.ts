@@ -11,7 +11,6 @@ import { assertCanMutateClaimedCard, cardRunId, cardSessionKey } from "./store-c
 import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
-  MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
 import { WorkboardCoreStore } from "./store-core.js";
@@ -90,7 +89,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         assertCanMutateClaimedCard(existing, scope);
         const metadata = { ...clearDiagnostics(existing.metadata, ["missing_proof"]) };
         if (proof) {
-          metadata.proof = [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF);
+          metadata.proof = [...(metadata.proof ?? []), proof];
         }
         if (artifact) {
           metadata.artifacts = [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS);

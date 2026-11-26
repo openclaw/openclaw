@@ -11,7 +11,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { MAX_CARD_METADATA_BYTES, MAX_RUN_ID_LENGTH } from "./store-constants.js";
+import { MAX_CARD_METADATA_BYTES, MAX_CARD_PROOF, MAX_RUN_ID_LENGTH } from "./store-constants.js";
 import { contains, expectRejected, expectStored, fakeClock } from "./store-family.test-support.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteStores } from "./test/database-config.js";
@@ -741,6 +741,36 @@ describe("WorkboardStore", () => {
 
     const cleared = await store.update(card.id, { execution: null });
     expect(cleared.execution).toBeUndefined();
+  });
+
+  it("keeps earlier proof and attempts when a later proof puts the card over budget", async () => {
+    const store = createStore();
+    const proof = { id: "first", status: "passed" as const, label: "Initial check", createdAt: 1 };
+    const attempt = { id: "attempt-1", status: "succeeded" as const, startedAt: 1 };
+    const card = await createCard(store, "Evidence under pressure", {
+      metadata: { ...metadataPressure(), proof: [proof], attempts: [attempt] },
+    });
+    const before = await store.get(card.id);
+    expect(before?.metadata?.proof).toEqual([proof]);
+    expect(before?.metadata?.attempts).toEqual([attempt]);
+    await store.addProof(card.id, { label: "Later check", note: "x".repeat(1800) });
+    const after = await store.get(card.id);
+    expect(after?.metadata?.proof).toHaveLength(2);
+    expect(after?.metadata?.proof?.[0]).toEqual(proof);
+    expect(after?.metadata?.attempts).toEqual([attempt]);
+  });
+
+  it("refuses a proof past the count limit without changing existing evidence", async () => {
+    const store = createStore();
+    const proof = Array.from({ length: MAX_CARD_PROOF }, (_, index) => ({
+      id: String(index),
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: "Checked",
+    }));
+    const card = await createCard(store, "Full proof history", { metadata: { proof } });
+    await expect(store.addProof(card.id, { label: "One more" })).rejects.toThrow(/proof limit/);
+    await expect(store.get(card.id)).resolves.toEqual(card);
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
