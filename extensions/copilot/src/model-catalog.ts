@@ -121,6 +121,9 @@ export async function loadCopilotModelCatalog(
         },
       ],
     };
+  } catch {
+    // This inventory belongs to GitHub Copilot even when the runtime also serves BYOK models.
+    return { entries: [], outcomes: [{ provider: "github-copilot", status: "unavailable" }] };
   } finally {
     timeout.cleanup();
     if (handle) {

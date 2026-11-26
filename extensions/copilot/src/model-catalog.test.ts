@@ -132,7 +132,7 @@ describe("Copilot native model catalog", () => {
     }
   });
 
-  it("keeps empty discovery authoritative and propagates failed discovery", async () => {
+  it("keeps empty discovery authoritative and failures scoped to GitHub Copilot", async () => {
     const f = fixture();
     f.list.mockResolvedValueOnce({
       models: [],
@@ -154,7 +154,10 @@ describe("Copilot native model catalog", () => {
         ],
       });
       f.list.mockRejectedValueOnce(new Error("catalog unavailable"));
-      await expect(f.harness.loadModelCatalog!(scope)).rejects.toThrow("catalog unavailable");
+      await expect(f.harness.loadModelCatalog!(scope)).resolves.toEqual({
+        entries: [],
+        outcomes: [{ provider: "github-copilot", status: "unavailable" }],
+      });
       expect(f.release).toHaveBeenCalledTimes(2);
     } finally {
       await f.harness.dispose?.();
@@ -166,7 +169,10 @@ describe("Copilot native model catalog", () => {
     const f = fixture();
     resolveAuth.mockRejectedValue(missingAuth);
     try {
-      await expect(f.harness.loadModelCatalog!(scope)).rejects.toBe(missingAuth);
+      await expect(f.harness.loadModelCatalog!(scope)).resolves.toEqual({
+        entries: [],
+        outcomes: [{ provider: "github-copilot", status: "unavailable" }],
+      });
       expect(f.sdkFactory).not.toHaveBeenCalled();
     } finally {
       await f.harness.dispose?.();
@@ -185,11 +191,14 @@ describe("Copilot native model catalog", () => {
         }),
     );
     const discovery = f.harness.loadModelCatalog!(scope);
-    const rejected = expect(discovery).rejects.toThrow();
+    const unavailable = expect(discovery).resolves.toEqual({
+      entries: [],
+      outcomes: [{ provider: "github-copilot", status: "unavailable" }],
+    });
     try {
       await vi.waitFor(() => expect(f.sdkFactory).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(30_000);
-      await rejected;
+      await unavailable;
       finish({ start: f.start, stop: f.stop } as unknown as CopilotClient);
       await vi.waitFor(() => expect(f.release).toHaveBeenCalledOnce());
       expect(f.start).not.toHaveBeenCalled();

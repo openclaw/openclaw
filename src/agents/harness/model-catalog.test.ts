@@ -145,6 +145,25 @@ describe("agent harness model catalog", () => {
     expect(load.mock.lastCall?.[0]).not.toHaveProperty("providerIds");
   });
 
+  it("refreshes a requested provider when the runtime default uses another provider", async () => {
+    const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => [
+      { provider: "github-copilot", id: "fusion", name: "Fusion", nativeRuntime: "native-one" },
+    ]);
+    const result = await augmentPreparedModelCatalogWithAgentHarness({
+      input: pickerInput(pickerConfig("native-one")),
+      snapshot: catalog([]),
+      pluginRegistry: catalogRegistry({ "native-one": load }),
+      providerIds: ["github-copilot"],
+      includesProvider: (provider) => provider === "github-copilot",
+    });
+    expect(load).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerIds: ["github-copilot"] }),
+    );
+    expect(result.entries).toEqual([
+      expect.objectContaining({ provider: "github-copilot", id: "fusion" }),
+    ]);
+  });
+
   it.each([
     { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
