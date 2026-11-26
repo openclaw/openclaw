@@ -84,6 +84,7 @@ export type QaGatewayChildParams = {
   forcedRuntime?: RuntimeId;
   runtimeSelection?: QaRuntimeSelection;
   codexMockAutoCompactTokenLimit?: number;
+  codexMockNativeSubagents?: boolean;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -208,11 +209,11 @@ export async function prepareQaGatewayChild(
     repoRoot: params.repoRoot,
   });
   await Promise.all([
-    fs.mkdir(stateDir, { recursive: true }),
-    fs.mkdir(homeDir, { recursive: true }),
-    fs.mkdir(xdgConfigHome, { recursive: true }),
-    fs.mkdir(xdgDataHome, { recursive: true }),
-    fs.mkdir(xdgCacheHome, { recursive: true }),
+    fs.mkdir(stateDir, { recursive: true, mode: 0o700 }),
+    fs.mkdir(homeDir, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgConfigHome, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgDataHome, { recursive: true, mode: 0o700 }),
+    fs.mkdir(xdgCacheHome, { recursive: true, mode: 0o700 }),
   ]);
   const providerMode = params.providerMode ?? DEFAULT_QA_PROVIDER_MODE;
   const codexModelCatalogPath = path.join(tempRoot, "codex-model-catalog.json");
@@ -221,6 +222,9 @@ export async function prepareQaGatewayChild(
       (model): model is string => typeof model === "string" && model.length > 0,
     );
     const models = listMockCodexModelInfos(selectedModelRefs);
+    if (params.codexMockNativeSubagents) {
+      for (const model of models) Object.assign(model, { multi_agent_version: "v2" });
+    }
     if (params.codexMockAutoCompactTokenLimit !== undefined) {
       for (const model of models) {
         Object.assign(model, { auto_compact_token_limit: params.codexMockAutoCompactTokenLimit });
@@ -427,6 +431,7 @@ export async function prepareQaGatewayChild(
             forcedRuntimeEnvPatch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
               providerBaseUrl,
               modelCatalogPath: codexModelCatalogPath,
+              nativeSubagents: params.codexMockNativeSubagents,
             });
           }
         }

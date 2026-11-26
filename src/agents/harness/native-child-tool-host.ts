@@ -7,11 +7,13 @@ import {
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-context-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   captureAdmittedRunSourceForChild,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { createAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
@@ -31,6 +33,27 @@ import {
   registerNativeChildToolIssuer,
   type NativeChildToolSource,
 } from "./native-child-tool-bindings.js";
+
+/** A physical app-server callback can still carry the already closed foreground work scope. */
+async function runWithChildToolWork<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  const work = new AsyncWorkScope();
+  // Reconstructed tool wrappers bind to the child's lifetime, not the parent turn's
+  // refresh controller. The source config and plugin registry are still checked on every call.
+  const refresh = createAgentPluginRuntimeRefresh();
+  const stop = () => work.beginClose(signal.reason);
+  signal.throwIfAborted();
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    return await runOutsideAsyncWorkScope(() => refresh.run(() => work.run(run)));
+  } finally {
+    try {
+      await work.drain();
+    } finally {
+      refresh.close();
+      signal.removeEventListener("abort", stop);
+    }
+  }
+}
 
 /** Bind only actual host-issued sources. Model admission or a copied handle is not a tool grant. */
 function registerNativeChildToolHost(params: {
@@ -123,62 +146,64 @@ function registerNativeChildToolHost(params: {
         admittedRunContext,
       };
       // Never borrow a foreground run's client or caller from an event handler's async context.
-      return await withoutGatewayToolCallerIdentity(() =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            isWebchatConnect: () => false,
-            context: resolveGatewayContext?.(),
-            resolveGatewayContext,
-          },
-          async () => {
-            const host = params.createHost({
-              attempt: {
+      return await runWithChildToolWork(signal, () =>
+        withoutGatewayToolCallerIdentity(() =>
+          withPluginRuntimeGatewayRequestScope(
+            {
+              isWebchatConnect: () => false,
+              context: resolveGatewayContext?.(),
+              resolveGatewayContext,
+            },
+            async () => {
+              const host = params.createHost({
+                attempt: {
+                  ...owner,
+                  config,
+                  workspaceDir: attempt.workspaceDir,
+                  cwd: attempt.cwd,
+                  senderId: attempt.senderId,
+                  senderName: attempt.senderName,
+                  senderUsername: attempt.senderUsername,
+                  senderE164: attempt.senderE164,
+                  senderIsOwner: attempt.senderIsOwner,
+                  messageChannel: attempt.messageChannel,
+                  messageProvider: attempt.messageProvider,
+                  agentAccountId: attempt.agentAccountId,
+                  operatorProfileId: attempt.operatorProfileId,
+                  skillsSnapshot: attempt.skillsSnapshot,
+                  preparedModelRuntime: attempt.preparedModelRuntime,
+                  sandbox: attempt.sandbox,
+                  requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+                  toolExecutionAllow: attempt.toolExecutionAllow,
+                  abortSignal: signal,
+                },
+                pluginId: "codex",
+              });
+              closeHost = host.close;
+              host.setToolPolicyScope(params.scope);
+              const caller = createAdmittedGatewayToolCallerIdentity({
                 ...owner,
-                config,
-                workspaceDir: attempt.workspaceDir,
-                cwd: attempt.cwd,
-                senderId: attempt.senderId,
-                senderName: attempt.senderName,
-                senderUsername: attempt.senderUsername,
-                senderE164: attempt.senderE164,
-                senderIsOwner: attempt.senderIsOwner,
-                messageChannel: attempt.messageChannel,
-                messageProvider: attempt.messageProvider,
-                agentAccountId: attempt.agentAccountId,
-                operatorProfileId: attempt.operatorProfileId,
-                skillsSnapshot: attempt.skillsSnapshot,
-                preparedModelRuntime: attempt.preparedModelRuntime,
-                sandbox: attempt.sandbox,
-                requireWorkspaceOnly: attempt.requireWorkspaceOnly,
-                toolExecutionAllow: attempt.toolExecutionAllow,
-                abortSignal: signal,
-              },
-              pluginId: "codex",
-            });
-            closeHost = host.close;
-            host.setToolPolicyScope(params.scope);
-            const caller = createAdmittedGatewayToolCallerIdentity({
-              ...owner,
-              requesterOrigin: attempt.requesterOrigin,
-              receiptAuthority: assertCurrent,
-              approvalSignals: [signal],
-            });
-            if (caller) {
-              caller.fullPermission = fullPermission;
-              caller.assertToolAllowed = assertToolAllowed;
-              if (requester) {
-                caller.webchatMcpRequester = {
-                  sessionId: requester.sessionId,
-                  requesterSenderId: issuer.operator.profileId,
-                  connectionSessionKey: sourceSessionKey,
-                  assertCurrent,
-                };
+                requesterOrigin: attempt.requesterOrigin,
+                receiptAuthority: assertCurrent,
+                approvalSignals: [signal],
+              });
+              if (caller) {
+                caller.fullPermission = fullPermission;
+                caller.assertToolAllowed = assertToolAllowed;
+                if (requester) {
+                  caller.webchatMcpRequester = {
+                    sessionId: requester.sessionId,
+                    requesterSenderId: issuer.operator.profileId,
+                    connectionSessionKey: sourceSessionKey,
+                    assertCurrent,
+                  };
+                }
               }
-            }
-            return await withGatewayToolCallerIdentity(caller, () =>
-              host.runWithScope(() => execute(host.capabilities, runId)),
-            );
-          },
+              return await withGatewayToolCallerIdentity(caller, () =>
+                host.runWithScope(() => execute(host.capabilities, runId)),
+              );
+            },
+          ),
         ),
       );
     } finally {

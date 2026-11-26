@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { cleanupTempDirs } from "../../../test/helpers/temp-dir.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { materializeStaticMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
@@ -8,6 +10,10 @@ import {
   setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
 import { createMcpProbeFixture } from "../agent-bundle-mcp-probe.test-support.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../plugin-runtime-refresh.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
@@ -67,7 +73,23 @@ it("admits a distinct child after foreground teardown only through its own live 
     await expect(
       runWithCodexNativeChildToolHost(parent, { ...source }, request, execute),
     ).rejects.toThrow(/No retained/);
-    expect(await runWithCodexNativeChildToolHost(parent, source, request, execute)).toBe(42);
+    const foreground = new AsyncWorkScope();
+    const refresh = createAgentPluginRuntimeRefresh();
+    const dispatchFromAppServer = refresh.run(() =>
+      foreground.run(() => AsyncLocalStorage.snapshot()),
+    );
+    await foreground.drain();
+    refresh.close();
+    expect(
+      await dispatchFromAppServer(() =>
+        runWithCodexNativeChildToolHost(parent, source, request, (host, id) =>
+          captureAsyncWorkTracker()(() => {
+            captureAgentPluginRuntimeRefresh().assertCurrent();
+            return execute(host, id);
+          }),
+        ),
+      ),
+    ).toBe(42);
     abort.abort(new Error("revoked"));
     await expect(runWithCodexNativeChildToolHost(parent, source, request, execute)).rejects.toThrow(
       /revoked/,
