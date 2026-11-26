@@ -46,6 +46,61 @@ it("registers API-key onboarding with Cyber v1 as the default model", async () =
   expect(config?.agents?.defaults?.models?.[defaultModel]?.alias).toBe("Cyber v1");
 });
 
+it("keeps an existing primary model, fallbacks, alias and authored provider settings", async () => {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const method = resolveProviderPluginChoice({
+    providers: [provider],
+    choice: "nodecode-api-key",
+  })?.method;
+  assert(method?.runNonInteractive, "Missing Nodecode API-key onboarding");
+  const existing = {
+    models: {
+      providers: {
+        nodecode: {
+          baseUrl: "https://api.nodecode.ai/v1",
+          api: "openai-completions" as const,
+          timeoutSeconds: 300,
+          models: [
+            {
+              id: "nodecode-cyber-v1",
+              name: "Cyber v1 (hand-configured)",
+              reasoning: true,
+              input: ["text" as const],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1048576,
+              maxTokens: 32768,
+            },
+          ],
+        },
+      },
+    },
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-5-5", fallbacks: [defaultModel] },
+        models: { [defaultModel]: { alias: "cyber" } },
+      },
+    },
+  };
+  const config = await method.runNonInteractive({
+    authChoice: "nodecode-api-key",
+    opts: { nodecodeApiKey: "synthetic-key" },
+    config: existing,
+    baseConfig: existing,
+    runtime: createRuntimeEnv(),
+    resolveApiKey: async () => ({ key: "synthetic-key", source: "profile" as const }),
+    toApiKeyCredential: () => null,
+  });
+  expect(resolveAgentModelPrimaryValue(config?.agents?.defaults?.model)).toBe(
+    "anthropic/claude-opus-5-5",
+  );
+  expect(config?.agents?.defaults?.model).toMatchObject({ fallbacks: [defaultModel] });
+  expect(config?.agents?.defaults?.models?.[defaultModel]?.alias).toBe("cyber");
+  expect(config?.models?.providers?.nodecode).toMatchObject({
+    timeoutSeconds: 300,
+    models: [{ id: "nodecode-cyber-v1", name: "Cyber v1 (hand-configured)", maxTokens: 32768 }],
+  });
+});
+
 it("publishes Cyber v1 in the static catalog without credentials", async () => {
   const provider = await registerSingleProviderPlugin(plugin);
   const catalog = await provider.staticCatalog?.run({} as never);

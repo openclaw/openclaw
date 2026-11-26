@@ -20,6 +20,9 @@ export default defineSingleProviderPluginEntry({
     envVars: ["NODECODE_API_KEY"],
     manifestAuth: {
       defaultModel: NODECODE_DEFAULT_MODEL_REF,
+      // Signing in again, or adding Nodecode beside another provider, keeps the
+      // primary model the user already chose; only a config without one gets Cyber v1.
+      preserveExistingPrimary: true,
       applyConfig: createProviderConnectionPresetAppliers<[]>({
         primaryModelRef: NODECODE_DEFAULT_MODEL_REF,
         resolveParams: () => ({
