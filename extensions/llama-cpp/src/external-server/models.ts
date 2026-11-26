@@ -20,6 +20,7 @@ type LlamaServerModelWire = Record<string, unknown> & {
   meta?: {
     n_ctx?: unknown;
     n_ctx_train?: unknown;
+    n_params?: unknown;
   };
   status?: {
     value?: unknown;
@@ -27,9 +28,6 @@ type LlamaServerModelWire = Record<string, unknown> & {
   };
   architecture?: {
     input_modalities?: unknown;
-  };
-  meta?: {
-    n_params?: unknown;
   };
 };
 
