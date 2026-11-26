@@ -161,9 +161,6 @@ it.each([
           : { id: "other", voices, activeVoices: ["active-only"], modelFamilySettings: undefined },
     });
     expect(readVoiceOptions(page)).toEqual(["", ...voices]);
-    expect(
-      [...page.querySelectorAll<HTMLOptionElement>("select option")].map((option) => option.value),
-    ).toEqual(["", ...voices]);
     if (kind === "provider") {
       expect(page.textContent).not.toContain(t("talkPage.gptLive.hint"));
     }

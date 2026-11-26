@@ -88,9 +88,9 @@ The validator replays the bounded source map and checks lexical coverage;
 unsupported or malformed changes retain the eligible original.
 
 Processing is bounded to 32 KiB of UTF-8 transcript, 8 KiB of authorized context,
-256 supplied protected spans, and 128 edits. Inputs over these limits keep the
-original with a limitation. Recognition still requires its configured provider;
-local punctuation does not imply offline speech recognition.
+and 128 edits. Inputs over these limits keep the original with a limitation.
+Recognition still requires its configured provider; local punctuation does not
+imply offline speech recognition.
 
 Only the versioned punctuation preference is saved through the existing browser
 settings owner. Invalid values and unknown versions disable refinement and show
