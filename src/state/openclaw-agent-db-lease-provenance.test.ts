@@ -84,7 +84,11 @@ it.each(["success", "timeout"] as const)(
     );
     expect(readAgentDatabaseLeaseProvenance(pathname)).toBeNull();
     const identity = "2026-09-01T00:00:00.0000000Z";
-    const complete = readBootAsync.mock.calls[0][3];
+    const [call] = readBootAsync.mock.calls;
+    if (!call) {
+      throw new Error("Expected the Windows boot identity lookup to start");
+    }
+    const complete = call[3];
     complete(outcome === "timeout" ? new Error("ETIMEDOUT") : null, identity);
     await pending;
     const prepared = readAgentDatabaseLeaseProvenance(pathname);
