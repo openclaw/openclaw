@@ -60,7 +60,7 @@ const environment = {
   OPENCLAW_STATE_DIR: path.join(scratch, "state"),
   OPENCLAW_CONFIG_PATH: configPath,
   TMPDIR: path.join(scratch, "tmp"),
-  ...(values["debug-proxy-capture"] ? { OPENCLAW_DEBUG_PROXY_ENABLED: "1" } : {}),
+  OPENCLAW_DEBUG_PROXY_ENABLED: values["debug-proxy-capture"] ? "1" : "0",
 };
 
 // Per-token poll scripts keep samples independent on one listener.
@@ -161,19 +161,14 @@ async function runSample(arm, sampleIndex) {
   const result = { arm: arm.name, sample: sampleIndex };
   let pollSuccesses = 0;
   let ackedUpdateId;
-  const done = Promise.withResolvers();
+  const failure = Promise.withResolvers();
+  const firstPollCpu = Promise.withResolvers();
+  const batchCpu = Promise.withResolvers();
   const census = Promise.withResolvers();
   const steady = Promise.withResolvers();
   let steadyTarget = Number.POSITIVE_INFINITY;
-  /** @type {Promise<NodeJS.CpuUsage> | undefined} */
-  let firstPollCpu;
-  /** @type {Promise<NodeJS.CpuUsage> | undefined} */
-  let batchCpu;
-  worker.on("error", (error) => {
-    done.reject(error);
-    census.reject(error);
-    steady.reject(error);
-  });
+  worker.once("error", failure.reject);
+  worker.once("exit", (code) => failure.reject(new Error(`${arm.name} worker exited (${code})`)));
   worker.on("message", (message) => {
     if (message.type === "bench-census") {
       census.resolve(message);
@@ -188,26 +183,24 @@ async function runSample(arm, sampleIndex) {
         [],
       );
     } else if (message.type === "poll-error") {
-      done.reject(new Error(`${arm.name} poll error: ${message.message}`));
+      failure.reject(new Error(`${arm.name} poll error: ${message.message}`));
     } else if (message.type === "poll-success") {
       pollSuccesses += 1;
       if (pollSuccesses === 1) {
         result.firstPollWallMs = performance.now() - started;
-        firstPollCpu = worker.cpuUsage();
+        firstPollCpu.resolve(worker.cpuUsage());
       } else if (pollSuccesses === 2) {
-        batchCpu = worker.cpuUsage();
-        done.resolve();
+        batchCpu.resolve(worker.cpuUsage());
       }
       if (pollSuccesses >= steadyTarget) {
         steady.resolve();
       }
     }
   });
-  const timeout = setTimeout(() => done.reject(new Error(`${arm.name} sample timed out`)), 60_000);
-  try {
-    await done.promise;
-    result.firstPollCpuMs = cpuMs(await firstPollCpu);
-    result.batchCpuMs = cpuMs(await batchCpu) - result.firstPollCpuMs;
+  async function measure() {
+    const [first, batch] = await Promise.all([firstPollCpu.promise, batchCpu.promise]);
+    result.firstPollCpuMs = cpuMs(first);
+    result.batchCpuMs = cpuMs(batch) - result.firstPollCpuMs;
     result.retainedHeapBytes = await heapAfterFullGc(worker);
     const steadyStartCpu = await worker.cpuUsage();
     steadyTarget = pollSuccesses + steadyPolls;
@@ -222,6 +215,13 @@ async function runSample(arm, sampleIndex) {
     result.pollOffsets = state.requests.slice(0, 3).map((body) => body.offset ?? null);
     result.pollTimeouts = state.requests.slice(0, 3).map((body) => body.timeout);
     return result;
+  }
+  const timeout = setTimeout(
+    () => failure.reject(new Error(`${arm.name} sample timed out`)),
+    60_000,
+  );
+  try {
+    return await Promise.race([measure(), failure.promise]);
   } finally {
     clearTimeout(timeout);
     worker.postMessage({ type: "stop" }, []);
@@ -252,6 +252,7 @@ try {
   }
 } finally {
   server.close();
+  fs.rmSync(scratch, { recursive: true, force: true });
 }
 const keys = [
   "modules",
@@ -284,7 +285,6 @@ const report = {
   rows,
 };
 fs.writeFileSync(output, JSON.stringify(report, null, 2));
-fs.rmSync(scratch, { recursive: true, force: true });
 console.log(
   JSON.stringify(
     Object.fromEntries(
