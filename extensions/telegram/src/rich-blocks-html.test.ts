@@ -58,6 +58,17 @@ describe("block HTML islands", () => {
     expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
   });
 
+  it("reports wide-table degradation inside a disclosure", () => {
+    const header = `| ${Array.from({ length: 21 }, (_, index) => `H${index + 1}`).join(" | ")} |`;
+    const separator = `| ${Array.from({ length: 21 }, () => "---").join(" | ")} |`;
+    const row = `| ${Array.from({ length: 21 }, (_, index) => String(index + 1)).join(" | ")} |`;
+    const { blocks, degradationReasons } = markdownToTelegramRichBlocks(
+      `<details><summary>Wide</summary>\n\n${header}\n${separator}\n${row}\n\n</details>`,
+    );
+    expect(degradationReasons).toEqual(["table-ascii"]);
+    expect(blocks).toMatchObject([{ type: "details", blocks: [{ type: "pre" }] }]);
+    expect(JSON.stringify(blocks)).toContain("H21");
+  });
   it("keeps inline code tags inside their authored disclosure", () => {
     const block = single(
       "<details><summary>Code</summary>\n\nKeep `</details>` literal.\n\n</details>",
