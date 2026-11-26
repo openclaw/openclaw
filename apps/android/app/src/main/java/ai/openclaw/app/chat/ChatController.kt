@@ -495,9 +495,16 @@ class ChatController internal constructor(
     val optimisticMessage: ChatMessage,
   )
 
-  private data class ChatRunOwner(
+  internal data class ChatRunOwner(
     val owner: ChatComposerOwner,
     val runId: String,
+  )
+
+  internal data class StreamingAssistant(
+    val owner: ChatRunOwner?,
+    val text: String,
+    /** Retain the live reader when the send acknowledgement replaces the local run ID. */
+    val readerKey: String? = owner?.runId,
   )
 
   private data class RunLifecycleOwner(
@@ -577,7 +584,8 @@ class ChatController internal constructor(
 
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
-  private var streamingAssistantOwner: ChatRunOwner? = null
+  private val streamingAssistantState = MutableStateFlow<StreamingAssistant?>(null)
+  internal val streamingAssistant: StateFlow<StreamingAssistant?> = streamingAssistantState.asStateFlow()
 
   private val turnToolCallsById = ConcurrentHashMap<Pair<ChatRunOwner?, String>, ChatPendingToolCall>()
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
@@ -3425,6 +3433,12 @@ class ChatController internal constructor(
 
   private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> = session?.activeRunIds.orEmpty().distinct()
 
+  private fun localRunKey(runId: String): String =
+    pendingRunProjectionsByRunId[runId]?.optimisticMessage?.id
+      ?: optimisticMessagesByRunId[runId]?.id
+      ?: unresolvedRepliesByRunId[runId]?.id
+      ?: runId
+
   private fun publishRunPresentation() {
     synchronized(gatewayScopeApplyLock) {
       val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
@@ -3450,10 +3464,7 @@ class ChatController internal constructor(
       val clockKey =
         when {
           selectedRunId != null && selectedRunId in liveLocalRunIds -> {
-            pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
-              ?: optimisticMessagesByRunId[selectedRunId]?.id
-              ?: unresolvedRepliesByRunId[selectedRunId]?.id
-              ?: selectedRunId
+            localRunKey(selectedRunId)
           }
 
           selectedRunId != null -> {
@@ -7081,9 +7092,16 @@ class ChatController internal constructor(
     text: String,
   ) {
     synchronized(gatewayScopeApplyLock) {
-      streamingAssistantOwner = liveRunOwner(runId)
-      _streamingAssistantText.value = text
+      val owner = liveRunOwner(runId)
+      val previous = streamingAssistantState.value
+      val key = if (previous != null && previous.owner == owner) previous.readerKey else owner?.let { localRunKey(it.runId) }
+      setStreamingAssistant(StreamingAssistant(owner, text, key))
     }
+  }
+
+  private fun setStreamingAssistant(value: StreamingAssistant?) {
+    streamingAssistantState.value = value
+    _streamingAssistantText.value = value?.text
   }
 
   private fun clearLiveRunUi(
@@ -7093,9 +7111,8 @@ class ChatController internal constructor(
     synchronized(gatewayScopeApplyLock) {
       val retiringOwner = if (runId != null && owner != null) ChatRunOwner(owner, runId) else null
       if (runId != null && retiringOwner == null) return
-      if (runId == null || streamingAssistantOwner == retiringOwner) {
-        streamingAssistantOwner = null
-        _streamingAssistantText.value = null
+      if (runId == null || streamingAssistantState.value?.owner == retiringOwner) {
+        setStreamingAssistant(null)
       }
       if (runId == null) {
         turnToolCallsById.clear()
@@ -7529,7 +7546,8 @@ class ChatController internal constructor(
       val previousOwner = owner?.let { ChatRunOwner(it, oldRunId) }
       if (previousOwner != null) {
         val nextOwner = previousOwner.copy(runId = newRunId)
-        if (streamingAssistantOwner == previousOwner) streamingAssistantOwner = nextOwner
+        val stream = streamingAssistantState.value
+        if (stream?.owner == previousOwner) setStreamingAssistant(stream.copy(owner = nextOwner))
         turnToolCallsById.entries.filter { it.key.first == previousOwner }.forEach { (key, tool) ->
           turnToolCallsById.remove(key)
           turnToolCallsById.putIfAbsent(nextOwner to tool.toolCallId, tool)

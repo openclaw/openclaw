@@ -3,15 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  resolveGatewayStateOwnerPath,
-  tryAcquireGatewayStateOwner,
-} from "../infra/gateway-state-owner.js";
+import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as packageRoots from "../infra/openclaw-root.js";
-import {
-  readOnlyWorkerScope,
-  type SqliteReadOnlyWorkerScope,
-} from "../infra/sqlite-readonly-worker-context.js";
 import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -86,7 +79,7 @@ it.each([
   "late-independent-thread",
   "settlement-failed",
 ] as const)(
-  "reclaims retained runtimes only after Doctor-owned readers settle (%s broker)",
+  "reclaims retained runtimes before the stop, once Doctor-owned workers settle (%s broker)",
   async (broker) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const realNativeSource = broker === "idle-read-pool" || broker === "idle-plugin-preparation";
@@ -108,21 +101,52 @@ it.each([
       });
 
       const database = resolveOpenClawStateSqlitePath(state.env);
-      const ownerPath = resolveGatewayStateOwnerPath(database);
-      let ownerIdentity: Buffer | undefined;
-      let doctorReaders: SqliteReadOnlyWorkerScope | undefined;
-      let brokerLive = false;
+      const { captureRetainedNativeWorkerSource } =
+        await import("../infra/worker-native-lifecycle.js");
+      // Workers Doctor's own earlier reads left idle in this process.
       let readSource: RetainedNativeWorkerSource | undefined;
-      let checksFinished = false;
-      const assertMaintenanceHeld = () => {
+      if (broker === "idle-read-pool") {
+        const { executeExistingOpenClawStateRead } =
+          await import("../state/openclaw-state-db-readonly.js");
+        await executeExistingOpenClawStateRead(
+          { path: database, env: state.env },
+          { type: "backup.runs" },
+        );
+        readSource = captureRetainedNativeWorkerSource();
+        expect(readSource.hasActiveWorkers).toBe(true);
+      }
+      if (broker === "idle-plugin-preparation") {
+        const { withPluginSourceCaptureStorage } =
+          await import("../plugins/plugin-source-capture-context.js");
+        const { preparePluginGenerationArtifact } =
+          await import("../plugins/plugin-generation-worker.js");
+        const pluginRoot = path.join(root, "plugin-source");
+        const entry = path.join(pluginRoot, "index.js");
+        fs.mkdirSync(pluginRoot);
+        fs.writeFileSync(
+          path.join(pluginRoot, "package.json"),
+          '{"name":"fixture","type":"module"}',
+        );
+        fs.writeFileSync(entry, "export const value = 42;");
+        // Setup module loaders retain this artifact for the command's plugin cache.
+        await withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, () =>
+          preparePluginGenerationArtifact({ rootDir: pluginRoot, source: entry }),
+        );
+        expect(captureRetainedNativeWorkerSource().hasActiveWorkers).toBe(true);
+      }
+      let brokerLive = broker !== "independent-thread" && !realNativeSource;
+      let checksStarted = false;
+      // Cleanup needs no stop: it runs before Doctor takes state custody, while another
+      // owner (the serving Gateway) could still hold the state.
+      const assertBeforeMaintenance = () => {
+        expect(checksStarted).toBe(false);
+        expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
         const competingOwner = tryAcquireGatewayStateOwner(database);
+        expect(competingOwner).not.toBeNull();
         competingOwner?.release();
-        expect(competingOwner).toBeNull();
-        expect(fs.readFileSync(ownerPath)).toEqual(ownerIdentity);
       };
       custody.retireBroker.mockImplementation(async () => {
-        assertMaintenanceHeld();
-        expect([checksFinished, doctorReaders?.active]).toEqual([true, false]);
+        assertBeforeMaintenance();
         if (broker === "settlement-failed") {
           throw new Error("fixture broker could not settle native cleanup");
         }
@@ -135,10 +159,7 @@ it.each([
         return true;
       });
       custody.census.mockImplementation(() => {
-        assertMaintenanceHeld();
-        const maintenance = getOpenClawDatabaseMaintenanceScope();
-        expect(maintenance?.ownsSchemaMaintenance).toBe(true);
-        maintenance!.assertAdmission();
+        assertBeforeMaintenance();
         custody.activeNativeWork =
           broker === "late-independent-thread" || broker === "independent-thread";
         return {
@@ -146,66 +167,35 @@ it.each([
             ? readSource.hasActiveWorkers
               ? [42423]
               : []
-            : [...(doctorReaders?.active ? [42421] : []), ...(brokerLive ? [42422] : [])],
+            : brokerLive
+              ? [42422]
+              : [],
         };
       });
+      let presentDuringChecks: boolean | undefined;
       mocks.runContributions.mockImplementation(async (ctx) => {
-        ownerIdentity = fs.readFileSync(ownerPath);
-        doctorReaders = readOnlyWorkerScope.getStore();
-        expect(doctorReaders?.active).toBe(true);
-        brokerLive = broker !== "independent-thread" && !realNativeSource;
-        if (broker === "idle-read-pool") {
-          const { executeExistingOpenClawStateRead } =
-            await import("../state/openclaw-state-db-readonly.js");
-          const { captureRetainedNativeWorkerSource } =
-            await import("../infra/worker-native-lifecycle.js");
-          await executeExistingOpenClawStateRead(
-            { path: database, env: state.env },
-            { type: "backup.runs" },
-          );
-          readSource = captureRetainedNativeWorkerSource();
-          expect(readSource.hasActiveWorkers).toBe(true);
-        }
-        if (broker === "idle-plugin-preparation") {
-          const { captureRetainedNativeWorkerSource } =
-            await import("../infra/worker-native-lifecycle.js");
-          const { withPluginSourceCaptureStorage } =
-            await import("../plugins/plugin-source-capture-context.js");
-          const { preparePluginGenerationArtifact } =
-            await import("../plugins/plugin-generation-worker.js");
-          const pluginRoot = path.join(root, "plugin-source");
-          const entry = path.join(pluginRoot, "index.js");
-          fs.mkdirSync(pluginRoot);
-          fs.writeFileSync(
-            path.join(pluginRoot, "package.json"),
-            '{"name":"fixture","type":"module"}',
-          );
-          fs.writeFileSync(entry, "export const value = 42;");
-          // Setup module loaders retain this artifact for the command's plugin cache.
-          await withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, () =>
-            preparePluginGenerationArtifact({ rootDir: pluginRoot, source: entry }),
-          );
-          expect(captureRetainedNativeWorkerSource().hasActiveWorkers).toBe(true);
-        }
+        checksStarted = true;
+        // Under maintenance the diagnostic contribution leaves cleanup to the --fix pass.
         await initialDoctorHealthContribution("doctor:retained-update-runtimes").run(ctx);
-        expect(fs.existsSync(artifact)).toBe(true);
-        checksFinished = true;
+        presentDuringChecks = fs.existsSync(artifact);
       });
 
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const completed = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-      if (broker === "settlement-failed") {
-        await expect(completed).rejects.toThrow("fixture broker could not settle native cleanup");
-        expect(custody.census).not.toHaveBeenCalled();
-        expect(fs.existsSync(artifact)).toBe(true);
-        return;
-      }
-      await completed;
-      const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
-      expect(custody.census).toHaveBeenCalledOnce();
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      // The stopped repairs ran in every case, including a failed cleanup.
+      expect(checksStarted).toBe(true);
       const retained =
         broker !== "idle" && broker !== "idle-read-pool" && broker !== "idle-plugin-preparation";
-      expect(fs.existsSync(artifact)).toBe(retained);
+      expect([presentDuringChecks, fs.existsSync(artifact)]).toEqual([retained, retained]);
+      if (broker === "settlement-failed") {
+        expect(custody.census).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("fixture broker could not settle native cleanup"),
+        );
+        return;
+      }
+      const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
+      expect(custody.census).toHaveBeenCalledOnce();
       if (retained) {
         expect(output).toContain(
           broker === "independent-owner"

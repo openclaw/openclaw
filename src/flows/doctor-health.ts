@@ -13,7 +13,6 @@ import * as updatePhase from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { withSqliteSnapshotFailureScope } from "../infra/sqlite-error-diagnostics.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
@@ -226,6 +225,10 @@ async function runDoctorHealthFlowWithResult(
           preflightOptions,
         ),
       );
+    }
+    if (repairMode.shouldRepair) {
+      const { runDoctorPreStopMaintenance } = await import("./doctor-health-maintenance-steps.js");
+      await runDoctorPreStopMaintenance({ runtime: effectiveRuntime, measure });
     }
     const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
       import("../commands/doctor-maintenance.js"),
@@ -462,42 +465,21 @@ async function runDoctorHealthFlowWithResult(
         return undefined;
       }
       if (maintenance) {
-        const { validateDoctorExternalConfigForStartup } =
-          await import("./doctor-external-config.js");
-        await tracePending("external-config");
-        if (
-          !(await measure("doctor.external-config", () =>
-            validateDoctorExternalConfigForStartup(effectiveRuntime),
-          ))
-        ) {
+        const { runDoctorStartupReadinessSteps } =
+          await import("./doctor-health-maintenance-steps.js");
+        const readiness = await runDoctorStartupReadinessSteps({
+          ctx,
+          runtime: effectiveRuntime,
+          measure,
+          databaseTargets:
+            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [],
+          resumeCapture,
+        });
+        if (!readiness) {
           exitCode = 1;
           return undefined;
         }
-        const { assertDoctorMaintenanceReady } =
-          await import("../commands/doctor-maintenance-inspection.js");
-        await tracePending("maintenance-ready");
-        const readiness = await measure("doctor.maintenance-ready", () =>
-          assertDoctorMaintenanceReady(
-            ctx.cfg,
-            process.env,
-            effectiveRuntime.log,
-            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [],
-          ),
-        );
-        if (!readiness.schemaPublicationDeferred) {
-          sqliteReclamationAgents =
-            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [];
-          resumeCapture?.();
-          if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
-            const { initializeDebugProxyCaptureAsync } =
-              await import("../proxy-capture/runtime.js");
-            await initializeDebugProxyCaptureAsync("cli");
-          }
-        }
-        const { repairGatewayMaintenanceStartupFailures } =
-          await import("../infra/gateway-boot-lifecycle.js");
-        await tracePending("boot-lifecycle");
-        repairGatewayMaintenanceStartupFailures();
+        sqliteReclamationAgents = readiness.sqliteReclamationAgents;
       }
       return ctx;
     };
