@@ -28,6 +28,7 @@ import {
 import { createExistingInstallFixture, updateOptions } from "./install-package-dir.test-support.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
+  createDelegatedUpdateRequesterAuthority,
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
   prepareUpdateRequesterIdentity,
@@ -363,6 +364,33 @@ it.each(["discord", "mattermost"])(
     }
   },
 );
+
+it("checks a Telegram owner against the Doctor migration without publishing it", async () => {
+  const legacy = (owner: string) =>
+    JSON.stringify({
+      commands: { ownerAllowFrom: [`telegram:${owner}`] },
+      skills: { workshop: { autonomous: { mode: "auto", channelNotices: true } } },
+    });
+  const original = legacy("1001");
+  await writeConfig(original);
+  const telegramOwner = {
+    channel: "telegram",
+    senderId: "1001",
+    authorizationSource: "configured-owner",
+  };
+  const admission = await authorityFor(telegramOwner);
+  expect(() => admission.isCurrent()).toThrow("Invalid config");
+  const authority = await createDelegatedUpdateRequesterAuthority(
+    telegramOwner,
+    "run",
+    { assertCurrent() {} },
+    env,
+  );
+  expect(authority.isCurrent()).toBe(true);
+  expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  await writeConfig(legacy("1002"));
+  expect(authority.isCurrent()).toBe(false);
+});
 
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",
