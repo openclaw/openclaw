@@ -1,50 +1,7 @@
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveCompactionTimeoutMs } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { formatCompactionModelRef } from "./compaction-notice.js";
-
-/** A required preflight compaction went quiet for its whole progress window. */
-export class PreflightStallError extends Error {
-  override name = "PreflightStallError";
-
-  constructor(
-    readonly modelRef: string,
-    readonly windowMs: number,
-  ) {
-    // The prefix keeps the existing preflight failure handling (kept input, failure reply).
-    super(
-      `Preflight compaction required but failed: compaction timed out on ${modelRef} after ${Math.round(windowMs / 1000)}s without progress`,
-    );
-  }
-}
-
-/** A timed-out preflight compaction names the compaction model, else the reply's own model. */
-export function createCompactionStall(
-  reason: string,
-  cfg: OpenClawConfig,
-  run: { provider?: string; model?: string },
-): PreflightStallError | undefined {
-  if (classifyCompactionReason(reason) !== "timeout") {
-    return undefined;
-  }
-  return new PreflightStallError(
-    cfg.agents?.defaults?.compaction?.model?.trim() ||
-      formatCompactionModelRef(run.provider, run.model),
-    resolveCompactionTimeoutMs(cfg),
-  );
-}
-
-export function renderPreflightStallText(error: unknown): string | undefined {
-  if (!(error instanceof PreflightStallError)) {
-    return undefined;
-  }
-  return (
-    `⚠️ Compaction before this reply stalled: ${error.modelRef} sent no output for ` +
-    `${Math.round(error.windowMs / 1000)}s. Check that the model is running and responsive ` +
-    "(for a slow local model, raise agents.defaults.compaction.timeoutSeconds), then try again."
-  );
-}
 
 /**
  * Bounds a reply's private memory flush by the same progress window as compaction.

@@ -48,7 +48,6 @@ import {
   isGoalContinuationPlacementCurrent,
 } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
-import { renderPreflightStallText } from "./preflight-stall.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import { prepareFollowupRunOperatorAuthority } from "./queue/lifecycle.js";
 import {
@@ -630,7 +629,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
           turn.queued.run.verboseLevel;
         const text =
           renderAgentHarnessPreflightUserMessage(error) ??
-          renderPreflightStallText(error) ??
           buildPreflightCompactionFailureText(formatErrorMessage(error), {
             includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
           });

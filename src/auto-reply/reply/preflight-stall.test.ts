@@ -1,32 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
-import {
-  createCompactionStall,
-  renderPreflightStallText,
-  startMemoryFlushStallGuard,
-} from "./preflight-stall.js";
+import { startMemoryFlushStallGuard } from "./preflight-stall.js";
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-it("names the stalled compaction model and what to do", () => {
-  const stall = createCompactionStall(
-    "Compaction timed out",
-    { agents: { defaults: { compaction: { model: "ollama/qwen-local", timeoutSeconds: 180 } } } },
-    { provider: "openai", model: "gpt-main" },
-  );
-  if (!stall) {
-    throw new Error("timeout reason did not produce a stall");
-  }
-  expect(createCompactionStall("summary refused", {}, {})).toBeUndefined();
-  expect(stall.message).toMatch(/^Preflight compaction required but failed: /u);
-  expect(renderPreflightStallText(stall)).toBe(
-    "⚠️ Compaction before this reply stalled: ollama/qwen-local sent no output for 180s. " +
-      "Check that the model is running and responsive (for a slow local model, raise " +
-      "agents.defaults.compaction.timeoutSeconds), then try again.",
-  );
-  expect(renderPreflightStallText(new Error(stall.message))).toBeUndefined();
 });
 
 it("aborts a silent flush after the compaction window, measured from its last output", () => {
@@ -52,7 +29,5 @@ it("aborts a silent flush after the compaction window, measured from its last ou
   expect(guard.stall?.message).toBe(
     "memory flush timed out on ollama/qwen-local after 5s without output",
   );
-  // The flush's stall is an ordinary flush failure, never the reply's failure text.
-  expect(renderPreflightStallText(guard.stall)).toBeUndefined();
   guard.stop();
 });

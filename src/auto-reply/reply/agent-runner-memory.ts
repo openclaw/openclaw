@@ -88,7 +88,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
-import { createCompactionStall, startMemoryFlushStallGuard } from "./preflight-stall.js";
+import { startMemoryFlushStallGuard } from "./preflight-stall.js";
 import type { FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
@@ -456,7 +456,6 @@ export async function runSessionCompactionIfNeeded(params: {
         reason,
         tokenCountForCompaction,
         contextWindowTokens,
-        createCompactionStall(reason, params.cfg, params.followupRun.run),
       );
     }
 
