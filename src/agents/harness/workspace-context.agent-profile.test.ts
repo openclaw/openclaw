@@ -26,7 +26,7 @@ async function prepare(
   return prepareAgentWorkspaceContext({
     scope: "full",
     workspaceDir: workspace,
-    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/small" } } },
+    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/compact" } } },
     agentId: "main",
     sessionKey: "agent:main:s1",
     sessionId: "s1",
@@ -36,7 +36,7 @@ async function prepare(
 }
 
 describe("prepareAgentWorkspaceContext Agent Profile", () => {
-  it("caps context when the small profile is selected for the turn's model", async () => {
+  it("caps context when the compact profile is selected for the turn's model", async () => {
     const workspace = await makeWorkspace();
     const context = await prepare(workspace, MODEL);
     expect(totalChars(context.contextFiles)).toBeLessThanOrEqual(11_500);
@@ -75,7 +75,7 @@ describe("prepareAgentWorkspaceContext Agent Profile", () => {
         agents: {
           defaults: {
             workspace,
-            agentProfileId: "openclaw/small",
+            agentProfileId: "openclaw/compact",
             bootstrapMaxChars: 1_500,
             bootstrapTotalMaxChars: 2_000,
           },

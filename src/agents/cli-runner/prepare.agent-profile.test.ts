@@ -201,12 +201,12 @@ describe("prepareCliRunContext agent profiles", () => {
       agentId: "main",
       trigger: "user",
       prompt: "Who are you?",
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+      config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
     });
 
     expect(context.systemPrompt).toContain("Name: Bob");
     expect(context.systemPromptReport.agentProfile).toEqual({
-      id: "openclaw/small",
+      id: "openclaw/compact",
       selectionSource: "defaults-explicit",
     });
     expect(context.systemPromptReport.workspaceContext).toMatchObject({
@@ -220,9 +220,9 @@ describe("prepareCliRunContext agent profiles", () => {
 
   it.each([
     {
-      name: "the small profile",
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
-      expected: { id: "openclaw/small", selectionSource: "defaults-explicit" },
+      name: "the compact profile",
+      config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
+      expected: { id: "openclaw/compact", selectionSource: "defaults-explicit" },
     },
     {
       name: "no configured profile",
@@ -263,7 +263,7 @@ describe("prepareCliRunContext agent profiles", () => {
 
       expect(context.systemPromptReport.agentProfile).toEqual(expected);
       expect(context.systemPromptReport.workspaceContext?.totalMaxChars).toBe(
-        expected.id === "openclaw/small" ? 11_500 : undefined,
+        expected.id === "openclaw/compact" ? 11_500 : undefined,
       );
     },
   );
@@ -292,7 +292,7 @@ describe("prepareCliRunContext agent profiles", () => {
       trigger: "user",
       prompt: "Who are you?",
       config: {
-        agents: { defaults: { agentProfileId: "openclaw/small", bootstrapTotalMaxChars: 2_000 } },
+        agents: { defaults: { agentProfileId: "openclaw/compact", bootstrapTotalMaxChars: 2_000 } },
       },
     });
 

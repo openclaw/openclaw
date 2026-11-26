@@ -9,7 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function instructionsFor(
   model: { provider: string; modelId: string },
-  options: { profile?: "openclaw/base" | "openclaw/small" } = {},
+  options: { profile?: "openclaw/base" | "openclaw/compact" } = {},
 ) {
   const workspace = await fs.realpath(tempDirs.make("agentsapi-profile-"));
   await fs.writeFile(path.join(workspace, "AGENTS.md"), "Q".repeat(12_000));
@@ -38,10 +38,10 @@ async function instructionsFor(
 const countQ = (text: string) => text.split("Q").length - 1;
 
 describe("buildAgentsApiInstructions Agent Profile", () => {
-  it("caps workspace instructions when the small profile is selected", async () => {
+  it("caps workspace instructions when the compact profile is selected", async () => {
     const instructions = await instructionsFor(
       { provider: "llama-cpp", modelId: "local-8b" },
-      { profile: "openclaw/small" },
+      { profile: "openclaw/compact" },
     );
     expect(countQ(instructions)).toBeGreaterThan(0);
     expect(countQ(instructions)).toBeLessThanOrEqual(7_500);

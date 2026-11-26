@@ -9,7 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function instructionsFor(
   model: { provider: string; modelId: string },
-  options: { profile?: "openclaw/base" | "openclaw/small" } = {},
+  options: { profile?: "openclaw/base" | "openclaw/compact" } = {},
 ) {
   const workspace = await fs.realpath(tempDirs.make("copilot-profile-"));
   await fs.writeFile(path.join(workspace, "USER.md"), "Q".repeat(12_000));
@@ -37,10 +37,10 @@ async function instructionsFor(
 const countQ = (text: string) => text.split("Q").length - 1;
 
 describe("loadCopilotWorkspaceInstructions Agent Profile", () => {
-  it("caps USER.md when the small profile is selected", async () => {
+  it("caps USER.md when the compact profile is selected", async () => {
     const text = await instructionsFor(
       { provider: "llama-cpp", modelId: "local-8b" },
-      { profile: "openclaw/small" },
+      { profile: "openclaw/compact" },
     );
     expect(countQ(text)).toBeGreaterThan(0);
     expect(countQ(text)).toBeLessThanOrEqual(2_000);

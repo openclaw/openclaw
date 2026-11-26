@@ -10,7 +10,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function contextFor(
   model: { provider: string; modelId: string },
   nativeModelRef?: { provider: string; model: string },
-  options: { profile?: "openclaw/base" | "openclaw/small" } = {},
+  options: { profile?: "openclaw/base" | "openclaw/compact" } = {},
 ) {
   const workspace = await fs.realpath(tempDirs.make("codex-profile-"));
   await fs.writeFile(path.join(workspace, "AGENTS.md"), "Q".repeat(12_000));
@@ -51,9 +51,9 @@ const totalChars = (files: Array<{ content: string }>) =>
   files.reduce((sum, file) => sum + file.content.length, 0);
 
 describe("buildCodexWorkspaceBootstrapContext Agent Profile", () => {
-  it("caps workspace context when the small profile is selected", async () => {
+  it("caps workspace context when the compact profile is selected", async () => {
     const context = await contextFor({ provider: "llama-cpp", modelId: "local-8b" }, undefined, {
-      profile: "openclaw/small",
+      profile: "openclaw/compact",
     });
     expect(totalChars(context.contextFiles)).toBeLessThanOrEqual(11_500);
   });
@@ -70,11 +70,11 @@ describe("buildCodexWorkspaceBootstrapContext Agent Profile", () => {
     expect(totalChars(context.contextFiles)).toBeGreaterThan(11_500);
   });
 
-  it("caps a native-owned thread when the small profile is selected", async () => {
+  it("caps a native-owned thread when the compact profile is selected", async () => {
     const context = await contextFor(
       { provider: "llama-cpp", modelId: "local-8b" },
       { provider: "llama-cpp", model: "local-8b" },
-      { profile: "openclaw/small" },
+      { profile: "openclaw/compact" },
     );
     expect(totalChars(context.contextFiles)).toBeLessThanOrEqual(11_500);
   });

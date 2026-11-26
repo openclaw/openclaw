@@ -25,7 +25,7 @@ function resolve(
 ) {
   return resolveBootstrapContextForRun({
     workspaceDir: workspace,
-    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/small" } } },
+    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/compact" } } },
     agentId: "main",
     sessionKey: "agent:main:s1",
     sessionId: "s1",
@@ -64,7 +64,7 @@ describe("resolveBootstrapContextForRun Agent Profile", () => {
         agents: {
           defaults: {
             workspace,
-            agentProfileId: "openclaw/small",
+            agentProfileId: "openclaw/compact",
             bootstrapMaxChars: 1_500,
             bootstrapTotalMaxChars: 2_000,
           },
