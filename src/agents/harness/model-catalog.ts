@@ -188,7 +188,10 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const scopedProviders = [...(requestedProviderIds ?? providers)].filter(
       (provider) => !params.includesProvider || params.includesProvider(provider),
     );
-    if (scopedProviders.length === 0) {
+    if (
+      (requestedProviderIds !== undefined || providers.size > 0) &&
+      scopedProviders.length === 0
+    ) {
       continue;
     }
     // The scoped lookup retains transient catalog resources for executable CLI cleanup.
