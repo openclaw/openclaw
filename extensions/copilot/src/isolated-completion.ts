@@ -10,6 +10,7 @@ import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
+import { normalizeCopilotUsage } from "./usage-bridge.js";
 
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
@@ -176,6 +177,8 @@ export async function runCopilotIsolatedCompletion(
     authorization.sourceAuthFingerprint?.trim() || tokenFingerprint(apiKey);
   let handle: PooledClient | undefined;
   let session: IsolatedSession | undefined;
+  let unsubscribeUsage: (() => void) | undefined;
+  let usage: ReturnType<typeof normalizeCopilotUsage>;
   try {
     const acquiredHandle = await awaitWithinCompletionBoundary({
       boundary,
@@ -217,6 +220,10 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
+    unsubscribeUsage = createdSession.on("assistant.usage", (event) => {
+      if (event.agentId !== undefined) return;
+      usage = normalizeCopilotUsage(event.data);
+    });
     await awaitWithinCompletionBoundary({
       boundary,
       start: () => createdSession.rpc.remote.disable(),
@@ -242,9 +249,11 @@ export async function runCopilotIsolatedCompletion(
         event,
         modelRef: model,
         now: Date.now,
+        usage,
       }),
     };
   } finally {
+    unsubscribeUsage?.();
     // Teardown starts independently and remains strongly referenced, but never
     // extends the operation deadline when an SDK cleanup call wedges.
     if (session) {
