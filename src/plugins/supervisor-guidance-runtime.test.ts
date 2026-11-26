@@ -8,6 +8,11 @@ import {
   formatExternalSupervisorActionRequired,
 } from "../infra/gateway-supervision.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import {
+  buildDegradedPluginsFromVerificationFailures,
+  listActiveDegradedPlugins,
+  setActiveDegradedPlugins,
+} from "./runtime-degraded-state.js";
 import { resolveExternalSupervisorGuidance } from "./supervisor-guidance-runtime.js";
 
 let home: TempHomeEnv;
@@ -175,4 +180,36 @@ it("reads offline display config without applying its environment or creating he
   });
   expect(process.env.SUPERVISOR_GUIDANCE_LOOKUP_PROBE).toBeUndefined();
   expect(await fs.readdir(state)).toEqual(["openclaw.json"]);
+});
+
+it("excludes only root-matched quarantined providers before counting guidance owners", async () => {
+  const previous = listActiveDegradedPlugins();
+  const pluginDir = path.join(home.home, "deployment");
+  const failure = {
+    pluginId: "deployment",
+    reason: "missing-openclaw-peer-link" as const,
+    detail: "Fixture host peer link unavailable",
+  };
+  try {
+    setActiveDegradedPlugins(
+      buildDegradedPluginsFromVerificationFailures([
+        { ...failure, installPath: `${pluginDir}-old` },
+      ]),
+    );
+    expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
+      command: guidance.actions.start,
+    });
+    setActiveDegradedPlugins(
+      buildDegradedPluginsFromVerificationFailures([{ ...failure, installPath: pluginDir }]),
+    );
+    expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
+    const healthy = await createPlugin("healthy-deployment");
+    config.plugins!.load!.paths!.push(healthy);
+    config.plugins!.allow!.push("healthy-deployment");
+    expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
+      command: guidance.actions.start,
+    });
+  } finally {
+    setActiveDegradedPlugins(previous);
+  }
 });

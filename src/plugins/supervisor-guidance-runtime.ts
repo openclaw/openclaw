@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
 import type {
   SupervisorAction,
   SupervisorDisplayGuidance,
@@ -45,6 +46,10 @@ export async function resolveExternalSupervisorGuidance<Action extends Superviso
           channelIds: plugin.channels,
         }).enabled
       ) {
+        continue;
+      }
+      const degraded = findActiveDegradedPlugin(plugin.id);
+      if (degraded && degradedPluginMatchesRoot(degraded, plugin.rootDir)) {
         continue;
       }
       // Resolve one owner before choosing an action so conflicting providers cannot

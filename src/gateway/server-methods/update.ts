@@ -57,7 +57,6 @@ import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-i
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
-import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -700,14 +699,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       {
         runId,
         ok: handoff?.status === "started",
-        ...(params.includeSupervisorGuidance &&
-        result.reason === EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON
-          ? {
-              externalSupervisorGuidance: await resolveExternalSupervisorGuidance("update", {
-                config,
-              }),
-            }
-          : {}),
         ackDelivered,
         ackQueued,
         acknowledgement,
