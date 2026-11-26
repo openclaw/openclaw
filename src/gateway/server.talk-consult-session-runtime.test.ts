@@ -203,7 +203,7 @@ async function createRunner(
     context,
     sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
     ownerConnId: connectionId,
-    authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
+    authority: resolveTalkAgentConsultAuthority(client),
     getVoiceSessionId,
     initialItems: [],
     runIdPrefix: "talk-realtime-relay-consult",

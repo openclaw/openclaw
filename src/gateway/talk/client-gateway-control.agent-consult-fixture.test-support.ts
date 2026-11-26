@@ -20,10 +20,7 @@ export function createConsultRunner(
 ) {
   return createTalkClientAgentConsultRunner({
     config,
-    authority: resolveTalkAgentConsultAuthority(
-      ["operator.read"],
-      sharingPolicyClient({ scopes: ["operator.read"] }),
-    ),
+    authority: resolveTalkAgentConsultAuthority(sharingPolicyClient({ scopes: ["operator.read"] })),
     context: { logGateway: createMockSubsystemLogger("gateway/test") },
     sessionTarget: {
       agentId: "researcher",
@@ -44,10 +41,7 @@ export function createRunner(
     Parameters<typeof createTalkClientAgentConsultRunner>[0]["registerRun"]
   > = vi.fn(async () => ({ release: vi.fn(), isCurrent: () => true })),
   authority: TalkAgentConsultAuthority = {
-    ...resolveTalkAgentConsultAuthority(
-      ["operator.read"],
-      sharingPolicyClient({ scopes: ["operator.read"] }),
-    ),
+    ...resolveTalkAgentConsultAuthority(sharingPolicyClient({ scopes: ["operator.read"] })),
     senderIsOwner: false,
     toolsAllow: ["read"],
   },
