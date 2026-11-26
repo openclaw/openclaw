@@ -20,7 +20,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 ## Quick start (inspect context)
 
 - `/status` → quick "how full is my window?" view + session settings.
-- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus cache hit rate and cost for the latest run and the whole session. Same numbers as the Control UI context popover, on every chat channel. `/context help` lists the modes.
+- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus cache hit rate and cost for the latest run and the whole session. Same categories and cache rates as the Control UI context popover, on every chat channel; cost is the per-token estimate that `/usage cost` reports. `/context help` lists the modes.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
