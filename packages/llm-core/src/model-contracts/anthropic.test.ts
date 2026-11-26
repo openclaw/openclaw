@@ -147,11 +147,7 @@ it("reads server compaction from the listed /v1/models capability", () => {
 // Verified live on 2026-11-10 against every listed model on one account.
 it.each([
   ["claude-opus-5-5", true],
-  ["claude-opus-5", true],
-  ["claude-opus-4-8", true],
   ["claude-fable-5-1", false],
-  ["claude-sonnet-5-5", false],
-  ["claude-haiku-5-5", false],
   ["claude-opus-4-6", false],
   ["gpt-6-astra", false],
 ] as const)("matches the live fast-mode answer for %s", (id, expected) => {

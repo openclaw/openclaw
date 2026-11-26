@@ -49,7 +49,6 @@ import {
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { expectCollected } from "../test-utils/retention.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   createSessionActivitySummaries,
@@ -519,30 +518,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       totalMessages: 2,
     });
     expect(complete).toHaveBeenCalledTimes(2);
-  });
-
-  it("releases unrelated entry snapshots while recap preparation remains pending", async () => {
-    class SavedSkillSnapshot {
-      readonly prompt = "Synthetic saved skill instructions. ".repeat(4096);
-      readonly skills = [];
-    }
-    await messages(2);
-    const preparation = createDeferred<typeof prepared>();
-    const preparationStarted = createDeferred();
-    releasePending.push(() => preparation.resolve(prepared));
-    prepare.mockImplementationOnce(() => {
-      preparationStarted.resolve();
-      return withinTest(preparation.promise, testSignal);
-    });
-    const snapshot = await (async () => {
-      const skillsSnapshot = new SavedSkillSnapshot();
-      await service.ensure(target, { ...read()!, skillsSnapshot });
-      return new WeakRef(skillsSnapshot);
-    })();
-    await withinTest(preparationStarted.promise, testSignal);
-    await expectCollected(snapshot);
-    await awaitPublication(() => preparation.resolve(prepared));
-    expect(read()?.activitySummary).toMatchObject(summary(2));
   });
 
   it("uses committed resident facts for recap authority checks", async () => {

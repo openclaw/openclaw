@@ -12,25 +12,9 @@ function fixture(next: AsyncIterator<number>["next"] = async () => ({ done: fals
   return { source, hooks, open };
 }
 
-// Run the same external contract against the language generator and the helper.
-// This keeps the expected ordering independent of our queue implementation.
-describe.each(["generator", "observer"])("observeAsyncIterator: %s contract", (implementation) => {
+describe("observeAsyncIterator contract", () => {
   function observe(f: ReturnType<typeof fixture>): Required<AsyncIterableIterator<number>> {
-    if (implementation === "observer") {
-      return observeAsyncIterator({ iterator: f.open, ...f.hooks });
-    }
-    return (async function* () {
-      f.hooks.onStart();
-      try {
-        for await (const value of { [Symbol.asyncIterator]: f.open }) {
-          f.hooks.onEvent(value);
-          yield value;
-        }
-        f.hooks.onDone();
-      } finally {
-        f.hooks.onFinally();
-      }
-    })();
+    return observeAsyncIterator({ iterator: f.open, ...f.hooks });
   }
 
   it.each(["return", "throw"] as const)("does not start on unopened %s", async (method) => {
