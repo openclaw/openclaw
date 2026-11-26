@@ -328,6 +328,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const receiptCommitted = window === "receipt-before-ack";
       const noticeCrash = window.startsWith("notice-");
       await using resources = new AsyncDisposableStack();
+      const caseStartedAt = performance.now();
+      let restartStartedAt: number | undefined;
+      let recoveredRequests = 0;
       let phase = "fixture.setup";
       let phaseReported = false;
       // Timeout aborts before teardown; failure hooks run afterward.
@@ -337,7 +340,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         }
         phaseReported = true;
         try {
-          console.error("[postgres-final-crash-phase]", JSON.stringify({ window, phase }));
+          const elapsedMs = Math.round(performance.now() - caseStartedAt);
+          const restartElapsedMs =
+            restartStartedAt === undefined
+              ? null
+              : Math.round(performance.now() - restartStartedAt);
+          console.error(
+            "[postgres-final-crash-phase]",
+            JSON.stringify({ window, phase, elapsedMs, restartElapsedMs, recoveredRequests }),
+          );
         } catch {
           // Diagnostic output must not replace the original failure.
         }
@@ -368,6 +379,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
             held.resolve(JSON.parse(body));
             response.writeHead(204).end();
           } else if (request.method === "POST" && request.url === "/recovered") {
+            recoveredRequests += 1;
             recovered.resolve(JSON.parse(body));
             response.writeHead(204).end();
           } else {
@@ -629,8 +641,36 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
               Date.now(),
           ) + 1_000,
       });
+      const priorReadiness = instance.readiness.at(-1);
       phase = "restart.start";
-      await instance.startGateway();
+      restartStartedAt = performance.now();
+      try {
+        await instance.startGateway();
+      } catch (error) {
+        if (receiptCommitted || window === "acceptance-before-receipt") {
+          try {
+            const latestReadiness = instance.readiness.at(-1);
+            const receipt = latestReadiness === priorReadiness ? undefined : latestReadiness;
+            const probe = receipt?.lastProbe;
+            console.error(
+              "[postgres-final-crash-restart]",
+              JSON.stringify({
+                window,
+                readinessFresh: receipt !== undefined,
+                outcome: receipt?.outcome ?? null,
+                elapsedMs: receipt?.elapsedMs ?? null,
+                attempts: receipt?.attempts ?? null,
+                status: probe?.status ?? null,
+                startupStatus: probe?.startupStatus ?? null,
+                error: probe?.error ?? null,
+              }),
+            );
+          } catch {
+            // Diagnostic output must not replace the original restart failure.
+          }
+        }
+        throw error;
+      }
       phase = "restart.recovered";
       const ack = await withinTest(recovered.promise, signal);
       expect(ack).toEqual({ id: boundary.id, pid: instance.child?.pid });
