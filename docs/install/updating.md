@@ -85,6 +85,18 @@ An inconclusive readiness check is reported separately from current serving heal
 This recovery repair is supplied by the candidate CLI; older updaters using
 `gateway restart --preserve-definition` can use it without an updater upgrade.
 
+For a Linux system service, run maintenance as the account in its `User=` setting
+with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
+uses root's selectors; it does not automatically adopt the service account.
+
+For an administrator-managed global npm package, replace the package with
+`sudo npm install -g openclaw@latest`, then restart the existing system unit with
+`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
+its service configuration and file ownership unchanged. Direct Gateway startup
+already migrates old configuration and database schemas in the selected state
+directory; no separate state copy or account adoption is needed.
+
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. The official
