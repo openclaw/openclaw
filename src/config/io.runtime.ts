@@ -239,8 +239,12 @@ export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  projectInvalidConfig?: (snapshot: ConfigFileSnapshot) => OpenClawConfig | undefined;
 }): OpenClawConfig {
-  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
+  return createCurrentConfigReader(params).loadConfig({
+    skipSuspiciousRecovery: true,
+    projectInvalidConfig: params.projectInvalidConfig,
+  });
 }
 
 /** Keep the Template Add policy reader bound to its admitted plugin-state lease. */
@@ -382,8 +386,10 @@ export async function recoverConfigFromJsonRootSuffix(
   return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot, assertRecoveryCandidate);
 }
 
-export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
-  return await readConfigFileSnapshot();
+export async function readSourceConfigSnapshot(
+  options?: Pick<ConfigSnapshotReadOptions, "observe">,
+): Promise<ConfigFileSnapshot> {
+  return await readConfigFileSnapshot(options);
 }
 
 export async function readConfigFileSnapshotForRuntimeTransaction(

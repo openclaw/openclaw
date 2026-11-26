@@ -78,7 +78,7 @@ export function parseGatewayThreadStat(raw: string) {
 }
 
 /** The caller supplies a delegated parent; this owner creates and removes only its own leaf. */
-export function createGatewayLoadResources(parent: string) {
+export function createGatewayLoadResources(parent: string, memoryLimitBytes?: number) {
   if (process.platform !== "linux") {
     throw new Error("Control UI resource accounting requires Linux cgroup v2");
   }
@@ -163,7 +163,35 @@ export function createGatewayLoadResources(parent: string) {
     }
     return snapshot;
   };
+  const readMemoryBudget = () => {
+    if (memoryLimitBytes === undefined) {
+      return undefined;
+    }
+    const memoryController = (name: string) =>
+      readFileSync(path.join(directory, name), "utf8").trim();
+    const maxBytes = Number(memoryController("memory.max"));
+    const swapMaxBytes = Number(memoryController("memory.swap.max"));
+    const peakBytes = Number(memoryController("memory.peak"));
+    const events = parseGatewayCounters(memoryController("memory.events"));
+    const { oom, oom_kill: oomKill } = events;
+    if (
+      maxBytes !== memoryLimitBytes ||
+      swapMaxBytes !== 0 ||
+      !Number.isSafeInteger(peakBytes) ||
+      peakBytes < 0 ||
+      oom === undefined ||
+      oomKill === undefined
+    ) {
+      throw new Error("Gateway cgroup memory limits or OOM counters could not be verified");
+    }
+    return { maxBytes, swapMaxBytes, peakBytes, events: { ...events, oom, oom_kill: oomKill } };
+  };
   try {
+    if (memoryLimitBytes !== undefined) {
+      writeFileSync(path.join(directory, "memory.max"), String(memoryLimitBytes));
+      writeFileSync(path.join(directory, "memory.swap.max"), "0");
+      readMemoryBudget();
+    }
     read();
   } catch (error) {
     rmdirSync(directory);
@@ -193,6 +221,7 @@ export function createGatewayLoadResources(parent: string) {
         sampleIntervalMs: 50,
         peakRssBytes: maxRssBytes,
         peakThreads: maxThreads,
+        memoryBudget: readMemoryBudget(),
         loadPeakRssBytes: loadSamples.length
           ? Math.max(...loadSamples.map((sample) => sample.rssBytes))
           : null,

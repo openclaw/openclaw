@@ -1,10 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createParticipationTestAuthority } from "../../agents/participation-ceiling.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { captureCronCreatorSession } from "./cron-input-validation.js";
+import { createHistoryJob } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
+import { createCronCallerClient } from "./cron.validation.test-support.js";
 import type { RespondFn } from "./types.js";
 
 describe("cron request validation", () => {
@@ -59,3 +65,39 @@ describe("cron request validation", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "refuses source-less participant system events, preserving ordinary creation (participant=%s)",
+  async (participant) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:invited";
+      const client = createCronCallerClient("main", undefined, sessionKey);
+      if (participant) {
+        client.internal!.operatorRunAuthority = createParticipationTestAuthority(
+          {
+            kind: "send",
+            profileId: "participant",
+            sessionKey,
+          },
+          ["operator.cron"],
+        );
+      }
+      const capture = captureCronCreatorSession(
+        {
+          ...createHistoryJob("main", sessionKey),
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "Must not escape the original invitation" },
+        },
+        undefined,
+        { client, context: createDirectChatContext({ getRuntimeConfig: () => ({}) }) },
+        {},
+      );
+      if (participant) {
+        await expect(capture).rejects.toThrow(/participant|participating/i);
+      } else {
+        expect((await capture).operatorSource).toBeUndefined();
+      }
+    });
+  },
+);

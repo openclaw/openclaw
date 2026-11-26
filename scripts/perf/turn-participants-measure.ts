@@ -9,6 +9,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: { allocation: { type: "boolean" }, "owner-file": { type: "string" } },
@@ -26,10 +27,12 @@ const { createReplyTurnParticipants } =
   await import("../../src/sessions/session-controller.tool-authority.js");
 const { createAdmittedRunOperatorAuthority } =
   await import("../../src/agents/admitted-run-context.js");
+const { decideTurnGrant } = await import("../../src/gateway/operator-admission.js");
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-profile",
   scopes: ["operator.admin"],
-  assertCurrent() {},
+  grant: decideTurnGrant(["operator.admin"]),
 });
 const fixture = {
   operatorAuthority: authority,
@@ -49,12 +52,7 @@ function run(count: number) {
 run(10_000);
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const cpuStart = process.cpuUsage();
 const start = performance.now();

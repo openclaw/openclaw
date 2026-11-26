@@ -6,10 +6,17 @@ export type SessionRowDeltaFields = {
   readonly fieldCount: number;
 };
 
-type SessionRowDelta = { set: Record<string, unknown>; remove: string[] };
+type SessionRowDelta = {
+  patch: { set: Record<string, unknown>; remove: string[] };
+  encoding?: {
+    suffix: string;
+    utf8Bytes: number;
+    headers: Map<string, string>;
+  };
+};
 
 const preparedRows = new WeakMap<object, SessionRowDeltaFields>();
-const revisionSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
+const publicationSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
 
 /** Keep JSON's omission/null semantics while ignoring nested object key order. */
 function canonicalJson(value: unknown): string | undefined {
@@ -62,14 +69,14 @@ const fingerprintObject = memoizeFrozenPlainDataProjection((value: object) =>
 /** Presented row identity is immutable; fingerprints retain no row objects or text. */
 export function prepareSessionRowDeltaFields(
   row: Record<string, unknown>,
-  source?: Record<string, unknown>,
+  publicationIdentity?: object,
 ): SessionRowDeltaFields {
   const cached = preparedRows.get(row);
   if (cached) {
     return cached;
   }
-  // Reuse an existing presentation's vector without retaining its row or a second source vector.
-  const sample = source && revisionSamples.get(source)?.deref();
+  // Compare immutable samples across published revisions without retaining their rows or text.
+  const sample = publicationIdentity && publicationSamples.get(publicationIdentity)?.deref();
   const sampleFields = sample && preparedRows.get(sample);
   const fingerprints = new Map<string, number | boolean | null | bigint>();
   for (const field of Object.keys(row)) {
@@ -96,14 +103,14 @@ export function prepareSessionRowDeltaFields(
   }
   const prepared = { fingerprints, fieldCount: fingerprints.size };
   preparedRows.set(row, prepared);
-  // Keep one weak sample per immutable materialized revision; collected samples recompute normally.
-  if (source && !sample) {
-    revisionSamples.set(source, new WeakRef(row));
+  // Keep one weak sample per row lineage; collected samples recompute normally.
+  if (publicationIdentity && !sample) {
+    publicationSamples.set(publicationIdentity, new WeakRef(row));
   }
   return prepared;
 }
 
-/** A publication owns patches; identical recipient baselines share comparison work. */
+/** A publication owns patch fields and encoding; identical baselines share both. */
 export function createSessionRowDeltaDiffer() {
   const pairs = new WeakMap<
     SessionRowDeltaFields,
@@ -136,7 +143,7 @@ export function createSessionRowDeltaDiffer() {
         remove.push(field);
       }
     }
-    const delta = { set, remove };
+    const delta: SessionRowDelta = { patch: { set, remove } };
     if (!next) {
       next = new WeakMap();
       pairs.set(previous, next);

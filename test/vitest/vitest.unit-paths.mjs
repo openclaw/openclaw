@@ -74,6 +74,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
+  "src/node-host/node-worker-publication-merge.test.ts",
   ...bundledPluginDependentUnitTestFiles,
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",
@@ -85,11 +86,10 @@ const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 export function filterUnitConfigTestFiles(files) {
   let candidates = files.map(normalizeRepoPath);
   let exclude = unitTestAdditionalExcludePatterns;
-  // Keep singleton routing cheap and use equality only for proven Node/Linux paths.
+  // Canonical POSIX paths retain literal equality in both Node and Bun.
   if (
     candidates.length > 1 &&
-    process.platform === "linux" &&
-    !process.versions.bun &&
+    (process.platform === "linux" || process.platform === "darwin") &&
     candidates.every(isPlainRepoRelativePath)
   ) {
     const literalExcludes = new Set(exclude.filter(isPlainRepoRelativePath));

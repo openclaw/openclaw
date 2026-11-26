@@ -52,7 +52,7 @@ export function isCircuitBreakerOpen(
     return false;
   }
   // Cooldown allows another attempt; only a completed recall clears the streak.
-  return Date.now() - entry.lastTimeoutAt < cooldownMs;
+  return performance.now() - entry.lastTimeoutAt < cooldownMs;
 }
 
 export function recordCircuitBreakerTimeout(key: string): void {
@@ -61,7 +61,7 @@ export function recordCircuitBreakerTimeout(key: string): void {
   timeoutCircuitBreaker.delete(key);
   timeoutCircuitBreaker.set(key, {
     consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
-    lastTimeoutAt: Date.now(),
+    lastTimeoutAt: performance.now(),
   });
   pruneMapToMaxSize(timeoutCircuitBreaker, DEFAULT_MAX_CACHE_ENTRIES);
 }

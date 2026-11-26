@@ -5,13 +5,14 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
 import { SinceInput, LastSeenInput } from "./chronicle-contract.js";
 import { emptyChronicle } from "./chronicle.js";
-import { contract } from "./contract.js";
+import { contract, type FullOutputContract } from "./contract.js";
 import { knowledgeLearnContribution } from "./learn-guidance.js";
 import {
   RECORD_MAX_BYTES,
@@ -27,7 +28,6 @@ import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
 import { registerRecallGateHook } from "./recall-gate-hook.js";
-import { searchDetail } from "./search-detail.js";
 import type { StorageOperations } from "./storage-host.js";
 import { createStoreOperations } from "./store-assignments.js";
 import type { StoreRuntime } from "./store-runtime.js";
@@ -35,7 +35,7 @@ import { parsePolicy } from "./stores-config.js";
 import type { StoreState } from "./stores-contract.js";
 import { Stores } from "./stores.js";
 
-type Handlers = FeatureHandlers<typeof contract>;
+type Handlers = FeatureHandlers<FullOutputContract>;
 // StorageClient.call with its per-operation input tuple erased, for calls made with a generic Op.
 type StorageCall<Op extends keyof StorageOperations> = (
   op: Op,
@@ -154,11 +154,20 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler);
+        const scheduler = ctx.scheduler;
+        if (getResourceProfile() === "lean") {
+          stores.onFirstUse = () => {
+            void maintenance
+              .start(scheduler)
+              .catch((error: unknown) => api.logger?.warn?.(String(error)));
+          };
+        } else {
+          await maintenance.start(scheduler);
+        }
       }
     },
-    // A maintenance pass writes through the registry, so the registry closes only
-    // after the pass has settled; the stores are fenced immediately.
+    // Initialization and passes write through the registry, which closes only
+    // after both have settled; the stores are fenced immediately.
     stop() {
       return stores.stop(maintenance.stop());
     },
@@ -396,7 +405,7 @@ export function createKnowledgeService(
           runtime.client.call("recall", access, input),
         );
       },
-      connections: call("connections"),
+      connections_detail: call("connections"),
       resume: (input, context) =>
         use(context, true, (runtime, access) =>
           runtime.client.call("resume", access, { requestId: input.requestId }),
@@ -515,9 +524,9 @@ export function createKnowledgeService(
           issues: catalog.issues,
         };
       },
-      grep: searchDetail(call("search")),
-      lookup: searchDetail(call("lookup")),
-      records: call("records", false, () => ({
+      grep: call("search"),
+      lookup: call("lookup"),
+      records_detail: call("records", false, () => ({
         facets: { kinds: {}, origins: {} },
         records: [],
         total: 0,
@@ -525,7 +534,7 @@ export function createKnowledgeService(
         nextOffset: null,
         freshness: queryFreshness(now()),
       })),
-      record: call("record"),
+      record_detail: call("record"),
       ontology: call("ontology"),
       diagnostics: call("diagnostics", false, () => ({
         issues: [],
@@ -584,6 +593,7 @@ export function createKnowledgeService(
     ) {
       throw new Error("Maintenance status is available to authorized operators only.");
     }
+    await stores.ensure();
     return maintenance.status();
   };
   return {

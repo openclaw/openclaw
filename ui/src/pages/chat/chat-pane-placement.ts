@@ -151,10 +151,7 @@ export function resolvePlacementComposer(params: {
       placement?.state === "active" || placement?.state === "provisioning"
         ? placement.workerRuntimeInstall
         : undefined,
-    runError:
-      failureReason && !controls.restarting
-        ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
-        : null,
+    runError: failureReason && !controls.restarting ? { summary: failureReason } : null,
     failedUnavailableMessage: t("sessionsView.failedSessionUnavailable"),
   };
   if (params.startupPending || !params.row || canRecoverOnSend) {

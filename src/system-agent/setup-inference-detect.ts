@@ -14,8 +14,10 @@ import {
 } from "../agents/utility-model.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { isProviderAuthChoicePlatformSupported } from "../plugins/provider-auth-choice-platform.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
+import {
+  isProviderAuthChoicePlatformSupported,
+  resolveManifestProviderAuthChoices,
+} from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
@@ -124,7 +126,7 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   let utilityModel: string | undefined;
   if (utilitySetting.kind === "explicit") {
     const { resolveSimpleCompletionSelectionForAgent } =
-      await import("../agents/simple-completion-runtime.js");
+      await import("../agents/simple-completion-selection.js");
     const selection = resolveSimpleCompletionSelectionForAgent({
       cfg,
       agentId: targetAgentId,
@@ -193,22 +195,26 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   };
 }
 
-/** Manual setup options use only config and manifests, never machine or credential probes. */
-export async function listManualSetupInferenceOptions(
+/**
+ * Known setup choices from config and manifests, never machine or credential probes.
+ * Clients show these while discovery runs; install suggestions need a scan, so none are offered.
+ */
+export async function listManualSetupInferenceDetection(
   agentId?: string,
-): Promise<
-  Pick<
-    SetupInferenceDetection,
-    | "manualProviders"
-    | "authOptions"
-    | "prepareOptions"
-    | "workspace"
-    | "setupComplete"
-    | "setupModel"
-    | "utilityModel"
-  >
-> {
-  return (await prepareSetupInferenceOptions(agentId)).manual;
+): Promise<SetupInferenceDetection> {
+  const { cfg, targetAgentId, manual } = await prepareSetupInferenceOptions(agentId);
+  const { resolveConfiguredModelCandidate } = await import("../commands/onboard-inference.js");
+  const configuredModel = resolveConfiguredModelCandidate({
+    config: cfg,
+    agentId: targetAgentId,
+  })?.modelRef;
+  return {
+    ...manual,
+    candidates: [],
+    unavailableCandidates: [],
+    recommendedInstalls: [],
+    ...(configuredModel ? { configuredModel } : {}),
+  };
 }
 
 export async function detectSetupInference(agentId?: string): Promise<SetupInferenceDetection> {

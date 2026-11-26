@@ -511,48 +511,108 @@ it.each(["list", "pin"] as const)(
   },
 );
 
-it("exposes every local source as an actionable host for the selected owner", async () => {
-  const { betaAgentDir, processCodexHome, runtimeConfig } = await homeFixture("hosts");
-  const listPage = vi.fn(async (source?: fixture.CodexCatalogHome) => ({
-    sessions: [catalogSession(`thread-${source?.sourceHomeId ?? "missing"}`)],
-  }));
-  const forRequest = vi.fn((agentId: string, source?: fixture.CodexCatalogHome) =>
-    fixture.createControl({ listPage: async () => await listPage(source) }),
-  );
-  const provider = registeredProvider({ forRequest }, runtimeConfig);
-
-  await fixture.withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
-    const onHost = vi.fn();
-    const completions: Promise<void>[] = [];
-    const hosts = await provider.list({
-      agentId: "beta",
-      listNodes: async () => ({ nodes: [] }),
-      onHost,
-      waitUntil: (completion) => {
-        completions.push(completion);
-      },
+it.each([
+  { launch: "managed stdio", appServer: {}, automatic: true },
+  {
+    launch: "managed stdio proxy",
+    appServer: { args: ["app-server", "proxy", "--sock", "/example/daemon.sock"] },
+    automatic: false,
+  },
+  { launch: "configured command", appServer: { command: "operator-wrapper" }, automatic: false },
+])(
+  "lists every selected home and checks $launch before automatic export",
+  async ({ appServer, automatic }) => {
+    const { betaAgentDir, processCodexHome, runtimeConfig } = await homeFixture("hosts");
+    const listPage = vi.fn(async (source?: fixture.CodexCatalogHome) => ({
+      sessions: [catalogSession(`thread-${source?.sourceHomeId ?? "missing"}`)],
+    }));
+    const requireEligibleThread = vi.fn(async (id: string) =>
+      fixture.idleThread({ id, source: "cli", name: "selected native title" }),
+    );
+    const forRequest = vi.fn((agentId: string, source?: fixture.CodexCatalogHome) =>
+      fixture.createControl({
+        listPage: async () => await listPage(source),
+        requireEligibleThread,
+      }),
+    );
+    const provider = fixture.createCatalogTestProvider({
+      startupConfig: runtimeConfig,
+      control: { forRequest },
+      getPluginConfig: () => ({ ...defaultPluginConfig, appServer }),
+      getRuntimeConfig: () => runtimeConfig,
     });
 
-    expect(hosts).toHaveLength(3);
-    expect(completions).toHaveLength(3);
-    await Promise.all(completions);
-    expect(onHost).toHaveBeenCalledTimes(3);
-    expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(hosts));
-    expect(hosts?.every((host) => host.hostId.startsWith("gateway:local"))).toBe(true);
-    expect(
-      hosts?.every(
-        (host) =>
-          host.sessions[0]?.sourceHomeId &&
-          host.sessions[0]?.canContinue &&
-          host.sessions[0]?.canArchive,
-      ),
-    ).toBe(true);
-    expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
-    expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
-      true,
-    );
-  });
-});
+    await fixture.withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
+      const onHost = vi.fn();
+      const completions: Promise<void>[] = [];
+      const hosts = await provider.list({
+        agentId: "beta",
+        listNodes: async () => ({ nodes: [] }),
+        onHost,
+        waitUntil: (completion) => {
+          completions.push(completion);
+        },
+      });
+
+      expect(hosts).toHaveLength(3);
+      expect(completions).toHaveLength(3);
+      await Promise.all(completions);
+      expect(onHost).toHaveBeenCalledTimes(3);
+      expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(hosts));
+      expect(hosts?.every((host) => host.hostId.startsWith("gateway:local"))).toBe(true);
+      expect(
+        hosts?.every(
+          (host) =>
+            host.sessions[0]?.sourceHomeId &&
+            host.sessions[0]?.canContinue &&
+            host.sessions[0]?.canArchive,
+        ),
+      ).toBe(true);
+      expect(hosts.map((host) => host.sessions[0]?.exportPolicy)).toEqual(
+        hosts.map(() => (automatic ? { origin: "native-local", automatic: true } : undefined)),
+      );
+      const host = hosts[0]!;
+      const row = host.sessions[0]!;
+      const exact = await provider.list({
+        agentId: "beta",
+        hostIds: [host.hostId],
+        exportSource: {
+          hostId: host.hostId,
+          threadId: row.threadId,
+          sourceHomeId: row.sourceHomeId,
+        },
+      });
+      expect(listPage).toHaveBeenCalledTimes(3);
+      expect(requireEligibleThread).toHaveBeenCalledTimes(automatic ? 1 : 0);
+      if (automatic) {
+        expect(exact[0]?.sessions[0]).toMatchObject({
+          threadId: row.threadId,
+          sourceHomeId: row.sourceHomeId,
+          name: "selected native title",
+          exportPolicy: { origin: "native-local", automatic: true },
+        });
+        requireEligibleThread.mockRejectedValueOnce(new Error("native membership changed"));
+        await expect(
+          provider.list({
+            agentId: "beta",
+            hostIds: [host.hostId],
+            exportSource: {
+              hostId: host.hostId,
+              threadId: row.threadId,
+              sourceHomeId: row.sourceHomeId,
+            },
+          }),
+        ).rejects.toThrow("native membership changed");
+      } else {
+        expect(exact).toEqual([]);
+      }
+      expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
+      expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
+        true,
+      );
+    });
+  },
+);
 
 it("does not project an adopted session onto another local home with the same thread id", async () => {
   const homeA = localHome("home-a");

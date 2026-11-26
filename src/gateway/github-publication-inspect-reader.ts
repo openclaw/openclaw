@@ -1,5 +1,6 @@
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 
 type RecordedPublication = {
   url: string;
@@ -40,7 +41,7 @@ export function captureOwnGitHubPullRequestReader(
     };
   }
   if (!profileId) {
-    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    throw new OperatorRefusalError("channel-unverified", { action: "inspect this PR" });
   }
   const profile = captureResidentUserProfileAccess(profileId);
   const accountIds = () => {
@@ -54,9 +55,7 @@ export function captureOwnGitHubPullRequestReader(
   };
   const admittedIds = accountIds();
   if (!admittedIds.length && !publication) {
-    throw new Error(
-      "Link a verified GitHub account on the configured host before inspecting your PR.",
-    );
+    throw new OperatorRefusalError("github-not-linked", { action: "inspect this PR" });
   }
   return {
     host,

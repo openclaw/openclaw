@@ -19,6 +19,7 @@ import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { decodeSessionColdRecords } from "./session-cold-storage-codec.js";
+import { readSessionColdStorageInventoryInWorker } from "./session-cold-storage-read.worker.js";
 import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -32,7 +33,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL cold transcript selection", (
     const hotId = "hot-window";
     const coldId = "embedded-window";
     const referenceKey = "agent:main:reference";
-    const snapshot = admit(() =>
+    const { snapshot, archiveBytes } = admit(() =>
       runOpenClawAgentWriteTransaction((writer) => {
         const db = getNodeSqliteKysely<DB>(writer.db);
         for (const sessionId of [hotId, coldId]) {
@@ -98,9 +99,17 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL cold transcript selection", (
           writer.db,
           db.deleteFrom("session_transcript_index_state").where("session_id", "=", coldId),
         );
-        return readSessionStateDeleteSnapshot(writer.db, hotId);
+        return {
+          snapshot: readSessionStateDeleteSnapshot(writer.db, hotId),
+          archiveBytes: bytes.length,
+        };
       }, options),
     );
+    expect(admit(() => readSessionColdStorageInventoryInWorker(options))).toEqual({
+      hotTranscripts: 1,
+      coldTranscripts: 1,
+      embeddedArchiveBytes: archiveBytes,
+    });
     const input = {
       databaseOptions: { ...options, path: database.path },
       admissionIdentities: [],

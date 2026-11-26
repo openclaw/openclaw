@@ -1,11 +1,18 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
+import {
+  projectMlxSettingsManifest,
+  verifyMlxSettingsPackageProjection,
+} from "../../scripts/lib/macos-mlx-settings-manifest.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { preparedScriptWrapperPreload } from "./prepared-script-wrapper.test-support.js";
 
 const repo = path.resolve(import.meta.dirname, "../..");
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -58,6 +65,13 @@ function fixture(
   logicalCpu = "3",
   eventReport: string | null = eventStream("runStarted", "runEnded"),
   waitForSignal: false | "swift" | "security" = false,
+  cleanupFailure:
+    | "none"
+    | "stage-write"
+    | "swift-events"
+    | "keychain-budget"
+    | "keychain-retained"
+    | "keychain-exit" = "none",
 ) {
   const root = temps.make("native-launch-");
   const bin = path.join(root, "bin");
@@ -145,7 +159,9 @@ if (tool === 'security') {
   if (operation === 'set-keychain-settings') data.autoLock = false;
   if (operation === 'list-keychains') settings.search = [owned];
   if (operation === 'default-keychain') settings.default = owned;
-  if (operation === 'delete-keychain') fs.unlinkSync(owned);
+  if (operation === 'delete-keychain') {
+    if (${JSON.stringify(cleanupFailure)} !== 'keychain-retained') fs.unlinkSync(owned);
+  }
   else fs.writeFileSync(owned, JSON.stringify(data));
   fs.writeFileSync(settingsPath, JSON.stringify(settings));
 }
@@ -155,6 +171,11 @@ if (tool === 'sysctl') {
   console.log(${JSON.stringify(logicalCpu)});
 }
 if (tool === 'rg') console.log('apps/macos/Sources/Fixture.swift');
+if (tool === 'python3') {
+  assert.deepEqual(args.slice(0, 3), ['-I', '-S', '-c']);
+  assert.ok(args[3].includes('sys.version_info >= (3,10)'));
+  console.log('[120,300]');
+}
 if (tool === 'git' && args[0] === 'rev-parse' && args[1] === '--show-toplevel') console.log(${JSON.stringify(root)});
 if (tool === 'git' && args[0] === 'diff' && args.includes('--name-only')) console.log('apps/macos/Sources/Fixture.swift');
 if (['xcrun', 'lldb', 'xctest', 'swiftpm-testing-helper'].includes(tool)) {
@@ -162,7 +183,25 @@ if (['xcrun', 'lldb', 'xctest', 'swiftpm-testing-helper'].includes(tool)) {
 }
 if ((tool === 'swift' && args[0] === 'test') || tool === 'OpenClawRecoveryTestHost') {
   const appHost = tool === 'OpenClawRecoveryTestHost';
-  if (!appHost && env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
+  const filter = args[args.indexOf('--filter') + 1];
+  const settingsProof = filter?.startsWith('MLXSettings');
+  if (settingsProof) assert.equal(fs.readFileSync(path.join(env.OPENCLAW_STATE_DIR, 'mlx-settings-stage'), 'utf8'), filter);
+  if (filter === 'MLXSettingsSeedProofTests') {
+    assert.ok(!fs.existsSync(env.OPENCLAW_CONFIG_PATH));
+    fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, '{"talk":{"provider":"mlx"},"actualStableWriterMetadata":true}');
+    fs.copyFileSync(env.OPENCLAW_CONFIG_PATH, path.join(env.OPENCLAW_STATE_DIR, 'stable-written-config.json'));
+  }
+  if (filter === 'MLXSettingsConsumerProofTests') {
+    assert.deepEqual(fs.readFileSync(env.OPENCLAW_CONFIG_PATH), fs.readFileSync(path.join(env.OPENCLAW_STATE_DIR, 'stable-written-config.json')));
+    assert.ok(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, 'talk-config-response.json')));
+    if (${JSON.stringify(cleanupFailure)} === 'stage-write' && process.cwd() === ${JSON.stringify(workspace)}) {
+      const marker = path.join(env.OPENCLAW_STATE_DIR, 'mlx-settings-stage');
+      fs.unlinkSync(marker);
+      fs.mkdirSync(marker);
+    }
+  }
+  if (filter === 'MLXSettingsCleanupProofTests' && ${JSON.stringify(cleanupFailure)} === 'keychain-budget') fs.writeFileSync(${JSON.stringify(path.join(root, "cleanup-clock-exhausted"))}, 'owned fake clock');
+  if (!appHost && !settingsProof && env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
     const name = env.OPENCLAW_PROFILE === 'default' ? 'catalog' : 'thread-reasoning';
     for (const suffix of ['-window.png', '-menu-42.png', '-capture-status.json']) {
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, name + suffix), suffix.endsWith('.json') ? JSON.stringify({blockers: ['synthetic fixture, not visual proof']}) : 'synthetic-png-bytes');
@@ -176,8 +215,9 @@ if ((tool === 'swift' && args[0] === 'test') || tool === 'OpenClawRecoveryTestHo
     assert.ok(path.isAbsolute(eventPath));
     assert.ok(eventPath.startsWith(path.dirname(appHost ? env.TMPDIR : env.HOME) + path.sep));
     assert.equal(args[args.indexOf('--event-stream-version') + 1], '6.3');
-    const report = ${JSON.stringify(eventReport)};
-    if (report !== null) fs.writeFileSync(eventPath, appHost ? report.replaceAll('fixture/function', 'fixture/' + args[args.indexOf('--filter') + 1]) : report);
+    const report = filter === 'MLXSettingsCleanupProofTests' && ${JSON.stringify(cleanupFailure)} === 'swift-events'
+      ? ${JSON.stringify(eventStream("runStarted"))} : ${JSON.stringify(eventReport)};
+    if (report !== null) fs.writeFileSync(eventPath, appHost || settingsProof ? report.replaceAll('fixture/function', 'fixture/' + filter) : report);
   }
   if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(path.join(root, "ambient-state"))}) {
     fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, 'child-owned'), 'fixture');
@@ -190,6 +230,7 @@ if ((tool === 'swift' && args[0] === 'test') || tool === 'OpenClawRecoveryTestHo
     "security",
     "swift",
     "pnpm",
+    "python3",
     "node",
     "git",
     "uname",
@@ -299,20 +340,243 @@ function launchNamed(f: ReturnType<typeof fixture>, readyText: string) {
 
 describe.skipIf(process.platform === "win32")("native test launch ownership", () => {
   it.each([
+    { failCandidate: false, cleanupFailure: "none", managedFailure: "none" },
+    { failCandidate: true, cleanupFailure: "none", managedFailure: "none" },
+    { failCandidate: false, cleanupFailure: "stage-write", managedFailure: "none" },
+    { failCandidate: false, cleanupFailure: "keychain-budget", managedFailure: "none" },
+    { failCandidate: false, cleanupFailure: "keychain-retained", managedFailure: "none" },
+    { failCandidate: true, cleanupFailure: "keychain-retained", managedFailure: "none" },
+    { failCandidate: false, cleanupFailure: "none", managedFailure: "timeout" },
+    { failCandidate: false, cleanupFailure: "none", managedFailure: "unjoined" },
+    { failCandidate: true, cleanupFailure: "stage-write", managedFailure: "none" },
+    { failCandidate: true, cleanupFailure: "swift-events", managedFailure: "none" },
+    { failCandidate: true, cleanupFailure: "keychain-exit", managedFailure: "none" },
+  ] as const)(
+    "keeps ordered source launches and distinct process/resource retirement for %j",
+    ({ failCandidate, cleanupFailure, managedFailure }) => {
+      const f = fixture(
+        cleanupFailure === "keychain-exit" ? "delete-keychain" : "",
+        "3",
+        appHostEventStream("complete"),
+        false,
+        cleanupFailure,
+      );
+      const stable = path.join(f.env.RUNNER_TEMP, "stable-source");
+      const fixturePath = "apps/macos/Tests/OpenClawIPCTests/MLXSettingsUpgradeTests.swift";
+      const producerPath = "test/helpers/macos-mlx-settings-producer.ts";
+      const producer = `import fs from 'node:fs'; import path from 'node:path'; import assert from 'node:assert/strict';
+const token=process.env.OPENCLAW_MLX_SETTINGS_PRODUCER_TOKEN;
+await new Promise((resolve,reject)=>{
+  process.once('message',message=>{assert.deepEqual(message,{kind:'go',token});resolve();});
+  process.send({kind:'ready',token},error=>{if(error)reject(error);});
+});
+const [raw,out]=process.argv.slice(2);
+assert.equal(raw,process.env.OPENCLAW_CONFIG_PATH);
+assert.deepEqual(fs.readFileSync(raw),fs.readFileSync(raw.replace('openclaw.json','stable-written-config.json')));
+fs.appendFileSync(${JSON.stringify(f.log)},JSON.stringify({tool:'producer',cwd:process.cwd(),env:process.env})+'\\n');
+if (${failCandidate} && process.cwd()===${JSON.stringify(f.workspace)}) {
+  if (${JSON.stringify(cleanupFailure)} === 'stage-write') {
+    const marker = path.join(process.env.OPENCLAW_STATE_DIR, 'mlx-settings-stage');
+    fs.unlinkSync(marker); fs.mkdirSync(marker);
+  }
+  process.exit(41);
+}
+fs.writeFileSync(out,JSON.stringify({config:{talk:{provider:'mlx'}}}));
+await new Promise((resolve,reject)=>process.send({kind:'complete',token},error=>error?reject(error):resolve()));
+process.disconnect();`;
+      const overlays: Record<string, string> = {};
+      const originalManifest = read(path.join(repo, "apps/macos/Package.swift"));
+      const focusedManifest = projectMlxSettingsManifest(originalManifest);
+      // Native commands are fake here; these package graphs describe only the
+      // fixture's manifest contract, not a real SwiftPM build qualification.
+      const originalDump = { targets: [{ name: "OpenClawIPCTests", sources: null }] };
+      const focusedDump = {
+        targets: [{ name: "OpenClawIPCTests", sources: ["MLXSettingsUpgradeTests.swift"] }],
+      };
+      verifyMlxSettingsPackageProjection(originalDump, focusedDump);
+      const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+      const manifestReceipt = {
+        semanticVerified: true,
+        originalBlob: createHash("sha1")
+          .update(`blob ${Buffer.byteLength(originalManifest)}\0${originalManifest}`)
+          .digest("hex"),
+        originalSHA256: hash(originalManifest),
+        effectiveSHA256: hash(focusedManifest),
+        originalDumpSHA256: hash(JSON.stringify(originalDump)),
+        effectiveDumpSHA256: hash(JSON.stringify(focusedDump)),
+      };
+      for (const source of [stable, f.workspace]) {
+        for (const [relative, content] of [
+          [fixturePath, "synthetic Swift fixture"],
+          [producerPath, producer],
+        ]) {
+          const file = path.join(source, relative!);
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, content!);
+          overlays[relative!] = createHash("sha256").update(content!).digest("hex");
+        }
+        fs.writeFileSync(path.join(source, "package.json"), '{"type":"module"}\n');
+        fs.writeFileSync(path.join(source, "apps/macos/Package.swift"), focusedManifest);
+        const scripts = path.join(source, "scripts");
+        if (source === stable) {
+          fs.mkdirSync(scripts);
+        }
+        // The current fixture's scripts link points at real source; never overwrite it.
+        if (source === stable) {
+          fs.writeFileSync(path.join(scripts, "tsx.mjs"), "");
+        }
+      }
+      // The real current tsx loader needs the ready CI install. The synthetic stable
+      // producer uses its own loader/root; neither source shares dependency links.
+      const proof = path.join(f.env.RUNNER_TEMP, "proof");
+      fs.mkdirSync(proof);
+      const manifest = path.join(f.env.RUNNER_TEMP, "sources.json");
+      fs.writeFileSync(
+        manifest,
+        JSON.stringify({
+          stable: { sourceRoot: stable, sha: "a".repeat(40) },
+          fixed: { sourceRoot: fs.realpathSync(f.workspace), sha: "b".repeat(40) },
+          overlays,
+          testBuildManifests: { stable: manifestReceipt, fixed: manifestReceipt },
+        }),
+      );
+      // Exhaust only the final Keychain admission, after the joined defaults
+      // cleanup. No real wait or native call participates in this clock fixture.
+      const clockPreload = path.join(f.root, "cleanup-clock.mjs");
+      const managedSource = new URL("../../scripts/lib/managed-child-process.mts", import.meta.url);
+      const actualManaged = new URL(managedSource);
+      actualManaged.search = "?native-launch-fixture-actual";
+      const managedMock = path.join(f.root, "managed-rejection.mjs");
+      // Reject only AFTER the real synthetic child joins. These rows exercise the
+      // managed error contract, not a real timeout or an actual escaped process.
+      fs.writeFileSync(
+        managedMock,
+        `import fs from 'node:fs';
+export * from ${JSON.stringify(actualManaged.href)};
+import {runManagedCommand as actualRun} from ${JSON.stringify(actualManaged.href)};
+let injected = false;
+export async function runManagedCommand(options) {
+  const code = await actualRun(options);
+  if (code === 0 && !injected && options.cwd === ${JSON.stringify(f.workspace)} && options.args.includes(${JSON.stringify(producerPath)})) {
+    injected = true;
+    fs.appendFileSync(${JSON.stringify(f.log)}, JSON.stringify({tool:'managed-rejection', kind:${JSON.stringify(managedFailure)}})+'\\n');
+    const timeout = Object.assign(new Error('synthetic joined producer timeout'), {code:'ETIMEDOUT'});
+    if (${JSON.stringify(managedFailure)} === 'unjoined') throw Object.assign(new Error('synthetic indeterminate producer retirement', {cause:timeout}), {code:'EPROCESSGROUP_CLEANUP_FAILED',processTreeState:'indeterminate'});
+    throw timeout;
+  }
+  return code;
+}`,
+      );
+      fs.writeFileSync(
+        clockPreload,
+        (managedFailure === "none"
+          ? ""
+          : preparedScriptWrapperPreload([[managedSource, pathToFileURL(managedMock)]])) +
+          `import fs from 'node:fs'; const {NativeCiBudget}=await import(${JSON.stringify(new URL("../../scripts/lib/native-ci-budget.mts", import.meta.url).href)}); const timeout=NativeCiBudget.prototype.timeout; NativeCiBudget.prototype.timeout=function(ceiling,cleanup){if(cleanup&&fs.existsSync(${JSON.stringify(path.join(f.root, "cleanup-clock-exhausted"))}))throw new Error('Native cleanup budget exhausted');return timeout.call(this,ceiling,cleanup);};`,
+      );
+      const result = f.run(
+        `node --import '${clockPreload}' scripts/test-macos-native.mts settings-upgrade '${manifest}' 1 '${proof}'`,
+      );
+      const processesRetired = managedFailure !== "unjoined";
+      const defaultsRemoved =
+        processesRetired && !["stage-write", "swift-events"].includes(cleanupFailure);
+      const keychainRemoved =
+        processesRetired &&
+        !["keychain-budget", "keychain-retained", "keychain-exit"].includes(cleanupFailure);
+      const resourcesRemoved = defaultsRemoved && keychainRemoved;
+      expect(result.status, result.stderr).toBe(
+        failCandidate || managedFailure !== "none" || !resourcesRemoved ? 1 : 0,
+      );
+      const calls = f.calls();
+      const producers = calls.filter((x) => x.tool === "producer");
+      expect(producers.map((x) => x.cwd)).toEqual([stable, f.workspace]);
+      const swift = calls.filter((x) => x.tool === "swift");
+      expect(swift.map((x) => x.args[x.args.indexOf("--filter") + 1])).toEqual([
+        "MLXSettingsSeedProofTests",
+        "MLXSettingsConsumerProofTests",
+        ...(!failCandidate && managedFailure === "none" ? ["MLXSettingsConsumerProofTests"] : []),
+        ...(processesRetired && cleanupFailure !== "stage-write"
+          ? ["MLXSettingsCleanupProofTests"]
+          : []),
+      ]);
+      expect(new Set([...producers, ...swift].map((x) => x.env.OPENCLAW_PROFILE)).size).toBe(1);
+      expect(new Set([...producers, ...swift].map((x) => x.env.OPENCLAW_CONFIG_PATH)).size).toBe(1);
+      expect(
+        calls.filter((x) => x.tool === "security" && x.args[0] === "create-keychain"),
+      ).toHaveLength(1);
+      const ownedRoot = path.dirname(swift[0].env.HOME);
+      try {
+        expect(calls.some((x) => x.tool === "security" && x.args[0] === "delete-keychain")).toBe(
+          processesRetired && cleanupFailure !== "keychain-budget",
+        );
+        expect(fs.existsSync(ownedRoot)).toBe(!resourcesRemoved);
+        expect(readJson(path.join(proof, "settings-consumers.json"))).toMatchObject({
+          complete: !failCandidate && managedFailure === "none" && resourcesRemoved,
+          candidateReseeded: false,
+          defaultsRemoved,
+          keychainRemoved,
+          processesRetired,
+          resourcesRemoved,
+        });
+        expect(fs.existsSync(swift[0].settings.default)).toBe(!keychainRemoved);
+        expect(calls.filter((x) => x.tool === "managed-rejection")).toEqual(
+          managedFailure === "none" ? [] : [{ tool: "managed-rejection", kind: managedFailure }],
+        );
+        if (failCandidate) {
+          expect(result.stderr).toContain("Actual talk.config producer failed (exit 41)");
+        }
+        if (managedFailure !== "none") {
+          expect(result.stderr).toContain(
+            managedFailure === "timeout"
+              ? "synthetic joined producer timeout"
+              : "synthetic indeterminate producer retirement",
+          );
+        }
+        if (["stage-write", "swift-events"].includes(cleanupFailure)) {
+          expect(result.stderr).toContain("Settings Swift cleanup failed");
+        }
+        if (cleanupFailure === "keychain-exit") {
+          expect(result.stderr).toContain("security delete-keychain failed (exit 29)");
+        }
+        if (cleanupFailure === "keychain-retained") {
+          expect(result.stderr).toContain("Settings Keychain retirement is unverified");
+          if (failCandidate) {
+            expect(result.stderr).toContain("Actual talk.config producer failed (exit 41)");
+          }
+        }
+      } finally {
+        // All synthetic children joined; this test owns the deliberately retained root.
+        if (!resourcesRemoved) {
+          fs.rmSync(ownedRoot, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+  it.each([
     [appHostEventStream("complete"), "absent", 0, 3, ["retry", "credential-startup", "relaunch"]],
     [eventStream("runStarted", "runEnded"), "absent", 1, 1],
     [appHostEventStream("skipped"), "absent", 1, 1],
     [appHostEventStream("suite-only"), "absent", 1, 1],
     [appHostEventStream("complete"), "unknown", 1, 2],
+    [appHostEventStream("complete"), "absent", 1, 1, ["retry"], "cleanup-inspection"],
+    [appHostEventStream("complete"), "absent", 1, 1, ["retry"], "bootout"],
   ] satisfies [
     events: string,
     inspection: string,
     expected: number,
     hosts: number,
     filters?: string[],
+    managedFailure?: "cleanup-inspection" | "bootout",
   ][])(
     "owns fresh app hosts and refuses incomplete proof (case %#)",
-    (events, inspection, expected, hosts, filters = ["retry", "relaunch"]) => {
+    (
+      events,
+      inspection,
+      expected,
+      hosts,
+      filters = ["retry", "relaunch"],
+      managedFailure?: "cleanup-inspection" | "bootout",
+    ) => {
       const f = fixture("", "3", events);
       const contents = path.join(f.root, "Fixture.app/Contents");
       fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
@@ -325,6 +589,8 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       fs.writeFileSync(
         path.join(f.root, "bin/launchctl"),
         `#!${process.execPath}
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(f.log)}, JSON.stringify({tool:'launchctl',args:process.argv.slice(2)})+'\\n');
 if (process.argv[2] === 'print') {
   console.error(${JSON.stringify(inspection === "absent" ? "Could not find service in domain" : "Inspection permission denied")});
   process.exit(${inspection === "absent" ? 113 : 5});
@@ -332,8 +598,46 @@ if (process.argv[2] === 'print') {
 `,
         { mode: 0o755 },
       );
+      let preload = "";
+      if (managedFailure) {
+        const managedSource = new URL(
+          "../../scripts/lib/managed-child-process.mts",
+          import.meta.url,
+        );
+        const actualManaged = new URL(managedSource);
+        actualManaged.search = "?app-host-fixture-actual";
+        const managedMock = path.join(f.root, "managed-app-host-rejection.mjs");
+        // Every synthetic child joins before the managed-contract rejection.
+        // The pending Gateway fact must independently retain profile and Keychain.
+        fs.writeFileSync(
+          managedMock,
+          `import fs from 'node:fs';
+export * from ${JSON.stringify(actualManaged.href)};
+import {runManagedCommand as actualRun} from ${JSON.stringify(actualManaged.href)};
+let prints = 0; let injected = false;
+export async function runManagedCommand(options) {
+  const code = await actualRun(options);
+  if (options.bin === 'launchctl' && options.args[0] === 'print') prints += 1;
+  if (!injected && options.bin === 'launchctl' && (
+    (${JSON.stringify(managedFailure)} === 'cleanup-inspection' && options.args[0] === 'print' && prints === 2 && code === 113) ||
+    (${JSON.stringify(managedFailure)} === 'bootout' && options.args[0] === 'bootout' && code === 0)
+  )) {
+    injected = true;
+    fs.appendFileSync(${JSON.stringify(f.log)}, JSON.stringify({tool:'managed-rejection',kind:${JSON.stringify(managedFailure)},code,prints})+'\\n');
+    throw Object.assign(new Error(${JSON.stringify(`synthetic joined app-host ${managedFailure} failure`)}),{code:'ETIMEDOUT'});
+  }
+  return code;
+}`,
+        );
+        const preloadPath = path.join(f.root, "app-host-rejection-preload.mjs");
+        fs.writeFileSync(
+          preloadPath,
+          preparedScriptWrapperPreload([[managedSource, pathToFileURL(managedMock)]]),
+        );
+        preload = `--import '${preloadPath}' `;
+      }
       const result = f.run(
-        `node '${path.join(repo, "scripts/test-macos-native.mts")}' app-host '${path.dirname(contents)}' '${bundle}' ${filters.join(" ")}`,
+        `node ${preload}'${path.join(repo, "scripts/test-macos-native.mts")}' app-host '${path.dirname(contents)}' '${bundle}' ${filters.join(" ")}`,
       );
       expect(result.status, result.stderr).toBe(expected);
       const calls = f.calls();
@@ -365,12 +669,33 @@ if (process.argv[2] === 'print') {
         expect(fs.readdirSync(artifact)).toHaveLength(hosts);
         expect(read(path.join(artifact, "phase-0-events.jsonl"))).toContain("runEnded");
         expect(fs.existsSync(home)).toBe(true);
-        expect(fs.existsSync(state)).toBe(inspection === "unknown");
-        expect(fs.existsSync(ownedRoot)).toBe(inspection === "unknown");
+        const retained = inspection === "unknown" || managedFailure !== undefined;
+        expect(fs.existsSync(state)).toBe(retained);
+        expect(fs.existsSync(ownedRoot)).toBe(retained);
+        expect(fs.existsSync(security.args.at(-1))).toBe(retained);
+        if (managedFailure) {
+          expect(result.stderr).toContain(`synthetic joined app-host ${managedFailure} failure`);
+          expect(calls.filter((call) => call.tool === "managed-rejection")).toEqual([
+            {
+              tool: "managed-rejection",
+              kind: managedFailure,
+              code: managedFailure === "bootout" ? 0 : 113,
+              prints: 2,
+            },
+          ]);
+          expect(
+            calls.filter((call) => call.tool === "launchctl").map((call) => call.args[0]),
+          ).toEqual(
+            managedFailure === "bootout" ? ["print", "print", "bootout"] : ["print", "print"],
+          );
+          expect(
+            calls.some((call) => call.tool === "security" && call.args[0] === "delete-keychain"),
+          ).toBe(false);
+        }
         if (inspection === "unknown") {
           expect(result.stderr).toContain("retirement is unverified");
         }
-        if (expected === 1 && inspection === "absent") {
+        if (expected === 1 && inspection === "absent" && managedFailure === undefined) {
           expect(result.stderr).toContain("Swift Testing did not finish its run");
         }
       } finally {

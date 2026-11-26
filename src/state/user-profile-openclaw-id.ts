@@ -2,7 +2,23 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import type { OpenClawIdUserProfiles } from "./user-profile-openclaw-id.types.js";
 
-export { ensureCanonicalUserProfileForOpenClawIdIdentity } from "./user-profile-writes.js";
+export {
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
+  linkCanonicalOpenClawIdUserProfile,
+  unlinkCanonicalOpenClawIdUserProfile,
+} from "./user-profile-writes.js";
+
+/** Personal, unmerged profiles without an OCID identity; selection never grants access. */
+export async function readOpenClawIdInviteProfiles(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<Array<{ id: string; displayName: string | null }>> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.openClawId.inviteCandidates", input: {} },
+    { current: true },
+  );
+  return reply?.profiles ?? [];
+}
 
 /** Reads display metadata and canonical references only; callers retain all access decisions. */
 export async function readOpenClawIdUserProfiles(
@@ -18,4 +34,30 @@ export async function readOpenClawIdUserProfiles(
     { current: true },
   );
   return reply?.profiles ?? {};
+}
+
+/** The profile an OCID account is linked to, or null; attribution only, never access. */
+export async function readOpenClawIdLinkedProfile(
+  accountId: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<{ profileId: string; updatedAt: number } | null> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.openClawId.linkedProfile", input: { accountId } },
+    { current: true },
+  );
+  return reply?.profile ?? null;
+}
+
+/** The OCID accounts linked to a profile (several after a merge), oldest first. */
+export async function readOpenClawIdLinksOfProfile(
+  profileId: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<Array<{ accountId: string; email: string | null }>> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.openClawId.linksOf", input: { profileId } },
+    { current: true },
+  );
+  return reply?.links ?? [];
 }

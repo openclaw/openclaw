@@ -4,6 +4,7 @@ import type {
   DiscordVoiceAudioReceipt,
   DiscordVoiceTranscriptCapture,
 } from "./recording-types.js";
+import { publishRecordingUtterance, type RecordingSource } from "./recording-utterance.js";
 
 type Capture = DiscordVoiceTranscriptCapture | undefined;
 const MAX_REALTIME_RECORDING_BYTES = 1024 * 1024;
@@ -93,7 +94,7 @@ export class DiscordRealtimeRecording {
 
   constructor(
     private readonly params: {
-      entry: { guildId: string; channelId: string; voiceSessionKey: string };
+      entry: RecordingSource;
       isCurrent: () => boolean;
       warn: (message: string) => void;
     },
@@ -201,21 +202,7 @@ export class DiscordRealtimeRecording {
         }
         const final = this.finals.shift()!;
         try {
-          await capture.onUtterance({
-            sessionId: capture.sessionId,
-            ...(final.startedAt !== undefined
-              ? { startedAt: new Date(final.startedAt).toISOString() }
-              : {}),
-            final: true,
-            speaker,
-            text: final.text,
-            metadata: {
-              channel: "discord",
-              guildId: this.params.entry.guildId,
-              channelId: this.params.entry.channelId,
-              voiceSessionKey: this.params.entry.voiceSessionKey,
-            },
-          });
+          await publishRecordingUtterance(capture, this.params.entry, speaker, final);
         } catch {
           this.params.warn(
             "discord voice: realtime recording publication failed; check transcript storage.",

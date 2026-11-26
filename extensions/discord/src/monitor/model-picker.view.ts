@@ -514,9 +514,11 @@ export function renderDiscordModelPickerModelsView(
   }
 
   const resolvedDefault = params.data.resolvedDefault;
+  // Reset returns to the configured default; with none there is nothing to reset to.
   const shouldDisableReset =
-    parsedCurrentModel?.provider === resolvedDefault.provider &&
-    parsedCurrentModel?.model === resolvedDefault.model;
+    !resolvedDefault ||
+    (parsedCurrentModel?.provider === resolvedDefault.provider &&
+      parsedCurrentModel?.model === resolvedDefault.model);
 
   const hasPendingSelection =
     parsedPendingModel?.provider === modelPage.provider &&
@@ -588,7 +590,9 @@ export function renderDiscordModelPickerModelsView(
     providerPage: requestedProviderPage,
   });
 
-  const defaultModel = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+  const defaultModel = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : "not configured";
   const selectedRuntimeLabel = runtimeChoices?.find(
     (choice) => choice.id === selectedRuntime,
   )?.label;

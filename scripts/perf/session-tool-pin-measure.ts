@@ -13,7 +13,8 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
-  persistSessionToolSurface,
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
   prepareSessionToolSurface,
   retainEmbeddedSessionPromptState,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
@@ -85,7 +86,13 @@ async function fixture(kind: "published" | "restored" | "unpublished") {
       tools: selected,
     });
   prepare(pinned);
-  await persistSessionToolSurface(lease.state, async (customType, data) => {
+  prepareSessionSystemPrompt({
+    state: lease.state,
+    routeKey: "synthetic-route",
+    systemPrompt: "synthetic prompt",
+    entries,
+  }).commit();
+  await persistSessionSystemPrompt(lease.state, async (customType, data) => {
     entries.push({
       type: "custom",
       customType,

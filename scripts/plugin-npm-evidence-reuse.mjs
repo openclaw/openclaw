@@ -15,8 +15,11 @@ export function npmEvidenceBinding(params, env = process.env) {
     verifierRef: params.workflowFullRef,
     frvRunId: String(params.fullReleaseValidationRunId),
     frvRunAttempt: Number(params.fullReleaseValidationRunAttempt),
-    parentRunId: env.PREPARED_NPM_PARENT_RUN_ID,
-    parentRunAttempt: Number(env.PREPARED_NPM_PARENT_RUN_ATTEMPT),
+    // Direct publication has its own approval; absence is not a synthetic parent.
+    parentRunId: env.PREPARED_NPM_PARENT_RUN_ID || null,
+    parentRunAttempt: env.PREPARED_NPM_PARENT_RUN_ATTEMPT
+      ? Number(env.PREPARED_NPM_PARENT_RUN_ATTEMPT)
+      : null,
     childRunId: env.GITHUB_RUN_ID,
     childRunAttempt: Number(env.GITHUB_RUN_ATTEMPT),
     artifact: params.artifact,
@@ -28,14 +31,18 @@ export function npmEvidenceBinding(params, env = process.env) {
     npmDistTag: params.npmDistTag,
   };
   if (
-    ![binding.frvRunId, binding.parentRunId, binding.childRunId].every((id) =>
-      /^[1-9][0-9]*$/u.test(id ?? ""),
-    ) ||
-    ![binding.frvRunAttempt, binding.parentRunAttempt, binding.childRunAttempt].every(
+    ![binding.frvRunId, binding.childRunId].every((id) => /^[1-9][0-9]*$/u.test(id ?? "")) ||
+    ![binding.frvRunAttempt, binding.childRunAttempt].every(
       (attempt) => Number.isSafeInteger(attempt) && attempt > 0,
-    )
+    ) ||
+    ((binding.parentRunId !== null || binding.parentRunAttempt !== null) &&
+      (!/^[1-9][0-9]*$/u.test(binding.parentRunId ?? "") ||
+        !Number.isSafeInteger(binding.parentRunAttempt) ||
+        binding.parentRunAttempt <= 0))
   ) {
-    throw new Error("Evidence handoff requires exact FRV, publication parent and child attempts");
+    throw new Error(
+      "Evidence handoff requires exact FRV and publication attempts, and a complete parent tuple when supplied",
+    );
   }
   return binding;
 }
@@ -52,6 +59,7 @@ export async function loadNpmEvidenceReplay({
   archivePath,
   client,
   fetchImpl,
+  shareAcquisitionReads = false,
 }) {
   const current = await client.getRun(binding.childRunId);
   if (
@@ -105,13 +113,13 @@ export async function loadNpmEvidenceReplay({
     maxEntryBytes: () => MAX_REPLAY_BYTES,
     maxExpandedBytes: MAX_REPLAY_BYTES,
   });
-  const replay = createReleaseEvidenceReplay(
-    binding,
-    JSON.parse(files.get(NPM_EVIDENCE_FILE).toString("utf8")),
-  );
+  const payload = JSON.parse(files.get(NPM_EVIDENCE_FILE).toString("utf8"));
+  const replay = createReleaseEvidenceReplay(binding, payload, { shareAcquisitionReads });
   replay.observeRun("actions/runs/" + binding.childRunId, current);
   replay.observeArchive(artifactId, metadata);
   // Reuse on disk is content-only: every invocation still authenticates metadata,
   // current attempt and the successful trusted preview job above.
-  return replay;
+  // The successful exact trusted preview, not a caller-created replay object,
+  // authenticates this owner-produced graph projection.
+  return Object.assign(replay, { authenticatedPreparedEvidence: payload.preparedEvidence });
 }

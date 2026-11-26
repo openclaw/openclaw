@@ -55,40 +55,22 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
-When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
-`openclaw-cli` service in your Compose override so ownership checks can see the
-Gateway's processes; sharing the network alone does not share the PID namespace.
-Alternatively, run the TUI inside the Gateway container with
+The `openclaw-cli` service shares the Gateway's PID namespace
+(`pid: "service:openclaw-gateway"`) as well as its network, so ownership checks
+can see the Gateway's processes and config or channel changes reach the running
+Gateway. Keep both settings if you define your own CLI service; sharing the
+network alone does not share the PID namespace. Stopping or recreating the
+Gateway container also ends any running `openclaw-cli` container.
+You can also run the TUI inside the Gateway container with
 `docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
-now refuses unverifiable ownership instead of reclaiming the running Gateway's
-lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
-for shared state. Missing or unreadable namespace identity also keeps ownership
-protected. A replacement container cannot verify that the previous owner died,
-even when its heartbeat is old; elapsed time never authorizes takeover.
+cannot inspect the original Gateway's processes. `tui --local` starts an embedded
+agent and is not a PID-namespace workaround for shared state.
 
-For a genuinely stopped or crashed foreign owner, stop the Gateway service and
-inspect its recorded holder using the same image and state mount:
-
-```bash
-docker compose stop openclaw-gateway
-docker compose run --rm --no-deps openclaw-gateway node openclaw.mjs gateway recover-lock
-```
-
-After confirming that the recorded holder has stopped, run the printed
-`gateway recover-lock --confirm <fingerprint>` command through the same one-off
-Gateway service:
-
-```bash
-docker compose run --rm --no-deps openclaw-gateway node openclaw.mjs gateway recover-lock --confirm <fingerprint>
-docker compose up -d openclaw-gateway
-```
-
-The one-off Gateway service has its own PID namespace and does not depend on the
-stopped service's network or PID namespace. Recovery removes only the unchanged
-lock records and matching SQLite owner lease from the inspection. A renewed
-heartbeat, replaced record, or locally verified live holder causes refusal.
-Same-namespace restarts still recover verified-dead processes automatically.
-See [Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+A new Gateway container on the same state volume waits while the previous
+Gateway's heartbeat is fresh. If the previous owner crashed, the replacement
+automatically takes over once the heartbeat is more than 90 seconds old. A
+restart of the same container with its default hostname can take over
+immediately. See [Container restarts and replacements](/gateway/gateway-lock#container-restarts-and-replacements).
 
 Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
 If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the
@@ -125,7 +107,7 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Shared-network security note">
-    `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI commands can reach the gateway over `127.0.0.1`. Treat this as a shared trust boundary. The compose config drops `NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
+    `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` and `pid: "service:openclaw-gateway"` so CLI commands can reach the gateway over `127.0.0.1` and verify that it owns the shared state. Treat this as a shared trust boundary: the CLI container can also see and signal Gateway processes. The compose config drops `NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
   <Accordion title="Docker Desktop DNS failures in openclaw-cli">

@@ -100,6 +100,7 @@ internal fun buildSystemNotification(
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setContentTitle(request.title)
     .setContentText(request.body)
+    .setStyle(NotificationCompat.BigTextStyle().bigText(request.body))
     .setContentIntent(mainActivityPendingIntent(appContext, NOTIFICATION_CONTENT_REQUEST_CODE))
     .setAutoCancel(true)
     .setOnlyAlertOnce(true)

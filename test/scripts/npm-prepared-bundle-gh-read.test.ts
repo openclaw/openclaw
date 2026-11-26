@@ -32,7 +32,6 @@ beforeAll(() => {
   writeFixture(
     preload,
     String.raw`import childProcess from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
 import { appendFileSync } from 'node:fs';
 const config = JSON.parse(process.env.NPM_GH_FIXTURE);
 let elapsed = 0;
@@ -59,7 +58,7 @@ childProcess.execFileSync = (file, args, options) => {
   });
   return output;
 };
-syncBuiltinESMExports();`,
+`,
   );
 });
 

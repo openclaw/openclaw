@@ -26,8 +26,9 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { writeOutputAsset } from "../media-output.js";
-import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import type { CapabilityEnvelope, CapabilityTransport } from "./result-types.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,
@@ -365,7 +366,7 @@ export async function runTtsStateMutation(params: {
     return { persona: persona.id };
   }
   if (!params.provider) {
-    throw new Error("--provider is required");
+    throwExpectedCliError("--provider is required");
   }
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {

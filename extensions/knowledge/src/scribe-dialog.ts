@@ -1,5 +1,6 @@
 /** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
+import { slackFields } from "./scribe-slack-fields.js";
 import {
   CONVERSATIONS_SCHEDULE,
   defaultOptions,
@@ -28,7 +29,6 @@ import { icon } from "./ui-icons.js";
 export type StartDialogInput = {
   scribe: ScribeDefinition;
   agentName: string;
-  storeName: string;
   detection: ScribeDetection;
   canWrite: boolean;
   /** The Control UI's base path, for links to the Plugins page. */
@@ -65,7 +65,8 @@ const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) =>
 
 /**
  * Button that opens the plugin's page under Plugins, where it is installed, turned on and signed
- * in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads again.
+ * in to; a channel plugin connects its account on its own page (Channels for Slack). It leaves the
+ * Knowledge page; the Scribes tab reads the new state when it loads again.
  */
 export function pluginButton(
   basePath: string,
@@ -73,7 +74,10 @@ export function pluginButton(
   readiness: Exclude<PluginReadiness, "ready">,
   className = "knowledge-button knowledge-primary knowledge-small",
 ) {
-  const href = `${basePath}/plugins/${plugin.catalogPath}`;
+  const href =
+    readiness === "needs-sign-in" && plugin.channel
+      ? `${basePath}/${plugin.channel.accountPath}`
+      : `${basePath}/plugins/${plugin.catalogPath}`;
   return button(
     PLUGIN_ACTION[readiness](plugin.name),
     () => window.location.assign(href),
@@ -84,8 +88,8 @@ export function pluginButton(
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
-// Modal frame shared by both dialogs: head with close, body, feedback line and actions.
-function dialogFrame(title: string, lead?: HTMLElement) {
+/** Modal frame shared by the scribe dialogs: head with close, body, feedback line and actions. */
+export function dialogFrame(title: string, lead?: HTMLElement) {
   const dialog = el("dialog", undefined, "knowledge-store-dialog knowledge-surface scribe-dialog");
   // SAFETY: only focus() is called on it, which every focusable HTML or SVG element implements.
   const previousFocus = document.activeElement as HTMLElement | null;
@@ -120,8 +124,8 @@ function dialogFrame(title: string, lead?: HTMLElement) {
   return { dialog, body, feedback, footer, close };
 }
 
-// Open inside the page so its styles apply; the modal top layer handles stacking.
-function show(dialog: HTMLDialogElement) {
+/** Open inside the page so its styles apply; the modal top layer handles stacking. */
+export function show(dialog: HTMLDialogElement) {
   (document.querySelector(".knowledge-page") ?? document.body).append(dialog);
   dialog.showModal();
 }
@@ -436,13 +440,13 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
 
 // What starting does, in the dialog's own words.
 function effectText(input: StartDialogInput, mode: ScribeMode) {
-  const { scribe, storeName } = input;
+  const { scribe } = input;
   const effect = el("div", undefined, "knowledge-effect");
   const lead = el("p");
   lead.append(
-    "Knowledge will start a conversation called ",
+    "Knowledge will send the prompt above to the ",
     el("strong", scribeLabel(scribe)),
-    ` as you, with ${storeName}’s private access, and send it the prompt above. `,
+    " conversation, creating it if needed. ",
     mode === "once"
       ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
       : scribe.id === "claim-consolidation"
@@ -453,7 +457,7 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
     lead,
     el(
       "p",
-      `Uses ${input.agentName}’s default model. You can read everything it does in that conversation${mode === "once" ? "." : ", and pause or turn it off from Scribes."}`,
+      `This request uses the conversation’s model settings. Follow its progress there${mode === "once" ? "." : ", and manage its automation from Scribes."}`,
       "knowledge-muted",
     ),
   );
@@ -545,6 +549,12 @@ export function openStartDialog(input: StartDialogInput) {
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;
+  } else if (scribe.id === "slack") {
+    const fields = slackFields(input.detection, changed);
+    frame.body.append(...fields.nodes);
+    mode = fields.mode;
+    valid = fields.valid;
+    options = fields.options;
   } else if (scribe.id === "claim-consolidation") {
     const fields = reviewFields(changed);
     frame.body.append(...fields.nodes);
@@ -599,9 +609,11 @@ export function openConfirmDialog(
   text: string,
   confirmLabel: string,
   confirm: () => Promise<void>,
+  /** What confirming applies, shown below the text. */
+  detail?: Node,
 ) {
   const frame = dialogFrame(title);
-  frame.body.append(el("p", text, "scribe-dialog-blurb"));
+  frame.body.append(el("p", text, "scribe-dialog-blurb"), ...(detail ? [detail] : []));
   const submit = button(
     confirmLabel,
     () => {
@@ -626,4 +638,39 @@ export function openConfirmDialog(
   show(frame.dialog);
   submit.focus();
   return frame.dialog;
+}
+
+/**
+ * The lines that differ between two run messages, in order: lines only in `before` as removed,
+ * lines only in `after` as added. Unchanged lines are left out. Run messages are a few dozen
+ * lines, so a plain longest-common-subsequence table is enough.
+ */
+export function changedLines(before: string, after: string) {
+  const a = before.split("\n"),
+    b = after.split("\n");
+  const common = Array.from({ length: a.length + 1 }, () =>
+    Array.from({ length: b.length + 1 }, () => 0),
+  );
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i]![j] =
+        a[i] === b[j]
+          ? common[i + 1]![j + 1]! + 1
+          : Math.max(common[i + 1]![j]!, common[i]![j + 1]!);
+    }
+  }
+  const lines: { kind: "removed" | "added"; text: string }[] = [];
+  let i = 0,
+    j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (i < a.length && (j === b.length || common[i + 1]![j]! >= common[i]![j + 1]!)) {
+      lines.push({ kind: "removed", text: a[i++]! });
+    } else {
+      lines.push({ kind: "added", text: b[j++]! });
+    }
+  }
+  return lines;
 }

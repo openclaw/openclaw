@@ -15,19 +15,21 @@ import {
 } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
-import { resolveUnrepresentedHtmlAttachmentIds } from "./html.js";
+import {
+  extractInlineImageReferences,
+  isAdvertisedFileAttachment,
+  isDownloadableAttachment,
+  normalizeContentType,
+  resolveMSTeamsMediaKind,
+  resolveUnrepresentedHtmlAttachmentIds,
+} from "./html.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
-  extractInlineImageReferences,
   GRAPH_ROOT,
-  isAdvertisedFileAttachment,
-  isDownloadableAttachment,
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
-  normalizeContentType,
-  resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,

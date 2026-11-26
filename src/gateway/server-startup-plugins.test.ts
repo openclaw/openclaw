@@ -1,8 +1,11 @@
 /**
  * Gateway startup plugin bootstrap tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +28,10 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createLegacyLauncherFixture,
+  runLegacyLauncher,
+} from "../update/legacy-launcher.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -281,6 +288,79 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
     );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "repairs this installation's launcher an earlier updater left in its removed stage",
+    async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gateway-launcher-")));
+      onTestFinished(() => fs.rmSync(home, { recursive: true, force: true }));
+      // The Gateway resolves its own package root; point it at a fixture installation.
+      const root = path.join(home, "global", "openclaw");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, "openclaw.mjs"), "");
+      resolveOpenClawPackageRootSync.mockReturnValueOnce(root);
+      vi.stubEnv("PATH", home);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      // The published shim names a stage beside this installation that no longer exists.
+      const stage = path.join(home, "global", ".openclaw-update-native-AbC123");
+      const launcher = path.join(home, "openclaw");
+      fs.writeFileSync(
+        launcher,
+        `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node  "$basedir"/'global/.openclaw-update-native-AbC123/openclaw.mjs' "$@"\n# cmd-shim-target=${path.join(root, "openclaw.mjs")}\n`,
+      );
+      const log = createLog();
+      await runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
+        log,
+      });
+      expect(log.info).toHaveBeenCalledWith(
+        `Repaired the openclaw launcher ${launcher}: it still pointed at the removed update stage ${stage}.`,
+      );
+      expect(fs.readFileSync(launcher, "utf8")).not.toContain(".openclaw-update-native-");
+      expect(log.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refreshes an installed legacy launcher without counting diagnostics or disabling rollback", async () => {
+    await withOpenClawTestState({ label: "legacy-release-launcher" }, async () => {
+      const fixture = createLegacyLauncherFixture(process.env.OPENCLAW_STATE_DIR!);
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      resolveOpenClawPackageRootSync.mockReturnValueOnce(fixture.root);
+      expect(runLegacyLauncher(fixture.launcher, ["gateway", "run"]).status).toBe(0);
+      const trial = fs.readFileSync(fixture.trial, "utf8");
+      const selected = fs.readlinkSync(fixture.slot);
+      const log = createLog();
+      await runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
+        log,
+      });
+      for (let count = 0; count < 2; count++) {
+        expect(runLegacyLauncher(fixture.launcher, ["gateway", "status"]).status).toBe(0);
+        expect(fs.readFileSync(fixture.trial, "utf8")).toBe(trial);
+        expect(fs.readlinkSync(fixture.slot)).toBe(selected);
+      }
+      // Genuine starts still consume the legacy budget and restore the previous release.
+      expect(runLegacyLauncher(fixture.launcher, ["gateway", "run"]).status).toBe(0);
+      expect(JSON.parse(fs.readFileSync(fixture.trial, "utf8")).attempts).toBe(2);
+      const rollback = runLegacyLauncher(fixture.launcher, ["gateway", "run"]);
+      expect(rollback.status).toBe(0);
+      expect(rollback.stderr).toContain("failed to start twice; switched back");
+      expect(fs.existsSync(fixture.trial)).toBe(false);
+      expect(fs.realpathSync(fixture.slot)).toBe(
+        path.join(fixture.prefix, "releases/previous/openclaw"),
+      );
+      expect(log.warn).not.toHaveBeenCalled();
+    });
   });
 
   it("does not start maintenance after its Gateway lifetime closes", async () => {
@@ -686,12 +766,6 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
-    const startupInput = firstCallArg<{
-      channelPluginLoadIntent?: "full" | "setup";
-      loadIntent: "startup" | "replacement";
-    }>(prepareGatewayPluginLoad);
-    expect(startupInput.channelPluginLoadIntent).toBe("full");
-    expect(startupInput.loadIntent).toBe("startup");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );

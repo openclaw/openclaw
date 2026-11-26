@@ -15,8 +15,10 @@ it("keeps collection guidance in the automation message for an existing session"
     timeLine: "Current time: 2026-10-26T00:00:00Z",
   });
 
-  expect(commandBody).toContain("will not resume after `sessions_yield`");
-  expect(commandBody).toContain("Yield only when child output is the deliverable");
+  expect(commandBody).toContain(
+    "A `sessions_yield` for child sessions does not resume this automation turn",
+  );
+  expect(commandBody).toContain("Yield for children only when child output is the deliverable");
   expect(commandBody).toContain("`collect=true` and `agents_wait` when available");
 });
 

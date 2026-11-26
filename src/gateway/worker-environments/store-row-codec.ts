@@ -14,6 +14,7 @@ import type {
   WorkerEnvironmentCredentials,
   WorkerEnvironments,
 } from "../../state/openclaw-state-db.generated.js";
+import { decodeQueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type {
@@ -106,6 +107,13 @@ export function decodeWorkerEnvironmentRow(
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
+    ...(row.provision_source_json === null
+      ? {}
+      : {
+          provisionSource: decodeQueuedOperatorRecoverySource(
+            JSON.parse(row.provision_source_json),
+          ),
+        }),
     resourceReceipt:
       row.resource_receipt_json === null
         ? null

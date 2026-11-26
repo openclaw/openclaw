@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
+import {
+  decodeGitHubPublicationRequester,
+  matchesGitHubPublicationRequester,
+} from "../state/github-publication-requester.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 export function repositoryGitHubPublicationDigest(row: RepositoryGitHubPublicationRow): string {
@@ -50,6 +54,53 @@ export function checkRepositoryGitHubPublication(
     throw new Error("GitHub repository publication receipt is corrupt.");
   }
   return row;
+}
+
+/** Managed history identifies the accepted input; live requester authority still gates every retry. */
+export function matchesRepositoryGitHubPublicationInput(
+  row: RepositoryGitHubPublicationRow,
+  published: RepositoryGitHubPublicationRow,
+): boolean {
+  const requester = decodeGitHubPublicationRequester(row.requester_authority_json);
+  const publishedRequester = decodeGitHubPublicationRequester(published.requester_authority_json);
+  return (
+    row.owner_profile_id === null &&
+    published.owner_profile_id === null &&
+    published.status === "published" &&
+    published.request_id !== row.request_id &&
+    published.created_at_ms > row.created_at_ms &&
+    published.head_commit !== null &&
+    published.head_commit === published.pushed_head_commit &&
+    published.pull_request_url !== null &&
+    published.last_effect === "pull_request" &&
+    published.effect_state === "observed" &&
+    row.checkpoint_digest !== null &&
+    (
+      [
+        "session_id",
+        "session_lifecycle_revision",
+        "session_key",
+        "agent_id",
+        "workspace_id",
+        "push_repository",
+        "repository",
+        "branch",
+        "base_branch",
+        "identity_source",
+        "identity_profile_id",
+        "identity_account_id",
+        "identity_login",
+        "checkpoint_digest",
+        "source_head_commit",
+        "source_index_tree",
+        "workspace_tree",
+        "previous_head_commit",
+      ] as const
+    ).every((key) => row[key] === published[key]) &&
+    requester !== undefined &&
+    publishedRequester !== undefined &&
+    matchesGitHubPublicationRequester(requester, publishedRequester)
+  );
 }
 
 export type RepositoryGitHubPublicationPendingQuery = {

@@ -74,7 +74,8 @@ describe("runBtwSideQuestion", () => {
     expect(payload.tools).toEqual([{ type: "web_search" }]);
   });
 
-  it.each(["openclaw", "codex"] as const)(
+  // The built-in runtime's fork prepares nothing here; `runSessionFork` owns its authority.
+  it.each(["codex"] as const)(
     "rejects withdrawn source access after %s preparation before dispatch",
     async (harness) => {
       let current = true;
@@ -94,7 +95,8 @@ describe("runBtwSideQuestion", () => {
           throw new Error("conversation access withdrawn");
         }
       });
-      await expect(btw.runSideQuestion({ toolCalls: "deny", assertCurrent })).rejects.toThrow(
+      const sessionFork = async () => ({ text: "built-in fork" });
+      await expect(btw.runSideQuestion({ sessionFork, assertCurrent })).rejects.toThrow(
         "conversation access withdrawn",
       );
       expect(btw.streamSimpleMock).not.toHaveBeenCalled();

@@ -391,7 +391,7 @@ checkout_git_openclaw_ref() {
     # Full commit IDs pin source bytes, even when a remote ref has the same name.
     # Bundled/existing checkouts already have the object and need no remote lookup.
     if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+        if ! GIT_NO_LAZY_FETCH=1 git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
             if ! installer_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
                 installer_error "Could not fetch requested git commit: ${ref}"
                 return 1
@@ -491,6 +491,57 @@ git_install_lockfile_flag() {
     fi
 }
 
+publish_git_clone_staging() {
+    local source="$1" target="$2" preserve_target="$3"
+    if [[ "$preserve_target" == 0 ]]; then
+        if [[ -e "$target" || -L "$target" ]]; then
+            echo "Git install dir appeared while cloning: ${target}" >&2
+            return 1
+        fi
+        mv "$source" "$target"
+        return
+    fi
+    if [[ ! -d "$target" || -L "$target" || "$(ls -A "$target")" != "$(basename "$source")" ]]; then
+        echo "Git install dir appeared while cloning: ${target}" >&2
+        return 1
+    fi
+    local entry name git_entry="" moved_count=0 publish_failed=0 rollback_failed=0 recovery
+    local -a entries=() moved=()
+    while IFS= read -r entry; do
+        name="${entry##*/}"
+        if [[ "$name" == ".git" ]]; then
+            git_entry="$name"
+        else
+            entries+=("$name")
+        fi
+    done < <(find "$source" -mindepth 1 -maxdepth 1 -print)
+    # .git moves last, so an interrupted publish never looks like a complete checkout.
+    [[ -n "$git_entry" ]] && entries+=("$git_entry")
+    if (( ${#entries[@]} > 0 )); then
+        for name in "${entries[@]}"; do
+            if ! mv "${source}/${name}" "${target}/${name}"; then
+                publish_failed=1
+                break
+            fi
+            moved+=("$name")
+            moved_count=$((moved_count + 1))
+        done
+    fi
+    if (( publish_failed == 0 )) && rmdir "$source"; then
+        return 0
+    fi
+    while (( moved_count > 0 )); do
+        moved_count=$((moved_count - 1))
+        mv "${target}/${moved[$moved_count]}" "${source}/${moved[$moved_count]}" || rollback_failed=1
+    done
+    if (( rollback_failed != 0 )); then
+        recovery="$source"
+        mv "$source" "${source}.recovery" && recovery="${source}.recovery"
+        echo "Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}" >&2
+    fi
+    return 1
+}
+
 clone_git_checkout_transactionally() {
     local repo_url="$1"
     local repo_dir="$2"
@@ -515,58 +566,8 @@ clone_git_checkout_transactionally() {
         return "$clone_status"
     fi
 
-    if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
-const fs = require("node:fs");
-const [source, target, preserveTarget] = process.argv.slice(2);
-if (preserveTarget === "0") {
-  try {
-    fs.lstatSync(target);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    fs.renameSync(source, target);
-    process.exit(0);
-  }
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
-if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
-const moved = [];
-try {
-  for (const entry of entries) {
-    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
-    moved.push(entry);
-  }
-  fs.rmdirSync(source);
-} catch (error) {
-  const rollbackErrors = [];
-  for (const entry of moved.reverse()) {
-    try {
-      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
-    } catch (rollbackError) {
-      rollbackErrors.push(rollbackError);
-    }
-  }
-  if (rollbackErrors.length > 0) {
-    let recovery = source;
-    try {
-      recovery = `${source}.recovery`;
-      fs.renameSync(source, recovery);
-    } catch (recoveryError) {
-      rollbackErrors.push(recoveryError);
-      recovery = source;
-    }
-    throw new AggregateError(
-      [error, ...rollbackErrors],
-      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
-    );
-  }
-  throw error;
-}
-NODE
-    then
+    # Git installs provision Node after checkout, so publication must not need it.
+    if ! publish_git_clone_staging "$staging_dir" "$repo_dir" "$preserve_repo_dir"; then
         installer_clone_error "$repo_dir"
     fi
 }

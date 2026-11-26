@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
 import { buildChildEnv, resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
@@ -15,16 +15,13 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  CI_PROOF_TEST_FILES,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-  isCiProofTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
+import { CI_PROOF_TEST_FILES, isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
@@ -37,6 +34,7 @@ import {
   resolveAffectedTestsFromImportGraph,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
+import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -108,6 +106,8 @@ function toolingShard(
 }
 
 describe("selected boundary setup sharing", () => {
+  aroundEach((runTest) => withEnvAsync({ OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" }, runTest));
+
   const runner = "blacksmith-8vcpu-ubuntu-2404";
   const boundary: NodeTestShard = {
     checkName: "checks-node-changed-boundary",
@@ -145,8 +145,33 @@ describe("selected boundary setup sharing", () => {
   });
 
   it.each([
+    ["bun-all", 90],
+    ["node", 60],
+    ["dual-all", 60],
+    [undefined, 60],
+  ] as const)("bounds boundary packing for runtime policy %s", (policy, seconds) => {
+    withEnv({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy }, () => {
+      const selected = { ...tooling(), predictedSeconds: seconds, predictedTestSeconds: seconds };
+      const packed = packChangedNodeBoundary([selected, boundary]);
+      expect(packed).toHaveLength(1);
+      expect(packed[0]?.predictedTestSeconds).toBe(150);
+      expect(packed[0]?.groups?.[0]).toEqual({
+        configs: boundary.configs,
+        requiresDist: false,
+        runner,
+        shard_name: boundary.shardName,
+      });
+      expect(packed[0]?.groups?.slice(1)).toEqual(selected.groups);
+      const overflow = [
+        { ...selected, predictedSeconds: seconds + 1, predictedTestSeconds: seconds + 1 },
+        boundary,
+      ];
+      expect(packChangedNodeBoundary(overflow)).toBe(overflow);
+    });
+  });
+
+  it.each([
     { measurement: "complete", prices: [1, 1], allocations: 1 },
-    { measurement: "missing", prices: [1, undefined], allocations: 2 },
     { measurement: "expensive", prices: [75, 1], allocations: 2 },
   ])(
     "shares boundary setup only for a short $measurement tooling selection",
@@ -203,6 +228,7 @@ describe("selected boundary setup sharing", () => {
   it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
     const base = tooling();
     const variants = [
+      { predictedSeconds: undefined, predictedTestSeconds: undefined },
       { predictedSeconds: 61, predictedTestSeconds: 61 },
       { runner: "blacksmith-32vcpu-ubuntu-2404" },
       { planConcurrency: 2 },
@@ -818,7 +844,7 @@ describe("CI changed Node test plan", () => {
 
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
     ];
     const artifactTarget = "test/scripts/build-all.test.ts";
@@ -895,7 +921,7 @@ describe("CI changed Node test plan", () => {
 
   it("pays for heavy-row splits by merging compatible small rows before the matrix cap", async () => {
     const targets = [
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-run-timings.test.ts",
       "test/scripts/ci-test-timings.test.ts",
@@ -1489,7 +1515,10 @@ describe("CI changed Node test plan", () => {
       const shards = createChangedNodeTestShards(changedPaths, { runnerBackend });
       expect(shards).not.toBeNull();
       const groups = shards?.flatMap((shard) => shard.groups ?? []) ?? [];
-      const tooling = groups.filter((group) => !group.requiresDist);
+      const tooling = groups.filter(
+        (group) =>
+          !group.requiresDist && group.configs.includes("test/vitest/vitest.tooling.config.ts"),
+      );
       expect(tooling.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
         expectedTargets.toSorted(),
       );
@@ -1511,9 +1540,11 @@ describe("CI changed Node test plan", () => {
         );
       }
       expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-      expect(shards).toContainEqual(
-        expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
+      const boundaryGroups = fallbackGroups(shards ?? []).filter((group) =>
+        group.configs.includes("test/vitest/vitest.boundary.config.ts"),
       );
+      expect(boundaryGroups).toHaveLength(1);
+      expect(boundaryGroups[0]?.includePatterns).toBeUndefined();
       for (const shard of shards?.filter((job) => job.groups) ?? []) {
         const encodedGroups = (shard.groups ?? []).map(
           ({ configs, env, includePatterns, shard_name, timing_key }) => ({
@@ -1817,7 +1848,6 @@ describe("CI changed Node test plan", () => {
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const shards = createChangedNodeTestShards([target]);
@@ -1826,7 +1856,6 @@ describe("CI changed Node test plan", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>

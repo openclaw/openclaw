@@ -1,6 +1,35 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 
+const auditCliConfig = "test/vitest/vitest.cli-process.config.ts";
+const auditMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
+const auditDatabaseConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
+/** @type {Array<[string[], string]>} */
+const auditConfigGroups = [
+  [[auditCliConfig], auditCliConfig],
+  [[auditMethodsConfig], auditMethodsConfig],
+  [[auditDatabaseConfig], auditDatabaseConfig],
+  [
+    [auditMethodsConfig, "test/vitest/vitest.gateway-methods-isolated.config.ts"],
+    auditMethodsConfig,
+  ],
+  [
+    ["test/vitest/vitest.gateway-server-isolated.config.ts", auditDatabaseConfig],
+    auditDatabaseConfig,
+  ],
+];
+
+// Mixed commands run one process per config. Only the named failure-bearing
+// config may publish to their shared audit directory.
+export function resolveCiTestAuditConfig(configs) {
+  return auditConfigGroups.find(
+    ([expected]) =>
+      Array.isArray(configs) &&
+      configs.length === expected.length &&
+      configs.every((config, index) => config === expected[index]),
+  )?.[1];
+}
+
 const digest = /^[a-f0-9]{64}$/iu;
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 export const observationFileId = ({ project, pool, file }) => JSON.stringify([project, pool, file]);

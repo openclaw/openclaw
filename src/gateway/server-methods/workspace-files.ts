@@ -163,6 +163,8 @@ async function toSessionFileEntry(
   fileRoot: string | undefined,
   opts: {
     includeContent?: boolean;
+    /** Without content, still open the file so the reader's admission rules decide "missing". */
+    admitRead?: boolean;
     workspaceRoot?: WorkspaceRoot;
     readRoot?: string;
     assertCurrent?: () => void;
@@ -211,6 +213,9 @@ async function toSessionFileEntry(
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
   };
   if (!opts.includeContent) {
+    if (opts.admitRead && !(await readWorkspaceFilePrefix(readRoot, browserPath, 1))) {
+      return { ...base, missing: true };
+    }
     return entry;
   }
   const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
@@ -257,6 +262,81 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
+/**
+ * Runs Files searches over one ordered workspace walk. Each search stops, incomplete, where it
+ * would alone: before its next entry once it holds MAX_SEARCH_ENTRIES matches or the walk has
+ * visited MAX_SEARCH_VISITED_ENTRIES. Results keep the order of `searches`.
+ */
+export async function searchWorkspaceEntries(
+  readRoot: string | WorkspaceRoot,
+  searches: readonly string[],
+  relevance?: ReadonlyMap<string, SessionFileRelevance>,
+  assertCurrent?: () => void,
+) {
+  // Normalize comparison text only; on-disk filenames stay original.
+  const results = searches.map((search) => ({
+    query: foldSearchCase(search).normalize("NFC"),
+    // SAFETY: each search starts with an empty list populated only with browser entries.
+    entries: [] as SessionFileBrowserEntry[],
+    truncated: false,
+    open: true,
+  }));
+  let visited = 0;
+  const shouldStop = () => {
+    let open = false;
+    for (const result of results) {
+      if (
+        result.open &&
+        (result.entries.length >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
+      ) {
+        result.open = false;
+        result.truncated = true;
+      }
+      open ||= result.open;
+    }
+    return !open;
+  };
+  const visit = async (dir: string): Promise<void> => {
+    if (shouldStop()) {
+      return;
+    }
+    const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
+    if (!dirents) {
+      return;
+    }
+    for (const dirent of sortDirents(dirents)) {
+      if (shouldStop()) {
+        return;
+      }
+      visited += 1;
+      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+      const folded = foldSearchCase(browserPath).normalize("NFC");
+      for (const result of results) {
+        if (result.open && folded.includes(result.query)) {
+          const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
+          if (entry) {
+            result.entries.push(entry);
+          }
+        }
+      }
+      if (dirent.isDirectory) {
+        if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+          // The public result only has a boolean completeness signal. A skipped
+          // directory can contain another filename match, so searches that saw
+          // one must not be presented as workspace-wide unique.
+          for (const result of results) {
+            result.truncated ||= result.open;
+          }
+        } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+          await visit(browserPath);
+        }
+      }
+    }
+  };
+  await visit("");
+  return results.map(({ entries, truncated }) => ({ entries, truncated }));
+}
+
 export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
@@ -270,7 +350,7 @@ export async function listSessionWorkspaceFiles(
     workspaceRoot && "access" in workspaceRoot
       ? undefined
       : params.diffCwd
-        ? insideGitCheckout(params.diffCwd)
+        ? await insideGitCheckout(params.diffCwd)
         : undefined;
   const allowOutside =
     root &&
@@ -302,51 +382,9 @@ export async function listSessionWorkspaceFiles(
     const relevance = buildSessionRelevanceMap(workspaceFiles, root, fileRoot);
     const readRoot = workspaceRoot ?? root;
     if (search) {
-      const entries: SessionFileBrowserEntry[] = [];
-      // Normalize comparison text only; on-disk filenames stay original.
-      const query = foldSearchCase(search).normalize("NFC");
-      let visitedEntries = 0;
-      let truncated = false;
-      const shouldStop = (): boolean => {
-        if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
-          truncated = true;
-          return true;
-        }
-        return false;
-      };
-      const visit = async (dir: string): Promise<void> => {
-        if (shouldStop()) {
-          return;
-        }
-        const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
-        if (!dirents) {
-          return;
-        }
-        for (const dirent of sortDirents(dirents)) {
-          if (shouldStop()) {
-            return;
-          }
-          visitedEntries += 1;
-          const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (foldSearchCase(browserPath).normalize("NFC").includes(query)) {
-            const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
-            if (entry) {
-              entries.push(entry);
-            }
-          }
-          if (dirent.isDirectory) {
-            if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
-              // The public result only has a boolean completeness signal. A skipped
-              // directory can contain another filename match, so searches that saw
-              // one must not be presented as workspace-wide unique.
-              truncated = true;
-            } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
-              await visit(browserPath);
-            }
-          }
-        }
-      };
-      await visit("");
+      const { entries, truncated } = (
+        await searchWorkspaceEntries(readRoot, [search], relevance, assertCurrent)
+      )[0]!;
       return {
         path: "",
         search,
@@ -398,12 +436,14 @@ export async function getSessionWorkspaceFile(
     path: string;
     assertCurrent?: () => void;
     includeContent?: boolean;
+    admitRead?: boolean;
   },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
     readRoot: params.readRoot,
     includeContent: params.includeContent !== false,
+    admitRead: params.admitRead,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {

@@ -187,6 +187,17 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          prepareRepositoryIntegration: async (
+            identity,
+            input,
+          ): ReturnType<
+            import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration
+          > => {
+            if (!workerPlacement) {
+              throw new Error("Repository publication worker is unavailable");
+            }
+            return await workerPlacement.prepareRepositoryPublication(identity, input);
+          },
           ...(workerEnvironmentService ? { environments: workerEnvironmentService } : {}),
           getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
@@ -477,7 +488,10 @@ export async function prepareGatewayKernelState(params: {
     getStartupPendingReason: () => startupState.pendingReason,
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
-  const getStartup = createStartupChecker(startupCheckerDeps, listAgentDatabaseAdmissionRefusals);
+  const getStartup = createStartupChecker(
+    { ...startupCheckerDeps, gatewayBootId: bootId },
+    listAgentDatabaseAdmissionRefusals,
+  );
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
@@ -513,6 +527,7 @@ export async function prepareGatewayKernelState(params: {
   // Inert until the Labs switch is on; the switch is reconciled after ready. Saved
   // device-token bindings are read now, before any listener admits a connection.
   const openclawIdService = createOpenClawIdService({
+    memberRolePresets: bootstrap.memberRolePresets,
     getConfig: () => getRuntimeConfig().gateway?.openclawId,
     getStateDir: () => resolveStateDir(),
     getGatewayServer: () => transportBridge.current()?.httpServer,

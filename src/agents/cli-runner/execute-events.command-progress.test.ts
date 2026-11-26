@@ -214,7 +214,7 @@ it.each([
       vi.setSystemTime(360_000);
       expect(watchdog.snapshot().semanticDeadlineAtMs).toBe(advances ? 719_000 : 360_000);
       if (endTool) {
-        expect((await watchdog.tick()).action).toBe("warn");
+        expect((await watchdog.tick()).action).toBe("observe");
         expect(stop).not.toHaveBeenCalled();
         endTool();
       }

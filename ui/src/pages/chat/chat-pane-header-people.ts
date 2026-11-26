@@ -1,4 +1,4 @@
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../api/types.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import {
   projectPresenceViewers,
@@ -7,7 +7,11 @@ import {
 } from "../../lib/presence-users.ts";
 import { CHAT_HEADER_VIEWER_LIMIT } from "./chat-header-viewers-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
-import { projectChatMobilePeople, type ChatMobilePeopleMention } from "./chat-mobile-people.ts";
+import {
+  projectChatMobilePeople,
+  projectSessionPeople,
+  type ChatMobilePeopleMention,
+} from "./chat-mobile-people.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -25,6 +29,7 @@ export class ChatPaneHeaderPeople {
   read(input: {
     host?: ChatPageHost;
     session: GatewaySessionRow | undefined;
+    sharing?: SessionMembersListEvidenceResult;
     ownerCount: number;
     presence: unknown;
     selfUser: AuthenticatedUser | null | undefined;
@@ -34,19 +39,22 @@ export class ChatPaneHeaderPeople {
     detailsControl: object | undefined;
     mentionableUsers: readonly ChatMobilePeopleMention[] | undefined;
   }) {
-    const { session, presence, sessionKey, mentionableUsers } = input;
+    const { session, sharing, presence, sessionKey, mentionableUsers } = input;
     const host = input.host;
     const target = { sessionKey };
     // First-pane hydration admits this record with the transcript before attach.
     const saved = host && readChatSessionSnapshot(host.chatMessagesBySession, host, target);
     const cached = saved?.headerViewers;
-    const showOwnerChip = input.ownerCount >= 2 || (session?.participantCount ?? 0) > 0;
+    const showOwnerChip =
+      input.ownerCount >= 2 ||
+      (session?.participantCount ?? 0) > 0 ||
+      Boolean(sharing?.members.length);
     const ownerIdentity = showOwnerChip ? session?.owner?.actor.identity : undefined;
     const viewers = input.catalog
       ? undefined
       : this.viewers.read(
           presence === undefined && cached
-            ? [cached, sessionKey]
+            ? [cached, sessionKey, session, sharing, input.detailsControl]
             : [
                 presence,
                 presence === undefined ? cached : undefined,
@@ -55,29 +63,25 @@ export class ChatPaneHeaderPeople {
                 sessionKey,
                 input.detailsControl,
                 ownerIdentity,
-                showOwnerChip ? session?.participants : undefined,
+                showOwnerChip ? session : undefined,
+                sharing,
               ],
-          () =>
-            presence === undefined && cached
-              ? cached.users.map(({ profileId, ...user }) => ({
-                  ...user,
-                  identity: profileId ? { type: "profile" as const, id: profileId } : undefined,
-                  watchedSessions: [sessionKey],
-                }))
-              : projectPresenceViewers(
-                  presence,
-                  input.selfUser,
-                  input.instanceId,
-                  sessionKey,
-                  input.detailsControl
-                    ? []
-                    : [
-                        ...(ownerIdentity ? [ownerIdentity] : []),
-                        ...(showOwnerChip
-                          ? (session?.participants ?? []).map(({ identity }) => identity)
-                          : []),
-                      ],
-                ),
+          () => {
+            const projected =
+              presence === undefined && cached
+                ? cached.users.map(({ profileId, ...user }) => ({
+                    ...user,
+                    identity: profileId ? { type: "profile" as const, id: profileId } : undefined,
+                    watchedSessions: [sessionKey],
+                  }))
+                : projectPresenceViewers(presence, input.selfUser, input.instanceId, sessionKey);
+            const staticPeople =
+              !input.detailsControl && showOwnerChip ? projectSessionPeople(session, sharing) : [];
+            return projected.filter(
+              (viewer) =>
+                !staticPeople.some(({ identity }) => presenceMatchesProfile(viewer, identity)),
+            );
+          },
         );
     const ownerViewing =
       presence === undefined && cached
@@ -118,9 +122,10 @@ export class ChatPaneHeaderPeople {
       }
     }
     const mobilePeople = session
-      ? this.people.read([session, presence, sessionKey, mentionableUsers], () =>
+      ? this.people.read([session, sharing, presence, sessionKey, mentionableUsers], () =>
           projectChatMobilePeople({
             session,
+            sharing,
             sessionKey,
             viewers: projectPresencePayload(presence).users,
             mentionableUsers: mentionableUsers ?? [],

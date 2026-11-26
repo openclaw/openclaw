@@ -81,6 +81,8 @@ struct ChatAssistantRunGroup: Identifiable {
             return ($0.startedAt ?? .infinity) < ($1.startedAt ?? .infinity)
         }) {
             if let runID = tool.runID, recordedCalls.contains("\(runID):\(tool.id)") { continue }
+            // Live yield context is never a tool row either (web chat-sessions-yield.ts:290-293).
+            if ChatToolActivityItem(live: tool).isYieldContext { continue }
             let index = tool.startedAt.flatMap { startedAt in
                 parts.firstIndex { ($0.timestamp.map { $0 > startedAt }) == true }
             } ?? parts.endIndex
@@ -137,6 +139,11 @@ struct ChatAssistantRunGroup: Identifiable {
         }
         return groups
     }
+
+    /// Index of the group that starts the latest turn, or the end when no group starts one.
+    static func latestTurnStart(in groups: [Self]) -> Int {
+        groups.lastIndex { $0.parts.first?.boundaryID != nil } ?? groups.endIndex
+    }
 }
 
 extension ChatTranscriptRow {
@@ -144,6 +151,7 @@ extension ChatTranscriptRow {
         switch self {
         case let .message(message):
             guard !self.startsTurn,
+                  message.isNestedToolActivity ||
                   ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
             else { return nil }
             return message.workRunID
@@ -158,33 +166,56 @@ extension ChatTranscriptRow {
 }
 
 struct ChatAssistantRunFrame<Content: View>: View {
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
-    let isClean: Bool
+    var joinsAbove = false
+    var joinsBelow = false
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        #if os(iOS)
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
-                    .padding(.top, 5)
+                if self.joinsAbove {
+                    ChatAssistantAvatar()
+                        .hidden()
+                        .frame(height: 0)
+                        .clipped()
+                        .accessibilityHidden(true)
+                } else {
+                    ChatAssistantAvatar()
+                        .padding(.top, 5)
+                }
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
                 .environment(\.openClawAssistantRunContent, true)
-                .padding(self.isClean ? 4 : 12)
-                .assistantBubbleContainerStyle(isClean: self.isClean)
+                .padding(.top, self.joinsAbove ? 0 : 4)
+                .padding(.bottom, self.joinsBelow ? 0 : 4)
+                .focusable(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Include disclosure and action rows in the container's accessibility bounds.
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
+        #else
+        HStack(alignment: .top, spacing: 8) {
+            if self.showsAssistantAvatar {
+                ChatAssistantAvatar()
+                    .padding(.top, 5)
+            }
+            VStack(alignment: .leading, spacing: 8, content: self.content)
+                .environment(\.openClawAssistantRunContent, true)
+                .padding(.vertical, 4)
+                .focusable(false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Include disclosure and action rows in the container's accessibility bounds.
+        .contentShape(.accessibility, Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-assistant-run")
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
+        #endif
     }
 }
 

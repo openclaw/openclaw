@@ -1,32 +1,18 @@
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
-import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-
-export class SandboxStateOwnerRequiredError extends Error {
-  readonly code = "GATEWAY_STATE_OWNER_REQUIRED";
-
-  constructor(cause?: unknown) {
-    super(
-      "Sandbox workspace preparation cannot run alongside a foreign live owner of the selected " +
-        "state root, or when that ownership cannot be verified. Run this SDK call inside the " +
-        "owning Gateway plugin/runtime, or stop the Gateway through its service owner and wait " +
-        "for any embedded run to finish, then retry offline. Inspect openclaw gateway status; " +
-        "this call does not acquire ownership or route remotely.",
-      { cause },
-    );
-    this.name = "SandboxStateOwnerRequiredError";
-  }
-}
+import {
+  prepareSandboxStateOwnerPath,
+  SandboxStateOwnerRequiredError,
+} from "./state-owner-path.js";
 
 /** Retain hosted custody; standalone SDK preparation stays local when the root is offline. */
-export async function captureSandboxStateOwner(): Promise<() => void> {
-  const resolveTarget = () =>
-    resolveIdentityPathViaExistingAncestorSync(resolveOpenClawStateSqlitePath());
+export async function captureSandboxStateOwner() {
   try {
     const env = { ...process.env };
-    const databasePath = resolveTarget();
-    const owner = captureGatewayStateOwner(databasePath);
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const access = await captureStateDatabaseAccess(databasePath);
+    const owner = access.processOwner;
     if (owner && owner.role !== "gateway" && owner.role !== "agent-embedded") {
       throw new SandboxStateOwnerRequiredError();
     }
@@ -36,13 +22,15 @@ export async function captureSandboxStateOwner(): Promise<() => void> {
     ) {
       throw new SandboxStateOwnerRequiredError();
     }
+    const assertAccess = owner ? await access.prepareAccess() : undefined;
+    const stateOwnerPath = { path: databasePath, canonicalPath: access.canonicalPath };
     const assertCurrent = () => {
       try {
-        if (owner) {
-          owner.assertCurrent(resolveOpenClawStateSqlitePath());
-        } else if (resolveTarget() !== databasePath) {
+        if (resolveOpenClawStateSqlitePath() !== databasePath) {
           throw new SandboxStateOwnerRequiredError();
         }
+        owner?.assertCurrent();
+        assertAccess?.();
       } catch (error) {
         if (error instanceof SandboxStateOwnerRequiredError) {
           throw error;
@@ -50,8 +38,16 @@ export async function captureSandboxStateOwner(): Promise<() => void> {
         throw new SandboxStateOwnerRequiredError(error);
       }
     };
-    assertCurrent();
-    return assertCurrent;
+    const prepareCurrent = async () => {
+      await prepareSandboxStateOwnerPath(stateOwnerPath);
+      assertCurrent();
+    };
+    await prepareCurrent();
+    return {
+      assertCurrent,
+      stateOwnerPath,
+      prepareCurrent,
+    };
   } catch (error) {
     if (error instanceof SandboxStateOwnerRequiredError) {
       throw error;

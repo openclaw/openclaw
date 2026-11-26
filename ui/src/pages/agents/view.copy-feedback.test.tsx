@@ -3,15 +3,12 @@ import { t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { AgentsPageMenu } from "./agents-page-menu.tsx";
 
-const showToast = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/toast.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
-  showToast,
-}));
-
 function menuProps() {
   return {
     agentId: "alpha",
+    canCreateAgent: true,
+    canSetDefault: true,
+    canDeleteAgent: true,
     defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
@@ -34,20 +31,38 @@ const openItems = (container: HTMLElement) => {
   return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
 };
 
-it("copies the agent ID from the page menu and confirms with a toast", async () => {
-  const writeText = vi.fn(async (_text: string) => undefined);
+it("keeps Copy ID feedback in the menu and permits an immediate retry or next action", async () => {
+  const writeText = vi
+    .fn(async (_text: string) => undefined)
+    .mockRejectedValueOnce(new Error("Clipboard unavailable"));
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const container = document.body.appendChild(document.createElement("div"));
-  const view = mountSolid(AgentsPageMenu, menuProps(), container);
+  const props = menuProps();
+  const view = mountSolid(AgentsPageMenu, props, container);
   try {
     await vi.waitFor(() => expect(openItems(container).length).toBeGreaterThan(0));
-    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-      .find((item) => item.textContent?.trim() === t("agents.copyId"))!
-      .click();
+    const trigger = container.querySelector<HTMLButtonElement>(".agents-page-menu__trigger")!;
+    const copy = document.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="copy"]')!;
+    copy.click();
     await vi.waitFor(() =>
-      expect(showToast).toHaveBeenCalledWith({ severity: "success", message: t("common.copied") }),
+      expect(copy.querySelector('[role="status"] .sr-only')?.textContent).toBe(
+        t("common.copyFailed"),
+      ),
     );
-    expect(writeText).toHaveBeenCalledWith("alpha");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    copy.click();
+    await vi.waitFor(() =>
+      expect(copy.querySelector('[role="status"]')?.textContent).toBe(t("common.copied")),
+    );
+    expect(writeText.mock.calls).toEqual([["alpha"], ["alpha"]]);
+    document.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="pin"]')!.click();
+    expect(props.onTogglePinned).toHaveBeenCalledWith("alpha");
+    trigger.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-value="copy"] [role="status"]')?.textContent).toBe(
+        t("agents.copyId"),
+      ),
+    );
   } finally {
     view.dispose();
     container.remove();
@@ -110,27 +125,27 @@ it("leads with New agent and adds Refresh on the phone", async () => {
   }
 });
 
-it("keeps the recovery reason on a denied New agent", async () => {
-  const onCreate = vi.fn();
+it("hides unavailable management actions while retaining personal actions and refresh", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const view = mountSolid(
     AgentsPageMenu,
     {
       ...menuProps(),
       showPhoneActions: true,
-      createDisabled: true,
-      createDisabledReason: "Reconnect with operator.admin",
-      onCreate,
+      canCreateAgent: false,
+      canSetDefault: false,
+      canDeleteAgent: false,
     },
     container,
   );
   try {
-    await vi.waitFor(() => {
-      const first = openItems(container)[0];
-      expect(first?.textContent).toContain("Reconnect with operator.admin");
-    });
-    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
-    expect(onCreate).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(openItems(container).map((item) => item.textContent?.trim())).toEqual([
+        t("agents.copyId"),
+        "Pin",
+        "Refresh",
+      ]),
+    );
   } finally {
     view.dispose();
     container.remove();

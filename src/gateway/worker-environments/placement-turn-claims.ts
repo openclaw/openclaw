@@ -21,10 +21,7 @@ import {
   publishPlacementTurnClaimState,
   publishPlacementWorkspaceJournalState,
 } from "./placement-turn-authority.js";
-import {
-  deferTurnClaimRelease,
-  deferWorkerTurnClaimClosed,
-} from "./placement-turn-claim-events.js";
+import { deferWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import {
   assertSessionWorkspaceUnreserved,
   selectActiveSessionWorkspaceReservation,
@@ -58,22 +55,6 @@ function releaseTurnQuery(db: EngineConnection, nowMs: number) {
       ...turnClaimValues(null),
       updated_at_ms: nowMs,
     });
-}
-
-export function clearLocalTurnClaimsInDatabase(
-  db: EngineConnection,
-  path: string,
-  nowMs: number,
-): WorkerSessionPlacementRecord[] {
-  const placements = executeSqliteQuerySync(
-    db,
-    releaseTurnQuery(db, nowMs).where("turn_claim_owner", "=", "local").returningAll(),
-  ).rows.map(fromRow);
-  for (const placement of placements) {
-    publishPlacementTurnClaimState(db, placement, placement.state);
-    deferTurnClaimRelease(db, path, placement.sessionId);
-  }
-  return placements;
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {

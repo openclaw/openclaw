@@ -112,13 +112,12 @@ function providerFixture() {
 
 function startParams(overrides: Partial<Parameters<typeof startFaceTimeTalkDriver>[0]> = {}) {
   return {
-    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.test"] }),
+    config: resolveFaceTimeConfig({ allowedCallers: ["caller@example.test"] }),
     fullConfig: {},
     runtime: createPluginRuntimeMock(),
     logger: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() },
     callUUID: "call-1",
     senderId: "caller@example.test",
-    senderIsOwner: true as const,
     captureBinary: "/forbidden-capture",
     onHangupRequested: vi.fn(async () => {}),
     ...overrides,
@@ -192,7 +191,7 @@ describe("FaceTime realtime provider boundary", () => {
       startParams({
         fullConfig,
         config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.test"],
+          allowedCallers: ["caller@example.test"],
           realtime: { provider: "openai", sessionKey: "agent:voice-owner:main" },
         }),
       }),
@@ -255,7 +254,7 @@ describe("FaceTime realtime provider boundary", () => {
       const { driver, socket } = await startConnectedDriver(
         startParams({
           config: resolveFaceTimeConfig({
-            ownerHandles: ["caller@example.test"],
+            allowedCallers: ["caller@example.test"],
             realtime: {
               provider: "openai",
               providers: {

@@ -627,3 +627,12 @@ active compatibility records, prepared SQL-free overloads, and private/internal
 implementation kernels retain their own contracts. Removing the public adapters
 in January does not authorize removing live security checks or changing stored
 data.
+
+## Worker statement diagnostics
+
+For a plugin-owned native SQLite connection in a worker, call
+`observeSqliteConnection(db)` from `openclaw/plugin-sdk/sqlite-worker-runtime`
+once when opening it. It returns the same connection and attaches the shared
+statement observer, including native prepared statements and Kysely queries.
+Labeled transaction diagnostics can then separate statement execution from
+other callback work. This does not change database admission or ownership.

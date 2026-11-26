@@ -8,6 +8,7 @@ import {
   runIsolatedModuleScript,
 } from "../../commands/doctor-config-preflight.process.test-support.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const runtimeParent = fs.realpathSync(tempDirs.make("openclaw-selection-runtime-"));
@@ -118,6 +119,57 @@ function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>)
 }
 
 describe("Gateway config selection before migration admission", () => {
+  it("refuses ambiguous legacy text keys without changing database bytes or references", async () => {
+    const { root, configPath, env, options } = createFixture("openclaw-startup-key-conflict-");
+    writeJson(configPath, { gateway: { mode: "local" }, plugins: { enabled: false } });
+    const seeded = await runIsolatedModuleScript(
+      cliEnv(root, env),
+      `
+      // Load the state owner inside the isolated native process, not the Vitest module graph.
+      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } = await import("./src/state/openclaw-state-db.ts");
+      const { OPENCLAW_STATE_SCHEMA_VERSION } = await import("./src/state/openclaw-schema-versions.ts");
+      const database = openOpenClawStateDatabase();
+      // Visit the reference first so refusal must roll back an already completed conversion.
+      database.db.exec(\`
+        CREATE TABLE legacy_references (
+          parent_key TEXT REFERENCES legacy_parents(parent_key)
+        );
+        CREATE TABLE legacy_parents (parent_key TEXT PRIMARY KEY, label TEXT);
+        INSERT INTO legacy_parents VALUES (X'61', 'blob parent'), ('a', 'text parent');
+        INSERT INTO legacy_references VALUES (X'61');
+        PRAGMA user_version = \${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+        PRAGMA wal_checkpoint(TRUNCATE);
+      \`);
+      const pathname = database.path;
+      await closeOpenClawStateDatabaseAsync();
+      console.log("__RESULT__" + JSON.stringify({ pathname }));
+      `,
+      options,
+    );
+    const { pathname } = readResult(seeded) as { pathname: string };
+    const before = fs.readFileSync(pathname);
+    await expect(
+      runIsolatedModuleScript(cliEnv(root, env), gatewayRunCliScript(["--port", "18736"]), options),
+    ).rejects.toMatchObject({
+      code: 78,
+      stderr: expect.stringContaining("UNIQUE constraint failed: legacy_parents.parent_key"),
+    });
+    expect(fs.readFileSync(pathname)).toEqual(before);
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+    try {
+      expect(
+        database
+          .prepare(
+            `SELECT typeof(r.parent_key) AS key_type, p.label
+             FROM legacy_references r JOIN legacy_parents p ON p.parent_key = r.parent_key`,
+          )
+          .all(),
+      ).toEqual([{ key_type: "blob", label: "blob parent" }]);
+    } finally {
+      database.close();
+    }
+  }, 120_000);
+
   it("accepts a Doctor-repaired escaped reference and refuses later config drift", async () => {
     const { configPath, env, options } = createFixture("openclaw-startup-reference-repair-");
     const apiKey = "$${STARTUP_MEMORY_KEY}";
@@ -338,12 +390,12 @@ describe("Gateway config selection before migration admission", () => {
       );
       const plugins = {
         enabled: false,
-        installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
+        entries: { example: { enabled: false } },
       };
       writeJson(configPath, {
         gateway: { mode: "local" },
-        meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-        agents: { entries: { main: {}, helper: {} } },
+        meta: { lastTouchedVersion: "1.0.0" },
+        agents: { ownership: "explicit", entries: { main: {}, helper: {} } },
         plugins,
       });
       if (withBackup) {

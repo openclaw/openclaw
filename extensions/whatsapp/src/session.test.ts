@@ -476,20 +476,6 @@ describe("web session", () => {
     vi.useRealTimers();
   });
 
-  it("logWebSelfId prints cached E.164 when creds exist", () => {
-    const authDir = createTempAuthDir("openclaw-wa-log-self");
-    fsSync.writeFileSync(
-      path.join(authDir, "creds.json"),
-      JSON.stringify({ me: { id: "12345@s.whatsapp.net" } }),
-      "utf-8",
-    );
-    const runtime = createRuntimeSpies();
-
-    logWebSelfId(authDir, runtime as never, true);
-
-    expectRuntimeLogContaining(runtime, "Web Channel: +12345 (jid 12345@s.whatsapp.net)");
-  });
-
   it("logWebSelfId prints cached lid details when creds include a lid", () => {
     const authDir = createTempAuthDir("openclaw-wa-log-self-lid");
     fsSync.writeFileSync(

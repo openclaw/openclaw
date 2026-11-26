@@ -11,6 +11,7 @@ import {
   observedElements,
   resetTranscriptTestDom,
   resizeObservers,
+  transcriptDomState,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -70,6 +71,7 @@ it("retains row measurements across hidden and detached observer receipts", asyn
     observer.emitTarget(row, 0, 0);
   }
   expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
+  transcriptDomState.measuredRowHeight = 0;
   for (const observer of resizeObservers) {
     observer.emitTarget(row, 800, 0);
   }

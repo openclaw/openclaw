@@ -49,6 +49,7 @@ export function ToastNotice(props: {
   const content = createMemo(() => toast().message);
   const hasAction = () => Boolean(toast().actionLabel && toast().onAction);
   const [singleRow, setSingleRow] = createSignal(false);
+  let swipeStart: Touch | undefined;
   let contentElement!: HTMLDivElement;
   let bodyElement!: HTMLDivElement;
   let messageElement!: HTMLSpanElement;
@@ -128,6 +129,63 @@ export function ToastNotice(props: {
             event.stopPropagation();
             dismiss("dismiss");
           }
+        }}
+        onTouchStart={(event) => {
+          swipeStart = undefined;
+          if (
+            !props.onDismiss ||
+            props.active === false ||
+            event.touches.length !== 1 ||
+            !(event.target instanceof Element) ||
+            event.target.closest("a, button, input, select, textarea, summary")
+          ) {
+            return;
+          }
+          // Persistent notices use display: contents on the body; the actual
+          // scrollable surface can be an expanded diagnostic farther inside it.
+          for (
+            let element: Element | null = event.target;
+            element && element !== event.currentTarget;
+            element = element.parentElement
+          ) {
+            if (
+              element.scrollHeight > element.clientHeight &&
+              /^(auto|scroll)$/.test(getComputedStyle(element).overflowY)
+            ) {
+              return;
+            }
+          }
+          swipeStart = event.touches[0];
+        }}
+        onTouchMove={(event) => {
+          const touch = event.touches[0];
+          if (!swipeStart || !touch) {
+            return;
+          }
+          if (event.touches.length !== 1 || !event.cancelable) {
+            swipeStart = undefined;
+            return;
+          }
+          const dy = touch.clientY - swipeStart.clientY;
+          if (dy < -8 && -dy > Math.abs(touch.clientX - swipeStart.clientX)) {
+            event.preventDefault();
+          }
+        }}
+        onTouchEnd={(event) => {
+          const start = swipeStart;
+          swipeStart = undefined;
+          const end = event.changedTouches[0];
+          if (!start || !end || end.identifier !== start.identifier || props.active === false) {
+            return;
+          }
+          const dy = end.clientY - start.clientY;
+          if (dy <= -40 && -dy > Math.abs(end.clientX - start.clientX)) {
+            event.preventDefault();
+            dismiss("dismiss");
+          }
+        }}
+        onTouchCancel={() => {
+          swipeStart = undefined;
         }}
         onPointerEnter={() => {
           if (lane() === "anchored") {
