@@ -59,6 +59,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.gitOperations,
   runtimeProcessEntrypoints.cronStreamMatcher,
   runtimeProcessEntrypoints.fileToolPlanning,
+  runtimeProcessEntrypoints.spawnBroker,
   {
     ...pluginRuntimeProcessManifest.codexCatalogPage,
     currentModuleUrl: new URL(
@@ -83,7 +84,6 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   ...privateChunkRuntimeProcessEntrypoints,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
-  runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat,
   runtimeProcessEntrypoints.serviceChildRelay,
 ]);
