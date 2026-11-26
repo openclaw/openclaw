@@ -16,15 +16,12 @@ const mediaQueries = new WeakMap<Document, Map<string, MediaSubscription>>();
 const visibility = new WeakMap<Document, BooleanSubscription>();
 
 /** Synchronous native reads share a query; only subscribers retain its change listener. */
-export function createMediaQuerySource(query: string, fallback = false) {
+export function createMediaQuerySource(query: string) {
   const ownerDocument = document;
   const queries = mediaQueries.get(ownerDocument) ?? new Map<string, MediaSubscription>();
   let subscription = queries.get(query);
   if (!subscription) {
-    const media = ownerDocument.defaultView?.matchMedia?.(query);
-    if (!media) {
-      return { read: () => fallback, subscribe: (_listener: BooleanListener) => () => {} };
-    }
+    const media = ownerDocument.defaultView!.matchMedia(query);
     subscription = { media, readers: 0, listeners: new Set() };
     queries.set(query, subscription);
     mediaQueries.set(ownerDocument, queries);
@@ -83,7 +80,7 @@ export function createMediaQuerySource(query: string, fallback = false) {
 
 /** A browser capability that follows changes after the owner settles. */
 export function createMediaQuery(query: string, fallback = false) {
-  const source = createMediaQuerySource(query, fallback);
+  const source = createMediaQuerySource(query);
   const [matches, setMatches] = createSignal(fallback);
   onSettled(() => {
     const stop = source.subscribe(setMatches);

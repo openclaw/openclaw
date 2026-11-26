@@ -54,7 +54,6 @@ export type UsageCostWorkerOperation =
   | {
       kind: "inventory";
       minMtimeMs?: number;
-      sessionFiles?: string[];
     }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
@@ -81,6 +80,8 @@ export type UsageCostWorkerOperation =
   | {
       kind: "refresh";
       pricingFingerprint: string;
+      /** The publication queue, never a direct caller awaiting a refresh. */
+      background?: true;
       maxFiles?: number;
       sessionsDir?: string;
       sessionFiles?: string[];
@@ -133,7 +134,13 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
+  | {
+      kind: "refresh";
+      changed: boolean;
+      remainingFiles?: UsageCostPendingFile[];
+      /** Archives that cannot be decoded; their last rollup is kept and the batch completes. */
+      unreadableFiles?: Array<{ sessionFile: string; message: string }>;
+    };
 
 export type UsageCostWorkerFailure = {
   message: string;

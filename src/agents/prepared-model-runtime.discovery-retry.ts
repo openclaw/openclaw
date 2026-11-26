@@ -10,6 +10,11 @@ import type {
 const FAILED_DISCOVERY_RETRY_MS = 30_000;
 const FAILED_DISCOVERY_RETRY_MAX_MS = 30 * 60_000;
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
+// A picker read relists a live listing once it is this old and its response cache has expired, so
+// a newly launched provider model appears without a restart. The floor keeps short HTTP cache TTLs
+// from renewing inventory on almost every read (#167008); a longer TTL still wins (#168050), so the
+// relist never re-stamps a cached response as fresh.
+const LIVE_LISTING_MIN_AGE_MS = 15 * 60_000;
 
 export function waitForDiscovery(
   discovery: Promise<ModelCatalogSnapshot>,
@@ -30,7 +35,7 @@ function failedDiscoveryFacts(previous: PreparedModelCatalogProviderFacts | unde
   };
 }
 
-/** A successful discovery keeps its cache deadline; a failed one gets a backed-off retry deadline. */
+/** A successful live listing keeps its cache deadline, but no less than the listing age floor; a failed one gets a backed-off retry deadline. */
 export function discoveryDeadline(
   failed: boolean | undefined,
   expiresAt: number | undefined,
@@ -39,7 +44,9 @@ export function discoveryDeadline(
   if (failed) {
     return failedDiscoveryFacts(previous);
   }
-  return expiresAt === undefined ? {} : { expiresAt };
+  return expiresAt === undefined
+    ? {}
+    : { expiresAt: Math.max(expiresAt, Date.now() + LIVE_LISTING_MIN_AGE_MS) };
 }
 
 /** Failed renewal retains rows, but replaces a successful deadline with its retry deadline. */

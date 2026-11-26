@@ -8,6 +8,7 @@ import {
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionActionV2,
 } from "./github-personal-publication.js";
+import { publicationParticipantDisplayName } from "./github-publication-content.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
@@ -32,10 +33,13 @@ import {
   assertReceiptOwner,
   captureCheckpoint,
   prepareReceiptOwner,
+  type RepositoryDiskPublicationSource,
 } from "./github-repository-publication-workspace.js";
 
 export function createRepositoryGitHubPublicationExecution(params: {
   instanceId: string;
+  disk?: RepositoryDiskPublicationSource;
+  prepareIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   active: Map<string, string>;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
@@ -53,6 +57,8 @@ export function createRepositoryGitHubPublicationExecution(params: {
       action?: PersonalGitHubSessionActionV2;
       requester?: GitHubPublicationRequesterPolicyV2;
       recoveryResult?: SessionGitHubPublicationResult;
+      captureOnly?: boolean;
+      captureRequestIds?: readonly string[];
     },
   ) => {
     let row = initial;
@@ -162,6 +168,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       if (
         !row.checkpoint_ref &&
         row.owner_profile_id === null &&
+        !assertReceiptOwner(row, preparedOwner).workspace.diskAuthority &&
         !assertReceiptOwner(row, preparedOwner).workspace.checkpointRef
       ) {
         return projectGitHubPublicationResult(row);
@@ -178,13 +185,28 @@ export function createRepositoryGitHubPublicationExecution(params: {
             );
           }
           assertExecution();
+          if (context.captureOnly) {
+            return projectGitHubPublicationResult(row);
+          }
           const actor = action ? undefined : getRequester().snapshot.actor;
           return await executeRepositoryGitHubPublication({
             execution: await claimExecution(),
             requesterProfileId:
               action?.owner ?? (actor?.kind === "operator" ? actor.profileId : undefined),
+            requester: action ? undefined : getRequester(),
+            participantDisplayName: action
+              ? undefined
+              : publicationParticipantDisplayName(getRequester()),
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
+            history: prepared.history,
+            prepareIntegration: params.prepareIntegration,
+            signal: (action ?? getRequester()).signal,
+            readDispatchCredential: (action ?? getRequester()).prepareDispatchCredential?.({
+              sessionId: row.session_id,
+              requestDigest: row.request_digest,
+              assertCurrent: assertExecution,
+            }),
             storePath: loaded.storePath,
             readCurrentEntry: () => assertReceiptOwner(row, preparedOwner).loaded.entry,
             assertWorkflowChangesAllowed: bound
@@ -216,6 +238,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
           });
         },
         authority,
+        params.disk && { ...params.disk, captureRequestIds: context.captureRequestIds },
       );
     } catch (error) {
       if (

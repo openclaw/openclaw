@@ -65,7 +65,7 @@ export async function disposeOpenClawAgentDatabaseByPath(
   };
   const dispose = async () => {
     for (const pathname of paths) {
-      invalidateOpenClawAgentDatabaseValidation(pathname);
+      invalidateOpenClawAgentDatabaseValidation(pathname, "agent database disposal");
     }
     for (const owner of pending) {
       revokePendingAgentDatabaseOpen(owner.path, owner.agentId);
@@ -123,7 +123,7 @@ export async function disposeOpenClawAgentDatabaseByPath(
     };
     return withAgentDatabaseCloseFence({ path: owned.path }, async () => {
       assertOwned();
-      invalidateOpenClawAgentDatabaseValidation(owned.path);
+      invalidateOpenClawAgentDatabaseValidation(owned.path, "agent database disposal");
       await closeCapturedPaths(owned.path);
       assertOwned();
       const publication = captureOpenClawAgentDatabaseRegistration({

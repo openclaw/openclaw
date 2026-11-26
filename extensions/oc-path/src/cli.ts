@@ -286,8 +286,9 @@ export function registerPathCli(program: Command): void {
     if (pattern === null) {
       return;
     }
-    // File-slot wildcards would silently ENOENT during readFile; reject.
-    if (/[*?]/.test(pattern.file)) {
+    // The parser already split query delimiters; a remaining ? is a literal filename character.
+    // File-slot * wildcards would silently ENOENT during readFile; reject.
+    if (pattern.file.includes("*")) {
       emitError(
         mode,
         `find: file-slot wildcards are not supported (got "${pattern.file}"). ` +

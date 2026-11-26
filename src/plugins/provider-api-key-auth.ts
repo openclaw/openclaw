@@ -5,11 +5,11 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import type { ProviderNonInteractiveApiKeyCredentialParams } from "./provider-auth-types.js";
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
-  ProviderNonInteractiveApiKeyCredentialParams,
   ProviderPluginWizardSetup,
 } from "./types.js";
 

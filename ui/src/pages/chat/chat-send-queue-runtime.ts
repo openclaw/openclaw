@@ -25,7 +25,7 @@ import { isActiveLeafChangedError } from "./chat-send-ack.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { deliveryStateWriter, updateQueuedSendItem } from "./chat-send-queue-state.ts";
-import { surfaceChatDeliveryFailure, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { surfaceChatDeliveryFailure, chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -86,7 +86,7 @@ export function settleQueuedChatSendFailure(
     }
     const retained = setState("waiting-reconnect");
     if (!retained) {
-      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
+      reportFailure(chatOfflineQueueStorageError());
     }
     if (retained) {
       scheduleRetry(CHAT_OUTBOX_RETRY_DEFAULT_MS);
@@ -149,11 +149,11 @@ export function settleQueuedChatSendFailure(
       if (!restore) {
         updateQueuedMessage(host, id, (item) => ({
           ...item,
-          sendError: OFFLINE_QUEUE_STORAGE_ERROR,
+          sendError: chatOfflineQueueStorageError(),
           sendState: "failed",
         }));
       }
-      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
+      reportFailure(chatOfflineQueueStorageError());
       return restore ? "failed" : "pending";
     }
     if (!awaitingGateway && visibleSessionMatches(host, sessionKey, prepared.agentId)) {

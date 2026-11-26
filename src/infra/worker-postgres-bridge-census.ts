@@ -45,14 +45,16 @@ export function collectPostgresBridgeCounters(
   return [...counters.values()];
 }
 
-export function countPostgresBridges(counters: readonly PostgresBridgeCounter[]): number {
-  return counters.reduce((total, counter) => total + Atomics.load(counter.count, 0), 0);
-}
-
-export function countPostgresPoolSelfRoots(counters: readonly PostgresBridgeCounter[]): number {
-  return counters.reduce(
-    (total, counter) =>
-      total + (counter.selfRootCount ? Atomics.load(counter.selfRootCount, 0) : 0),
-    0,
-  );
+export function summarizePostgresBridgeCounters(counters: readonly PostgresBridgeCounter[]) {
+  return {
+    postgresBridgeCount: counters.reduce(
+      (total, counter) => total + Atomics.load(counter.count, 0),
+      0,
+    ),
+    postgresPoolSelfRootCount: counters.reduce(
+      (total, counter) =>
+        total + (counter.selfRootCount ? Atomics.load(counter.selfRootCount, 0) : 0),
+      0,
+    ),
+  };
 }

@@ -13,8 +13,9 @@ import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { constants, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
+import { constants, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const [mode = "timing", rawIterations = "3000"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -35,17 +36,9 @@ const inspector = new Session();
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-const recordGc = (entries: PerformanceEntry[]) => {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-};
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
   return {
@@ -217,7 +210,7 @@ try {
         )
       : undefined;
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const gc = (kind?: number) =>
     distribution(

@@ -4,6 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../lib/checkout-snapshot.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
@@ -138,11 +139,15 @@ export async function editSessionGroupDefaultsDialog(
         if (!repoRoot) {
           return "unavailable";
         }
-        const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
-          repoRoot,
-          includeRepositoryStatus: true,
-        });
-        requireCurrent();
+        const result = await requestCheckoutSnapshot<WorktreesBranchesResult>(
+          scope.gateway,
+          "worktrees.branches",
+          {
+            repoRoot,
+            includeRepositoryStatus: true,
+          },
+          { signal: scope.signal },
+        ).finally(requireCurrent);
         return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
           ? result.repositoryStatus
           : "unavailable";

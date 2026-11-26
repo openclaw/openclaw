@@ -1,9 +1,20 @@
+import { exchangeSqliteDatabaseAdmission } from "../../infra/sqlite-database-admission-context.js";
 import {
   withSqliteReaderOwner,
   type SqliteOperationHoldContext,
 } from "../../infra/sqlite-reader-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  withAgentCreationClaimWitness,
+  type AgentCreationClaimWitness,
+} from "../../state/agent-creation-claim.js";
+import { prepareAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
+import {
+  assertSessionStoreReadCandidate,
+  type SessionStoreReadCustody,
+} from "./session-store-read-candidates.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerSuccess,
@@ -11,6 +22,7 @@ import type {
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
 const MAX_RETAINED_HISTORY_DATABASES = 64;
+const log = createSubsystemLogger("sqlite/transaction");
 const historyDatabaseScopes = new Map<
   string,
   {
@@ -25,7 +37,19 @@ export async function withHistoryDatabase<T>(
   operation: () => T | Promise<T>,
   validation?: OpenClawAgentDatabaseReadValidation,
   holdContext?: SqliteOperationHoldContext,
+  readCustody?: readonly SessionStoreReadCustody[],
+  creation?: { witness: AgentCreationClaimWitness; assertCurrent: () => void },
 ): Promise<SessionTranscriptWorkerSuccess<T>> {
+  if (
+    creation &&
+    prepareAgentDeletionJournalStatus(creation.witness.statePath, creation.witness.agentId)() ===
+      undefined
+  ) {
+    // A warm reader may know the state generation before this row fact was published.
+    creation.assertCurrent();
+    exchangeSqliteDatabaseAdmission(creation.witness.statePath);
+    creation.assertCurrent();
+  }
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
   if (!retained) {
@@ -37,8 +61,28 @@ export async function withHistoryDatabase<T>(
   try {
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
-      () => scope.run({ ...database, validation }, operation),
-      holdContext,
+      () => {
+        const read = () =>
+          scope.run(
+            {
+              ...database,
+              validation,
+              assertSourceCurrent:
+                readCustody &&
+                (() => {
+                  for (const custody of readCustody) {
+                    assertSessionStoreReadCandidate(custody.sourcePath, custody.candidates);
+                  }
+                }),
+            },
+            operation,
+          );
+        return creation
+          ? withAgentCreationClaimWitness(creation.witness, creation.assertCurrent, read)
+          : read();
+      },
+      { agentId: database.agentId, ...holdContext },
+      log,
     );
     historyDatabaseScopes.delete(key);
     // Tasks without retained connections must not evict useful connections or retain empty scopes.
@@ -61,6 +105,14 @@ export async function withHistoryDatabase<T>(
       throw sessionHistoryCleanupError(error, cleanupError, "database close");
     }
     throw error;
+  }
+}
+
+/** Close every retained history database, as isolate exit would. */
+export function closeHistoryDatabaseScopes(): void {
+  for (const [identity, retained] of historyDatabaseScopes) {
+    retained.scope.close();
+    historyDatabaseScopes.delete(identity);
   }
 }
 

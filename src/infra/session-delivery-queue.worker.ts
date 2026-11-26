@@ -1,8 +1,5 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
-import {
-  admitSubagentCompletionInWorker,
-  mutateSubagentCompletionInWorker,
-} from "../agents/subagents/completion/subagent-completion-admission.worker.js";
+import type { subagentCompletionDeliveryOperations } from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type {
   WorkerOperationHandlers,
@@ -27,6 +24,7 @@ import type { DeliveryQueueStoredStatus } from "./delivery-queue-sqlite.kernel.j
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
+  type SessionDeliveryCandidateMedia,
 } from "./session-delivery-queue.records.js";
 
 function readSessionDelivery(
@@ -86,14 +84,6 @@ type PreparedMediaResult =
   | { source: "stored"; blocks: Array<Record<string, unknown>> };
 
 export const sessionDeliveryOperations = {
-  "sessionDelivery.mutateSubagentCompletion": (
-    input: Parameters<typeof mutateSubagentCompletionInWorker>[0],
-    { open },
-  ) => mutateSubagentCompletionInWorker(input, open()),
-  "sessionDelivery.admitSubagentCompletion": (
-    input: Parameters<typeof admitSubagentCompletionInWorker>[0],
-    { open },
-  ) => admitSubagentCompletionInWorker(input, open()),
   "sessionDelivery.enqueue": (input: PreparedEntry, { writeAdmitted }) =>
     writeAdmitted(
       (database) => {
@@ -156,9 +146,78 @@ export const sessionDeliveryOperations = {
   },
   "sessionDelivery.markAttemptStarted": (input: PreparedEntry, { open }) => {
     const database = open();
+    const current = readSessionDelivery(database, input.row.id);
+    if (current?.kind === "mediaCandidate") {
+      throw new Error("Generated media is held for review or superseded");
+    }
     if (!upsertBoundDeliveryQueueEntryInDatabase(input, database)) {
       throw new Error(`Session delivery ${input.row.id} is no longer pending`);
     }
+  },
+  "sessionDelivery.setMediaReview": (
+    input: {
+      id: string;
+      sessionKey: string;
+      taskId: string;
+      disposition: "approved" | "superseded";
+      media?: SessionDeliveryCandidateMedia;
+    },
+    { open },
+  ): "approved" | "superseded" | "delivery_started" | "not_found" | "not_review_pending" => {
+    const database = open();
+    const entry = readSessionDelivery(database, input.id);
+    if (
+      !entry ||
+      entry.kind === "systemEvent" ||
+      entry.sessionKey !== input.sessionKey ||
+      (entry.kind === "mediaCandidate" && entry.taskId !== input.taskId)
+    ) {
+      return "not_found";
+    }
+    if (
+      entry.deliveryStartedAt !== undefined ||
+      entry.acknowledgedAt !== undefined ||
+      entry.settlementOutcome
+    ) {
+      return "delivery_started";
+    }
+    if (entry.kind === "mediaCandidate" && entry.disposition === "superseded") {
+      return "superseded";
+    }
+    if (
+      input.disposition === "approved" &&
+      entry.kind !== "mediaCandidate" &&
+      entry.reviewedTaskId !== input.taskId
+    ) {
+      return "not_review_pending";
+    }
+    update(database, input.id, (current) => {
+      if (current.kind === "systemEvent") {
+        return current;
+      }
+      if (input.disposition === "approved") {
+        if (current.kind === "agentTurn") {
+          return current;
+        }
+        const {
+          taskId,
+          disposition: _disposition,
+          inspectionContext: _inspectionContext,
+          ...payload
+        } = current;
+        return { ...payload, kind: "agentTurn", reviewedTaskId: taskId, availableAt: Date.now() };
+      }
+      return {
+        ...current,
+        ...input.media,
+        ...(input.media ? { preparedMediaBlocks: undefined } : {}),
+        kind: "mediaCandidate",
+        taskId: input.taskId,
+        disposition: "superseded",
+        availableAt: Date.now(),
+      };
+    });
+    return input.disposition;
   },
   "sessionDelivery.markSettlement": (input: PreparedEntry, { open }) => {
     const database = open();
@@ -235,4 +294,5 @@ export const sessionDeliveryOperations = {
   },
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
-export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations>;
+export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations> &
+  WorkerOperations<typeof subagentCompletionDeliveryOperations>;

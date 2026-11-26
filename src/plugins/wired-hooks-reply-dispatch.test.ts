@@ -99,11 +99,14 @@ describe("reply_dispatch hook runner", () => {
         ],
         { logger },
       );
-      const work = runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx }, (invoke) =>
-        withNativeSubagentRequest(
-          () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
-          invoke,
-        ),
+      const work = runner.runReplyDispatch(
+        replyDispatchEvent,
+        { ...replyDispatchCtx, dispatchKind: outcome === "declined" ? "acp" : "agent" },
+        (invoke) =>
+          withNativeSubagentRequest(
+            () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+            invoke,
+          ),
       );
       try {
         await vi.advanceTimersByTimeAsync(5);

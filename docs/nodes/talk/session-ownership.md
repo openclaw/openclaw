@@ -37,11 +37,22 @@ browser transport preserves control of its accepted work. The legacy
 `talk.client.steer` RPC remains session-scoped: it selects owned work by
 `sessionKey`, not by a voice call ID.
 
+Client-owned and Gateway relay Talk transcripts trigger the existing automatic
+session title after a user turn is committed, including voice-only `ios-*`
+sessions. Title generation runs in the background, uses the first usable user
+task, and preserves an existing title. Sessions outside the normal
+automatic-title keys are unchanged.
+
 If a hot configuration change moves that session's storage route, a new native
 provider consultation rejects the old target before updating consultation metadata
 or starting model work. Start a new call to use the current route. Changing only
 the default Talk agent preserves an existing call's selected agent, and ending
 its audio transport does not cancel work already accepted by the Gateway.
+
+Each agent consultation checks the caller's authority when it starts. A role
+change or device revocation does not cancel an admitted consultation, including
+one awaiting tool approval; the next consultation must pass admission again.
+Explicit Stop still cancels the active run and its pending approval.
 
 Talk starts closing at the Gateway shutdown fence. On process exit, the shutdown
 plan's five-second prelude grace bounds the persistence join and reports unfinished

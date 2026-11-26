@@ -4,32 +4,24 @@ import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
+import type { DatabaseStoreLiveReadOperations } from "./database-engine/database-store-live-read.worker-contract.js";
 import type { DeferredSessionTranscriptReadOperations } from "./deferred-plugin-session-source-recovery.worker-contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
-import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
+import type { SqliteReadOnlyOperationExecutionContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
   typeof immutableInstallReadOperations &
     typeof pageCacheReadOperations &
     typeof startupMetadataReadOperations
 > &
+  DatabaseStoreLiveReadOperations &
   DeferredSessionTranscriptReadOperations &
   AgentDeletionSessionStoreAbsentReadOperations;
 
-const sqliteReadOnlyOperationProcessLifecycle = {
-  // This read can borrow host-side schema maintenance. The pooled child transport
-  // has process-lifetime admission, so its native exit is the release boundary.
-  "startupMetadata.readCurrent": "retire-after-result",
-} as const satisfies Partial<Record<keyof SqliteReadOnlyOperations, "retire-after-result">>;
-
-export function sqliteReadOnlyOperationRequiresProcessRetirement(type: string): boolean {
-  return type in sqliteReadOnlyOperationProcessLifecycle;
-}
-
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
-  SqliteReadOnlyOperationContext
+  SqliteReadOnlyOperationExecutionContext
 >({
   startupMetadata: () =>
     import("../state/startup-metadata-live-read.worker.js").then(
@@ -45,6 +37,10 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
     ),
   pageCache: () =>
     import("./sqlite-page-cache.worker.js").then((module) => module.pageCacheReadOperations),
+  databaseStore: () =>
+    import("./database-engine/database-store-live-read.worker.js").then(
+      (module) => module.databaseStoreLiveReadOperations,
+    ),
   immutableInstall: () =>
     import("./package-update-activation-immutable.js").then(
       (module) => module.immutableInstallReadOperations,

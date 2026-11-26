@@ -69,6 +69,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       initial?: SessionEntry;
       next: SessionEntry;
+      /** Final run accounting supersedes its own provider-boundary snapshots. */
+      contextTotalsAccounted?: true;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
@@ -76,6 +78,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       source: SessionEntry;
       continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      /** The occurrence's admitted parent; absence clears a row's earlier receipt. */
+      scheduledMemoryParent?: SessionEntry["scheduledMemoryParent"];
       create: boolean;
       creation: ReturnType<typeof buildSessionCreationStamp>;
       thinkingLevel?: string;
@@ -121,6 +125,9 @@ export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
 
+/** An accepted pin/archive write can invalidate Undo even when the entry data stays equal. */
+export type SessionEntryPatchWriteIntent = { invalidateArchiveUndo?: true };
+
 /** Shared by ordinary cron writes and the atomic reset-boundary owner. */
 export function projectCronSessionEntry(
   operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>,
@@ -133,9 +140,18 @@ export function projectCronSessionEntry(
   ) {
     throw createSessionWorkStartChangedError(operation.sessionKey);
   }
-  return current && initial
-    ? mergeSessionSnapshotChanges({ initial, next, current })
-    : { ...next, ...(!current ? operation.creation : {}) };
+  const merged =
+    current && initial
+      ? mergeSessionSnapshotChanges({ initial, next, current })
+      : { ...next, ...(!current ? operation.creation : {}) };
+  return operation.contextTotalsAccounted
+    ? {
+        ...merged,
+        totalTokens: next.totalTokens,
+        totalTokensFresh: next.totalTokensFresh,
+        totalTokensVersion: next.totalTokensVersion,
+      }
+    : merged;
 }
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
@@ -160,7 +176,17 @@ export function projectSessionEntryPatch(
     if (patch === null) {
       continue;
     }
-    next = mergeSessionEntryPatch({ ...params, existing, writeBase, patch });
+    next = mergeSessionEntryPatch({
+      ...params,
+      existing,
+      writeBase,
+      patch,
+      // Bookkeeping reducers can project a complete row, but do not own its pin or archive.
+      writeIntent:
+        operation.kind === "fields" || operation.kind === "public-fields"
+          ? params.writeIntent
+          : undefined,
+    });
     if (next) {
       existing = writeBase = next;
     }
@@ -279,6 +305,8 @@ export function reduceSessionEntryPatch(
         claudeCliSessionId: source.claudeCliSessionId,
         ...(!existingEntry ? operation.creation : {}),
         ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        // Only this cron-owned write sets the receipt; the copied source row never carries one.
+        scheduledMemoryParent: operation.scheduledMemoryParent,
         cronRunContinuation: continuation,
       };
     }
@@ -357,17 +385,24 @@ export function mergeSessionEntryPatch(params: {
   sessionKey: string;
   replaceEntry?: boolean;
   preserveActivity?: boolean;
+  writeIntent?: SessionEntryPatchWriteIntent;
 }): SessionEntry | undefined {
-  const { existing, writeBase, patch, sessionKey } = params;
-  // A fallback supplies identity, not an existing node's immutable creation policy.
-  const creationPatch = !existing && patch ? { ...writeBase, ...patch } : patch;
-  if (!creationPatch) {
+  const { existing, writeBase, sessionKey, patch, writeIntent } = params;
+  if (!patch) {
     return undefined;
+  }
+  if (
+    writeIntent &&
+    (params.replaceEntry || Object.hasOwn(patch, "pinnedAt") || Object.hasOwn(patch, "archivedAt"))
+  ) {
+    writeIntent.invalidateArchiveUndo = true;
   }
   if (params.replaceEntry) {
     // SAFETY: The existing replaceEntry updater contract supplies a complete entry.
     return structuredClone(patch as SessionEntry);
   }
+  // A fallback supplies identity, not an existing node's immutable creation policy.
+  const creationPatch = !existing ? { ...writeBase, ...patch } : patch;
   const merged = params.preserveActivity
     ? mergeSessionEntryPreserveActivity(existing, creationPatch)
     : mergeSessionEntry(existing, creationPatch);

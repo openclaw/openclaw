@@ -29,14 +29,12 @@ import {
   encodeNodeClaudeSkillMessage,
   type NodeClaudeSkillInit,
 } from "../infra/node-claude-skill-protocol.js";
-import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createPluginToolsMcpHandlers } from "../mcp/plugin-tools-handlers.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 import {
   isCurrentPlacementTurnClaim,
@@ -66,7 +64,7 @@ export async function prepareNodeClaudeSkillRuntime(
   ) {
     return undefined;
   }
-  const gateway = getPluginRuntimeGatewayRequestScope()?.context;
+  const gateway = getInProcessGatewayRequestContext();
   const target = context.executionTarget;
   const node =
     target.kind === "node" ? gateway?.nodeRegistry.get(target.placement.nodeId) : undefined;
@@ -181,15 +179,8 @@ export async function prepareNodeClaudeSkillRuntime(
     controller.abort();
     return releaseSource();
   };
-  const assertCallerCurrent = Object.assign(() => {
-    if (caller?.receiptAuthority?.() === false) {
-      throw new Error(
-        "Paired-node skill assignment or run authority changed. Retry from a fresh turn.",
-      );
-    }
-  }, caller?.receiptAuthority);
   const assertCurrent = composeSessionSourceAssertion(
-    [assertRun, assertCallerCurrent],
+    [assertRun, caller?.receiptAuthority],
     (assertSources) => {
       assertSources();
       combinedSignal.throwIfAborted();
@@ -203,14 +194,6 @@ export async function prepareNodeClaudeSkillRuntime(
         node.pairingGeneration !== pairingGeneration ||
         node.client.socket.readyState !== 1 ||
         !node.caps.includes(NODE_CLAUDE_SKILLS_CAPABILITY) ||
-        !isNodeCommandAllowed({
-          command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-          declaredCommands: node.commands,
-          allowlist: resolveNodeCommandAllowlist(gateway.getRuntimeConfig(), {
-            ...node,
-            approvedCommands: node.commands,
-          }),
-        }).ok ||
         !session ||
         session.sessionId !== run.sessionId ||
         ((run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision) !== undefined &&
@@ -232,9 +215,7 @@ export async function prepareNodeClaudeSkillRuntime(
             !currentPlacement ||
             !isCurrentPlacementTurnClaim(currentPlacement, claim)))
       ) {
-        throw new Error(
-          "Paired-node skill assignment or run authority changed. Retry from a fresh turn.",
-        );
+        throw new Error("Paired-node skill assignment or run changed. Retry from a fresh turn.");
       }
     },
   );
@@ -352,8 +333,11 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       );
     }
     calls.add(message.id);
+    // The node's "workshop" slot forwards to whichever tool the Gateway projected
+    // into it; the node-side tool name is local to the node and never trusted here.
+    const workshop = runtime.workshop;
     const result = await withGatewayToolCallerIdentity(identity, () =>
-      handlers.callTool({ name: "skill_workshop", arguments: message.arguments }, signal),
+      handlers.callTool({ name: workshop.name, arguments: message.arguments }, signal),
     );
     await runWithSessionSourceScope(
       assertCurrent,

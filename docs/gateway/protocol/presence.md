@@ -13,7 +13,8 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ## Presence
 
 - `system-presence` returns one row per live operator connection, including
-  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  `deviceId`, `roles`, and `scopes` for operator readers (see
+  [broadcast event scoping](#broadcast-event-scoping) for session-only readers). Separate tabs keep their own watched-session
   facts. Reconnecting removes offline rows for the same identity: device ID,
   then client instance ID, then connection ID. When the last connection closes,
   at most one offline row for that identity remains until the five-minute TTL.
@@ -213,8 +214,15 @@ sessions do not passively receive session content
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
 - Presence events require operator read access (`operator.read`, also satisfied
-  by `operator.write` or `operator.admin`). Watched-session references are filtered
-  for each recipient, including in hello snapshots and `system-presence` replies.
+  by `operator.write` or `operator.admin`) or session read access
+  (`operator.sessions.read`, also satisfied by `operator.sessions.write`).
+  Watched-session references are filtered for each recipient, including in hello
+  snapshots and `system-presence` replies.
+- Session-only readers, such as guests, receive a person-only view: `ts`,
+  `lastActivityAt`, the profile's `id`, `identity`, `name`, and `avatarUrl`,
+  a `disconnect` reason, and their visible watched sessions. Device, network,
+  connection, scope, and email fields are omitted, and rows without a resolved
+  profile carry no person. `presence.query` remains `operator.read` only.
 - Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
 - Unknown broadcast event families are blocked unless the caller has the required scope
@@ -223,6 +231,33 @@ sessions do not passively receive session content
 Each client connection keeps its own per-client sequence number, so broadcasts
 stay monotonically ordered on that socket even when different clients see
 different scope-filtered subsets of the event stream.
+
+### Optional live tool output
+
+`sessions.messages.subscribe` accepts `includeLiveToolOutput: true` to request
+the cumulative live stdout updates produced by the Codex harness. These updates
+use `stream: "tool"`, `data.phase: "update"`, and `data.outputOnly: true` on
+`agent` or `session.tool` events. Omitting the option declines only this marked
+stream. Tool starts, input deltas, reviews, results, and legacy unmarked updates
+keep their existing delivery rules. Channel verbosity remains independent.
+
+Interest belongs to the existing session-message subscription. Independent
+`subscriptionId` owners on one connection combine their interests; removing one
+owner does not withdraw another owner's request. Every delivery still requires
+current session disclosure authority, including run-targeted and hidden-session
+delivery. A client with multiple presentation modes on one connection must also
+filter marked updates locally for views that did not request live stdout.
+
+The Gateway still processes every admitted producer update and maintains its
+existing bounded in-flight snapshot without live-output subscribers. Full
+recovery snapshots may include output bodies; summary snapshots omit bodies.
+Both retain `outputOnly` so clients can apply the same presentation policy after
+recovery. Opting in mid-run should be followed by history/in-flight recovery to
+adopt the current invocation state. This contract does not add durable output
+history, change capture limits or the wire publication cadence, or guarantee
+display of every transient output state. The WebUI schedules its existing 80 ms
+publication window from the previous publication; this does not change the wire
+contract.
 
 `hello-ok.features.capabilities` advertises additive wire contracts. Native clients
 send `sessionKey` in `chat.metadata` only when `session-scoped-chat-metadata` is present;

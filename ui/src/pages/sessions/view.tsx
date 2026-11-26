@@ -1,8 +1,21 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  Loading,
+  Repeat,
+  Show,
+} from "solid-js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { personalSessionPinKeys } from "../../app-navigation.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsPage,
@@ -13,19 +26,25 @@ import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { createSessionSnoozeWake } from "../../lib/reactive/session-snooze-wake.ts";
 import { groupSessionRows } from "../../lib/sessions/grouping.ts";
+import { isPinnableUiSessionRow } from "../../lib/sessions/session-key.ts";
+import { isSessionSnoozed } from "../../lib/sessions/session-snooze.ts";
 import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
 import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionMenuEnglish();
 
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
 const SKELETON_ROW_COUNT = 4;
+// Keep in sync with the phone block in styles/sessions.css.
+const PHONE_LAYOUT_QUERY = "(max-width: 640px)";
 type RosterOutcome = { ok: true } | { ok: false; error: unknown };
 
 // Initial load renders shimmer rows instead of flashing the empty state
@@ -57,6 +76,10 @@ function SkeletonRows(props: { columnCount: number }) {
 
 export function SessionsView(props: SessionsProps) {
   const application = useOptionalApplication();
+  const phoneLayout = createMediaQuery(
+    PHONE_LAYOUT_QUERY,
+    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
+  );
   const rows = createMemo(() => props.result?.sessions ?? []);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   const transcriptSearch = createMemo(() => props.transcriptSearch);
@@ -118,20 +141,35 @@ export function SessionsView(props: SessionsProps) {
                 <SettingsStatus kind="muted" label={t("common.working")} />
               </span>
             </Show>
-            <TranscriptSearchForm {...props} />
-            <button
-              class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
-              type="button"
-              aria-label={t("common.refresh")}
-              disabled={props.refreshing || props.refreshDisabled}
+            <Show when={phoneLayout()}>
+              <div class="sessions-search">
+                <span class="sessions-search__icon" aria-hidden="true">
+                  <Icon name="search" />
+                </span>
+                <input
+                  type="search"
+                  class="settings-input"
+                  value={props.searchQuery}
+                  aria-label={t("sessionsView.searchPlaceholder")}
+                  placeholder={t("sessionsView.searchPlaceholder")}
+                  onInput={(event) => props.onSearchChange(event.currentTarget.value)}
+                />
+              </div>
+            </Show>
+            <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
+            <RefreshButton
+              class="sessions-toolbar__icon sessions-toolbar__refresh"
+              label={t("common.refresh")}
+              busy={props.refreshing}
+              disabled={props.refreshDisabled}
+
               onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-            </button>
+            />
             <SessionsAdvancedFilters
               {...props}
               searchQuery={props.searchQuery}
               archivedCount={archivedCount()}
+              phoneLayout={phoneLayout()}
             />
             <Show when={application}>
               {(context) => (
@@ -150,7 +188,7 @@ export function SessionsView(props: SessionsProps) {
         <Show when={props.transcriptSearch !== null}>
           <TranscriptSearchResults {...props} readSearch={transcriptSearch} />
         </Show>
-        <SessionsTable {...props} readRoster={roster} />
+        <SessionsTable {...props} readRoster={roster} phoneLayout={phoneLayout()} />
       </SettingsSection>
     </SettingsPage>
   );
@@ -196,6 +234,20 @@ function SortHeader(
   );
 }
 
+function withTablePin(
+  row: GatewaySessionRow,
+  ranks: ReadonlyMap<string, number>,
+  now: number,
+): GatewaySessionRow {
+  // Only project on already visible, eligible rows. A stale saved key cannot create a row.
+  const pinned =
+    ranks.has(row.key) &&
+    !row.archived &&
+    !isSessionSnoozed(row, now) &&
+    isPinnableUiSessionRow(row);
+  return (row.pinned === true) === pinned ? row : { ...row, pinned };
+}
+
 function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome }) {
   const rawRows = createMemo(() => props.result?.sessions ?? []);
   const pageSize = createMemo(() => props.pageSize);
@@ -204,11 +256,30 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const sortColumn = createMemo(() => props.sortColumn);
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
+  const pinRanks = createMemo(
+    () =>
+      new Map([...personalSessionPinKeys(props.personalSidebarEntries)].map((key, i) => [key, i])),
+  );
+  const [wakeRevision, setWakeRevision] = createSignal(0);
+  const wake = createSessionSnoozeWake(() => setWakeRevision((revision) => revision + 1));
   const sorted = createMemo(() => {
+    wakeRevision();
     const column = sortColumn();
     const sortDirection = direction();
-    return rawRows().toSorted((a, b) => {
-      const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    const ranks = pinRanks();
+    const roster = rawRows();
+    // The roster refreshes at the Gateway's snooze deadline. Use its clock, but keep
+    // membership and order live from navigation, even before a pin edit's list reply.
+    const gatewayTime = props.gatewayTimedPins ? props.result?.ts : undefined;
+    const now = gatewayTime ?? Date.now();
+    wake(
+      gatewayTime === undefined ? roster.filter((row) => ranks.has(row.key) && !row.archived) : [],
+      now,
+    );
+    const rows = roster.map((row) => withTablePin(row, ranks, now));
+    return rows.toSorted((a, b) => {
+      const pinnedDiff =
+        (a.pinned ? ranks.get(a.key)! : ranks.size) - (b.pinned ? ranks.get(b.key)! : ranks.size);
       if (pinnedDiff !== 0) {
         return pinnedDiff;
       }
@@ -269,12 +340,12 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
     });
   });
   function StatusRows() {
+    // Only cold loads consult pending; accepted empty rows use the deferred outcome.
     return (
       <>
-        {isPending(props.readRoster) && !props.result ? (
+        {!props.result && isPending(props.readRoster) ? (
           <SkeletonRows columnCount={sessionsTableColumnCount(props)} />
-        ) : isPending(props.readRoster) ||
-          !props.readRoster().ok ||
+        ) : !props.readRoster().ok ||
           props.error ||
           !props.result ||
           paginated().length > 0 ? undefined : (
@@ -297,10 +368,25 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
       </>
     );
   }
+  function SelectAllOnPage() {
+    return (
+      <Checkbox
+        checked={allSelected()}
+        indeterminate={selectedOnPage() > 0 && !allSelected()}
+        onChange={() => {
+          const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
+          update(paginated().map((r) => r.key));
+        }}
+        aria-label={t("sessionsView.selectAllOnPage")}
+      />
+    );
+  }
   return (
     <>
       {props.selectedKeys.size > 0 ? (
         <div class="data-table-bulk-bar">
+          {/* The phone list has no header row, so select-all joins the bulk bar. */}
+          {props.phoneLayout ? <SelectAllOnPage /> : undefined}
           <span>{t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
           <button class="btn btn--sm" onClick={() => props.onDeselectAll()}>
             {t("common.unselect")}
@@ -330,18 +416,7 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
           <thead>
             <tr>
               <th class="data-table-checkbox-col">
-                {paginated().length > 0 ? (
-                  <input
-                    type="checkbox"
-                    checked={allSelected()}
-                    prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
-                    onChange={() => {
-                      const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
-                      update(paginated().map((r) => r.key));
-                    }}
-                    aria-label={t("sessionsView.selectAllOnPage")}
-                  />
-                ) : undefined}
+                {paginated().length > 0 && !props.phoneLayout ? <SelectAllOnPage /> : undefined}
               </th>
               <SortHeader
                 {...props}

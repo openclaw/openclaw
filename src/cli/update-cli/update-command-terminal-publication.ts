@@ -251,11 +251,7 @@ export function createPostUpdateExceptionResult(
   if (
     activationVerified &&
     collectNestedErrorCandidates(error).every(
-      (cause) =>
-        cause instanceof GatewayRestartHealthError ||
-        (cause instanceof UpdateCommandFailure &&
-          cause.result.reason === "wrapper-retirement-failed" &&
-          cause.result.recovery?.serviceRestartSafe !== false),
+      (cause) => cause instanceof GatewayRestartHealthError,
     ) &&
     error instanceof Error &&
     !(params.result.recovery?.serviceRestartSafe === false && params.result.recovery.dataAtRisk)

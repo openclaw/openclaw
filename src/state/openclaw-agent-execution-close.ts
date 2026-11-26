@@ -1,6 +1,9 @@
 import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
   onSqliteWalCheckpoint,
@@ -9,10 +12,15 @@ import {
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
   type SqliteWorkerCloseReceipt,
+  type SqliteWorkerPreparedBackend,
 } from "../infra/sqlite-worker-contract.js";
+import { stopAgentDatabaseWalMaintenance } from "./openclaw-agent-db-close.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-lifecycle.js";
-import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseFileExecutionIdentity,
+  AgentDatabaseOperations,
+} from "./openclaw-agent-execution-contract.js";
 
 type AgentDatabaseExecutionCloseState = {
   database: OpenClawAgentDatabase | undefined;
@@ -42,7 +50,9 @@ export function createAgentDatabaseExecutionCloser(
     async close() {
       const { sharedBorrow, ...state } = capture();
       receipt = undefined;
-      await state.database?.walMaintenance.stop();
+      if (state.database) {
+        await stopAgentDatabaseWalMaintenance(state.database);
+      }
       const errors: unknown[] = [];
       try {
         receipt = closeAgentDatabaseExecution({ ...state, releaseSharedBorrow: () => {} });
@@ -111,4 +121,26 @@ function closeAgentDatabaseExecution({
     };
   }
   return undefined;
+}
+
+/** Creation owns failed-open cleanup until the prepared native backend is handed off. */
+export function prepareCreatedAgentDatabaseBackend(
+  backend: SqliteWorkerPreparedBackend<AgentDatabaseOperations> & { closeAfterFailedOpen(): void },
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
+  try {
+    backend.execute({ type: "database.prepareWrite", input: undefined });
+    backend.assertSettled?.();
+    return backend;
+  } catch (error) {
+    try {
+      backend.closeAfterFailedOpen();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "Agent creation and cleanup failed",
+        error,
+      );
+    }
+    throw error;
+  }
 }

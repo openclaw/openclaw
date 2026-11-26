@@ -71,7 +71,7 @@
   min-height: 36px;
   padding: 7px 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -212,7 +212,7 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
   list-style: none;
 }
@@ -266,7 +266,8 @@
 }
 
 .chat-workspace-mobile__name {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
   min-width: 0;
   line-height: 20px;
 }
@@ -279,7 +280,9 @@
 }
 
 .chat-workspace-mobile__extension {
-  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-workspace-mobile__directory {

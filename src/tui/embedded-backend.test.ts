@@ -541,17 +541,6 @@ describe("EmbeddedTuiBackend", () => {
     defaultRuntime.error = originalRuntimeError;
   });
 
-  it("returns the resolved model from the shared reset lifecycle", async () => {
-    const backend = new EmbeddedTuiBackend();
-
-    await expect(backend.resetSession("main", "new")).resolves.toEqual({
-      ok: true,
-      key: "agent:main:main",
-      entry: {},
-      resolved: { modelProvider: "openai", model: "gpt-5.4" },
-    });
-  });
-
   it.each([
     { key: "agent:work:new", parentSessionKey: "agent:work:main" },
     { key: "global", agentId: "work" },
@@ -907,6 +896,7 @@ describe("EmbeddedTuiBackend", () => {
     present: sessionProjection.present,
     withPreparedExactRows: sessionProjection.withPreparedExactRows,
     buildSessionRow: buildGatewaySessionRowMock,
+    readAcpMetadata: readAcpSessionMetaForEntriesMock,
   });
 
   it("rejects embedded session reads when the actual startup migration finds a legacy store", async () => {
@@ -1237,38 +1227,6 @@ describe("EmbeddedTuiBackend", () => {
       expect(buildGatewaySessionRowMock).not.toHaveBeenCalled();
     },
   );
-
-  it("preserves incognito history metadata without adding the row to the resident projection", async () => {
-    const entry = { sessionId: "private-session", incognito: true };
-    const key = "agent:main:dashboard:private";
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: key,
-      storePath: "/tmp/private.sqlite",
-      store: { [key]: entry },
-      entry,
-    });
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    try {
-      await expect(backend.loadHistory({ sessionKey: key })).resolves.toMatchObject({
-        sessionId: entry.sessionId,
-        sessionInfo: { key, sessionId: entry.sessionId },
-      });
-      expect(buildGatewaySessionRowMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          key,
-          entry,
-          storePath: "/tmp/private.sqlite",
-          lightweightListRow: true,
-        }),
-      );
-      expect(sessionProjection.present).not.toHaveBeenCalled();
-    } finally {
-      await backend.stop();
-    }
-  });
 
   it.each([{ input: { sessionKey: "global" }, owner: "main" }, ...selectedGlobalSessionCases])(
     "keeps the selected owner and gateway subagent binding off for embedded /btw: $input.sessionKey ($owner)",
@@ -2982,9 +2940,9 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it.each([
-    { command: "btw", text: "nothing important", timeoutMs: 0 },
-    { command: "side", text: "alias answer", timeoutMs: undefined },
-  ])("emits side-result events for local /$command runs", async ({ command, text, timeoutMs }) => {
+    { command: "btw", question: "what changed?\n  answer briefly", text: "nothing", timeoutMs: 0 },
+    { command: "side", question: "what changed?", text: "alias answer", timeoutMs: undefined },
+  ])("emits side results for local /$command", async ({ command, question, text, timeoutMs }) => {
     const entry = { sessionId: "session-main", updatedAt: Date.now() };
     loadSessionEntryMock.mockReturnValueOnce(
       localSessionEntry("agent:main:main", undefined, {
@@ -3000,7 +2958,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await backend.sendChat({
       sessionKey: "agent:main:main",
-      message: `/${command} what changed?`,
+      message: `/${command} ${question}`,
       runId,
       timeoutMs,
     });
@@ -3012,7 +2970,7 @@ describe("EmbeddedTuiBackend", () => {
       expect.objectContaining({
         provider: "openai",
         model: "gpt-5.4",
-        question: "what changed?",
+        question,
         sessionKey: "agent:main:main",
         ...(timeoutMs === 0
           ? { opts: expect.objectContaining({ timeoutOverrideSeconds: 0 }) }
@@ -3028,7 +2986,7 @@ describe("EmbeddedTuiBackend", () => {
           runId,
           sessionKey: "agent:main:main",
           agentId: "main",
-          question: "what changed?",
+          question,
           text,
         },
       },

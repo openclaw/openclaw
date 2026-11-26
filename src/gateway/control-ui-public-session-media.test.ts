@@ -134,12 +134,12 @@ describe("public session media", () => {
       }
       expect(String(policy)).not.toContain("allow-same-origin");
       const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-      expect(etag).toEqual(expect.any(String));
-      const unchanged = await request({ query, gate, headers: { "if-none-match": etag } });
-      expect(unchanged.res.statusCode).toBe(304);
-      expect(unchanged.getBody()).toBe("");
+      for (const validator of [etag, `W/${etag}`, `"stale", W/${etag}`, "*"]) {
+        const unchanged = await request({ query, gate, headers: { "if-none-match": validator } });
+        expect([unchanged.res.statusCode, unchanged.getBody()]).toEqual([304, ""]);
+      }
       active.mockReturnValue(false);
-      const revoked = await request({ query, gate, headers: { "if-none-match": etag } });
+      const revoked = await request({ query, gate, headers: { "if-none-match": "*" } });
       expect(revoked.res.statusCode).toBe(404);
       expect(revoked.getBody()).toBe("This widget is unavailable.");
     });

@@ -72,8 +72,8 @@ it("spools simulator commands and retains iOS failure evidence", () => {
   }
   const upload = steps.find((step) => step.name === "Upload iOS lifecycle simulator evidence");
   expect(upload?.if).toContain("always()");
-  expect(upload?.if).toContain("steps.ios_attachment_tests.outcome");
-  // Preserve logs and result bundles; attachment-specific artifacts have their own owner.
+  expect(upload?.if).toContain("steps.ios_lifecycle_tests.outcome");
+  expect(upload?.if).toContain("steps.ios_voice_cleanup_tests.outcome");
   expect(upload?.with?.path).toContain("apps/ios/build/LifecycleTestResults/*.log");
   expect(upload?.with?.path).toContain("apps/ios/build/LifecycleTestResults/*.xcresult");
 });

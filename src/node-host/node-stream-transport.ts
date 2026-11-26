@@ -6,11 +6,13 @@ import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { NODE_STREAM_MAX_FRAME_BYTES } from "../shared/node-desktop-stream.js";
 
 const loadWebSocketConstructor = createLazyRuntimeNamedExport(
   () => import("../../packages/gateway-client/src/websocket.js"),
@@ -83,7 +85,9 @@ export async function runNodeStreamTransport(params: {
     if (params.signal.aborted) {
       return;
     }
-    const gateway = new URL(params.gatewayUrl);
+    const unix = parseUnixGatewayUrl(params.gatewayUrl);
+    // Resolve and validate attach paths normally, but retain the enrolled Unix socket as owner.
+    const gateway = new URL(unix ? `ws://localhost${unix.path}` : params.gatewayUrl);
     const url = new URL(params.attachPath, gateway);
     if (url.protocol !== "ws:" && url.protocol !== "wss:") {
       throw new Error(`${params.streamName} stream gateway URL must use WebSocket transport`);
@@ -93,7 +97,9 @@ export async function runNodeStreamTransport(params: {
     }
     // Auxiliary streams share the enrolled node's reverse-proxy mount point.
     url.pathname = `${gateway.pathname.replace(/\/$/u, "")}${url.pathname}`;
-    const attachUrl = url.toString();
+    const attachUrl = unix
+      ? `ws+unix:${unix.socketPath}:${url.pathname}${url.search}${url.hash}`
+      : url.toString();
     const tlsFingerprint = params.gatewayTlsFingerprint;
     const cloudflareAccess = params.gatewayCloudflareAccess;
     const options: ClientOptions = {
@@ -186,7 +192,15 @@ export async function runNodeStreamTransport(params: {
           return;
         }
         forwardedBytes += chunk.length;
-        streamWs.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
+        // Runtime reads can exceed the Gateway frame limit (Bun delivers whole bursts);
+        // the attach stream is a plain byte stream, so ordered slices keep it intact.
+        for (let offset = 0; offset < chunk.length; offset += NODE_STREAM_MAX_FRAME_BYTES) {
+          streamWs.send(
+            chunk.subarray(offset, offset + NODE_STREAM_MAX_FRAME_BYTES),
+            { binary: true },
+            (error) => error && finish("send-error", error),
+          );
+        }
         if (streamWs.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
           return;
         }

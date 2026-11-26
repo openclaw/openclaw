@@ -208,7 +208,7 @@ export function createWorkerExecApprovalRpc(
         !identity.turnClaim ||
         !options.placementStore?.isWorkerTurnToolAuthorized(identity.turnClaim, "exec")
       ) {
-        throw new Error("Worker exec approval authority changed. Start a new turn.");
+        throw new Error("Worker exec approval ended with its turn. Start a new turn.");
       }
       source.receiptAuthority();
       assertWorkerTurnInputAdmitted(identity);

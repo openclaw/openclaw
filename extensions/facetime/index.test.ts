@@ -50,7 +50,7 @@ function registerPlugin(enabled?: boolean) {
   let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
   const api = createTestPluginApi({
     rootDir: "/plugin",
-    pluginConfig: { enabled, ownerHandles: ["owner@example.com"] },
+    pluginConfig: { enabled, allowedCallers: ["owner@example.com"] },
     runtime: { system: { runCommandWithTimeout: vi.fn() } } as never,
     registerGatewayMethod: (name, handler) =>
       void gatewayMethods.set(name, handler as (options: unknown) => Promise<void>),
@@ -108,7 +108,7 @@ it("recovers after stopping a service whose pending runtime construction rejects
     return pending.promise;
   });
   const { request, service, serviceContext } = registerPlugin(true);
-  if (!service?.stop || service.apiVersion === 2) {
+  if (!service?.stop || service.apiVersion === 2 || service.apiVersion === 3) {
     throw new Error("expected registered FaceTime service with shutdown");
   }
   const starting = service.start(serviceContext);

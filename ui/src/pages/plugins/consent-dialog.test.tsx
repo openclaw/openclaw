@@ -5,11 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { createInspectResult } from "./plugins-page.test-support.ts";
+import { PluginArtTile } from "./presentation.tsx";
 
 type ConsentProps = Parameters<typeof PluginConsentDialog>[0];
 
@@ -60,8 +58,8 @@ describe("renderPluginConsentDialog", () => {
         integrity: "sha256-0123456789abcdefghijklmnop",
         integrityKind: "ssri",
       },
-      provenance: "ClawHub · @openclaw/calendar-plus",
-      integrityLabel: "Integrity: sha256-0123456789abc…",
+      meta: "Global · ClawHub · @openclaw/calendar-plus",
+      provenance: ["Integrity: sha256-0123456789abc…"],
     },
     {
       source: {
@@ -71,12 +69,15 @@ describe("renderPluginConsentDialog", () => {
         integrity: "0123456789abcdef0123456789abcdef01234567",
         integrityKind: "git-commit",
       },
-      provenance: "Git · https://***:***@example.com/calendar.git?token=***#main",
-      integrityLabel: "Commit: 0123456789abcdef0123…",
+      meta: "Global · Git · @openclaw/calendar-plus",
+      provenance: [
+        "https://***:***@example.com/calendar.git?token=***#main",
+        "Commit: 0123456789abcdef0123…",
+      ],
     },
   ] as const)(
     "presents capabilities, grants, safe $source.kind provenance, and trust before enablement",
-    ({ source, provenance, integrityLabel }) => {
+    ({ source, meta, provenance }) => {
       const inspection = createInspectResult({
         plugin: {
           id: "calendar-runtime",
@@ -130,12 +131,17 @@ describe("renderPluginConsentDialog", () => {
 
       const dialog = container.querySelector('[data-plugin-consent="enable"]');
       const text = normalizedText(dialog);
+      const header = dialog?.querySelector(".plugins-consent__identity");
+      expect(normalizedText(header?.querySelector("h2") ?? null)).toBe("Calendar Plus");
+      expect(normalizedText(header?.querySelector(".plugins-version") ?? null)).toBe("v2.0.0");
+      expect(normalizedText(header?.querySelector("p") ?? null)).toBe(meta);
+      expect(
+        Array.from(dialog?.querySelectorAll(".plugins-consent__provenance > span") ?? [], (span) =>
+          normalizedText(span),
+        ),
+      ).toEqual(provenance);
+      expect(text.split("@openclaw/calendar-plus")).toHaveLength(2);
       for (const value of [
-        "Calendar Plus",
-        "v2.0.0",
-        "@openclaw/calendar-plus",
-        provenance,
-        integrityLabel,
         "Review required",
         "Requests an elevated permission",
         "Scanned 2026-08-25",
@@ -148,7 +154,9 @@ describe("renderPluginConsentDialog", () => {
         "calendar-cli",
         "schedule",
         "Dangerous config flags calendar.allowShell",
-        "Prompt injection Blocked (set in config)",
+        "Modify prompts",
+        "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
+        "Blocked (set in config)",
         "Conversation access Off (default)",
         "Off by default for external plugins.",
         "Allowed models: model-a, model-b",

@@ -12,13 +12,12 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { assertSupportedAgentSchemaVersion } from "../../state/openclaw-agent-db-schema-read.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 
 export type AuthProfileReadDatabaseOpener = (
@@ -32,6 +31,7 @@ type AuthProfileReadHandle = {
   db: DatabaseSync;
   identity: string | undefined;
   ready: boolean;
+  schemaVersion?: number;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const authProfileReadDatabases = new Map<string, AuthProfileReadHandle>();
@@ -133,16 +133,25 @@ export function acquireAuthProfileReadDatabase(
     return { status: "missing" };
   }
   const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
-  if (!inspection && schema && schema.userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    closeAuthProfileReadDatabase(resolvedPath);
-    return { status: "unreadable" };
-  }
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (
     cached?.ready &&
     cached.db.isOpen &&
     (expectedIdentity === undefined || cached.identity === expectedIdentity)
   ) {
+    if (schema && schema.userVersion !== cached.schemaVersion) {
+      try {
+        admitSqliteSchema(cached.db);
+        cached.schemaVersion = assertSupportedAgentSchemaVersion(
+          cached.db,
+          resolvedPath,
+          schema.userVersion,
+        );
+      } catch {
+        closeAuthProfileReadDatabase(resolvedPath);
+        return { status: "unreadable" };
+      }
+    }
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
     armReadHandleIdleClose(resolvedPath, cached);
@@ -170,24 +179,19 @@ export function acquireAuthProfileReadDatabase(
   const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);
-    unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
+    unregisterReadHandleExitClose ??= registerProcessExitCleanup(closeAuthProfileReadPool);
     armReadHandleIdleClose(resolvedPath, candidate);
   }
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
-    if (inspection) {
-      readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
-    } else if (schema) {
-      readable = true;
-    } else {
-      admitSqliteSchema(db, (version) => {
-        if (version > OPENCLAW_AGENT_SCHEMA_VERSION) {
-          throw new Error("Auth profile database uses a newer agent schema");
-        }
-      });
-      readable = true;
-    }
+    admitSqliteSchema(db);
+    candidate.schemaVersion = assertSupportedAgentSchemaVersion(
+      db,
+      resolvedPath,
+      schema?.userVersion,
+    );
+    readable = true;
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
   }

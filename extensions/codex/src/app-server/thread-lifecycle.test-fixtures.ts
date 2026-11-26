@@ -96,6 +96,16 @@ type NativeFixtureThread = {
   subscribed: boolean;
 };
 
+export function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
@@ -145,7 +155,10 @@ export function createCodexLifecycleHarness(options: {
     }
     if (request.method === "thread/read") {
       if (!current) {
-        throw new Error(`Unknown synthetic native thread: ${threadId}`);
+        throw new CodexAppServerRpcError(
+          { code: -32_600, message: `thread not loaded: ${threadId}` },
+          request.method,
+        );
       }
       return {
         thread: {
@@ -562,7 +575,6 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
       headers: {},
     },
     codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",

@@ -89,6 +89,13 @@ const { values } = parseArgs({
     method: { type: "string", multiple: true },
     "pr-subscribe-clients": { type: "string", default: "65" },
     "pr-subscribe-passive-keys": { type: "string" },
+    "picker-root": { type: "string" },
+    "picker-project-id": { type: "string", default: "workspace:main" },
+    "picker-fixture": { type: "string" },
+    "picker-delay-ms": { type: "string", default: "0" },
+    "picker-delay-after-warmup": { type: "boolean", default: false },
+    "picker-concurrency": { type: "string", default: "1" },
+    "picker-source-dir": { type: "string" },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "profile-samples": { type: "string", default: "5" },
@@ -110,6 +117,13 @@ if (values.help) {
   --method <case>                  Repeatable case filter (case names appear in result JSON).
   --pr-subscribe-clients 65        Fresh concurrent sockets for each PR subscribe burst; waits for every snapshot.
   --pr-subscribe-passive-keys <file> JSON array of existing sidebar session keys, in addition to --history-key.
+  --picker-root <repo>             Synthetic repository for worktrees.branches.
+  --picker-project-id <id>         Project for checkoutOptions (default workspace:main).
+  --picker-fixture <dir>           PATH wrapper prepared by checkout-picker-fixture.ts.
+  --picker-delay-ms 1000           Delay each native Git call after Gateway handshake.
+  --picker-delay-after-warmup      Populate snapshots before injecting slow Git.
+  --picker-concurrency 8           Concurrent identical requests on the measured connection.
+  --picker-source-dir <dir>        Frozen source manifest for parent and worker baseline.
   --profile                       Main-isolate CPU profile per selected RPC case, outside timing samples.
   --allocations                   With --profile, sample allocations instead of CPU (separate diagnostic pass).
   --profile-samples 5              Requests per profile; synchronized profiles start after every timed cell.
@@ -283,6 +297,11 @@ type Sample = {
   arrayCounts?: Record<string, number>;
   syntheticModelCount?: number;
   requestParams?: unknown;
+  picker?: unknown;
+  pickerCompletionMs?: number;
+  pickerSettled?: unknown;
+  gitCommandsStarted?: number;
+  pickerReplyMs?: number[];
   error?: unknown;
   clientRoundTripsMs?: number[];
   snapshotLatenciesMs?: number[];
@@ -305,6 +324,13 @@ const cronRequestLastEnd = new Map<string, number>();
 const cronPublicationPacing: Array<{ case: string; phase: string; gapMs: number }> = [];
 let child: ChildProcess | undefined;
 const peers = new Set<Peer>();
+const pickerEvents = new Set<(event: { event: string; payload?: unknown }) => void>();
+const pickerGitCount = () =>
+  values["picker-fixture"]
+    ? readFileSync(path.join(path.resolve(values["picker-fixture"]), "git-calls.log"), "utf8")
+        .split("\n")
+        .filter(Boolean).length
+    : undefined;
 const negotiatedExtensions = new Set<string>();
 const records: Sample[] = [];
 let proxy: Awaited<ReturnType<typeof startProxy>> | undefined;
@@ -319,6 +345,19 @@ const device = {
 };
 const buildId = readBuildIdFromBuildInfoForModuleUrl(pathToFileURL(entry).href) ?? "dev";
 const rpcCases = [
+  {
+    id: "worktrees.branches",
+    method: "worktrees.branches",
+    params: {
+      repoRoot: path.resolve(values["picker-root"] ?? path.join(root, "workspace")),
+      includeRepositoryStatus: true,
+    },
+  },
+  {
+    id: "projects.checkoutOptions",
+    method: "projects.checkoutOptions",
+    params: { projectId: values["picker-project-id"], agentId: "main" },
+  },
   { id: "connect", method: "connect" },
   {
     id: "controlUi.sessionPullRequests.subscribe.burst",
@@ -771,6 +810,9 @@ async function connectPeer(
     handshakeTimeoutMs: timeoutMs,
     onEvent(event) {
       onEvent?.(event);
+      for (const receive of pickerEvents) {
+        receive(event);
+      }
       if (
         event.event === "connect.challenge" &&
         isRecord(event.payload) &&
@@ -850,14 +892,52 @@ async function connectPeer(
   };
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
+  const picker = id === "worktrees.branches" || id === "projects.checkoutOptions";
+  const completed = Promise.withResolvers<void>();
+  const receive = (event: { event: string; payload?: unknown }) => {
+    if (
+      event.event === `${method}.changed` &&
+      isRecord(event.payload) &&
+      isRecord(params) &&
+      (method === "worktrees.branches"
+        ? event.payload.repoRoot === params.repoRoot
+        : event.payload.projectId === params.projectId)
+    ) {
+      completed.resolve();
+    }
+  };
+  if (picker) {
+    pickerEvents.add(receive);
+  }
+  const gitBefore = pickerGitCount();
   await control("begin", {
     method,
     countOps: !values["no-counters"] || phase === "first" || phase === "counts",
   });
   const started = performance.now();
   let response: Awaited<ReturnType<Peer["request"]>>;
+  const pickerReplyMs: number[] = [];
   try {
-    response = await peer.request(method, params, timeoutMs);
+    if (picker) {
+      const concurrency = parsePositiveInt(values["picker-concurrency"], 1, "--picker-concurrency");
+      assert(concurrency <= 32);
+      const responses = await Promise.all(
+        Array.from({ length: concurrency }, async () => {
+          const reply = await peer.request(method, params, timeoutMs);
+          pickerReplyMs.push(performance.now() - started);
+          assert(reply.ok, `${id}: ${JSON.stringify(reply.error)}`);
+          return reply;
+        }),
+      );
+      response = responses[0]!;
+      if (phase === "measured") {
+        for (const reply of responses) {
+          assert.deepEqual(reply.payload, response.payload);
+        }
+      }
+    } else {
+      response = await peer.request(method, params, timeoutMs);
+    }
   } catch (error) {
     records.push({
       case: id,
@@ -874,6 +954,37 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   const roundTripMs = performance.now() - started;
   const server = await control("end");
   finishCronPublication(id, params);
+  let pickerCompletionMs: number | undefined;
+  let pickerSettled: unknown;
+  if (picker) {
+    try {
+      if (isRecord(response.payload) && response.payload.refreshing === true) {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            completed.promise,
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(
+                () => reject(new Error("Picker completion event missing")),
+                15000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
+        const settled = await peer.request(method, params, timeoutMs);
+        assert(settled.ok);
+        pickerSettled = settled.payload;
+      } else {
+        pickerSettled = response.payload;
+      }
+      pickerCompletionMs = performance.now() - started;
+    } finally {
+      pickerEvents.delete(receive);
+    }
+  }
+  const gitAfter = pickerGitCount();
   const serializedPayload = JSON.stringify(response.payload ?? null);
   const syntheticModels =
     method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
@@ -899,6 +1010,16 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     ...(syntheticModels ? { syntheticModelCount } : {}),
     payloadSha256: createHash("sha256").update(serializedPayload).digest("hex"),
     requestParams: method === "cron.list" ? params : undefined,
+    ...(picker
+      ? {
+          picker: response.payload,
+          pickerReplyMs,
+          pickerCompletionMs,
+          pickerSettled,
+          gitCommandsStarted:
+            gitBefore === undefined || gitAfter === undefined ? undefined : gitAfter - gitBefore,
+        }
+      : {}),
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
           Object.entries(response.payload).flatMap(([key, value]) =>
@@ -1176,6 +1297,11 @@ try {
   const loader = path.join(checkout, "scripts", "tsx.mjs");
   const preload = fileURLToPath(new URL("./gateway-ui-rpc-preload.mjs", import.meta.url));
   const nodeArgs = ["--import", loader, "--import", preload, "--import", stopPreload.href];
+  if (values["picker-source-dir"]) {
+    const sourcePreload = new URL("./checkout-picker-source-preload.mjs", import.meta.url);
+    sourcePreload.searchParams.set("source", path.resolve(values["picker-source-dir"]));
+    nodeArgs.push("--import", sourcePreload.href);
+  }
   const log = createWriteStream(path.join(output, "gateway.log"));
   child = spawn(process.execPath, buildGatewayBenchChildArgs(entry, port, nodeArgs, "token"), {
     detached: true,
@@ -1184,6 +1310,13 @@ try {
     env: createGatewayBenchEnv(path.join(root, "home"), configPath, {
       startupTrace: false,
       caseEnv: {
+        ...(values["picker-fixture"]
+          ? {
+              PATH: `${path.resolve(values["picker-fixture"], "bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+              // This synthetic executable deliberately shadows Git after trusted PATH setup.
+              OPENCLAW_PATH_BOOTSTRAPPED: "1",
+            }
+          : {}),
         OPENCLAW_STATE_DIR: root,
         TMPDIR: path.join(root, "tmp"),
         OPENCLAW_SKIP_CHANNELS: "1",
@@ -1225,6 +1358,14 @@ try {
   const connected = await connectPeer();
   const hello = await connected.peer.request("connect", connected.params, timeoutMs);
   assert(hello.ok, `connect setup failed: ${JSON.stringify(hello.error)}`);
+  if (values["picker-fixture"]) {
+    const delayMs = parseNonNegativeInt(values["picker-delay-ms"], 0, "--picker-delay-ms");
+    assert(delayMs <= 130000);
+    writeFileSync(
+      path.join(path.resolve(values["picker-fixture"]), "git-delay-seconds"),
+      String(values["picker-delay-after-warmup"] ? 0 : delayMs / 1000),
+    );
+  }
   if (values["cron-publication"]) {
     cronPublicationFixture = await control<CronPublicationFixture>("cron-publication-setup", {
       storePath: path.join(root, "cron", "jobs.json"),
@@ -1241,6 +1382,12 @@ try {
     for (const candidate of selected) {
       await measureCase(candidate, index === 0 ? "first" : "warmup", connected.peer);
     }
+  }
+  if (values["picker-fixture"] && values["picker-delay-after-warmup"]) {
+    writeFileSync(
+      path.join(path.resolve(values["picker-fixture"]), "git-delay-seconds"),
+      String(parseNonNegativeInt(values["picker-delay-ms"], 0, "--picker-delay-ms") / 1000),
+    );
   }
   if (values["cron-pages"]) {
     for (const candidate of selected) {

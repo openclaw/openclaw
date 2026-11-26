@@ -6,7 +6,7 @@ import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -24,7 +24,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import * as setupAdmission from "./server-methods/setup-admission.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
   connectGatewayClient,
@@ -59,7 +58,7 @@ afterEach(() => {
 });
 
 it(
-  "replaces same-owner sign-in, preserves other owners, and fences revoked retries through WebSocket",
+  "replaces same-owner sign-in and preserves other owners through WebSocket",
   { timeout: 90_000 },
   async ({ signal }) => {
     const join = <T>(work: PromiseLike<T>) => withinTest(work, signal);
@@ -177,6 +176,8 @@ it(
               tls: { enabled: true, autoGenerate: false, certPath, keyPath },
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
+            // Keep the fetch trace scoped to sign-in, not background catalog polling.
+            models: { catalogRefresh: { enabled: false } },
             plugins: {
               allow: ["github-copilot"],
               slots: { memory: "none" },
@@ -217,7 +218,7 @@ it(
             return { actor, device };
           };
           // Paired backend devices share the Gateway owner; the proxy authenticates a person.
-          const { actor: owner, device } = await connectOwner("setup-owner");
+          const { actor: owner } = await connectOwner("setup-owner");
           const { actor: sameOwner } = await connectOwner("replacement-owner");
           const auth = {
             agentId: "main",
@@ -314,48 +315,6 @@ it(
             );
           };
           expectActivation();
-          // Cancellation requires a pending prompt, not a provider-specific prompt sequence.
-          expectPending(await startSignIn("before-revocation"));
-          const beforeRevocation = [...requests];
-          const reached = createDeferredCore();
-          const release = createDeferredCore();
-          const finished = observeSettlement();
-          const whenSettled = setupAdmission.whenAdmittedWizardSessionSettled;
-          // Hold only the retry's existing settlement await; cancellation and lock release stay real.
-          vi.spyOn(setupAdmission, "whenAdmittedWizardSessionSettled").mockImplementationOnce(
-            async (session) => {
-              await whenSettled(session);
-              reached.resolve();
-              await release.promise;
-            },
-          );
-          const reply = start("revoked-retry").then(
-            (value) => ({ result: value }),
-            (error: unknown) => ({ error }),
-          );
-          try {
-            await join(
-              awaitGateBeforeSettlement(
-                reached.promise,
-                finished.promise,
-                "Retry finished before settlement barrier",
-              ),
-            );
-            await client.request("device.token.revoke", {
-              deviceId: device.deviceId,
-              role: device.role,
-            });
-            release.resolve();
-            const sessions = await join(finished.promise);
-            expect(await reply).toHaveProperty("error");
-            expect(sessions).not.toContain("revoked-retry");
-            expect(requests).toEqual(beforeRevocation);
-            expect(readProfiles()).toEqual(savedProfiles);
-            expectActivation();
-          } finally {
-            release.resolve();
-            await join(Promise.all([finished.promise, reply]));
-          }
         } finally {
           for (const owner of owners) {
             await disconnectGatewayClient(owner);

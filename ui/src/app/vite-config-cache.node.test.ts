@@ -119,10 +119,42 @@ it("builds raw inventories and refreshes cached identity without changing compre
     expect(readFileSync(path.join(output, asset.fileName))).toEqual(asset.source);
   }
   const manifest: { icons: { src: string }[] } = JSON.parse(read("manifest.webmanifest"));
+  expect(offline.publicAssetVersion).toMatch(/^[a-f0-9]{64}$/u);
+  expect(html).toContain(
+    `data-openclaw-control-ui-build-id="second-build-${offline.publicAssetVersion}"`,
+  );
   for (const { src } of manifest.icons) {
-    expect(src).toContain("?v=second-build-");
+    expect(src).toContain(`?v=${offline.publicAssetVersion}`);
     expect(src.match(/\?v=/gu)).toHaveLength(1);
   }
+  const fontStylesheet = read("fonts/lora.css");
+  expect(fontStylesheet).toContain(`?v=${offline.publicAssetVersion}`);
   await refreshControlUiBuildOutput(output, second);
   expect(read("sw.js")).toBe(worker);
+
+  const third = { ...second, buildId: "third-build" };
+  await refreshControlUiBuildOutput(output, third);
+  const thirdOffline = JSON.parse(read("sw.js").match(/^const OFFLINE_BOOT = (.+);$/mu)![1]!);
+  expect(thirdOffline.publicAssetVersion).toBe(offline.publicAssetVersion);
+  expect(thirdOffline.assets).toEqual(offline.assets);
+  expect(read("fonts/lora.css")).toBe(fontStylesheet);
+  expect(JSON.parse(read("manifest.webmanifest"))).toEqual(manifest);
+  expect(read("index.html")).toContain(
+    `data-openclaw-control-ui-build-id="third-build-${offline.publicAssetVersion}"`,
+  );
+
+  const changedPublicDir = path.join(output, "public-source");
+  await cp(path.join(repoRoot, "ui/public"), changedPublicDir, { recursive: true });
+  const changedFontPath = path.join(changedPublicDir, "fonts/lora.css");
+  await writeFile(
+    changedFontPath,
+    `${readFileSync(changedFontPath, "utf8")}\n/* updated font */\n`,
+  );
+  await refreshControlUiBuildOutput(output, third, undefined, changedPublicDir);
+  const changedOffline = JSON.parse(read("sw.js").match(/^const OFFLINE_BOOT = (.+);$/mu)![1]!);
+  expect(changedOffline.publicAssetVersion).not.toBe(offline.publicAssetVersion);
+  expect(read("fonts/lora.css")).toContain(`?v=${changedOffline.publicAssetVersion}`);
+  expect(JSON.parse(read("manifest.webmanifest")).icons[0].src).toContain(
+    `?v=${changedOffline.publicAssetVersion}`,
+  );
 });

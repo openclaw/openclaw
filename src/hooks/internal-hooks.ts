@@ -1,8 +1,4 @@
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
-import type { CliDeps } from "../cli/outbound-send-deps.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -16,118 +12,7 @@ import type {
   InternalHookEventType,
   InternalHookHandler,
 } from "./internal-hook-types.js";
-import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
-
-export type AgentBootstrapHookContext = {
-  workspaceDir: string;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  cfg?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-};
-
-export type AgentBootstrapHookEvent = InternalHookEvent & {
-  type: "agent";
-  action: "bootstrap";
-  context: AgentBootstrapHookContext;
-};
-
-export type GatewayStartupHookContext = {
-  cfg?: OpenClawConfig;
-  deps?: CliDeps;
-  workspaceDir?: string;
-};
-
-export type GatewayStartupHookEvent = InternalHookEvent & {
-  type: "gateway";
-  action: "startup";
-  context: GatewayStartupHookContext;
-};
-
-export type MessageReceivedHookContext = {
-  /** Sender identifier (e.g., phone number, user ID) */
-  from: string;
-  content: string;
-  /** Unix timestamp when the message was received */
-  timestamp?: number;
-  channelId: string;
-  /** Provider account ID for multi-account setups */
-  accountId?: string;
-  conversationId?: string;
-  /** Message ID from the provider */
-  messageId?: string;
-  /** Staged, locally usable attachments in stable source order. */
-  media?: MessageHookMediaFact[];
-  /** Original attachment facts when local staging has not completed yet. */
-  originalMedia?: MessageHookMediaFact[];
-  /** True when originalMedia is present but media is withheld pending staging. */
-  mediaStagingPending?: boolean;
-  /** Additional provider-specific metadata */
-  metadata?: Record<string, unknown>;
-};
-
-export type MessageSentHookContext = Pick<
-  MessageReceivedHookContext,
-  "content" | "channelId" | "accountId" | "conversationId" | "messageId"
-> & {
-  to: string;
-  success: boolean;
-  error?: string;
-  isGroup?: boolean;
-  groupId?: string;
-};
-
-type MessageEnrichedBodyHookContext = Pick<
-  MessageReceivedHookContext,
-  | "timestamp"
-  | "channelId"
-  | "conversationId"
-  | "messageId"
-  | "media"
-  | "originalMedia"
-  | "mediaStagingPending"
-> & {
-  /** Sender identifier (e.g., phone number, user ID) */
-  from?: string;
-  to?: string;
-  /** Original raw message body (e.g., "🎤 [Audio]") */
-  body?: string;
-  /** Enriched body shown to the agent, including transcript */
-  bodyForAgent?: string;
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  provider?: string;
-  surface?: string;
-  /** @deprecated Use `media?.[0]?.path`. */
-  mediaPath?: string;
-  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
-  mediaType?: string;
-};
-
-export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
-  transcript: string;
-};
-
-export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
-  transcript?: string;
-  isGroup?: boolean;
-  groupId?: string;
-};
-
-export type SessionPatchHookContext = {
-  sessionEntry: SessionEntry;
-  patch: SessionsPatchParams;
-  cfg: OpenClawConfig;
-};
-
-export type SessionPatchHookEvent = InternalHookEvent & {
-  type: "session";
-  action: "patch";
-  context: SessionPatchHookContext;
-};
 
 // Share registrations across copies of this module emitted into separate bundle chunks.
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
@@ -233,33 +118,31 @@ export function createInternalHookEvent(
     type,
     action,
     sessionKey,
-    context,
+    context:
+      "sessionEntry" in context || "previousSessionEntry" in context
+        ? omitHookContextOperatorSources(context)
+        : context,
     timestamp: new Date(),
     messages: [],
   };
 }
 
-function hasHookEventContext(
-  event: InternalHookEvent,
-  type: InternalHookEventType,
-  action: string,
-): boolean {
-  return (
-    event.type === type &&
-    event.action === action &&
-    event.context !== null &&
-    typeof event.context === "object"
-  );
+/** Hook listeners receive session entries, never their recorded authentication sources. */
+export function omitHookSessionOperatorSources<T>(entry: T): T {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "operatorSources")) {
+    return entry;
+  }
+  const { operatorSources: _private, ...rest } = entry;
+  // SAFETY: removing one private key keeps every other field of the caller's entry shape.
+  return rest as T;
 }
 
-export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  return (
-    hasHookEventContext(event, "agent", "bootstrap") &&
-    typeof event.context.workspaceDir === "string" &&
-    Array.isArray(event.context.bootstrapFiles)
-  );
-}
-
-export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
-  return hasHookEventContext(event, "gateway", "startup");
+function omitHookContextOperatorSources(context: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...context };
+  for (const key of ["sessionEntry", "previousSessionEntry"]) {
+    if (key in next) {
+      next[key] = omitHookSessionOperatorSources(next[key]);
+    }
+  }
+  return next;
 }

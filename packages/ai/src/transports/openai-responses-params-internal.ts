@@ -17,8 +17,10 @@ import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-pro
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
+import { hasMutableModelPayloadHook } from "./model-request-body.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
+import { takeResponsesContextUsageInput } from "./openai-responses-context-usage.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
@@ -98,24 +100,31 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
+  onItemRecovery?: () => void,
+  nativeCompactEndpoint = false,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
+    nativeCompactEndpoint,
   });
   const policyAllowsReplayIds =
     payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
   const replayResponsesItemIds =
     !usesNativeOpenAICodexResponsesBackend(model) &&
     (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+  const conversion = {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
-    mutableInput: Boolean(options?.onPayload),
+    mutableInput: hasMutableModelPayloadHook(options?.onPayload),
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,
-  });
+    onItemRecovery,
+  };
+  const messages =
+    takeResponsesContextUsageInput(model, context, conversion) ??
+    convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, conversion);
   // The Responses API rejects an empty `input` array; when the only content
   // for this turn was the system prompt (now carried by `instructions`
   // instead), inject a placeholder input item so the request stays valid.
@@ -137,8 +146,8 @@ export function buildOpenAIResponsesParams(
   const promptCacheKey = compat.supportsPromptCacheKey
     ? resolvePromptCacheKey(options, cacheRetention)
     : undefined;
-  // Continuation compares input prefixes, so keep the changing system prompt in
-  // instructions on routes that support it. Other routes embed it in input.
+  // Routes that support and cache instructions carry the system prompt there.
+  // Other routes embed it in input, where a changed prompt ends continuation.
   let instructions = payloadPolicy.usesInstructionsField
     ? buildOpenAIResponsesInstructionsText(context)
     : undefined;
@@ -152,7 +161,13 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
+    ...resolveOpenAIPromptCacheParams(
+      model,
+      cacheRetention,
+      compat,
+      options?.promptCacheTtl,
+      options?.cachePrewarm,
+    ),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };

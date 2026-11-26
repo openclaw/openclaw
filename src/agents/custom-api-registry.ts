@@ -8,32 +8,50 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
 
+function isProducerStream(
+  stream: ReturnType<StreamFn>,
+): stream is AssistantMessageEventStreamContract {
+  return (
+    !("then" in stream) &&
+    "push" in stream &&
+    typeof stream.push === "function" &&
+    "end" in stream &&
+    typeof stream.end === "function"
+  );
+}
+
 function adaptCustomStream(
   model: Model,
   stream: ReturnType<StreamFn>,
 ): AssistantMessageEventStreamContract {
-  if (!(stream instanceof Promise)) {
-    return stream as AssistantMessageEventStreamContract;
+  if (isProducerStream(stream)) {
+    return stream;
   }
 
   const adapted = createAssistantMessageEventStream();
-  void (async () => {
+  const result = (async () => {
     try {
-      // Registry providers must return a stream immediately, while plugin
-      // hooks may resolve one lazily. Bridge that lifecycle at the boundary.
-      await runPluginStreamConsumer(stream, async () => {
+      // Read-only streams need a producer bridge. Retain the original stream
+      // or promise owner while consuming it across a plugin reload.
+      return await runPluginStreamConsumer(stream, async () => {
         const resolved = await stream;
         for await (const event of resolved) {
           adapted.push(event);
         }
-        adapted.end(await resolved.result());
+        const message = await resolved.result();
+        adapted.end(message);
+        return message;
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const message = buildStreamErrorAssistantMessage({ model, errorMessage });
       adapted.push({ type: "error", reason: "error", error: message });
+      return message;
     }
   })();
+  // A terminal event settles producer completion, not the source's independently
+  // repaired result. Keep those two promises distinct, as native streams do.
+  adapted.result = () => result;
   return adapted;
 }
 

@@ -55,6 +55,7 @@ export async function writeWorkspaceGitInput(params: {
   existingObjects?: ReadonlyMap<string, string>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
   parentCommit?: string;
+  result?: "tree" | "blobs";
   assertBeforeMutation?: () => void;
 }): Promise<void> {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
@@ -67,6 +68,13 @@ export async function writeWorkspaceGitInput(params: {
       yield Buffer.from(`blob\nmark :${index + 1}\ndata ${content.byteLength}\n`);
       yield content;
       yield Buffer.from("\n");
+    }
+    if (params.result === "blobs") {
+      for (let index = 0; index < entries.length; index++) {
+        yield Buffer.from(`get-mark :${index + 1}\n`);
+      }
+      yield Buffer.from("done\n");
+      return;
     }
     yield Buffer.from(
       `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
@@ -89,7 +97,9 @@ export async function writeWorkspaceGitInput(params: {
           .join(""),
       );
     }
-    yield Buffer.from(`\nget-mark :${entries.length + 1}\ndone\n`);
+    yield Buffer.from(
+      `\n${params.result === "tree" ? `ls :${entries.length + 1} ""` : `get-mark :${entries.length + 1}`}\ndone\n`,
+    );
   }
   const directory = await fsRoot(path.dirname(params.inputPath));
   await directory.create(path.basename(params.inputPath), chunks(), {

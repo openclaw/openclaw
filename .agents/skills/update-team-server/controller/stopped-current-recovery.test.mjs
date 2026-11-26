@@ -12,7 +12,6 @@ const state = (f, values) => {
 };
 function fixture(t, scenario = "success", timer = "inactive") {
   const f = makeReleaseFixture(t, scenario);
-  writeFileSync(f.lockFile, "", { mode: 0o644, flag: "wx" });
   const environmentFiles = ["first", "second", "third"].map(name => {
     const file = join(f.state, name + ".env");
     writeFileSync(file, "SYNTHETIC_" + name.toUpperCase() + "=1\n", { mode: 0o600 });

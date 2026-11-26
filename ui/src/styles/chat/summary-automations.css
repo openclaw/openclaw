@@ -64,7 +64,7 @@ openclaw-chat-summary-automations {
   min-height: 32px;
   gap: 8px;
   padding: 4px 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-size: 12px;
   line-height: 24px;
@@ -162,8 +162,6 @@ openclaw-chat-summary-automations {
   flex: 0 0 12px;
   width: 12px;
   height: 12px;
-  border-color: color-mix(in srgb, var(--muted) 30%, transparent);
-  border-top-color: var(--muted);
   animation-duration: 1.5s;
 }
 

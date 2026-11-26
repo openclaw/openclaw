@@ -106,6 +106,33 @@ function heapBytesUnder(
   );
 }
 
+it("writes synchronous GC marker bytes without normalizing capture identities", async () => {
+  const ownerUrl = new URL("../../scripts/lib/gateway-bench-profile.ts", import.meta.url).href;
+  const { child, closed, stdout, stderr } = spawnFixture(
+    [
+      "--input-type=module",
+      "-e",
+      `
+      import { writeSync } from "node:fs";
+      import { writeGatewayGcTraceMarker } from ${JSON.stringify(ownerUrl)};
+      for (const profilePath of [undefined, "", 'raw/../capture"\\\\name']) {
+        writeGatewayGcTraceMarker("heap-start", profilePath);
+        writeSync(1, "after\\n");
+      }
+      `,
+    ],
+    undefined,
+    false,
+  );
+  expect(await closed).toEqual([0, null]);
+  expect(stderr()).toBe("");
+  expect(stdout()).toBe(
+    `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid}}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":""}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":"raw/../capture\\"\\\\name"}\nafter\n`,
+  );
+});
+
 it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
   const { closed, stdout, stderr } = spawnFixture(
     [
@@ -222,7 +249,7 @@ it("attributes worker receipts without retaining labels or treating unsized mess
     const { pathToFileURL } = await import("node:url");
     const v8 = await import("node:v8");
     process.channel.ref();
-    process.on("message", message => {
+    process.on("message", async message => {
       if (!message.run) return;
       if (message.run === "tasks") {
         void (async () => {
@@ -257,7 +284,8 @@ it("attributes worker receipts without retaining labels or treating unsized mess
       admission.port.postMessage({ stage: "transaction", decision: new SharedArrayBuffer(4), facts: { publication: { kind: "session-actor-admission", snapshot: { entry: { skillsSnapshot: "s".repeat(1024) } } } } });
       admission.port.postMessage({ kind: "native-commit", payloadBytes: 40, committed: { version: 1, sequence: 1, facts: { kind: "committed", receipt: { kind: "session-actor-committed", phase: "appendTranscriptEvent", postimage: { entry: { systemPromptReport: "p".repeat(2048) } } } } } });
       admission.service();
-      admission.finish();
+      const pending = admission.finish();
+      if (pending) await pending;
       const { port1, port2 } = new MessageChannel();
       observeWorkerMessage({ status: "notification", port: port1 }, "from_worker");
       port1.close(); port2.close();
@@ -339,7 +367,6 @@ it("attributes worker receipts without retaining labels or treating unsized mess
     ReturnType<ReturnType<typeof startGatewayBenchWorkerMessages>> & { sourceHooks: string[] }
   >(`${taskProfilePath}.worker-attribution.json`);
   expect(tasks.sourceHooks).toEqual([
-    "sqlite-worker-operation-admission.ts",
     "worker-cpu.ts",
     "worker-message-metrics.ts",
     "worker-task-pool-core.ts",

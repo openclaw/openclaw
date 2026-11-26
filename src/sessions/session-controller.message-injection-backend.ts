@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { canSteerEmbeddedRunDuringCompaction } from "../agents/embedded-agent-runner/runs.probes.js";
+import { resolveEmbeddedRunCompactionSteeringRejection } from "../agents/embedded-agent-runner/runs.probes.js";
 import {
   bindMessageInjectionV2,
   createLegacyToolAuthorityQueuePreflight,
@@ -113,15 +113,23 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
         backend && params.assertCurrent && backend.messageInjectionV2?.version !== 2
           ? "guarded_injection_unsupported"
           : "injection_unavailable",
+      runtimeReason: "injection_unsupported",
     };
   }
   try {
-    const compactionAllowsSteering = canSteerEmbeddedRunDuringCompaction(params.sessionId, backend);
-    if (!injection.isAvailable() || !compactionAllowsSteering) {
-      return { reason: "injection_unavailable" };
+    const runtimeReason = resolveEmbeddedRunCompactionSteeringRejection(params.sessionId, backend);
+    if (runtimeReason) {
+      return { reason: "injection_unavailable", runtimeReason };
+    }
+    if (!injection.isAvailable()) {
+      return { reason: "injection_unavailable", runtimeReason: "turn_not_steerable" };
     }
   } catch (error) {
-    return { reason: "injection_unavailable", errorMessage: String(error) };
+    return {
+      reason: "injection_unavailable",
+      runtimeReason: "availability_check_failed",
+      errorMessage: String(error),
+    };
   }
   if (
     backend.supportsCrossProfileSteering === false &&

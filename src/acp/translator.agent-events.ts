@@ -1,4 +1,4 @@
-import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AgentContext, SessionUpdate } from "@agentclientprotocol/sdk";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
@@ -24,7 +24,7 @@ import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.j
 
 export class AcpTranslatorAgentEvents {
   constructor(
-    private readonly connection: AgentSideConnection,
+    private readonly connection: Pick<AgentContext, "request">,
     private readonly gateway: GatewayClient,
     private readonly sessionUpdates: AcpTranslatorSessionUpdates,
     private readonly pendingPrompts: Map<string, AcpPendingPrompt>,
@@ -273,12 +273,14 @@ export class AcpTranslatorAgentEvents {
     if (params.runId) {
       return this.findPendingBySessionKey(params.sessionKey, params.runId);
     }
-    const toolCallId = params.approvalEvent.toolCallId;
+    const { runId, toolCallId } = params.approvalEvent;
     let match: AcpPendingPrompt | undefined;
     for (const pending of this.pendingPrompts.values()) {
       if (
         pending.sessionKey !== params.sessionKey ||
-        (toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
+        (runId
+          ? pending.idempotencyKey !== runId
+          : toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
       ) {
         continue;
       }
@@ -309,7 +311,7 @@ export class AcpTranslatorAgentEvents {
         details,
       });
       try {
-        const response = await this.connection.requestPermission(request);
+        const response = await this.connection.request("session/request_permission", request);
         decision = resolveGatewayDecisionFromPermissionOutcome(response, request.options);
       } catch (err) {
         this.log(`approval relay request failed for ${relay.approvalId}: ${String(err)}`);

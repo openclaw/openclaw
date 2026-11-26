@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeAnthropicServiceTier,
+  recordFastModeUnsupported,
   resolveAnthropicFastModePlan,
   supportsAnthropicPriorityTier,
   type AnthropicServiceTier,
@@ -46,10 +47,17 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
 
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
-/** Publish installed-version evidence; the transport owns the floor and billing snapshot. */
+/**
+ * Publish the newest known Claude Code version (installed CLI or the version
+ * Anthropic last required) and collect new requirements; the transport owns
+ * the floor, the retry, and the billing snapshot.
+ */
 export function createAnthropicClaudeCodeIdentityWrapper(
   baseStreamFn: StreamFn | undefined,
-  resolveVersion: () => Promise<string | undefined>,
+  identity: {
+    resolveVersion: () => Promise<string | undefined>;
+    record: (version: string) => void;
+  },
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -61,15 +69,16 @@ export function createAnthropicClaudeCodeIdentityWrapper(
     ) {
       return underlying(model, context, options);
     }
-    return resolveVersion().then((version) =>
-      underlying(
-        model,
-        context,
-        version
-          ? { ...options, headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
-          : options,
-      ),
-    );
+    return identity.resolveVersion().then((version) => {
+      const requestOptions = {
+        ...options,
+        ...(version
+          ? { headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
+          : {}),
+        onClaudeCodeVersionRequired: identity.record,
+      };
+      return underlying(model, context, requestOptions);
+    });
   };
 }
 
@@ -183,6 +192,14 @@ export function createAnthropicFastModeWrapper(
     if (resolved === undefined) {
       return underlying(model, context, options);
     }
+    return withPlan(model, context, options, resolved);
+  };
+  function withPlan(
+    model: Parameters<StreamFn>[0],
+    context: Parameters<StreamFn>[1],
+    options: Parameters<StreamFn>[2],
+    resolved: boolean,
+  ): ReturnType<StreamFn> {
     const plan = resolveAnthropicFastModePlan({
       provider: model.provider,
       modelId: model.id,
@@ -204,10 +221,12 @@ export function createAnthropicFastModeWrapper(
       if (!resolved) {
         return underlying(model, context, options);
       }
-      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, {
+      const fastOptions = {
         ...options,
         headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
-      });
+        onFastModeUnsupported: recordFastModeUnsupported,
+      };
+      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, fastOptions);
     }
     return plan === "service-tier"
       ? createAnthropicServiceTierWrapper(underlying, resolved ? "auto" : "standard_only")(
@@ -216,7 +235,7 @@ export function createAnthropicFastModeWrapper(
           options,
         )
       : underlying(model, context, options);
-  };
+  }
 }
 
 function createAnthropicCompactionWrapper(

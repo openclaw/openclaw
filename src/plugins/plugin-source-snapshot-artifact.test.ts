@@ -9,12 +9,11 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
-  retainSqliteDatabaseAdmissionLocation,
+  prepareSqliteDatabaseAdmissionAsync,
 } from "../infra/sqlite-database-admission.js";
-import {
-  capturePluginSnapshotGeneration,
-  capturePluginSourceSnapshot,
-} from "./plugin-generation-capture.js";
+import { capturePluginSourceSnapshot } from "./plugin-generation-capture.js";
+import { capturePluginSnapshotGeneration } from "./plugin-generation-frozen-source.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   hasPluginNativeCaptureCleanupCandidates,
@@ -25,7 +24,7 @@ import {
   acquirePluginSourceSnapshot,
   collectPluginSourceSnapshots,
   pluginSourceSnapshotClosureDigest,
-  publishPluginSourceSnapshot,
+  stagePluginSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
@@ -76,12 +75,12 @@ async function fixture(native = true, hardlinked = false, linkedDependency = fal
     dependencyClosureDigest: pluginSourceSnapshotClosureDigest(capture),
     buildResolutionDigest: "options",
   };
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
     assertCurrent,
-  });
+  }).then((staged) => staged.publish());
   const descriptor: PluginSourceSnapshotDescriptor = { ...published, installedRevision: 1 };
   return { stateDir, source, descriptor, capture, binding };
 }
@@ -113,12 +112,12 @@ it("keeps absolute dependency links valid across atomic publication", async () =
   vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) =>
     symlink(path.resolve(path.dirname(String(link)), String(target)), link, type),
   );
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
     assertCurrent,
-  });
+  }).then((staged) => staged.publish());
   const descriptor = { ...published, installedRevision: 1 };
   const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
   releases.push(reader.release);
@@ -152,11 +151,11 @@ it("releases staging token descriptor custody before atomic rename", async () =>
     rename(from, to);
   });
   let checks = 0;
-  const published = await publishPluginSourceSnapshot({
+  const published = await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
-    assertCurrent() {
+    async assertCurrent() {
       if (++checks !== 2) {
         return;
       }
@@ -164,19 +163,19 @@ it("releases staging token descriptor custody before atomic rename", async () =>
       const stage = fs.readdirSync(parent).find((name) => name.startsWith("snapshot-v1-staging-"))!;
       // Exercise the physical-descriptor cache that Windows publication must release.
       const location = path.join(parent, stage, "owner.sqlite");
-      retainSqliteDatabaseAdmissionLocation(location);
+      await prepareSqliteDatabaseAdmissionAsync({ location, assertCurrent() {} });
       tokenDescriptor = captureSqliteDatabaseAdmissions(undefined, { location })[0]?.descriptor;
       expect(tokenDescriptor).toBeDefined();
       tokenIdentity = fs.fstatSync(tokenDescriptor!, { bigint: true });
     },
-  });
+  }).then((staged) => staged.publish());
   expect(fs.existsSync(published.artifact.path)).toBe(true);
 });
 
 it("keeps a current-process snapshot publisher out of capture maintenance", async () => {
   const { stateDir, capture, binding } = await fixture(false);
   let checks = 0;
-  await publishPluginSourceSnapshot({
+  await stagePluginSourceSnapshot({
     stateDir,
     capture,
     binding,
@@ -193,7 +192,7 @@ it("keeps a current-process snapshot publisher out of capture maintenance", asyn
       await prunePluginNativeCaptureDirectories(stateDir, new Set(), () => {}, { startup: true });
       expect(fs.existsSync(stage)).toBe(true);
     },
-  });
+  }).then((staged) => staged.publish());
 });
 
 it.each(process.platform === "win32" ? [false] : [false, true])(
@@ -379,52 +378,73 @@ it("captures complete lazy files for install-time package import aliases", () =>
   );
 });
 
-it("retains frozen logical aliases and closure restrictions through recovery forks", async () => {
-  const { stateDir, source, descriptor } = await fixture(false);
-  const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
-  releases.push(reader.release);
-  const capture = () =>
-    withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
-      capturePluginSnapshotGeneration(reader, undefined, (run) => run()),
+it.each(["inline", "worker"] as const)(
+  "retains %s frozen aliases and closure restrictions through recovery forks",
+  async (transport) => {
+    const { stateDir, source, descriptor } = await fixture(false);
+    const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
+    releases.push(reader.release);
+    const capture = () =>
+      withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginSnapshotGeneration(reader, undefined, (run) => run()),
+      );
+    const runtime =
+      transport === "worker"
+        ? (
+            await preparePluginGenerationArtifact({
+              rootDir: source,
+              source: path.join(source, "index.cjs"),
+              sourceSnapshot: { stateDir, descriptor },
+            })
+          ).artifact
+        : capture();
+    releases.push(runtime.disposeAsync);
+    // Frozen custody remains a synchronous contract, including over worker RPC.
+    const custody = runtime.retainSourceCustody();
+    releases.push(custody.source.disposeAsync);
+    expect(
+      fs.readFileSync(custody.source.resolve(path.join(source, "index.cjs")), "utf8"),
+    ).toContain("require('dep')");
+    const recovery =
+      transport === "worker"
+        ? await runtime.captureRecoverySourceAsync!()
+        : runtime.captureRecoverySource();
+    releases.push(recovery.disposeAsync);
+    const fork = recovery.fork();
+    releases.push(fork.disposeAsync);
+    fs.rmSync(source, { recursive: true });
+    reader.release();
+    runtime.dispose();
+    const restored = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+      capturePluginSnapshotGeneration(
+        fork.frozenSource!,
+        undefined,
+        (run) => run(),
+        undefined,
+        fork.native,
+      ),
     );
-  const runtime = capture();
-  releases.push(runtime.disposeAsync);
-  const recovery = runtime.captureRecoverySource();
-  releases.push(recovery.disposeAsync);
-  const fork = recovery.fork();
-  releases.push(fork.disposeAsync);
-  fs.rmSync(source, { recursive: true });
-  reader.release();
-  runtime.dispose();
-  const restored = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
-    capturePluginSnapshotGeneration(
-      fork.frozenSource!,
-      undefined,
-      (run) => run(),
-      undefined,
-      fork.native,
-    ),
-  );
-  releases.push(restored.disposeAsync);
-  expect(restored.frozenSource).toBe(true);
-  expect(restored.sourceDigest).toBe(descriptor.contentDigest);
-  expect(fs.readFileSync(restored.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
-    "require('dep')",
-  );
-  expect(() => restored.assertFrozenModule!(path.join(stateDir, "outside.cjs"))).toThrow(
-    "Declare the dependency",
-  );
-});
+    releases.push(restored.disposeAsync);
+    expect(restored.frozenSource).toBe(true);
+    expect(restored.sourceDigest).toBe(descriptor.contentDigest);
+    expect(fs.readFileSync(restored.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
+      "require('dep')",
+    );
+    expect(() => restored.assertFrozenModule!(path.join(stateDir, "outside.cjs"))).toThrow(
+      "Declare the dependency",
+    );
+  },
+);
 
 it("refuses publication when the capture no longer matches its installation binding", async () => {
   const { stateDir, capture, binding } = await fixture();
   await expect(
-    publishPluginSourceSnapshot({
+    stagePluginSourceSnapshot({
       stateDir,
       capture,
       binding: { ...binding, contentDigest: "changed" },
       assertCurrent,
-    }),
+    }).then((staged) => staged.publish()),
   ).rejects.toThrow("does not match the installation record");
 });
 
@@ -462,7 +482,9 @@ it.each(["content", "link", "directory", "executable"] as const)(
       fs.chmodSync(path.join(capture.rootDir, "index.cjs"), 0o700);
     }
     await expect(
-      publishPluginSourceSnapshot({ stateDir, capture, binding, assertCurrent }),
+      stagePluginSourceSnapshot({ stateDir, capture, binding, assertCurrent }).then((staged) =>
+        staged.publish(),
+      ),
     ).rejects.toThrow("source changed after its installation receipt");
   },
 );
@@ -526,7 +548,7 @@ it.each(["authority", "staging-payload", "published-payload"] as const)(
     const parent = path.join(stateDir, "tmp", "plugin-captures");
     const rootsBefore = fs.readdirSync(parent);
     await expect(
-      publishPluginSourceSnapshot({
+      stagePluginSourceSnapshot({
         stateDir,
         capture,
         binding,
@@ -549,7 +571,7 @@ it.each(["authority", "staging-payload", "published-payload"] as const)(
             );
           }
         },
-      }),
+      }).then((staged) => staged.publish()),
     ).rejects.toThrow(change === "authority" ? "installation changed" : "after source validation");
     expect(fs.readdirSync(parent)).toEqual(rootsBefore);
   },

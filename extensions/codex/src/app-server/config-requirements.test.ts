@@ -7,8 +7,11 @@ import {
 import { expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 afterEach(() => vi.mocked(fs.readFileSync).mockReset());
 

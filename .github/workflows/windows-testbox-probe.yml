@@ -11,7 +11,7 @@ on:
       runner_label:
         description: "Runner for Windows/WSL probes and headless CI"
         required: false
-        default: "blacksmith-16vcpu-windows-2025"
+        default: "windows-2025"
         type: choice
         options:
           - blacksmith-16vcpu-windows-2025
@@ -20,7 +20,7 @@ on:
       keepalive_minutes:
         description: "Minutes to keep the Windows runner alive for SSH inspection"
         required: false
-        default: "20"
+        default: "0"
         type: string
       require_wsl2:
         description: "Fail the run when WSL2 is unavailable"
@@ -899,7 +899,7 @@ jobs:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
         run: |
           $ErrorActionPreference = "Stop"
-          $minutes = 20
+          $minutes = 0
           if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
             $minutes = [int]$env:KEEPALIVE_MINUTES
           }

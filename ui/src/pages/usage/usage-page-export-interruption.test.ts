@@ -29,7 +29,10 @@ it.each(["disconnect", "replacement"] as const)(
       await response.promise.catch(() => {});
       await waitForSolid(() => expect(page.read().data.exporting).toBe(false));
       if (change === "disconnect") {
-        expect(toast).toHaveBeenCalledWith({ message: "Export: Connection lost during export" });
+        expect(toast).toHaveBeenCalledWith({
+          severity: "error",
+          message: "Export: Connection lost during export",
+        });
       } else {
         expect(toast).not.toHaveBeenCalled();
       }

@@ -36,7 +36,12 @@ export function createTeamScaleSidebarPresentation(input: {
     if (index % 3 === 1) {
       const agent = input.agents.agents[1]!;
       row.owner = {
-        actor: { type: "agent", id: agent.id, identity: { type: "agent", id: agent.id } },
+        actor: {
+          type: "agent",
+          id: agent.id,
+          identity: { type: "agent", id: agent.id },
+          avatarUrl: agent.identity?.avatarUrl,
+        },
       };
     }
     requests[row.key] = {
@@ -87,4 +92,63 @@ export function installTeamScaleSidebarPresentation(input: {
       }
     },
   );
+}
+
+export function installSidebarCachedParitySettings(groups: string[]) {
+  const scope = `ws://${location.host}`;
+  localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+  localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+  localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+  localStorage.setItem(
+    "openclaw:sidebar:sessions:collapsed-sections",
+    JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
+  );
+  localStorage.setItem(
+    `openclaw.control.sidebarSessionOwnerFilter.v1:${scope}:team-person-001`,
+    "involving-me",
+  );
+  localStorage.setItem(
+    `openclaw.control.sidebarEmptyGroups.v1:${scope}:user:team-person-001`,
+    "always",
+  );
+}
+
+export function createTeamScaleSidebarCategories(sessions: GatewaySessionRow[]) {
+  const groups = Array.from(
+    { length: 97 },
+    (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+  );
+  for (const [index, row] of sessions.entries()) {
+    row.category = groups[index % groups.length];
+  }
+  return {
+    groups,
+    methodResponses: {
+      "sessions.groups.list": {
+        groups: groups.map((name, position) => ({ name, position })),
+        sectionOrder: [
+          "pinned",
+          "ungrouped",
+          "groups",
+          "work",
+          "catalog:codex",
+          ...groups.map((name) => `category:${name}`),
+        ],
+      },
+    },
+  };
+}
+
+export function teamScaleAgentIdentities(agents: AgentsListResult) {
+  return {
+    cases: agents.agents.map((agent) => ({
+      match: { agentId: agent.id },
+      response: {
+        agentId: agent.id,
+        name: agent.name,
+        emoji: agent.identity?.emoji,
+        avatar: agent.identity?.avatarUrl ?? "",
+      },
+    })),
+  };
 }

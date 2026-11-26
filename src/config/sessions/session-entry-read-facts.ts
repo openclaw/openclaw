@@ -7,7 +7,6 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -23,6 +22,7 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
@@ -39,10 +39,13 @@ type WriterReads = {
   entries: (request: SessionEntryCohortRequest) => Promise<SessionExactEntriesWorkerResult>;
 };
 type WriterReadContext = {
-  database: Database;
-  reads: WriterReads;
-  queue: <T>(read: () => Promise<T>) => Promise<T>;
-  active: boolean;
+  borrowed:
+    | {
+        database: Database;
+        reads: WriterReads;
+        queue: <T>(read: () => Promise<T>) => Promise<T>;
+      }
+    | undefined;
   parent?: WriterReadContext;
 };
 const writerReads = resolveGlobalSingleton(
@@ -58,16 +61,14 @@ export async function withSessionEntryWriterReads<T>(
 ): Promise<T> {
   return withTranscriptLockSettlement(async (queue) => {
     const context: WriterReadContext = {
-      database,
-      reads,
-      queue,
-      active: true,
+      borrowed: { database, reads, queue },
       parent: writerReads.getStore(),
     };
     try {
       return await runWithAsyncStore(writerReads, context, run);
     } finally {
-      context.active = false;
+      // The queue also closes over this invocation; release the complete borrow from snapshots.
+      context.borrowed = undefined;
     }
   });
 }
@@ -78,17 +79,18 @@ function readFromSessionWriter<T>(
 ): Promise<T> | undefined {
   let context = writerReads.getStore();
   while (context) {
+    const borrowed = context.borrowed;
     if (
-      context.active &&
-      context.database.agentId === database.agentId &&
-      context.database.path === database.path
+      borrowed &&
+      borrowed.database.agentId === database.agentId &&
+      borrowed.database.path === database.path
     ) {
-      const reads = context.reads;
+      const reads = borrowed.reads;
       // Transcript appends have their own acceptance queue, including a nested preparation
       // queue. Joining it prevents a read from overtaking an accepted, not-yet-dispatched write.
       return (
         runLockedSessionTranscriptRead(database, () => read(reads)) ??
-        context.queue(() => read(reads))
+        borrowed.queue(() => read(reads))
       );
     }
     context = context.parent;
@@ -225,10 +227,7 @@ export function readRetainedSessionEntryFacts(
       if (facts.members) {
         members[key] = facts.members;
         if (request.projection === "sharing") {
-          sharingMembers.push({
-            sessionKey: key,
-            identityIds: facts.members.map(({ identityId }) => identityId),
-          });
+          sharingMembers.push(sessionMemberSharingFacts(key, facts.members));
         }
       }
       if (facts.participants?.length) {
@@ -380,11 +379,9 @@ export async function readSessionEntriesWithRetainedFacts(
   if (cached) {
     return cached;
   }
-  const before =
-    !isArtifactPreservingStateRead("agent") ||
-    getSqliteDatabaseAdmissionIdentityForPath(database.path)
-      ? readSqliteDatabaseWriteTokenForPath(database.path)
-      : undefined;
+  const before = getSqliteDatabaseAdmissionIdentityForPath(database.path)
+    ? readSqliteDatabaseWriteTokenForPath(database.path)
+    : undefined;
   const result = await read();
   retainSessionEntryReadFacts(database, request, result, before);
   return result;
@@ -410,11 +407,9 @@ export async function readSessionEntryWithRetainedFacts(
   if (cached) {
     return { ...ok(cached.entries[0]?.entry), source: cached.source };
   }
-  const before =
-    !isArtifactPreservingStateRead("agent") ||
-    getSqliteDatabaseAdmissionIdentityForPath(database.path)
-      ? readSqliteDatabaseWriteTokenForPath(database.path)
-      : undefined;
+  const before = getSqliteDatabaseAdmissionIdentityForPath(database.path)
+    ? readSqliteDatabaseWriteTokenForPath(database.path)
+    : undefined;
   const result = await read();
   if (result.ok && result.facts) {
     retainSessionEntryReadFacts(database, request, result.facts, before);

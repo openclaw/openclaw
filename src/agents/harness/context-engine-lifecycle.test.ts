@@ -1,12 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import {
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
-import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
@@ -18,8 +16,8 @@ import {
   registerTestMemoryPromptBuilder,
   type MemoryPromptSectionParams,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
+import * as pressure from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
@@ -108,37 +106,40 @@ function toolCallMessage(id: string, timestamp: number) {
 }
 
 describe("harness context engine lifecycle", () => {
-  it.each(["assemble", "prompt"] as const)(
-    "does not enumerate the enclosing attempt during %s",
+  it.each(["assemble", "prompt", "fallback"] as const)(
+    "shares the history budget without rescanning the rendered prompt (%s)",
     async (operation) => {
+      const estimate = vi.spyOn(pressure, "estimateRenderedLlmBoundaryTokenPressure");
+      onTestFinished(() => estimate.mockRestore());
       const messages = [textMessage("user", "Current request", 1)];
-      const assemble = vi.fn(
-        async ({ messages: input }: Parameters<ContextEngine["assemble"]>[0]) => ({
-          messages: input,
-          estimatedTokens: 0,
-        }),
-      );
-      const ownKeys = vi.fn(Reflect.ownKeys);
-      const params = new Proxy(
-        {
-          ...promptDefaults,
-          messages,
-          contextEngine: createContextEngine({ assemble }),
-          tokenBudget: 2000,
-          warn: vi.fn(),
+      const assemble = vi.fn(async (input: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input.tokenBudget).toBe(4952);
+        expect(input.runtimeSettings?.limits.promptTokenBudget).toBe(4952);
+        if (operation === "fallback") {
+          throw new Error("fixture assembly failure");
+        }
+        return { messages: input.messages, estimatedTokens: 0 };
+      });
+      const params = {
+        ...promptDefaults,
+        messages,
+        contextEngine: createContextEngine({ assemble }),
+        promptBudget: {
+          contextTokens: 6000,
+          reserveTokens: 1000,
+          inputTokens: 16,
+          systemPrompt: "aaaa",
+          prompt: "bbbb",
         },
-        { ownKeys: (target) => ownKeys(target) },
-      );
+        warn: vi.fn(),
+      };
       const result = await (operation === "assemble"
         ? assembleHarnessContextEngine(params)
         : prepareHarnessContextEnginePrompt(params));
       expect(result?.messages).toEqual(messages);
       expect(assemble).toHaveBeenCalledOnce();
-      expect(assemble.mock.calls[0]?.[0]).toMatchObject({
-        tokenBudget: 2000,
-        runtimeSettings: { limits: { promptTokenBudget: 2000, maxOutputTokens: 0 } },
-      });
-      expect(ownKeys).not.toHaveBeenCalled();
+      expect(estimate).toHaveBeenCalledOnce();
+      expect(params.warn).toHaveBeenCalledTimes(operation === "fallback" ? 1 : 0);
     },
   );
 
@@ -402,23 +403,14 @@ describe("harness context engine lifecycle", () => {
   });
 
   it.each([false, true])(
-    "isolates assembly with one working array (carrier=%s)",
+    "isolates assembly history when the engine mutates and fails (carrier=%s)",
     async (carrier) => {
       const first = textMessage("user", "first", 1);
       const second = textMessage("assistant", "second", 2);
-      let allocations = 0;
-      class History extends Array<AgentMessage> {
-        constructor(length = 0) {
-          super(length);
-          allocations++;
-        }
-      }
-      const messages = new History();
       const original = carrier
         ? [first, runtimeContextMessage("private context", 3), second]
         : [first, second];
-      messages.push(...original);
-      allocations = 0;
+      const messages = [...original];
       const contextEngine = createContextEngine({
         assemble: vi.fn(async ({ messages: workingMessages }) => {
           expect(workingMessages).toEqual([first, second]);
@@ -440,13 +432,12 @@ describe("harness context engine lifecycle", () => {
       expect(messages).toEqual(original);
       expect(messages[0]).toBe(first);
       expect(messages.at(-1)).toBe(second);
-      expect(allocations).toBe(1);
     },
   );
 
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
     const engineId = uniqueConfiguredProofEngineId();
-    type Hook = "bootstrap" | "assemble" | "afterTurn" | "maintain" | "compact";
+    type Hook = "bootstrap" | "assemble" | "afterTurn" | "maintain";
     const captured: Array<{
       hook: Hook;
       runtimeContext?: ContextEngineRuntimeContext;
@@ -485,7 +476,6 @@ describe("harness context engine lifecycle", () => {
       })),
       afterTurn: observe("afterTurn", () => undefined),
       maintain: observe("maintain", () => unchangedMaintenance),
-      compact: observe("compact", () => ({ ok: true, compacted: false })),
     });
     await registerTestContextEngine(engineId, () => engine);
     const configuredEngine = await resolveContextEngine({
@@ -522,30 +512,8 @@ describe("harness context engine lifecycle", () => {
       messagesSnapshot: [textMessage("assistant", "new answer", 4)],
     });
 
-    const compactRuntimeSettings = buildContextEngineRuntimeSettings({
-      contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-      provider: "openai",
-      requestedModel: "openai/gpt-5.5",
-      resolvedModel: "anthropic/claude-sonnet-4-6",
-      selectedContextEngineId: engineId,
-      contextEngineSelectionSource: "configured",
-      promptTokenBudget: 2048,
-      fallbackReason: "primary_provider_5xx",
-    });
-    await compactContextEngineWithSafetyTimeout(
-      configuredEngine,
-      {
-        sessionId,
-        sessionKey,
-        sessionTarget: assemblySession,
-        tokenBudget: 2048,
-        runtimeSettings: compactRuntimeSettings,
-      },
-      100,
-    );
-
     expect(new Set(captured.map((entry) => entry.hook))).toEqual(
-      new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
+      new Set(["bootstrap", "assemble", "afterTurn", "maintain"]),
     );
     const capturedFor = (hook: Hook) => captured.find((entry) => entry.hook === hook);
     for (const hook of ["bootstrap", "afterTurn"] as const) {

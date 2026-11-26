@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -145,6 +149,7 @@ async function prepareSessionEntryCurrentCheck(
     }),
   }));
   const entryOnly = alternatives.every((alternative) => alternative.conversations.length === 0);
+  let admission: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
   let entryPredicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let predicateRevision = 0;
   const bindings = new Map<string, Awaited<ReturnType<typeof captureConversationBindingFacts>>>();
@@ -185,6 +190,12 @@ async function prepareSessionEntryCurrentCheck(
         env: scope.env,
       };
       const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
+      if (entryOnly && identity?.key.startsWith("file:") && canShareSqliteDatabaseAdmissions()) {
+        admission = retainSqliteDatabaseAdmissionForPath(identity.canonicalPath);
+        if (!admission) {
+          refuse();
+        }
+      }
       const readSource = identity?.key.startsWith("file:")
         ? {
             agentId: owner.scope?.databaseAgentId ?? params.agentId,
@@ -212,6 +223,7 @@ async function prepareSessionEntryCurrentCheck(
       let active = true;
       const release = () => {
         active = false;
+        admission?.release();
         entryPredicate?.release();
         for (const binding of bindings.values()) {
           binding.release();
@@ -224,6 +236,10 @@ async function prepareSessionEntryCurrentCheck(
         if (incognito) {
           incognito.assertCurrent();
           return true;
+        }
+        // Retained sources follow admission; source preparation checks aliases and file replacement.
+        if (admission) {
+          return admission.isCurrent();
         }
         try {
           if (
@@ -390,6 +406,7 @@ async function prepareSessionEntryCurrentCheck(
       predicateRevision = entryPredicate.captureRevision();
     },
   ).catch((error: unknown) => {
+    admission?.release();
     entryPredicate?.release();
     for (const binding of bindings.values()) {
       binding.release();

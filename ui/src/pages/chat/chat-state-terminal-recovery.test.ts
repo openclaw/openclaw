@@ -7,6 +7,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { historyBudget } from "./chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -15,8 +16,6 @@ import {
   renderedTranscript,
 } from "./chat-state.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
-
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
 // Keep history ordering/count assertions independent of auxiliary post-run auth reads.
 function withAuthStatus(request: GatewayRequestHandler): GatewayRequestHandler {
@@ -177,7 +176,7 @@ describe("terminal reply recovery", () => {
       fail();
       await vi.advanceTimersByTimeAsync(0);
       expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-      expect(state.chatRunError).toMatchObject({ runId, summary: "Error: Storage is unavailable" });
+      expect(state.chatRunError).toMatchObject({ runId, summary: "Storage is unavailable" });
       fail();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);

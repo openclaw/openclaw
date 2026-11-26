@@ -182,7 +182,8 @@ it.each([
   {
     mode: "full",
     config: { skills: { workshop: { approvalPolicy: "pending" } } },
-    issue: { path: "skills.workshop", message: expect.stringContaining("approvalPolicy") },
+    // The whole core key is retired; its settings moved to the skill-workshop plugin.
+    issue: { path: "skills", message: expect.stringContaining("workshop") },
     legacy: "skills.workshop.approvalPolicy",
     spy: () => vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues"),
   },

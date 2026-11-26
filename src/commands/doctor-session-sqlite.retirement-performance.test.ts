@@ -18,7 +18,7 @@ function transcript(content: string) {
 
 it("hashes each original three times and reports progress while retiring a large recovery set", async () => {
   const { store } = await createVerifiedRecoveryStore(transcript("x".repeat(2 * 1024 * 1024)));
-  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   const originals = preview.artifacts
     .filter((item) => item.outcome === "candidate")
     .map((item) => Object.assign({ stat: fs.statSync(item.path, { bigint: true }) }, item));
@@ -86,7 +86,7 @@ it("rehashes an original edited in place with restored mtime after initial verif
   await expect(
     retireSessionSqliteRecovery({
       env: store.env,
-      preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+      preview: await inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
       readConfig: async () => ({}),
       confirm: async () => {
         fs.writeFileSync(original.archivePath, bytes);

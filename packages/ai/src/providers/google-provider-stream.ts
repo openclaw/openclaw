@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -26,6 +27,7 @@ export function createGoogleGenerateContentStreams<
     void runGoogleGenerateContentLifecycle({
       stream: events,
       model,
+      tools: context.tools,
       output: createAssistantOutput(model, api),
       options,
       createClient: () => createClient(model, options),
@@ -36,10 +38,15 @@ export function createGoogleGenerateContentStreams<
   };
   return {
     stream,
-    streamSimple: (model, context, options) =>
-      stream(model, context, {
+    streamSimple: (model, context, options) => {
+      // Sampling controls are Google call options, not part of the shared base projection.
+      const { topP, seed } = asRecord(options);
+      return stream(model, context, {
         ...buildBaseOptions(model, options, resolveSimpleApiKey?.(model, options)),
+        ...(typeof topP === "number" ? { topP } : {}),
+        ...(typeof seed === "number" ? { seed } : {}),
         thinking: buildGoogleSimpleThinking(model, options),
-      }),
+      });
+    },
   };
 }

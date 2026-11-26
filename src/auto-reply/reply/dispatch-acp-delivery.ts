@@ -16,7 +16,10 @@ import {
   cleanDeferredFinalText,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
+import {
+  appendTtsBlockSource,
+  createTtsDirectiveTextStreamCleaner,
+} from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
@@ -24,6 +27,7 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
@@ -69,11 +73,11 @@ const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
 
-export type AcpDispatchDeliveryCoordinator = ReturnType<
-  typeof createAcpDispatchDeliveryCoordinator
+export type AcpDispatchDeliveryCoordinator = Awaited<
+  ReturnType<typeof createAcpDispatchDeliveryCoordinator>
 >;
 
-export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
+export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
@@ -103,14 +107,14 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     accumulatedFinalText: "",
     accumulatedDeliveredFinalText: "",
     pendingTranscriptOutcomes: [],
-    cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
+    cleanBlockTtsDirectiveText: (await shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
       channelId: params.ttsChannel,
       accountId: resolvedAccountId,
-    })
+    }))
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
     deliveredFinalReply: false,
@@ -281,25 +285,22 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       kind === "block" ? normalizeOptionalString(visiblePayload.text) : undefined;
     const rawBlockText = isStatusNotice ? undefined : rawBlockPayloadText;
     let blockSource: BlockReplySource | undefined;
-    if (rawBlockPayloadText) {
-      const joinsBufferedTtsDirective =
-        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
-      if (rawBlockText) {
-        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-          state.accumulatedBlockTtsText += "\n";
-        }
-        state.accumulatedBlockTtsText += rawBlockText;
-      }
+    if (rawBlockText) {
+      // Preserve authored line boundaries when the cleaner tests a fence continuation.
+      const cleanerInput =
+        visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockText;
+      state.accumulatedBlockTtsText = appendTtsBlockSource(
+        state.accumulatedBlockTtsText,
+        rawBlockText,
+        state.cleanBlockTtsDirectiveText,
+        cleanerInput,
+      );
 
-      if (state.cleanBlockTtsDirectiveText && rawBlockText) {
+      if (state.cleanBlockTtsDirectiveText) {
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(
-          // Keep authored line boundaries without restoring padding removed by
-          // the existing speech-cleaning path (including private-context gaps).
-          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
-        );
+        const text = state.cleanBlockTtsDirectiveText.push(cleanerInput);
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);
@@ -309,6 +310,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
           ...visiblePayload,
           text: text.trim() ? text : undefined,
         });
+        setReplyPayloadMetadata(visiblePayload, { ttsDirectivesParsed: true });
       }
     }
     const rawFinalText =
@@ -316,10 +318,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         ? normalizeOptionalString(visiblePayload.text)
         : undefined;
     if (rawFinalText && !transcriptSource) {
-      if (state.accumulatedFinalText.length > 0) {
-        state.accumulatedFinalText += "\n";
-      }
-      state.accumulatedFinalText += rawFinalText;
+      state.accumulatedFinalText += `${state.accumulatedFinalText ? "\n" : ""}${rawFinalText}`;
     }
     const transcriptFinalText = !transcriptSource
       ? rawFinalText

@@ -2,14 +2,12 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { buildPendingInputItems } from "./chat-pending-inputs.ts";
+import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
 import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
   insertChatItemsByTimestamp,
-  messageMatchesSearchQuery,
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -33,9 +31,6 @@ export type ChatInputPlacementProps = {
   pendingInputs?: ChatPendingInputsPage["items"];
   workspaceSyncPendingRunIds?: readonly string[];
   workerSetupPending?: boolean;
-  searchOpen?: boolean;
-  searchQuery?: string;
-  messageRecovery?: ChatMessageRecovery;
 };
 
 /** Canonical history, accepted custody, then local delivery are representations of one input. */
@@ -45,6 +40,7 @@ export function placeChatInputs(
   props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
   currentRunId: string | null,
+  hideSearchMiss: (message: unknown, key: string) => void,
 ) {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
   const { queue, pendingInputs } = selectChatInputDisplay(
@@ -54,21 +50,9 @@ export function placeChatInputs(
   );
   const historicalKeys = new Set<string>();
   const pendingKeys = new Set<string>();
-  const hiddenKeys = new Set<string>();
   const blocks: InputBlock[] = [];
   let activeInputKey: string | undefined;
   let previousStoppedKey: string | undefined;
-  const markSearchVisibility = (message: unknown, inputItems: readonly ChatItem[]) => {
-    if (
-      props.searchOpen &&
-      props.searchQuery?.trim() &&
-      !messageMatchesSearchQuery(message, props.searchQuery, props.messageRecovery)
-    ) {
-      for (const item of inputItems) {
-        hiddenKeys.add(item.key);
-      }
-    }
-  };
   for (const input of pendingInputs) {
     const inputItems = buildPendingInputItems(
       [input],
@@ -79,7 +63,9 @@ export function placeChatInputs(
     if (!first) {
       continue;
     }
-    markSearchVisibility(input.message, inputItems);
+    for (const item of inputItems) {
+      hideSearchMiss(input.message, item.key);
+    }
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
       // On an empty transcript, the first accepted input owns the startup floor
@@ -103,7 +89,36 @@ export function placeChatInputs(
     blocks.flatMap((block) => (block.runId ? [[block.runId, block] as const] : [])),
   );
   const acceptedKeys = new Map(blocks.map((block) => [block.items[0]!.key, block]));
-  const historyKeys = new Set(items.map((item) => item.key));
+  const historyItems = new Map(items.map((item) => [item.key, item]));
+  const newLocalInput = blocks.length
+    ? items.find((item) => {
+        const identity = item.kind === "message" ? readSessionMessageIdentity(item.message) : null;
+        return (
+          identity?.role === "user" &&
+          identity.sendId &&
+          identity.id === null &&
+          identity.sequence === null &&
+          !identity.isImported &&
+          !orderState.keys.includes(item.key)
+        );
+      })
+    : undefined;
+  for (const block of blocks) {
+    const previousPosition = orderState.keys.indexOf(block.items[0]!.key);
+    if (previousPosition >= 0) {
+      // Custody can replace a steer before younger optimistic inputs settle.
+      // Keep its observed input successor without treating custody as run output.
+      block.beforeKey =
+        orderState.keys.slice(previousPosition + 1).find((key) => {
+          const item = historyItems.get(key);
+          return (
+            item?.kind === "message" && readSessionMessageIdentity(item.message)?.role === "user"
+          );
+        }) ??
+        // An ACK can arrive before the next local send has a previous position.
+        newLocalInput?.key;
+    }
+  }
   for (const queued of queue) {
     if (!shouldRenderQueuedSendInThread(queued)) {
       continue;
@@ -127,7 +142,7 @@ export function placeChatInputs(
       local: true,
       bypassesQueue: queued.queueMode === "steer" || queued.queueMode === "interrupt",
     };
-    markSearchVisibility(message, block.items);
+    hideSearchMiss(message, block.items[0]!.key);
     if (!activeInputKey && !isQueuedSendInlineState(queued)) {
       activeInputKey = block.items[0]!.key;
     }
@@ -140,8 +155,8 @@ export function placeChatInputs(
         ? undefined
         : orderState.keys
             .slice(previousPosition + 1)
-            .find((key) => acceptedKeys.has(key) || historyKeys.has(key));
-    if (previousSuccessor && historyKeys.has(previousSuccessor)) {
+            .find((key) => acceptedKeys.has(key) || historyItems.has(key));
+    if (previousSuccessor && historyItems.has(previousSuccessor)) {
       block.beforeKey = previousSuccessor;
     }
     const nextAccepted =
@@ -159,55 +174,47 @@ export function placeChatInputs(
 
   let insertionCeiling = items.length;
   for (const block of blocks.toReversed()) {
-    // A recovered reply can arrive before its user row. Only exact owned output
-    // anchors that local prompt; accepted custody does not imply execution.
-    const outputIndex = block.local
-      ? items.findIndex((item) => {
-          if (!block.runId || item.kind !== "message") {
-            return false;
-          }
-          const identity = readSessionMessageIdentity(item.message);
-          return (
-            isLiveTerminalForRun(item.message, block.runId) ||
-            (identity?.role === "assistant" &&
-              !identity.isImported &&
-              identity.runId === block.runId)
-          );
-        })
-      : -1;
-    // A steer may be projected before setup promotes its original input into
-    // history. Its explicit target keeps that pending original before the steer,
-    // without comparing browser/Gateway clocks or moving canonical messages.
-    const steerIndex = block.runId
-      ? items.findIndex((item) => {
-          if (item.kind !== "message") {
-            return false;
-          }
-          const identity = readSessionMessageIdentity(item.message);
-          return (
-            identity?.role === "user" &&
+    let index = block.initial ? 0 : insertionCeiling;
+    let hasOwnedOutput = false;
+    for (const [at, item] of items.entries()) {
+      // A steer can bypass older custody only if its own output exists, even
+      // beyond the insertion ceiling. Other inputs need only their first anchor.
+      if (at >= index && (block.initial || !block.bypassesQueue)) {
+        break;
+      }
+      if (block.beforeKey && item.key === block.beforeKey) {
+        index = Math.min(index, at);
+      }
+      if (!block.runId || item.kind !== "message") {
+        continue;
+      }
+      const identity = readSessionMessageIdentity(item.message);
+      if (
+        block.local &&
+        (isLiveTerminalForRun(item.message, block.runId) ||
+          (identity?.role === "assistant" &&
             !identity.isImported &&
-            persistedSteerTargetRunId(item.message) === block.runId
-          );
-        })
-      : -1;
-    const successorIndex = block.beforeKey
-      ? items.findIndex((item) => item.key === block.beforeKey)
-      : -1;
-    const index = block.initial
-      ? 0
-      : Math.min(
-          insertionCeiling,
-          outputIndex < 0 ? items.length : outputIndex,
-          steerIndex < 0 ? items.length : steerIndex,
-          successorIndex < 0 ? items.length : successorIndex,
-        );
+            identity.runId === block.runId))
+      ) {
+        hasOwnedOutput = true;
+        index = Math.min(index, at);
+        break;
+      }
+      // A persisted steer keeps its original input ahead of it without relying on either clock.
+      if (
+        identity?.role === "user" &&
+        !identity.isImported &&
+        persistedSteerTargetRunId(item.message) === block.runId
+      ) {
+        index = Math.min(index, at);
+      }
+    }
     items.splice(index, 0, ...block.items);
     // Steering can precede queued work when its own recovered reply anchors it
     // there. The delivery mode alone must not reverse pending submissions at
     // the live edge while their acknowledgments are still outstanding.
     insertionCeiling =
-      block.initial || (block.bypassesQueue && outputIndex >= 0)
+      block.initial || (block.bypassesQueue && hasOwnedOutput)
         ? insertionCeiling + block.items.length
         : index;
     pendingKeys.add(block.items[0]!.key);
@@ -216,5 +223,5 @@ export function placeChatInputs(
   orderState.keys = items
     .filter((item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message))
     .map((item) => item.key);
-  return { pendingKeys, historicalKeys, hiddenKeys, activeInputKey };
+  return { pendingKeys, historicalKeys, activeInputKey };
 }

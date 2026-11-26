@@ -44,6 +44,7 @@ function decodeSessionEntryCurrentFacts(
       subagentControlScope: value.subagentControlScope,
       inheritedToolPolicyVersion: value.inheritedToolPolicyVersion,
       inheritedToolPolicySource: value.inheritedToolPolicySource,
+      delegatedOperatorSource: value.delegatedOperatorSource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
       delegatedToolPolicy: value.delegatedToolPolicy,

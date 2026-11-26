@@ -62,6 +62,20 @@ extension DashboardWindowController {
         else {
             return
         }
+        if let payload = message.body as? [String: Any],
+           let type = payload["type"] as? String,
+           type == "openclaw-id-sign-in" || type == "close-recovery"
+        {
+            guard self.isShowingFailurePage, self.signedOut == nil,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  self.webView.url?.absoluteString == "about:blank" else { return }
+            if type == "openclaw-id-sign-in" {
+                MacOpenClawIDSignInPresenter.shared.present()
+            } else {
+                self.window?.close()
+            }
+            return
+        }
         if let payload = message.body as? [String: Any], payload["type"] as? String == "reload" {
             guard self.isShowingFailurePage, self.signedOut == nil,
                   message.frameInfo.request.url?.absoluteString == "about:blank",

@@ -31,6 +31,12 @@ describe("Telegram chunk delivery", () => {
     ],
     [telegramError(401, "unauthorized"), false],
     [telegramError(429, "rate limited"), false],
+    [
+      new PlatformMessageNotDispatchedError("flood refusal", {
+        cause: telegramError(429, "rate limited"),
+      }),
+      false,
+    ],
     [telegramError(500, "server error"), false],
     [new Error("ambiguous transport failure"), false],
   ])("classifies %s as skippable=%s", (error, expected) => {

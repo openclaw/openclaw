@@ -37,6 +37,10 @@
   text-align: left;
 }
 
+:where(.session-menu__item) + :where(.session-menu__item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .row.session-menu__label {
   gap: 6px;
 }
@@ -63,6 +67,23 @@
 .sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
 .sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
   background: var(--bg-hover);
+}
+
+/* Plain choice rows follow the menu's own hover and selected fills. */
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .session-menu__item:where(:not(.oc-menu-item)):disabled,
@@ -103,17 +124,12 @@
   font-size: 10px;
 }
 
-/* Icon templates only carry paths; without an explicit stroke rule the SVGs
-   render as solid black fills (invisible-blob chips in dark mode). */
+/* Icon data owns fill and stroke color, including filled brand marks. */
 .session-menu__icon svg,
 .session-menu__check svg {
   width: 15px;
   height: 15px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .new-session-page__trigger-chevron svg,
@@ -121,11 +137,24 @@
 .new-session-page__browser-nav svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+}
+
+.project-picker-icon {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.workspace-icon-fallback {
+  display: contents;
 }
 
 .session-menu__item[data-new-tab-action]:not(:disabled, [aria-disabled="true"]) {

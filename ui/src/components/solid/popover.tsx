@@ -6,7 +6,7 @@ import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
-import overlayStyles from "./overlay.css?inline";
+import overlayStyles from "./overlay-shadow.css?inline";
 import "./overlay.css";
 
 export interface PopoverHandle {
@@ -70,7 +70,7 @@ export function Popover(props: {
       positionAnchor: props.positionAnchor,
       placement: props.placement,
     }),
-    { sameRoot: initialIdentity.sameRoot },
+    { sameRoot: initialIdentity.sameRoot, lazy: Boolean(initialIdentity.lazy) },
   );
   onSettled(() => {
     overlay.bindSurface(surface);

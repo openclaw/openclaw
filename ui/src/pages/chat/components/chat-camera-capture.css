@@ -7,11 +7,7 @@ openclaw-chat-camera-capture {
   .camera {
     max-height: var(--openclaw-modal-height-limit);
     overflow: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    background: var(--bg);
     color: var(--text);
-    box-shadow: var(--shadow-xl);
   }
   header {
     display: flex;
@@ -135,6 +131,12 @@ openclaw-chat-camera-capture {
   }
   .primary:hover:not(:disabled) {
     background: var(--primary-hover);
+    color: var(--primary-foreground);
+  }
+
+  .primary:active:not(:disabled) {
+    background: var(--primary-active);
+    color: var(--primary-foreground);
   }
   .icon-button {
     width: 32px;

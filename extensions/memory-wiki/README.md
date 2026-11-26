@@ -199,6 +199,10 @@ openclaw wiki status --agent support
 openclaw wiki search "refund policy" --agent support
 ```
 
+Wiki search ignores sentence-final periods in query terms, so `gateway port.` can
+find a page containing those words without the final period. Internal dots in
+identifiers such as `config.yaml` remain part of the term.
+
 ChatGPT imports preserve active-branch message text, including pasted JSON.
 Serialized image parts are omitted; serialized text parts are decoded as text.
 

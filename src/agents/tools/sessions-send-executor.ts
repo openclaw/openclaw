@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
@@ -61,32 +60,40 @@ import {
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
+  recordSessionsSendForRequester,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
   readSessionsSendMessage,
   readSessionsSendMode,
   readSessionsSendTarget,
-  readSessionsSendTimeout,
 } from "./sessions-send-tool.input.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
-/** One send implementation, shared by direct execution and the one-shot retained replay. */
 export async function executeSessionsSend(
-  opts: SessionsSendToolOptions | undefined,
+  opts: SessionsSendToolOptions,
   toolCallId: string,
-  args: unknown,
+  {
+    params,
+    mode,
+    timeoutSeconds,
+    onAdmissionComplete,
+  }: {
+    params: Record<string, unknown>;
+    mode: ReturnType<typeof readSessionsSendMode>;
+    timeoutSeconds: number;
+    onAdmissionComplete: () => void;
+  },
   retain?: ReturnType<typeof createSelfHeldSendRetainer>,
 ) {
+  opts.signal?.throwIfAborted();
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   const withRequesterAuthority = bindRequesterYieldCronAuthority(opts?.requesterTurnRunId);
 
-  const params = isRecord(args) ? args : {};
   const promptedAt = Date.now();
   const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
   const message = readSessionsSendMessage(params);
-  const mode = readSessionsSendMode(params);
   const resumeCaller =
     mode === undefined || mode === "resume"
       ? captureSessionsSendResumeCaller(opts?.retainedReplay ? opts.assertSourceCurrent : undefined)
@@ -94,7 +101,6 @@ export async function executeSessionsSend(
   if (mode === "resume" && !resumeCaller) {
     return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
   }
-  const timeoutSeconds = readSessionsSendTimeout(params, mode);
   const {
     cfg,
     mainKey,
@@ -439,17 +445,6 @@ export async function executeSessionsSend(
         /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-      if (
-        opts?.expectedTargetLifecycleRevision !== undefined &&
-        (targetSessionEntry?.lifecycleRevision ?? null) !== opts.expectedTargetLifecycleRevision
-      ) {
-        return sendFailure(
-          "error",
-          "Target session lifecycle changed before retained send.",
-          displayKey,
-          runId,
-        );
-      }
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,
@@ -497,7 +492,7 @@ export async function executeSessionsSend(
         communication = await prepareSessionsSendCommunication({
           config: cfg,
           allowApproval: opts?.retainedReplay ? false : undefined,
-          expectedTask: opts?.expectedTargetRun,
+          expectTask: opts?.expectTargetTask,
           source,
           target: targetEndpoint(),
           message,
@@ -570,6 +565,21 @@ export async function executeSessionsSend(
           nativeChild: targetIsSubagent && !targetAcpMeta,
           inputProvenance,
         });
+        // Unsupervised sessions (no completion owner) keep ordinary recipient turns.
+        if (requesterSessionEntry?.completionOwnerSessionKey === targetSession.canonicalKey) {
+          return await recordSessionsSendForRequester({
+            cfg,
+            admissionConfig: communication.admissionConfig,
+            callGateway: communication.callGateway,
+            runId,
+            sendParams,
+            sessionKey: resolvedKey,
+            sessionStoreTarget: targetSession,
+            preparedTargetSessionId: targetSessionEntry?.sessionId,
+            assertSendCurrent: communication.assertCurrent,
+            displayKey,
+          });
+        }
         if (
           mode === "resume" ||
           (mode === undefined &&
@@ -592,13 +602,11 @@ export async function executeSessionsSend(
             sessionKey: resolvedKey,
             displayKey,
             runId,
-            expectedSessionId,
-            expectedTask: opts?.expectedTargetTask,
             sendParams,
             callGateway: communication.callGateway,
           });
           if (attempt.selfHeld && retainedSend && targetSessionEntry) {
-            return retainedSend(attempt.selfHeld, "resume", attempt.targetTask);
+            return retainedSend(attempt.selfHeld, "resume");
           }
           return attempt.result;
         }
@@ -610,12 +618,13 @@ export async function executeSessionsSend(
           captureReplyAdmission: communication.captureReplyAdmission,
           runId,
           mode,
-          callDurableGateway: communication.callDurableGateway,
           sendParams,
           sourceOrigin: sameSession ? requesterOrigin : undefined,
           sessionKey: resolvedKey,
           sessionStoreTarget: targetSession,
-          allowActiveRunQueueDelivery: !sameSession && timeoutSeconds === 0,
+          // A parent's guidance belongs in its busy child's current run; a queued turn would
+          // start after that run finished and redo its work. Other targets steer only zero-wait.
+          allowActiveRunQueueDelivery: !sameSession && (timeoutSeconds === 0 || ownChild),
           expectedSessionId,
           preparedTargetSessionId: targetSessionEntry?.sessionId,
           assertSendCurrent: communication.assertCurrent,
@@ -680,6 +689,7 @@ export async function executeSessionsSend(
         if (!start.ok && start.selfHeld && retainedSend && targetSessionEntry && mode !== "steer") {
           return retainedSend(start.selfHeld, "followup");
         }
+        onAdmissionComplete();
         return await finishSessionsSendReply({
           start,
           completion,
@@ -692,7 +702,8 @@ export async function executeSessionsSend(
           requesterAgentId,
           promptedAt,
           timeoutSeconds,
-          timeoutMs,
+          deadlineAtMs: Date.now() + timeoutMs,
+          signal: opts.signal,
           targetIsSubagent,
           isIsolatedCronRequester,
         });

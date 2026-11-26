@@ -1,10 +1,11 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { chunkText } from "../../../packages/markdown-core/src/chunk-text.js";
 import { DEFAULT_MAX_TEXT_LENGTH } from "../../../src/tts/tts-limits.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
 import { listen } from "./reactive/listener.ts";
+
+const AUDIO_PRIMER_TIMEOUT_MS = 1_000;
 
 const activePlayback = new WeakMap<GatewayBrowserClient, GatewaySpeechPlayback>();
 
@@ -43,10 +44,31 @@ export class GatewaySpeechPlayback {
       "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQIAAAAAAA==",
     );
     this.audio = audio;
-    this.ready = audio.play().then(
-      () => audio.pause(),
-      () => undefined,
-    );
+    const priming = audio.play();
+    this.ready = new Promise<void>((resolve) => {
+      let expired = false;
+      const timeout = setTimeout(() => {
+        expired = true;
+        // Retire the primer before a reply reuses this element.
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        resolve();
+      }, AUDIO_PRIMER_TIMEOUT_MS);
+      void priming.then(
+        () => {
+          clearTimeout(timeout);
+          if (!expired) {
+            audio.pause();
+          }
+          resolve();
+        },
+        () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+      );
+    });
     return audio;
   }
 
@@ -79,6 +101,7 @@ export class GatewaySpeechPlayback {
       this.cancel = () => resolve(undefined);
     });
     try {
+      const { chunkText } = await import("../../../packages/markdown-core/src/chunk-text.js");
       for (const textChunk of chunkText(text, maxTextLength)) {
         if (generation !== this.generation || !isCurrent()) {
           return;

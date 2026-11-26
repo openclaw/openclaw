@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,11 +17,12 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import * as stdioWorker from "./stdio-worker.js";
 import { createCodexTestOAuthProfile } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
+vi.mock("./stdio-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stdio-worker.js")>()),
 }));
 
 describe.skipIf(process.platform === "win32")("Codex model discovery process lifetime", () => {
@@ -210,7 +210,7 @@ process.stdin.on("end", () => process.exit(0));
     const workspaceDir = path.join(root, "workspace");
     const executable = path.join(root, "codex.mjs");
     const receipts = await openFixtureReceiptChannel();
-    const children: { child: childProcess.ChildProcess; closed: Promise<unknown> }[] = [];
+    const children: { child: stdioWorker.CodexStdioChild; closed: Promise<unknown> }[] = [];
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("CODEX_API_KEY", "");
@@ -248,10 +248,10 @@ if (process.argv.includes("--native")) {
 }
 `,
     );
-    const spawn = childProcess.spawn;
-    vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+    const spawn = stdioWorker.spawnCodexStdio;
+    vi.spyOn(stdioWorker, "spawnCodexStdio").mockImplementation((...args) => {
       const child = spawn(...args);
-      if (Array.isArray(args[1]) && args[1].includes(executable)) {
+      if (args[1].includes(executable)) {
         children.push({ child, closed: once(child, "close") });
       }
       return child;

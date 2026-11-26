@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { threadId } from "node:worker_threads";
-import type { SqlConnection } from "../sql-connection.js";
+import { observeGcSamples } from "../gc-observer.js";
+import type { SqlConnection, SqlStatement } from "../sql-connection.js";
 import type { DatabaseEngineId } from "./types.js";
 
 type Kind = "statement" | "request";
@@ -10,24 +11,63 @@ const channels = {
   request: channel("openclaw.database.request"),
 };
 const observedConnections = new WeakSet<SqlConnection>();
-let statementTiming: ((sql: string, durationMs: number) => void) | undefined;
+let statementTiming:
+  | ((sql: string, durationMs: number, rows?: number, changes?: number) => void)
+  | undefined;
+
+/**
+ * Slow holds of these operations name their statements: session, trajectory, audit and
+ * knowledge writes hold the writer in front of streaming turns, and long transcript reads
+ * hold back WAL checkpoints.
+ */
+export function attributesSqliteStatements(operationLabel: string): boolean {
+  return (
+    operationLabel.startsWith("session.transcript.") ||
+    operationLabel.startsWith("sessions.transcript-") ||
+    operationLabel.startsWith("session.metadata.") ||
+    operationLabel.startsWith("session.cold.") ||
+    operationLabel.startsWith("trajectory.") ||
+    operationLabel.startsWith("audit.writer.") ||
+    operationLabel.startsWith("knowledge.") ||
+    operationLabel === "session.lifecycle.delete" ||
+    operationLabel === "session context snapshot read"
+  );
+}
 
 /** Synchronous diagnostic scope; hashes identify normalized statements without logging SQL. */
-export function startSqliteStatementTiming() {
+export function startSqliteStatementTiming(collectGc = false) {
   const previous = statementTiming;
+  let callbackGcMs: number | undefined;
+  // Reuse the isolate's GC owner; PerformanceObserver delivers too late for this sync line.
+  let stopGc: (() => void) | undefined;
+  if (collectGc) {
+    try {
+      stopGc = observeGcSamples((samples) => {
+        for (const sample of samples) {
+          callbackGcMs = (callbackGcMs ?? 0) + sample.durationMs;
+        }
+      });
+      callbackGcMs = stopGc ? 0 : undefined;
+    } catch {
+      // Unavailable diagnostics must not prevent a coherent read.
+    }
+  }
+
   const statements = new Map<
     string,
     {
       count: number;
       totalMs: number;
       maxMs: number;
+      rows?: number;
+      changes?: number;
     }
   >();
   let count = 0;
   let totalMs = 0;
   let maxMs = 0;
   let slowestSql: string | undefined;
-  statementTiming = (sql, durationMs) => {
+  statementTiming = (sql, durationMs, rows, changes) => {
     count++;
     totalMs += durationMs;
     if (slowestSql === undefined || durationMs > maxMs) {
@@ -37,14 +77,26 @@ export function startSqliteStatementTiming() {
     const entry = statements.get(key) ?? { count: 0, totalMs: 0, maxMs: 0 };
     statements.set(key, entry);
     maxMs = Math.max(maxMs, durationMs);
+    if (rows !== undefined) {
+      entry.rows = (entry.rows ?? 0) + rows;
+    }
+    if (changes !== undefined) {
+      entry.changes = (entry.changes ?? 0) + changes;
+    }
     entry.count++;
     entry.totalMs += durationMs;
     entry.maxMs = Math.max(entry.maxMs, durationMs);
   };
   return () => {
     statementTiming = previous;
+    try {
+      stopGc?.();
+    } catch {
+      callbackGcMs = undefined;
+    }
     return {
       totalMs,
+      callbackGcMs,
       summarize() {
         // Only slow holds pay for normalization, hashing and log-shaped allocations.
         const identity = (sql: string) => {
@@ -61,7 +113,17 @@ export function startSqliteStatementTiming() {
           count,
           maxMs,
           slowest: slowestSql === undefined ? undefined : { ...identity(slowestSql), maxMs },
-          statements: [...statements].map(([sql, entry]) => Object.assign(identity(sql), entry)),
+          // Keep the existing console metadata tail below its 2,048-character budget.
+          statements: [...statements]
+            .toSorted((left, right) => right[1].totalMs - left[1].totalMs)
+            .slice(0, 5)
+            .map(([sql, entry]) =>
+              Object.assign(identity(sql), entry, {
+                totalMs: Math.round(entry.totalMs * 100) / 100,
+                maxMs: Math.round(entry.maxMs * 100) / 100,
+              }),
+            ),
+          omittedGroups: Math.max(0, statements.size - 5),
         };
       },
     };
@@ -118,6 +180,7 @@ export function observeDatabaseOperation<T>(
   kind: Kind,
   sql: string | undefined,
   operation: () => T,
+  resultKind?: "get" | "all" | "run",
 ): T {
   const target = channels[kind];
   const timing = engine === "sqlite" && kind === "statement" ? statementTiming : undefined;
@@ -126,14 +189,26 @@ export function observeDatabaseOperation<T>(
   }
   const started = performance.now();
   let outcome = "error";
+  let rows: number | undefined;
+  let changes: number | undefined;
   try {
     const result = operation();
     outcome = "ok";
+    if (timing && resultKind === "run") {
+      // SAFETY: the connection wrapper supplies run only for SqlStatement.run results.
+      changes = Number((result as ReturnType<SqlStatement["run"]>).changes);
+    }
+    rows =
+      resultKind === "all" && Array.isArray(result)
+        ? result.length
+        : resultKind === "get"
+          ? Number(result !== undefined)
+          : undefined;
     return result;
   } finally {
     const durationMs = performance.now() - started;
     if (sql !== undefined) {
-      timing?.(sql, durationMs);
+      timing?.(sql, durationMs, rows, changes);
     }
     if (target.hasSubscribers) {
       target.publish({
@@ -184,7 +259,7 @@ export function observeConnection<T extends SqlConnection>(db: T): T {
         configurable: true,
         writable: true,
         value: (...parameters: Parameters<typeof execute>) =>
-          observeDatabaseOperation("sqlite", "statement", sql, () => execute(...parameters)),
+          observeDatabaseOperation("sqlite", "statement", sql, () => execute(...parameters), key),
       });
     }
     const iterate = statement.iterate.bind(statement);
@@ -195,6 +270,7 @@ export function observeConnection<T extends SqlConnection>(db: T): T {
         return iterator;
       }
       let durationMs = 0;
+      let rows = 0;
       let executed = false;
       let finished = false;
       const finish = (outcome: "ok" | "error") => {
@@ -203,7 +279,7 @@ export function observeConnection<T extends SqlConnection>(db: T): T {
         }
         finished = true;
         if (executed) {
-          timing?.(sql, durationMs);
+          timing?.(sql, durationMs, rows);
           if (channels.statement.hasSubscribers) {
             channels.statement.publish({
               engine: "sqlite",
@@ -225,6 +301,8 @@ export function observeConnection<T extends SqlConnection>(db: T): T {
           durationMs += performance.now() - started;
           if (result.done) {
             finish("ok");
+          } else {
+            rows++;
           }
           return result;
         } catch (error) {

@@ -40,6 +40,8 @@ type AssistantDecisionParams = ProfileDecisionParams & {
   terminal: AgentRunAttemptTerminal;
   signalOwnedInterruption?: boolean;
   errorMessage?: string;
+  /** A listed model rejected the chat request; only another model can help. */
+  listedModelRejected?: boolean;
 };
 
 type RunFailoverDecisionParams =
@@ -149,14 +151,23 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     shouldRotate =
       shouldFallback &&
       params.failoverReason !== "timeout" &&
+      params.failoverReason !== "route_unavailable" &&
       params.failoverReason !== "tls_certificate";
   } else {
     if (
       params.signalOwnedInterruption ||
       ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
-        params.terminal.source === "external") ||
-      isTerminalFormatFailure(params)
+        params.terminal.source === "external")
     ) {
+      return surfaceError;
+    }
+    // Same model, another login or a compaction cannot fix it; the next model can (#198288).
+    if (params.listedModelRejected) {
+      return params.fallbackConfigured
+        ? { action: "fallback_model", reason: "format" }
+        : { action: "surface_error", reason: "format" };
+    }
+    if (isTerminalFormatFailure(params)) {
       return surfaceError;
     }
     if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
@@ -172,6 +183,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     if (
       params.failoverFailure &&
       (params.failoverReason === "tls_certificate" ||
+        params.failoverReason === "route_unavailable" ||
         (params.failoverReason === "model_not_found" &&
           /\b(?:unknown model|invalid model|model[_\-\s]?not[_\-\s]?found|is not a valid model id|models?[/\s:].{0,120}?(?:not found|does not exist|retired|deprecated|no longer available)|[\w./:@-]+ was retired at \d{4}-\d{2}-\d{2}|no endpoints found for)\b/i.test(
             params.errorMessage ?? "",

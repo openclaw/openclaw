@@ -1,39 +1,21 @@
-/* Model Providers settings page leftovers; provider usage details reuse
-   provider-usage-* styles from usage.css and .provider-brand-icon from
-   components.css. Structural surfaces come from settings.css. */
+/* Provider usage panels own provider-usage.css; structural surfaces come from
+   settings.css and shared brand icons from components.css. */
 
-.model-providers__catalog-feedback {
-  min-block-size: 3.6rem;
+/* Discovery is silent until there is an error to read and retry. Don't reserve an action slot. */
+.settings-section__actions:has(> .model-providers__catalog-feedback:empty) {
+  display: none;
+}
+
+.settings-section__header:has(.model-providers__catalog-progress) {
+  flex-wrap: wrap;
+}
+
+.settings-section__actions:has(.model-providers__catalog-progress) {
+  flex-basis: 100%;
 }
 
 .model-providers__installed-agent .settings-row__desc {
   min-block-size: 2.6em;
-}
-
-.model-providers__catalog-progress {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.model-providers__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-width: 0;
-  min-block-size: 2.75rem;
-}
-
-.model-providers__checking {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 .model-providers__icon {
@@ -46,8 +28,14 @@
   font-size: 12px;
 }
 
+.model-provider-login__copy > span,
+.model-providers__catalog-progress,
+.model-providers__profile-position,
 .model-providers__profiles-heading-copy span,
-.model-providers__profile-copy span {
+.model-providers__profile-copy span,
+.model-providers__usage-bars small,
+.model-providers__usage-label,
+.model-providers__account-plan {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -79,14 +67,12 @@
   flex: 1 1 200px;
 }
 
-.model-providers__profiles-heading-copy strong,
 .model-providers__profile-copy strong {
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
-  font-weight: 650;
+  font-weight: 500;
 }
 
-.model-providers__profiles-heading-actions,
 .model-providers__profile-actions,
 .model-providers__profile-order {
   display: flex;
@@ -94,8 +80,14 @@
   gap: var(--space-1);
 }
 
-.model-providers__profiles-heading-actions {
+.model-providers__profiles-heading-actions,
+.model-providers__card-actions,
+.model-providers__form-actions,
+.model-providers__inline-form,
+.model-providers__catalog-progress {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
 }
 
@@ -105,27 +97,33 @@
   font-size: var(--control-ui-text-xs);
 }
 
+/* A credential: its identity, then only the word and actions it actually has. */
 .model-providers__profile {
   display: grid;
-  grid-template-columns: max-content 28px minmax(0, 1fr) max-content max-content;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: var(--space-1) var(--space-3);
-  min-width: 0;
-  padding-block: var(--space-3);
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  row-gap: var(--space-1);
+  min-block-size: var(--settings-control-height);
 }
 
-/* The accounts section already has its divider. */
-.model-providers__profile:first-child {
-  border-top: 0;
+.model-providers__profile:has(> .model-providers__profile-order) {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.model-providers__profile-order {
+  margin-inline-end: var(--space-2);
+}
+
+.model-providers__profile-status:not(:empty),
+.model-providers__profile-actions:not(:empty) {
+  margin-inline-start: var(--space-3);
 }
 
 .model-providers__profile-grip,
 .model-providers__profile-logout {
   display: inline-grid;
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
+  min-width: 28px;
+  height: 28px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -138,16 +136,34 @@
   cursor: default;
 }
 
+/* The icon sits on the row's end, in line with the values; the target grows inward. */
+.model-providers__profile-logout {
+  place-items: center end;
+}
+
 .model-providers__profile-grip svg,
 .model-providers__profile-logout svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
+}
+
+/* Provider-declared account actions: a full-width line under the account identity. */
+.model-providers__profile-account-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block-end: var(--space-2);
+}
+
+.model-providers__profile-manage {
+  font-size: var(--control-ui-text-xs);
 }
 
 .model-providers__profile-grip {
   cursor: grab;
   touch-action: none;
-  user-select: none;
 }
 
 .model-providers__profile-grip:disabled {
@@ -155,7 +171,8 @@
   cursor: default;
 }
 
-.model-providers__profile-grip:focus-visible {
+.model-providers__profile-grip:focus-visible,
+[data-account-segment]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   border-radius: var(--radius-sm);
@@ -185,18 +202,6 @@
   cursor: grabbing;
 }
 
-.model-providers__profiles--sorting
-  .model-providers__profile:not(.model-providers__profile--dragging) {
-  transition: translate 100ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .model-providers__profiles--sorting
-    .model-providers__profile:not(.model-providers__profile--dragging) {
-    transition: none;
-  }
-}
-
 .model-providers__profile-avatar {
   display: grid;
   width: 28px;
@@ -212,8 +217,6 @@
 
 .model-providers__profile-position {
   min-width: 2ch;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -223,124 +226,60 @@
   color: var(--danger);
 }
 
-@container provider-profiles (max-width: 640px) {
-  .model-providers__profile {
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
-    gap: var(--space-1) var(--space-2);
+/* Narrow rows keep an account's problem under its name so the name keeps its width. */
+@container provider-profiles (max-width: 480px) {
+  .model-providers__profile-status:not(:empty) {
+    grid-area: 2 / 1;
+    justify-self: start;
+    margin-inline-start: 0;
   }
 
-  .model-providers__profile-avatar {
-    display: none;
+  .model-providers__profile:not(:has(.model-providers__profile-grip)) {
+    grid-template-columns: minmax(0, 1fr) max-content;
   }
 
-  .model-providers__profile-copy {
-    grid-column: 2 / -1;
+  .model-providers__profile:not(:has(.model-providers__profile-grip))
+    > :is(.model-providers__profile-copy, .model-providers__profile-status) {
+    grid-column: 1 / -1;
   }
 
-  .model-providers__profile-status {
-    grid-column: 1 / 3;
-  }
-
-  .model-providers__profile-actions {
-    justify-self: end;
+  .model-providers__profile-order ~ .model-providers__profile-status:not(:empty) {
+    grid-column: 2;
   }
 }
 
-.model-providers__setup .settings-row {
-  min-height: 92px;
-  padding-block: var(--space-5);
+/* One line where it fits: the field takes what its actions leave. */
+.provider-row__footer,
+.model-providers__inline-form {
+  justify-content: flex-end;
 }
 
-.model-providers__setup .settings-row__title {
-  font-size: var(--control-ui-text-lg);
-  font-weight: 600;
+.model-providers__inline-form > .field {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
-.model-providers__card-actions,
-.model-providers__form-actions {
+.model-providers__probe {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+}
+
+.model-providers__probe-summary {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
-.model-providers__card-actions {
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
-.model-providers__inline-form,
-.model-providers__probe {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-muted);
-}
-
-.model-providers__probe {
-  font-size: 12px;
-}
-
-.model-providers__probe--success {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
-}
-
-.model-providers__probe--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-}
-
-.model-providers__probe--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-}
-
-.model-providers__probe-summary,
 .model-providers__probe-target {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-}
-
-.model-providers__probe-target {
   flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  gap: 2px var(--space-3);
 }
 
 .model-providers__probe-target small {
   flex-basis: 100%;
   color: var(--muted);
-}
-
-.model-providers__label-with-help {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: fit-content;
-}
-
-.model-providers__label-with-help .settings-section__help-button svg {
-  width: 14px;
-  height: 14px;
-}
-
-.model-providers__help-button {
-  width: 16px;
-  height: 16px;
-  border: 0;
-  border-radius: 0;
-}
-
-.model-providers__help-button:hover,
-.model-providers__help-button:focus-visible {
-  color: var(--text);
-}
-
-.model-providers__help-button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .settings-section > .settings-group:has(> .model-providers__provider-list) {
@@ -358,150 +297,217 @@
   margin-bottom: var(--space-3);
 }
 
-.settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
-  width: var(--control-ui-text-xs);
-  height: var(--control-ui-text-xs);
-}
-
-.model-providers__defaults .settings-row__control {
-  flex: 0 1 420px;
-  width: 420px;
-}
-
-.model-providers__defaults .model-picker,
-.model-providers__defaults .settings-segmented {
-  width: 100%;
-}
-
-.model-providers__defaults .model-picker .picker-select__trigger {
-  min-height: 48px;
-}
-
-/* Access metadata belongs to the option list, beside the model name. */
-.model-providers__defaults .model-picker .picker-select__option .picker-select__copy {
-  display: flex;
-  flex: 1;
-  align-items: center;
+/* One equal-width slot per subscription. The fill is the allowance left on that login. */
+.model-providers__usage-bars {
+  display: grid;
   gap: var(--space-2);
+  grid-template-columns: fit-content(25%) minmax(0, 1fr);
+  padding-block: var(--space-2);
+  margin-inline-start: calc(-1 * var(--provider-detail-indent));
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  > * {
+    grid-column: 1 / -1;
+  }
 }
-
-.model-providers__defaults .model-picker .picker-select__option .picker-select__label {
-  flex: 1;
-  white-space: nowrap;
+.model-providers__usage-window {
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
 }
-
-.model-providers__defaults .model-picker .picker-select__option .picker-select__description {
-  flex: 0 1 auto;
-  max-width: 50%;
-  color: var(--muted);
-  text-align: end;
-  white-space: nowrap;
-}
-
-.model-providers__defaults .settings-segmented__btn {
-  flex: 1 1 auto;
-  min-width: 0;
+.model-providers__usage-label {
   overflow-wrap: anywhere;
-  white-space: normal;
 }
-
-@media (max-width: 768px) {
-  .model-providers__defaults .settings-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-2);
+.model-providers__usage-track {
+  display: grid;
+  grid: auto / auto-flow minmax(0, 1fr);
+  gap: var(--space-1);
+  > [data-movable] {
+    cursor: grab;
+    touch-action: pan-y;
   }
-
-  .model-providers__defaults .settings-row__control {
-    flex: 0 1 auto;
-    width: 100%;
-    max-width: none;
-  }
-
-  .model-providers__head {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .model-providers__head > .settings-row__control {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-    width: 100%;
+  > [data-grabbed] {
+    position: relative;
+    z-index: 1;
+    cursor: grabbing;
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    box-shadow: var(--shadow-md);
   }
 }
-
-/* Codex account limits span the whole account row. */
+.model-providers__usage-segment {
+  min-height: max(36px, var(--settings-control-height));
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  position: relative;
+  z-index: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  &[data-known="false"] {
+    border-style: dashed;
+  }
+  &[data-tone="warning"] {
+    --segment-tone: var(--warn);
+  }
+  &[data-tone="error"] {
+    --segment-tone: var(--danger);
+    color: var(--segment-tone);
+  }
+}
+/* Row and column reordering use the same motion; the lifted item follows the pointer. */
+.model-providers__profiles--sorting [role="listitem"]:not(.model-providers__profile--dragging),
+[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
+  /* base.css disables transition durations for reduced motion. */
+  transition: translate 100ms ease-out;
+}
+.model-providers__segment-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--segment-tone, var(--ok)) 32%, transparent);
+}
+.model-providers__credit {
+  > :empty {
+    display: inline-block;
+    width: 3ch;
+    height: 0.65em;
+    background: var(--bg-hover);
+    border-radius: var(--radius-sm);
+  }
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+.model-providers__segment-name {
+  display: grid;
+  align-content: start;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+  padding: var(--space-1) 0;
+}
+/* Codex limits belong to their account: they start under its name and run to the row's end. */
 .model-providers__account-limits {
   grid-column: 1 / -1;
   display: grid;
   gap: var(--space-2);
   min-width: 0;
-  padding: 0 var(--space-4) var(--space-3);
+  margin-block-start: var(--space-2);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.model-providers__account-limits > strong {
+.model-providers__profile-order ~ .model-providers__account-limits {
+  grid-column: 2 / -1;
+}
+
+.model-providers__account-plan {
   text-transform: capitalize;
-  font-weight: 600;
+}
+
+.model-providers__account-details {
+  > summary {
+    width: fit-content;
+    font-size: var(--control-ui-text-xs);
+  }
+
+  &[open] > summary {
+    margin-block-end: var(--space-2);
+  }
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
-.model-provider-login {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+.model-provider-login--catalog .oc-dialog__body {
+  /* Filtering must not resize the dialog under the field being typed in. */
+  height: min(480px, 60dvh);
+  padding-block-start: 0;
 }
 
-.model-provider-login .model-setup-wizard__body > p {
-  margin: 0;
+.model-provider-login__search {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  padding-block: var(--space-3) var(--space-2);
+  background: var(--overlay-modal-surface);
 }
 
-.model-provider-login .model-setup-wizard__footer {
-  flex-wrap: wrap;
-  gap: var(--space-2);
+.model-provider-login__search .input {
+  width: 100%;
 }
 
 .model-provider-login__providers {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-  max-height: min(360px, 45dvh);
-  margin: 0;
-  padding: var(--space-1);
-  overflow-y: auto;
-  list-style: none;
+  margin: 0 calc(-1 * var(--space-2));
 }
 
-.model-provider-login__option.btn {
-  justify-content: flex-start;
+/* Catalog rows reach past the column so their text lines up with the title and field. */
+[data-models-login-provider] {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--control-ui-text-md);
+}
+
+[data-models-login-provider]:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+[data-models-login-provider]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+[data-models-login-provider]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+[data-models-login-provider] strong {
+  font-weight: 500;
+}
+
+/* Connection methods stay cards, so each way in reads as one choice. */
+.model-provider-login__option {
   gap: var(--space-3);
   width: 100%;
-  min-height: 52px;
-  padding: var(--space-3);
   text-align: start;
   white-space: normal;
 }
 
+.model-provider-login__option.btn {
+  justify-content: flex-start;
+  min-height: 52px;
+  padding: var(--space-3);
+}
+
 .model-provider-login__copy > span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
 
-.model-provider-login__provider {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: 0;
-  overflow-wrap: anywhere;
+.model-provider-login__accounts {
+  display: grid;
+  gap: var(--space-1);
 }
 
-.model-provider-login__accounts h3,
-.model-provider-login__methods h3 {
+/* The empty state and key sources read at the description's size, under their heading. */
+.model-provider-login h3,
+.model-provider-login__accounts > p {
   margin: 0;
   font-size: var(--control-ui-text-sm);
 }
 
+.model-provider-login__accounts > p {
+  line-height: 1.45;
+}
+
 .model-provider-login__methods,
-.model-provider-login [data-models-login-choice] {
+[data-models-login-choice] {
   display: grid;
   gap: var(--space-2);
 }
@@ -512,7 +518,6 @@
   align-items: center;
   gap: var(--space-3);
   padding-block: var(--space-2);
-  border-bottom: 1px solid var(--border);
 }
 
 .model-provider-login__account > .btn {
@@ -520,37 +525,23 @@
   justify-self: start;
 }
 
-.model-provider-login__methods .learn-more-link {
-  justify-self: start;
-  margin-top: var(--space-2);
-}
-
 .model-provider-login__secondary {
   margin-inline-end: auto;
 }
 
-.model-providers__installed-agent + .model-providers__installed-agent,
-.settings-row + .model-providers__installed-agent {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+.model-provider-login .model-providers__icon,
+[data-models-key-dialog] .model-providers__icon {
+  flex: none;
 }
 
-/* Apps missing from the Gateway computer share one quiet line instead of rows with switches. */
-.model-providers__agents-missing {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.model-providers__installed-agent .settings-row--toggle {
-  gap: var(--space-3);
+/* "Show all" stays a quiet text action under the catalog rows. */
+.model-providers__catalog-more {
+  justify-self: center;
 }
 
 .model-providers__agent-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-grid;
+  place-items: center;
   color: var(--muted);
 }
 
@@ -565,60 +556,52 @@
 
 /* Provider access: one master list. Each connected provider is a dense summary
  * row that expands in place; providers without credentials sit below, quieter. */
-.provider-list {
+.provider-list,
+.model-provider-login__providers {
   display: grid;
-  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.provider-list__title {
-  margin: var(--oc-space-2) 0 0;
-  color: var(--oc-text-muted);
-  font-size: var(--oc-font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.provider-list {
+  margin: 0;
+}
+
+.provider-list__section {
+  margin-top: var(--space-2);
 }
 
 .provider-row {
-  border-top: 1px solid var(--oc-border-subtle);
-}
-
-.provider-row:first-child {
-  border-top: 0;
+  --provider-detail-indent: calc(22px + var(--space-3));
 }
 
 .provider-row__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto minmax(6.5rem, auto) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: var(--oc-space-4);
-  inline-size: 100%;
-  min-height: 3.75rem;
-  padding: var(--oc-space-3) var(--oc-space-4);
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
   border: 0;
   background: transparent;
-  color: inherit;
-  font: inherit;
   text-align: start;
   cursor: default;
-  box-shadow: inset 2px 0 0 var(--oc-chart-color, transparent);
-  transition: background var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
-.provider-row__summary:hover {
-  background: color-mix(in srgb, var(--oc-text-primary) 3%, transparent);
+button.provider-row__summary:hover {
+  background: var(--surface-hover);
 }
 
 .provider-row__summary:focus-visible {
-  outline: 2px solid var(--oc-focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
 
 .provider-row__icon {
-  inline-size: 22px;
-  block-size: 22px;
+  width: 22px;
+  height: 22px;
 }
 
 .provider-row__identity {
@@ -628,36 +611,25 @@
 }
 
 .provider-row__name {
-  display: flex;
   min-width: 0;
-  align-items: center;
-  gap: var(--oc-space-2);
-  color: var(--oc-text-primary);
-  font-size: var(--oc-font-size-base);
-  font-weight: 600;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
 }
 
-.provider-row__plan {
-  padding: 0 var(--oc-space-1);
-  border: 1px solid var(--oc-border-subtle);
-  border-radius: var(--oc-radius-control);
-  color: var(--oc-text-secondary);
-  font-family: var(--oc-font-mono);
-  font-size: var(--oc-font-size-xs);
-  font-weight: 400;
-  line-height: 1.5;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+.model-providers__account-name,
 .provider-row__meta {
   overflow: hidden;
-  color: var(--oc-text-muted);
-  font-size: var(--oc-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.provider-row__meta-part:empty {
+  display: none;
+}
+
+.provider-row__meta-part:not(:empty) ~ .provider-row__meta-part::before {
+  content: " · ";
 }
 
 .provider-row__status {
@@ -666,113 +638,113 @@
 }
 
 .provider-row__chevron {
-  inline-size: 16px;
-  block-size: 16px;
-  color: var(--oc-text-muted);
-  transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  color: var(--muted);
+  stroke-width: var(--list-row-icon-stroke);
+  transition: transform var(--duration-fast) var(--ease-out);
 }
 
 .provider-row--open .provider-row__chevron {
   transform: rotate(180deg);
 }
 
+/* The open provider hangs off its name: credentials, what they allow, then its actions. */
 .provider-row__detail {
   display: grid;
-  gap: var(--oc-space-3);
-  padding: var(--oc-space-4) var(--oc-space-4) var(--oc-space-4)
-    calc(var(--oc-space-4) + 22px + var(--oc-space-4));
-  border-top: 1px solid var(--oc-border-subtle);
-  background: color-mix(in srgb, var(--oc-bg-page) 45%, var(--oc-bg-surface));
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-4) var(--space-4)
+    calc(var(--space-4) + var(--provider-detail-indent));
 }
 
-.provider-row .model-providers__profile-avatar svg {
-  width: 14px;
-  height: 14px;
-}
-
+/* Rows touch and carry their own spacing: dragging reads their slots as one column. */
 .provider-row__accounts {
   display: grid;
-  gap: var(--oc-space-2);
   min-width: 0;
+  margin-block: calc(var(--space-2) * -1);
 }
 
-.provider-row__limits-pane + .provider-row__accounts {
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
+.provider-row__accounts .model-providers__profile {
+  padding-block: var(--space-2);
 }
 
-/* Destructive action on its own side; routine actions sit together at the end. */
-.provider-row__footer {
-  justify-content: flex-end;
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
-}
-
+/* Text on the detail's left edge, not a button shape floating beside it. */
 .provider-row__footer .provider-row__remove {
   margin-inline-end: auto;
-}
-
-.provider-row--quiet .provider-row__summary {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: 3.25rem;
-  box-shadow: none;
-}
-
-.provider-row--quiet .provider-row__summary:hover {
+  padding-inline: 0;
   background: transparent;
 }
 
-.provider-row--quiet .provider-row__icon {
-  opacity: 0.7;
-}
-
-.provider-row--quiet .provider-row__name {
-  color: var(--oc-text-secondary);
-  font-weight: 500;
-}
-
-.provider-row--quiet .model-providers__card-actions {
-  padding: 0;
-  border: 0;
-}
-
-.provider-row--quiet .model-providers__inline-form,
-.provider-row--quiet > .callout {
-  margin: 0 var(--oc-space-4) var(--oc-space-3);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .provider-row__summary,
-  .provider-row__chevron {
-    transition: none;
-  }
-}
-
-@media (max-width: 1100px) {
+.provider-row--quiet {
   .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
   }
 
-  .provider-row__summary .provider-usage__chips {
-    display: none;
+  .provider-row__icon {
+    opacity: 0.7;
+  }
+
+  .provider-row__name {
+    color: var(--text);
+  }
+
+  .model-providers__inline-form,
+  > .callout {
+    margin: 0 var(--space-4) var(--space-3) calc(var(--space-4) + var(--provider-detail-indent));
   }
 }
 
 @media (max-width: 640px) {
-  .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    gap: var(--oc-space-3);
+  /* An expanded provider stays inside the card: tracks shrink, and long text wraps. */
+  .provider-list,
+  .provider-row__detail {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .provider-row__detail {
-    padding-inline-start: var(--oc-space-4);
+  /* A phone has no width to spare for hanging the detail off the name. */
+  .provider-row {
+    --provider-detail-indent: 0px;
+  }
+
+  /* Routine actions keep their line; removing a provider takes the one under it. */
+  .provider-row__footer .provider-row__remove {
+    flex-basis: 100%;
+    order: 1;
+    justify-content: flex-start;
+  }
+
+  /* Status takes its own line so it never squeezes the provider's meta into an ellipsis. */
+  button.provider-row__summary {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    row-gap: 2px;
+  }
+
+  button .provider-row__icon {
+    grid-row: 1 / span 2;
+  }
+
+  button .provider-row__meta {
+    white-space: normal;
+  }
+
+  .provider-row__status {
+    grid-area: 2 / 2;
+    justify-content: flex-start;
+  }
+
+  .provider-row__status:empty {
+    display: none;
+  }
+
+  .provider-row__chevron {
+    grid-area: 1 / 3 / span 2;
   }
 
   .provider-row--quiet .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, 1fr);
   }
 
-  .provider-row--quiet .model-providers__card-actions {
+  .provider-row__summary > .provider-row__footer {
     grid-column: 1 / -1;
   }
 }

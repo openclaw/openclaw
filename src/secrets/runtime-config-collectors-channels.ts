@@ -14,7 +14,7 @@ export function collectChannelConfigAssignments(params: {
   /** Optional installed plugin roots for external channel contract loading. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
-  const channelIds = Object.keys(params.config.channels ?? {});
+  const channelIds = Object.keys(params.config.channels ?? {}).filter((id) => id !== "defaults");
   if (channelIds.length === 0) {
     return;
   }
@@ -23,6 +23,7 @@ export function collectChannelConfigAssignments(params: {
       channelId,
       config: params.config,
       env: params.context.env,
+      manifestRegistry: params.context.manifestRegistry,
       loadablePluginOrigins: params.loadablePluginOrigins,
     });
     const collectRuntimeConfigAssignments =

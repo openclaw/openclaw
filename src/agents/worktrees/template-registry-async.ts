@@ -1,3 +1,11 @@
+import { promisify } from "node:util";
+import { zstdCompress, zstdDecompress } from "node:zlib";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { LruCache } from "../../infra/lru-cache.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -9,18 +17,41 @@ import {
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import { readWorktreeRegistryCommand } from "./registry-read.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 type TemplateOperation = Extract<
   keyof OpenClawStateWorkerOperations,
   `worktrees.templates.${string}`
 >;
 
+async function prepareTemplateSource(
+  commitGuard: (() => void) | undefined,
+  workerAuthority: WorktreeWorkerAuthority | undefined,
+) {
+  const source = await prepareSessionSourceEffect(
+    composeSessionSourceAssertion([commitGuard, workerAuthority?.assertCurrent]),
+  );
+  return {
+    ...source,
+    workspaceEvidence: [
+      ...new Set([
+        ...(source.workspaceEvidence ?? []),
+        ...(workerAuthority?.workspaceEvidence ?? []),
+      ]),
+    ],
+    stateOwnerPath: workerAuthority?.stateOwnerPath,
+  };
+}
+
 async function runTemplateCommand<Key extends TemplateOperation>(
   env: NodeJS.ProcessEnv,
   command: { type: Key; input: OpenClawStateWorkerOperations[Key]["input"] },
   commitGuard?: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<OpenClawStateWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext({ env });
+  const source = await prepareTemplateSource(commitGuard, workerAuthority);
+  await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
   let outcome: { value: OpenClawStateWorkerOperations[Key]["output"] } | { error: unknown };
   try {
@@ -28,16 +59,25 @@ async function runTemplateCommand<Key extends TemplateOperation>(
       await import("../../state/openclaw-state-worker-store.js");
     const result = await runOpenClawStateWorkerOperation(
       context,
-      (scope) => scope.execute(command),
+      (scope) =>
+        scope.execute({
+          ...command,
+          input: {
+            ...command.input,
+            workspaceEvidence: source.workspaceEvidence,
+            stateOwnerPath: source.stateOwnerPath,
+          },
+        }),
       {
-        assertCurrent: commitGuard,
+        signal: workerAuthority?.signal,
+        assertCurrent: source.assertCurrent,
         createAdmission: (operation) => {
           settled = operation.settled;
           return {
             nativeLocations: [context.admission.databasePath],
             admission: createSqliteWorkerOperationAdmission((_request, grant) => {
               context.admission.assertCurrent();
-              commitGuard?.();
+              source.assertCurrent();
               grant();
             }),
           };
@@ -45,7 +85,7 @@ async function runTemplateCommand<Key extends TemplateOperation>(
       },
     );
     context.admission.assertCurrent();
-    commitGuard?.();
+    source.assertCurrent();
     outcome = { value: result };
   } catch (error) {
     outcome = { error };
@@ -74,11 +114,29 @@ async function runTemplateCommand<Key extends TemplateOperation>(
 
 async function runTemplateReadCommand<
   Command extends Extract<OpenClawStateReadCommand, { type: `worktrees.templates.${string}` }>,
->(env: NodeJS.ProcessEnv, command: Command, commitGuard?: () => void) {
+>(
+  env: NodeJS.ProcessEnv,
+  command: (
+    authority: Pick<WorktreeWorkerAuthority, "workspaceEvidence" | "stateOwnerPath">,
+  ) => Command,
+  commitGuard?: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
+) {
   const context = captureOpenClawStateReadWorkerContext({ env });
-  commitGuard?.();
-  const reply = await readWorktreeRegistryCommand(context, command);
-  commitGuard?.();
+  const source = await prepareTemplateSource(commitGuard, workerAuthority);
+  await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
+  source.assertCurrent();
+  const reply = await readWorktreeRegistryCommand(
+    context,
+    command(
+      structuredClone({
+        workspaceEvidence: source.workspaceEvidence,
+        stateOwnerPath: source.stateOwnerPath,
+      }),
+    ),
+    workerAuthority?.signal,
+  );
+  source.assertCurrent();
   return reply;
 }
 
@@ -86,11 +144,17 @@ export async function readTemplateAsync(
   env: NodeJS.ProcessEnv,
   cacheKey: string,
   commitGuard?: () => void,
+  contentKey?: string,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<WorktreeTemplateRecord | undefined> {
   const reply = await runTemplateReadCommand(
     env,
-    { type: "worktrees.templates.read", input: { cacheKey } },
+    (authority) => ({
+      type: "worktrees.templates.read",
+      input: { cacheKey, contentKey, ...authority },
+    }),
     commitGuard,
+    workerAuthority,
   );
   return reply?.record;
 }
@@ -98,11 +162,13 @@ export async function readTemplateAsync(
 export async function hasTemplatesAsync(
   env: NodeJS.ProcessEnv,
   commitGuard?: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<boolean> {
   const reply = await runTemplateReadCommand(
     env,
-    { type: "worktrees.templates.has", input: undefined },
+    (authority) => ({ type: "worktrees.templates.has", input: authority }),
     commitGuard,
+    workerAuthority,
   );
   return reply?.has ?? false;
 }
@@ -110,11 +176,13 @@ export async function hasTemplatesAsync(
 export async function listTemplatesAsync(
   env: NodeJS.ProcessEnv,
   commitGuard?: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<WorktreeTemplateRecord[]> {
   const reply = await runTemplateReadCommand(
     env,
-    { type: "worktrees.templates.list", input: undefined },
+    (authority) => ({ type: "worktrees.templates.list", input: authority }),
     commitGuard,
+    workerAuthority,
   );
   return reply?.records ?? [];
 }
@@ -123,57 +191,162 @@ export function reserveTemplateAsync(
   env: NodeJS.ProcessEnv,
   record: WorktreeTemplateRecord & { status: "preparing" },
   commitGuard: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<void> {
   return runTemplateCommand(
     env,
     { type: "worktrees.templates.reserve", input: record },
     commitGuard,
+    workerAuthority,
   );
 }
 
-export function markTemplateReadyAsync(
+export type TemplateManifest = {
+  rawManifest: string;
+  manifestRef: string;
+  projectionFingerprints?: Buffer | null;
+};
+const compressManifest = promisify(zstdCompress);
+const decompressManifest = promisify(zstdDecompress);
+const templateManifests = new LruCache<{
+  compressed: Buffer;
+  manifestRef: string;
+  projectionFingerprints?: Buffer | null;
+  bytes: number;
+}>(1024, { maxBytes: 64 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
+const pendingManifests = new Map<string, Promise<TemplateManifest>>();
+const templateManifestKey = (record: WorktreeTemplateRecord, policyKey: string) =>
+  `${JSON.stringify(record.id)}:${JSON.stringify([record.path, record.createdAt, record.sourceCommit, policyKey])}`;
+
+function invalidateTemplateManifest(id: string): void {
+  const prefix = `${JSON.stringify(id)}:`;
+  for (const key of templateManifests.keys()) {
+    if (key.startsWith(prefix)) {
+      templateManifests.delete(key);
+    }
+  }
+}
+
+export async function readTemplateManifest(record: WorktreeTemplateRecord, policyKey: string) {
+  const cached = templateManifests.get(templateManifestKey(record, policyKey));
+  return (
+    cached && {
+      rawManifest: (await decompressManifest(cached.compressed)).toString("utf8"),
+      manifestRef: cached.manifestRef,
+      projectionFingerprints: cached.projectionFingerprints,
+    }
+  );
+}
+
+/** Callers retain the immutable generation until capture settles, excluding retirement. */
+export async function prepareTemplateManifest(
+  record: WorktreeTemplateRecord,
+  policyKey: string,
+  capture: () => Promise<TemplateManifest>,
+  signal?: AbortSignal,
+): Promise<TemplateManifest> {
+  const key = templateManifestKey(record, policyKey);
+  while (true) {
+    const pending = pendingManifests.get(key);
+    if (!pending) {
+      break;
+    }
+    try {
+      return await racePromiseWithAbortSignal(pending, signal);
+    } catch {
+      // Another caller can cancel its capture. Active waiters retry under their own custody.
+      signal?.throwIfAborted();
+    }
+  }
+  signal?.throwIfAborted();
+  const prepared = (async () => {
+    const cached = await readTemplateManifest(record, policyKey);
+    signal?.throwIfAborted();
+    if (cached) {
+      return cached;
+    }
+    const manifest = await capture();
+    const compressed = await compressManifest(Buffer.from(manifest.rawManifest));
+    const { manifestRef, projectionFingerprints } = manifest;
+    const bytes =
+      compressed.byteLength +
+      (projectionFingerprints?.byteLength ?? 0) +
+      2 * (key.length + manifestRef.length) +
+      256;
+    templateManifests.set(key, { compressed, manifestRef, projectionFingerprints, bytes });
+    return manifest;
+  })().finally(() => pendingManifests.delete(key));
+  pendingManifests.set(key, prepared);
+  return prepared;
+}
+
+export async function markTemplateReadyAsync(
   env: NodeJS.ProcessEnv,
   id: string,
   now: number,
   commitGuard: () => void,
-  content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">,
+  publication?: OpenClawStateWorkerOperations["worktrees.templates.ready"]["input"]["publication"],
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<boolean> {
-  return runTemplateCommand(
+  const ready = await runTemplateCommand(
     env,
-    { type: "worktrees.templates.ready", input: { id, now, content } },
+    { type: "worktrees.templates.ready", input: { id, now, publication } },
     commitGuard,
+    workerAuthority,
   );
+  if (ready && publication?.previousId && !publication.retainedCacheKey) {
+    invalidateTemplateManifest(publication.previousId);
+  }
+  return ready;
 }
 
-export function deleteTemplateAsync(
+export async function deleteTemplateAsync(
   env: NodeJS.ProcessEnv,
   id: string,
   commitGuard: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<boolean> {
-  return runTemplateCommand(
-    env,
-    { type: "worktrees.templates.delete", input: { id } },
-    commitGuard,
-  );
+  try {
+    return await runTemplateCommand(
+      env,
+      { type: "worktrees.templates.delete", input: { id } },
+      commitGuard,
+      workerAuthority,
+    );
+  } finally {
+    invalidateTemplateManifest(id);
+  }
 }
 
-export function retainTemplateReaderAsync(
+export async function retainTemplateReaderAsync(
   env: NodeJS.ProcessEnv,
   input: OpenClawStateWorkerOperations["worktrees.templates.retainReader"]["input"],
   commitGuard: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<WorktreeTemplateRecord | undefined> {
-  return runTemplateCommand(env, { type: "worktrees.templates.retainReader", input }, commitGuard);
+  const record = await runTemplateCommand(
+    env,
+    { type: "worktrees.templates.retainReader", input },
+    commitGuard,
+    workerAuthority,
+  );
+  if (record && "unpublish" in input && input.unpublish) {
+    invalidateTemplateManifest(record.id);
+  }
+  return record;
 }
 
 export function releaseTemplateReaderAsync(
   env: NodeJS.ProcessEnv,
   key: string,
   commitGuard: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<void> {
   return runTemplateCommand(
     env,
     { type: "worktrees.templates.releaseReader", input: { key } },
     commitGuard,
+    workerAuthority,
   );
 }
 
@@ -181,10 +354,12 @@ export function hasTemplateReadersAsync(
   env: NodeJS.ProcessEnv,
   id: string,
   commitGuard: () => void,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<boolean> {
   return runTemplateCommand(
     env,
     { type: "worktrees.templates.hasReaders", input: { id } },
     commitGuard,
+    workerAuthority,
   );
 }

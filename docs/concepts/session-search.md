@@ -48,6 +48,11 @@ returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
 plus an ellipsis when needed, within a 32 KiB result budget. Query words are
 literal text; punctuation does not become database query syntax.
 
+Broad searches query the transcript indexes directly, including archived sessions.
+Matching session keys pass the current visibility checks before result limits are
+applied. Searches do not page through the session inventory or retain an authorization
+snapshot between requests. Passing `sessionKey` restricts the search to that session.
+
 Each transcript search request allows up to 90 seconds, leaving dispatch and
 authorization headroom around the reader's 60-second budget, including worker admission.
 If it times out, retry `sessions_search` with a `sessionKey` to search one session
@@ -81,6 +86,9 @@ normal, not a search-completeness warning; refine the query to narrow the result
 search completeness and cold archived transcripts excluded from search have separate status
 messages. Cold transcript history becomes searchable again when its session is opened
 and the history is restored. Search does not restore archived history automatically.
+Cold sessions are excluded as soon as archival commits. Maintenance removes their
+old full-text rows in bounded write transactions and resumes interrupted cleanup
+on a later pass; pending cleanup does not expose archived hits.
 
 ## Index lifecycle
 
@@ -103,6 +111,13 @@ word, phrase, and prefix matching. Its native ranking is engine-local, so scores
 and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
+
+If a durable transcript search returns no word matches, Chinese, Japanese, and
+Korean terms are retried as literal substrings. Other terms keep their word or
+prefix matching. This retry scans text in the selected scope, so narrow the session
+selection for large histories. Agent recall streams this retry once, retaining only the
+bounded best matches. It finishes the pass even after finding matches because a later
+message may have a newer timestamp. It does not expand word searches that already found hits.
 
 Agent namespace prefixes are literal, including underscores in agent IDs.
 The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate

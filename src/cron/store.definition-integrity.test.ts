@@ -108,8 +108,11 @@ function makeAuthorityStore(jobId: string) {
 }
 
 it("preserves separately stored authority through reads and older-writer edits", async () => {
-  const { storePath, job, database } = await savedAuthority("authority-companion-row");
+  const { storePath, job, database } = await savedAuthority("authority-companion-row", {
+    createdActor: { type: "human", source: "profile", id: "legacy-owner" },
+  });
   const parentJson = readDefinition(job.id);
+  expect(parentJson).not.toHaveProperty("ownerProfileId");
   expect(parentJson).not.toHaveProperty("runtimeAuthority");
   expect(parentJson).not.toHaveProperty("runtimeAuthorityRecoveryRequired");
   const child = database
@@ -119,6 +122,8 @@ it("preserves separately stored authority through reads and older-writer edits",
 
   const reloaded = (await loadCronStore(storePath)).jobs[0];
   expect(reloaded?.payload).toStrictEqual(job.payload);
+  expect(reloaded?.ownerProfileId).toBe("legacy-owner");
+  expect(reloaded).not.toHaveProperty("ownerTransferPending");
   expect(reloaded?.runtimeAuthority).toEqual(job.runtimeAuthority);
   expect(reloaded?.runtimeAuthorityRecoveryRequired).toBeUndefined();
   const readOnly = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0];

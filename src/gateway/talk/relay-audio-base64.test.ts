@@ -70,6 +70,7 @@ it.each(["realtime", "transcription"] as const)(
     } else {
       const { transcriptionSessionId } = createTalkTranscriptionRelaySession({
         ...common,
+        assertCurrent: () => {},
         provider: { ...provider, createSession: () => connection },
       });
       cleanups.push(() =>

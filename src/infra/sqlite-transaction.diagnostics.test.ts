@@ -56,6 +56,60 @@ function asWorker(
 
 const thread = { isMainThread, pid: process.pid, threadId };
 
+it.each([false, true])("reports affected rows in write holds (bigints=%s)", (bigints) => {
+  const { db, advance, run, logger } = fixture();
+  observeConnection(db);
+  const insert = db.prepare("INSERT INTO entries VALUES (?, ?)");
+  const update = db.prepare("UPDATE entries SET value = ?");
+  const remove = db.prepare("DELETE FROM entries WHERE id <= ?");
+  for (const statement of [insert, update, remove]) {
+    statement.setReadBigInts(bigints);
+  }
+  run(
+    () => {
+      for (let index = 0; index < 5; index++) {
+        insert.run(String(index), "private-value");
+      }
+      update.run("private-update");
+      remove.run("1");
+      remove.run("4");
+      remove.run("4");
+      expect(() => insert.run("invalid-binding-count")).toThrow();
+      expect(db.prepare("SELECT id FROM entries").all()).toEqual([]);
+      advance(1_200);
+    },
+    { operationLabel: "audit.writer.process" },
+  );
+  expect(logger.warn).toHaveBeenCalledTimes(1);
+  expect(logger.warn.mock.calls[0]?.[0]).toBe("slow SQLite transaction hold");
+  const statements = logger.warn.mock.calls[0]?.[1].statementTiming.statements;
+  for (const [operation, count, changes] of [
+    ["INSERT", 6, 5],
+    ["UPDATE", 1, 5],
+    ["DELETE", 3, 5],
+  ]) {
+    expect(
+      statements.find((entry: { operation: string }) => entry.operation === operation),
+    ).toEqual({
+      id: expect.stringMatching(/^[a-f0-9]{16}$/),
+      operation,
+      count,
+      changes,
+      totalMs: expect.any(Number),
+      maxMs: expect.any(Number),
+    });
+  }
+  expect(statements.find((entry: { operation: string }) => entry.operation === "SELECT")).toEqual({
+    id: expect.stringMatching(/^[a-f0-9]{16}$/),
+    operation: "SELECT",
+    count: 1,
+    rows: 0,
+    totalMs: expect.any(Number),
+    maxMs: expect.any(Number),
+  });
+  expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(/entries|private|binding/);
+});
+
 it("names the admitted writer in a contending BEGIN and clears it after rollback", () => {
   const filename = resources.file();
   const holder = resources.open(filename, {}, true);
@@ -104,107 +158,100 @@ it("names the admitted writer in a contending BEGIN and clears it after rollback
   );
 });
 
-it("attributes slow deletion statements without counting iterator consumers or exposing SQL", () => {
-  const { db, advance, run, warning, logger } = fixture();
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  db.function("synthetic_elapsed", () => {
-    advance(100);
-    return 1;
-  });
-  observeConnection(db);
-  const statement = db.prepare("SELECT synthetic_elapsed(), ? AS private_identifier");
-  run(
-    () => {
-      statement.get("private-binding");
-      statement.get("another-binding");
-      for (const row of db
-        .prepare("SELECT synthetic_elapsed() UNION ALL SELECT synthetic_elapsed()")
-        .iterate()) {
-        expect(row).toBeDefined();
-        advance(300);
-      }
-      advance(400);
-    },
-    { operationLabel: "session.lifecycle.delete" },
-  );
-  warning("hold", {
-    elapsedMs: 1_400,
-    phases: expect.objectContaining({
-      sqlMs: 1_400,
-      statementExecutionMs: 400,
-      callbackOtherMs: 1_000,
-    }),
-    statementTiming: {
-      count: 3,
-      maxMs: 200,
-      slowest: { id: expect.stringMatching(/^[a-f0-9]{16}$/), operation: "SELECT", maxMs: 200 },
-      statements: [
-        {
-          id: expect.stringMatching(/^[a-f0-9]{16}$/),
-          operation: "SELECT",
-          count: 2,
-          totalMs: 200,
-          maxMs: 100,
+it.each([
+  "session.lifecycle.delete",
+  "session.cold.batch",
+  "session.cold.sweep",
+  "session.transcript.append-turn",
+  "session.transcript.prepare-rewrite",
+  "session.metadata.append",
+  "trajectory.runtime.append",
+  "session context snapshot read",
+  "sessions.transcript-maintenance",
+  "sessions.transcript-hydration.cron-model",
+])(
+  "attributes and bounds %s statements without counting consumers or exposing SQL",
+  (operation) => {
+    const { db, advance, run, warning, logger } = fixture();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    db.function("synthetic_elapsed", () => {
+      advance(100);
+      return 1;
+    });
+    observeConnection(db);
+    const statement = db.prepare("SELECT synthetic_elapsed(), ? AS private_identifier");
+    asWorker(operation, () =>
+      run(
+        () => {
+          statement.get("private-binding");
+          statement.get("another-binding");
+          for (const row of db
+            .prepare("SELECT synthetic_elapsed() UNION ALL SELECT synthetic_elapsed()")
+            .iterate()) {
+            expect(row).toBeDefined();
+            advance(300);
+          }
+          advance(400);
+        },
+        operation.startsWith("sessions.transcript-hydration.") ? {} : { operationLabel: operation },
+      ),
+    );
+    const id = expect.stringMatching(/^[a-f0-9]{16}$/);
+    warning("hold", {
+      elapsedMs: 1_400,
+      phases: expect.objectContaining({
+        sqlMs: 1_400,
+        statementExecutionMs: 400,
+        callbackOtherMs: 1_000,
+      }),
+    });
+    const summary = logger.warn.mock.calls[0]?.[1].statementTiming;
+    expect([summary.count, summary.maxMs, summary.omittedGroups]).toEqual([3, 200, 0]);
+    expect(summary.slowest).toEqual({ id, operation: "SELECT", maxMs: 200 });
+    const select = { id, operation: "SELECT", rows: 2, totalMs: 200 };
+    expect(summary.statements).toEqual([
+      { ...select, count: 2, maxMs: 100 },
+      { ...select, count: 1, maxMs: 200 },
+    ]);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(
+      /private|synthetic_elapsed|UNION|binding/,
+    );
+    logger.warn.mockClear();
+    expect(() =>
+      run(
+        () => {
+          for (let index = 0; index < 40; index++) {
+            db.prepare(`SELECT synthetic_elapsed() AS column_${index}`).get();
+          }
+          advance(800);
+          throw new Error("synthetic rejection");
         },
         {
-          id: expect.stringMatching(/^[a-f0-9]{16}$/),
-          operation: "SELECT",
-          count: 1,
-          totalMs: 200,
-          maxMs: 200,
+          operationLabel: operation,
+          databaseLabel: `/synthetic/${"d".repeat(180)}/agents/agent/agent.db`,
+          diagnosticContext: { sessionId: "s".repeat(36), sessionKey: "k".repeat(120) },
         },
-      ],
-    },
-  });
-  expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(
-    /private|synthetic_elapsed|UNION|binding/,
-  );
-});
-
-it("bounds deletion statement attribution and releases it after a failed callback", () => {
-  const { db, advance, run, logger } = fixture();
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  db.function("synthetic_elapsed", () => {
-    advance(10);
-    return 1;
-  });
-  observeConnection(db);
-  expect(() =>
-    run(
-      () => {
-        for (let index = 0; index < 40; index++) {
-          db.prepare(`SELECT synthetic_elapsed() AS column_${index}`).get();
-        }
-        advance(800);
-        throw new Error("synthetic rejection");
-      },
-      { operationLabel: "session.lifecycle.delete" },
-    ),
-  ).toThrow("synthetic rejection");
-  const hold = logger.warn.mock.calls.find(
-    ([message]) => message === "slow SQLite transaction hold",
-  )?.[1];
-  expect(hold).toMatchObject({
-    phases: { statementExecutionMs: 400, callbackOtherMs: 800 },
-    statementTiming: { count: 40, maxMs: 10, statements: expect.any(Array) },
-  });
-  expect(hold.statementTiming.statements).toHaveLength(33);
-  expect(hold.statementTiming.statements.at(-1)).toEqual({
-    id: "other",
-    operation: "OTHER",
-    count: 8,
-    totalMs: 80,
-    maxMs: 10,
-  });
-  logger.warn.mockClear();
-  run(() => advance(1_200), { operationLabel: "session.actor" });
-  expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("statementTiming");
-  logger.warn.mockClear();
-  run(() => db.prepare("SELECT synthetic_elapsed()").get(), {
-    operationLabel: "session.lifecycle.delete",
-  });
-  expect(logger.warn).not.toHaveBeenCalled();
-});
+      ),
+    ).toThrow("synthetic rejection");
+    const hold = logger.warn.mock.calls[0]?.[1];
+    expect(hold).toMatchObject({
+      phases: { statementExecutionMs: 4_000, callbackOtherMs: 800 },
+      statementTiming: { count: 40, maxMs: 100, omittedGroups: 28 },
+    });
+    expect(hold.statementTiming.statements).toHaveLength(5);
+    const other = { id: "other", operation: "OTHER", count: 8, rows: 8, totalMs: 800, maxMs: 100 };
+    expect(hold.statementTiming.statements[0]).toEqual(other);
+    // JSON punctuation is a conservative bound on the plain console metadata tail.
+    expect(JSON.stringify(hold).length).toBeLessThanOrEqual(2_048);
+    expect(hold.isMainThread).toBe(isMainThread);
+    logger.warn.mockClear();
+    run(() => advance(1_200), { operationLabel: "session.actor" });
+    expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("statementTiming");
+    logger.warn.mockClear();
+    run(() => statement.get("private-binding"), { operationLabel: operation });
+    expect(logger.warn).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
   const { db, advance, run, warning } = fixture();

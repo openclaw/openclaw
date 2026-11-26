@@ -139,19 +139,31 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const gateway = await installMockGateway(
         page,
-        guestScenario({
-          sequence: [
-            { status: "failed", retryable: true, message: "Roboclaw is busy right now." },
-            { __mockError: { code: "UNAVAILABLE", message: "Gateway restarting" } },
-            ready(true),
-          ],
-        }),
+        guestScenario(
+          {
+            sequence: [
+              { status: "failed", retryable: true, message: "Roboclaw is busy right now." },
+              { __mockError: { code: "UNAVAILABLE", message: "Gateway restarting" } },
+              ready(true),
+            ],
+          },
+          { deferredMethods: [GUEST_WELCOME_ENSURE_METHOD] },
+        ),
       );
       await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest(GUEST_WELCOME_ENSURE_METHOD);
+      await gateway.deferNext(GUEST_WELCOME_ENSURE_METHOD);
+      await gateway.resolveDeferred(GUEST_WELCOME_ENSURE_METHOD, { status: "pending" });
+      const label = page.locator(".chat-guest-welcome-status .agent-chat__composer-status-text");
+      await expectBrowser(label).toHaveText("Setting up your welcome session…");
+      const pendingEdge = await label.evaluate((el) => el.getBoundingClientRect().left);
+      await gateway.waitForRequest(GUEST_WELCOME_ENSURE_METHOD, { after: 1 });
+      await gateway.resolveDeferred(GUEST_WELCOME_ENSURE_METHOD);
       const failure = page
         .getByRole("alert")
-        .filter({ hasText: "We couldn't set up your welcome session." });
+        .filter({ hasText: "Couldn’t set up your welcome session. Try again." });
       await expectBrowser(failure).toContainText("Roboclaw is busy right now.");
+      expect(await label.evaluate((el) => el.getBoundingClientRect().left)).toBe(pendingEdge);
       // The rest of the UI stays usable while the failure is shown.
       await page.locator(`openclaw-app-sidebar [data-session-key="${shared.key}"]`).first().click();
       await expectBrowser(page.getByText("Onboarding notes.")).toBeVisible();
@@ -162,7 +174,7 @@ suite.define(() => {
       await expectBrowser(failure).toBeVisible();
       await failure.getByRole("button", { name: "Try again" }).click();
       await expectBrowser(page.locator(".chat-guest-welcome-status")).toHaveCount(0);
-      expect(await gateway.getRequests(GUEST_WELCOME_ENSURE_METHOD)).toHaveLength(3);
+      expect(await gateway.getRequests(GUEST_WELCOME_ENSURE_METHOD)).toHaveLength(4);
       // Retried from a deep link: setup finishes quietly without moving the guest.
       await expectBrowser(page).toHaveURL(onSession(shared.sessionId));
     });

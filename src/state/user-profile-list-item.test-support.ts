@@ -8,6 +8,7 @@ import {
   userProfileDisplaySelection,
   userProfilesDb,
   toUserProfile,
+  isUserProfileEmailAddress,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
 
@@ -57,7 +58,7 @@ export function readUserProfileSnapshotSync(options: OpenClawStateDatabaseOption
       return {
         profiles: profiles.map((profile) =>
           Object.assign(toUserProfile(profile), {
-            emails: emailsByProfile.get(profile.id) ?? [],
+            emails: (emailsByProfile.get(profile.id) ?? []).filter(isUserProfileEmailAddress),
             githubIdentity: githubIdentities.get(profile.id) ?? null,
             hasAvatar: profile.has_avatar === 1,
           }),

@@ -43,7 +43,7 @@ openclaw-plugin-install-action {
   overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-lg);

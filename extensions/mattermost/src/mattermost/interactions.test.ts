@@ -308,7 +308,11 @@ describe("createMattermostInteractionHandler", () => {
   }
 
   function createActionContext(actionId = "approve", channelId = "chan-1") {
-    const context = { action_id: actionId, __openclaw_channel_id: channelId };
+    const context = {
+      action_id: actionId,
+      __openclaw_channel_id: channelId,
+      callback_data: "::approve",
+    };
     return { context, token: generateInteractionToken(context, "acct") };
   }
 
@@ -567,11 +571,10 @@ describe("createMattermostInteractionHandler", () => {
     expect(dispatchButtonClick).not.toHaveBeenCalled();
   });
 
-  it("forwards fetched post threading metadata to session and button callbacks", async () => {
+  it("delivers a click to the agent exactly once, with the fetched post", async () => {
     const enqueueSystemEvent = vi.fn();
     setInteractionRuntime(enqueueSystemEvent);
     const { context, token } = createActionContext();
-    const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
     const dispatchButtonClick = vi.fn();
     const fetchedPost = createActionPost({ rootId: "root-9" });
     const handler = createMattermostInteractionHandler({
@@ -579,7 +582,6 @@ describe("createMattermostInteractionHandler", () => {
         init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
       ),
       accountId: "acct",
-      resolveSessionKey,
       dispatchButtonClick,
     });
 
@@ -587,24 +589,14 @@ describe("createMattermostInteractionHandler", () => {
       body: createInteractionBody({ context, token, userName: "alice" }),
     });
     expect(res.statusCode).toBe(200);
-    expect(resolveSessionKey).toHaveBeenCalledWith({
-      channelId: "chan-1",
-      userId: "user-1",
-      post: fetchedPost,
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      'Mattermost button click: action="approve" by alice in channel chan-1',
-      {
-        sessionKey: "session:thread:root-9",
-        contextKey: "mattermost:interaction:post-1:approve",
-      },
-    );
-    expect(dispatchButtonClick).toHaveBeenCalledWith({
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(dispatchButtonClick).toHaveBeenCalledExactlyOnceWith({
       channelId: "chan-1",
       userId: "user-1",
       userName: "alice",
       actionId: "approve",
       actionName: "Approve",
+      callbackData: "::approve",
       postId: "post-1",
       post: fetchedPost,
     });

@@ -24,7 +24,11 @@ describe("Memory Core settings placement presentation", () => {
     expect(presentation.presentationOwner).toBe(asNullableRecord(manifest)?.id);
     const seen = new Set<string>();
     for (const section of presentation.sections) {
-      for (const field of section.fields) {
+      const fields = [
+        ...(section.fields ?? []),
+        ...(section.disclosures ?? []).flatMap((disclosure) => disclosure.fields),
+      ];
+      for (const field of fields) {
         const path = field.path.join(".");
         expect(seen.has(path)).toBe(false);
         seen.add(path);

@@ -1,6 +1,7 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -9,13 +10,21 @@ import {
 } from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import {
+  isSessionKeyAddressable,
+  sessionNavigationTarget,
+  resolveSessionNavigationAgentId,
+} from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
+import {
+  buildSessionUsageDateParams,
   requestSessionUsage,
   type SessionUsageQuery,
   type SessionUsageTarget,
@@ -165,10 +174,19 @@ export function createUsageDetails(
   const timeSeries = createUsageDetailRequest(
     notify,
     gateway,
-    (client, target) =>
-      client
-        .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
-        .then((result) => result ?? null),
+    async (client, target, signal) => {
+      const { startDate, endDate, selectedDays, timeZone } = query();
+      const params = selectedDays?.length
+        ? { ...target, startDate, endDate, selectedDays, ...buildSessionUsageDateParams(timeZone) }
+        : target;
+      return (
+        (await client.request<SessionUsageTimeSeries | undefined>(
+          "sessions.usage.timeseries",
+          params,
+          { signal },
+        )) ?? null
+      );
+    },
     resolveTarget,
     clearTimeSeriesRange,
   );
@@ -220,4 +238,27 @@ export function createUsageDetails(
     cancel: () => requests.forEach((request) => request.cancel()),
     clear: () => requests.forEach((request) => request.clear()),
   };
+}
+
+/** Use the authoritative Usage owner, including raw global keys outside the active agent. */
+export function resolveUsageConversationTarget(
+  context: ApplicationContext,
+  selectedSession: UsageSessionEntry | null,
+) {
+  const navigationDefaults = {
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  };
+  return selectedSession &&
+    isSessionKeyAddressable(selectedSession.key, isUiGlobalScopeConfigured(navigationDefaults))
+    ? sessionNavigationTarget({
+        face: "chat",
+        sessionKey: selectedSession.key,
+        basePath: context.basePath,
+        fallbackAgentId: resolveSessionNavigationAgentId(context, selectedSession.agentId),
+        mainKey: resolveUiConfiguredMainKey(navigationDefaults),
+        row: { key: selectedSession.key, displayName: selectedSession.label },
+        exactKey: true,
+      })
+    : null;
 }

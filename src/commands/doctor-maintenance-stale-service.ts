@@ -9,7 +9,6 @@ import { probePortUsage } from "../infra/ports-probe.js";
 import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
 export type DoctorStaleGateway = {
   version: string;
@@ -77,8 +76,6 @@ export async function inspectStaleDoctorGateway(params: {
         env: serviceEnv,
         expectedVersion: version,
         expectedBuildId: buildId,
-        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-        requirePluginHealth: false,
       });
   params.assertCurrent?.();
   const stale =
@@ -117,6 +114,8 @@ export async function inspectStaleDoctorGateway(params: {
 export async function assertStaleDoctorGatewayStopped(params: {
   stale: DoctorStaleGateway;
   env: NodeJS.ProcessEnv;
+  /** Why the stop was skipped rather than attempted, when it was. */
+  skipped?: string;
   assertCurrent?: () => void;
 }): Promise<void> {
   const runtime = await resolveGatewayService().readRuntime(params.env);
@@ -124,8 +123,16 @@ export async function assertStaleDoctorGatewayStopped(params: {
   const legacy = await readLegacyGatewayLockIdentity(params.env);
   params.assertCurrent?.();
   if (runtime.status !== "stopped" || (runtime.pid ?? 0) > 0 || port !== "free" || legacy) {
+    const observed = `service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}`;
+    const stale = `Stale Gateway PID ${params.stale.pid ?? "unknown"}`;
+    // Only a running service, a busy port or a live lock shows the old Gateway still runs.
+    const stillRunning = runtime.status === "running" || port === "busy" || Boolean(legacy);
     throw new Error(
-      `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}.`,
+      params.skipped
+        ? `${stale} was not stopped: ${params.skipped} Observed: ${observed}.`
+        : stillRunning
+          ? `${stale} did not stop: ${observed}.`
+          : `${stale} could not be confirmed stopped: ${observed}.`,
     );
   }
 }

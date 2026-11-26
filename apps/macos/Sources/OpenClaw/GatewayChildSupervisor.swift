@@ -170,17 +170,6 @@ final class GatewayChildSupervisor {
                 fastFailures = 0
             }
             self.healthySince = nil
-            if case .terminated(.signaled(SIGILL)) = failure {
-                self.monitorTask = nil
-                let tail = Self.logTail(path: configuration.logPath)
-                onEvent(.failed(
-                    "The bundled Bun runtime stopped with an illegal instruction (SIGILL). " +
-                        "Automatic restarts were stopped because retrying the same runtime will not repair it. " +
-                        "Update or reinstall OpenClaw.app. If this persists, use an independently managed " +
-                        "Node Gateway and connect the app to it. Include the Gateway log when reporting this failure." +
-                        (tail.isEmpty ? "" : "\n\(tail)")))
-                return
-            }
             fastFailures += 1
             guard fastFailures < 5 else {
                 self.monitorTask = nil

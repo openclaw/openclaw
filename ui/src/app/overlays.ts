@@ -9,6 +9,7 @@ import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { showToast } from "../lib/toast.ts";
 import {
+  canDecideApproval,
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
   enqueueExecApprovalPrompt,
@@ -244,15 +245,19 @@ export function createApplicationOverlays(
       approvalDecision = null;
       pairing?.close();
     }
-    if (connected && !operatorAccess.canReviewApprovals) {
-      approvalDecision = null;
-    }
-    if (identityChanged || !next.client || !operatorAccess.canReviewApprovals) {
+    if (identityChanged || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
+    } else if (!operatorAccess.canReviewApprovals) {
+      for (const approval of promptState.execApprovalQueue) {
+        if (approval.canDecide !== true) {
+          clearResolvedExecApprovalPrompt(promptState, approval.id);
+        }
+      }
     }
-    if (!connected || identityChanged || !operatorAccess.canReviewApprovals) {
+    if (!connected || identityChanged || accessTransition.reviewChanged) {
+      approvalDecision = null;
       promptState.execApprovalBusy = false;
     }
     if (!connected || !next.client) {
@@ -309,20 +314,33 @@ export function createApplicationOverlays(
       updates.handleUpdateRunChanged(event.payload);
       return;
     }
-    if (
-      !operatorAccess.canReviewApprovals ||
-      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
-    ) {
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    const resolvedApproval = requestedApproval
+      ? null
+      : parseApprovalResolvedEvent(event.event, event.payload);
+    if (!requestedApproval && !resolvedApproval) {
       return;
     }
-    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    const canReview =
+      operatorAccess.canReviewApprovals &&
+      readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals;
     if (requestedApproval) {
+      if (!canReview && requestedApproval.canDecide !== true) {
+        return;
+      }
       enqueueExecApprovalPrompt(promptState, requestedApproval);
       publish();
       return;
     }
-    const resolvedApproval = parseApprovalResolvedEvent(event.event, event.payload);
     if (resolvedApproval) {
+      if (
+        !canReview &&
+        !promptState.execApprovalQueue.some(
+          (entry) => entry.id === resolvedApproval.id && entry.canDecide === true,
+        )
+      ) {
+        return;
+      }
       clearResolvedExecApprovalPrompt(promptState, resolvedApproval.id);
       publish();
     }
@@ -342,10 +360,7 @@ export function createApplicationOverlays(
     diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
     reportUpdateFailure: updates.reportUpdateFailure,
     reconcileApprovalTerminals(client, events) {
-      if (
-        !isCurrentClient(client) ||
-        !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
-      ) {
+      if (!isCurrentClient(client)) {
         return;
       }
       const previousCount = promptState.execApprovalQueue.length;
@@ -371,7 +386,9 @@ export function createApplicationOverlays(
         publish();
         return;
       }
-      if (!readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals) {
+      if (
+        !canDecideApproval(active, readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals)
+      ) {
         promptState.execApprovalErrors.set(active.id, t("execApproval.reviewOnly"));
         publish();
         return;
@@ -391,7 +408,7 @@ export function createApplicationOverlays(
         operation.epoch === connectedEpoch &&
         operation.accessGeneration === approvalAccessGeneration &&
         operation.grantGeneration === approvalGrantGeneration &&
-        readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals &&
+        canDecideApproval(active, readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals) &&
         isCurrentClient(operation.client);
       publish();
       try {
@@ -448,7 +465,7 @@ export function createApplicationOverlays(
           feature = await import("./overlays-pairing.ts");
         } catch (error) {
           if (canOpen()) {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           }
           return false;
         }

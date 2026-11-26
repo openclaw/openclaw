@@ -1,5 +1,6 @@
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAiTransportHost } from "../host.js";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
 import {
@@ -9,32 +10,36 @@ import {
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import {
-  isCompactionReplayCheckpoint,
-  stripCompactionReplayCheckpoint,
-} from "./provider-compaction-checkpoint.js";
+  createCompactionReplayWindowFactCollector as createWindowFactCollector,
+  isAssistantReplayMessage,
+  preserveCompactionReplayWindow as preserveWindow,
+  type ReplayIdentity,
+  type ReplayMessage,
+} from "./provider-compaction-replay-kernel.js";
 
 export {
   isCompactionReplayCheckpoint,
+  resolveCompactionReplayContentRewrite,
   stripCompactionReplayCheckpoint,
   stripCompactionReplayCheckpointInPlace,
+  replaceCompactionReplayOwnerContent,
 } from "./provider-compaction-checkpoint.js";
+export {
+  replaceCompactionReplayWindowFactContent,
+  resolveCompactionReplayWindow,
+  type CompactionReplayWindowFact,
+} from "./provider-compaction-replay-kernel.js";
+export {
+  CompactionReplayRefreshRequiredError,
+  readOpenAIResponsesItemRecoveryAnchor,
+} from "./openai-responses-compaction-checkpoint.js";
 
-export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
-
-type ReplayIdentity = { sessionId?: string; authProfileId?: string; enabled?: boolean };
-type ReplayMessage = { role: string };
 type ReplayPressureEstimator = {
   text(value: string): number;
   image(): number;
   json(value: unknown): number;
   toolResult?(value: string): number;
 };
-
-function isAssistantReplayMessage<T extends ReplayMessage>(
-  message: T,
-): message is T & AssistantMessage {
-  return message.role === "assistant";
-}
 
 /** Resolve from prepared transport facts; never retain or return credential material. */
 export function resolveCompactionReplayEligibility(
@@ -62,7 +67,9 @@ function resolveCompactionSource<T extends ReplayMessage>(
   const selected = (() => {
     if (OPENAI_RESPONSES_APIS.has(model.api)) {
       const responses = resolveNewestOpenAIResponsesCompactionReplay(assistants, model, identity);
-      return responses ? { family: "responses" as const, ...responses } : undefined;
+      return responses && responses.mode !== "item-recovery"
+        ? { family: "responses" as const, ...responses }
+        : undefined;
     }
     if (identity.enabled !== true) {
       return undefined;
@@ -87,31 +94,25 @@ export function requiresCompactionReplayRefresh(
   return checkpoint?.family === "responses" && checkpoint.mode === "refresh-required";
 }
 
-/** Carry a checkpoint immediately after reference-preserving history limiting, before repair. */
+/** Validate replay facts with the active transport's immutable publication contract. */
+export function createCompactionReplayWindowFactCollector(model: Model, identity: ReplayIdentity) {
+  return createWindowFactCollector(model, identity, () => getAiTransportHost().immutableData);
+}
+
+/** Carry a checkpoint after reference-preserving history limiting, before transport repair. */
 export function preserveCompactionReplayWindow<T extends ReplayMessage>(
   source: readonly T[],
   windowed: T[],
   model: Model,
   identity: ReplayIdentity,
 ): T[] {
-  const checkpoint = resolveCompactionSource(source, model, identity);
-  if (!checkpoint || windowed.some((message) => message === checkpoint.owner)) {
-    return windowed;
-  }
-  const owner = checkpoint.owner;
-  const replay = checkpoint.owner.providerReplay;
-  // Retained-user state has no content index, including its refresh-required barrier.
-  const providerReplay =
-    replay?.type === "openai-responses-retained-compaction"
-      ? replay
-      : { ...replay, replayIndex: 0 };
-  // The limiter can preserve a leading prelude that this checkpoint already
-  // covers. Only the original suffix may follow its projected owner.
-  const suffix = new Set(source.slice(source.indexOf(owner) + 1));
-  return [
-    { ...owner, content: [], providerReplay },
-    ...windowed.filter((message) => suffix.has(message)),
-  ];
+  return preserveWindow(
+    source,
+    windowed,
+    model,
+    identity,
+    () => getAiTransportHost().immutableData,
+  );
 }
 
 function estimateResponsesContent(
@@ -194,6 +195,7 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   identity: ReplayIdentity,
   estimate: ReplayPressureEstimator,
   systemPrompt?: string,
+  requestContext?: Context,
 ): { messages: T[]; prefixTokens: number; measuredTokens?: number } | undefined {
   const checkpoint = resolveCompactionSource(messages, model, identity);
   if (!checkpoint) {
@@ -215,7 +217,13 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
         : estimate.text(checkpoint.item.encrypted_content);
   const measuredBoundary =
     checkpoint.family === "responses"
-      ? resolveResponsesContextUsageBoundary(messages, model, identity, systemPrompt)
+      ? resolveResponsesContextUsageBoundary(
+          messages,
+          model,
+          identity,
+          systemPrompt,
+          requestContext,
+        )
       : undefined;
   if (measuredBoundary) {
     // Async tool results can be persisted before the final usage event. The wire
@@ -246,49 +254,4 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     ],
     prefixTokens,
   };
-}
-
-/** Preserve the covered prefix and reindex checkpoints after known content removals. */
-export function replaceCompactionReplayOwnerContent(
-  message: AssistantMessage,
-  content: AssistantMessage["content"],
-): AssistantMessage {
-  const next = { ...message, content };
-  const replay = message.providerReplay;
-  if (!isCompactionReplayCheckpoint(replay)) {
-    return next;
-  }
-  if (replay.type === "openai-responses-retained-compaction") {
-    // This checkpoint is anchored to retained user turns, not assistant content indexes.
-    return next;
-  }
-  const replayIndex = replay.replayIndex ?? 0;
-  if (
-    (content.length === 0 && message.content.length > 0) ||
-    replayIndex > message.content.length
-  ) {
-    return stripCompactionReplayCheckpoint(next);
-  }
-  // Same-position rewrites after the checkpoint (such as tool-call id repair)
-  // change only the replayed suffix, not the prefix covered by its opaque state.
-  if (
-    content.length === message.content.length &&
-    content.slice(0, replayIndex).every((block, index) => block === message.content[index])
-  ) {
-    return next;
-  }
-  let sourceIndex = 0;
-  let nextReplayIndex = 0;
-  const unambiguous = content.every((block) => {
-    const index = message.content.indexOf(block, sourceIndex);
-    sourceIndex = index + 1;
-    nextReplayIndex += index >= 0 && index < replayIndex ? 1 : 0;
-    return index >= 0;
-  });
-  if (!unambiguous) {
-    return stripCompactionReplayCheckpoint(next);
-  }
-  return nextReplayIndex === replayIndex
-    ? next
-    : { ...next, providerReplay: { ...replay, replayIndex: nextReplayIndex } };
 }

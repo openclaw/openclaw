@@ -244,7 +244,7 @@ it.each(["send", "new"] as const)("%s waits through startup and writes once", as
   expect(settled).not.toHaveBeenCalled();
   expect(f.writes).toHaveLength(0);
   f.ready();
-  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.advanceTimersToNextTimerAsync();
   await operation;
   expect(f.writes).toHaveLength(1);
   expect(new Set(f.attempts).size).toBe(1);

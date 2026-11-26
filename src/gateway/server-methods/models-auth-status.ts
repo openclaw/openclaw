@@ -25,9 +25,14 @@ import {
 import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { signInNeedsApiKeyForVoice } from "../../agents/voice-sign-in-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ProviderAuthMethod } from "../../plugins/provider-authentication.types.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunsForProvider } from "../chat-abort.js";
@@ -51,10 +56,55 @@ import type {
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("models-auth-status");
+const PROVIDER_REVOKE_TIMEOUT_MS = 30_000;
+
+/**
+ * A provider's auth methods from the loaded plugin registry; a status read never
+ * loads a plugin to find its account actions.
+ */
+function listLoadedAuthMethods(provider: string): readonly ProviderAuthMethod[] {
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+  const providerId = normalizeProviderId(provider);
+  return (
+    registry?.providers.find((entry) => normalizeProviderId(entry.provider.id) === providerId)
+      ?.provider.auth ?? []
+  );
+}
+
+function projectOAuthAccountActions(
+  provider: string,
+): ModelAuthStatusProvider["oauthAccountActions"] {
+  const methods = listLoadedAuthMethods(provider);
+  // Disconnect and the manage link may come from different auth methods.
+  const revoking = methods.find((method) => method.revoke);
+  const managing = methods.find(
+    (method) =>
+      method.accountManagementUrl && URL.parse(method.accountManagementUrl)?.protocol === "https:",
+  );
+  const disconnectLabel = revoking?.disconnectLabel?.trim();
+  const manageLabel = managing?.accountManagementLabel?.trim();
+  if (!revoking && !managing?.accountManagementUrl) {
+    return undefined;
+  }
+  return {
+    ...(revoking ? { disconnect: disconnectLabel ? { label: disconnectLabel } : {} } : {}),
+    ...(managing?.accountManagementUrl
+      ? {
+          manage: {
+            url: managing.accountManagementUrl,
+            ...(manageLabel ? { label: manageLabel } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function resolveAuthRefreshScope(cfg: OpenClawConfig): {
   providerIds: string[];
   profileIds?: string[];
@@ -183,7 +233,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertCurrent: (() => void) | undefined;
+    // The save writes credentials and can widen the model allowlist: both need live requester authority.
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    let assertCurrent: () => void = requestAuthority.assertCurrent;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
         respondError(
@@ -198,7 +250,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        const assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        assertCurrent = () => {
+          requestAuthority.assertCurrent();
+          assertOwnerCurrent();
+        };
       } catch (error) {
         respond(false, undefined, localStateOwnerChangedError(error));
         return;
@@ -208,28 +264,37 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
       // CLI-only target semantics must not load the model-command runtime during Gateway startup.
-      const scope = assertCurrent
-        ? {
-            ok: true as const,
-            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
-              config,
-              params.agentId,
-              { kind: "mutation" },
-            ),
-          }
-        : resolveModelAuthAgentScope(config, params.agentId);
+      const scope =
+        expectedOwnerId !== undefined
+          ? {
+              ok: true as const,
+              ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+                config,
+                params.agentId,
+                { kind: "mutation" },
+              ),
+            }
+          : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
@@ -262,6 +327,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const revoke = params.revoke !== undefined;
+    if (revoke && (params.revoke !== true || selection.profileIds?.length !== 1)) {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "revoke requires exactly one profileId");
+      return;
+    }
     const apiKeyOnly = params.credentialType === "api_key";
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
@@ -290,6 +360,36 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           "profileIds contain unavailable auth profiles",
         );
         return;
+      }
+      if (revoke) {
+        const profileId = removedProfiles[0]!;
+        const credential = store.profiles[profileId];
+        const revokeGrant = listLoadedAuthMethods(provider).find((method) => method.revoke)?.revoke;
+        if (credential?.type !== "oauth" || !revokeGrant) {
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "This sign-in cannot be disconnected at its provider. Sign out on this device instead.",
+          );
+          return;
+        }
+        // The saved sign-in stays until the provider confirms the grant is gone.
+        try {
+          await revokeGrant({
+            profileId,
+            credential,
+            config: cfg,
+            signal: AbortSignal.timeout(PROVIDER_REVOKE_TIMEOUT_MS),
+          });
+        } catch (error) {
+          log.warn(`provider revoke failed for ${provider}: ${formatForLog(error)}`);
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            `${formatErrorMessage(error)} The sign-in is still saved on this device.`,
+          );
+          return;
+        }
       }
       const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
       const configWarning = await removeModelAuthCredentials({
@@ -504,6 +604,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               ? { profileOrderLocked: "auth-config" as const }
               : {}),
           ...(apiKey ? { apiKey } : {}),
+          oauthAccountActions: hasRefreshableProfile
+            ? projectOAuthAccountActions(prov.provider)
+            : undefined,
+          ...(!apiKey &&
+          !prov.profiles.some((profile) => profile.type === "api_key") &&
+          signInNeedsApiKeyForVoice(store, prov.provider)
+            ? { voiceApiKeyRequired: true as const }
+            : {}),
           usage:
             usage && usageKey
               ? {
@@ -512,12 +620,34 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                   ...(usage.summary ? { summary: usage.summary } : {}),
                   ...(usage.plan ? { plan: usage.plan } : {}),
                   ...(usage.billing?.length ? { billing: usage.billing } : {}),
+                  ...(includeProfileIdentity && usage.authProfileId
+                    ? { authProfileId: usage.authProfileId }
+                    : {}),
                   ...(includeProfileIdentity && usage.accountEmail
                     ? { accountEmail: usage.accountEmail }
                     : {}),
                 }
               : undefined,
         });
+      }
+      // Native login has no saved profile. Project the already-prepared display facts;
+      // a status read must never probe a CLI or manufacture a removable account.
+      for (const [provider, mode] of Object.entries(preparedSnapshot.authModes)) {
+        if (typeof mode !== "object" || !mode.display) {
+          continue;
+        }
+        const existing = providers.find((entry) => entry.provider === provider);
+        if (existing) {
+          existing.nativeAuth = mode.display;
+        } else {
+          providers.push({
+            provider,
+            displayName: providerDisplayName(provider),
+            status: "ok",
+            profiles: [],
+            nativeAuth: mode.display,
+          });
+        }
       }
       const result: ModelAuthStatusResult = {
         ts: now,

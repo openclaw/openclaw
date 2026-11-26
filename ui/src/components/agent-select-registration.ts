@@ -15,6 +15,8 @@ declare module "@solidjs/web" {
         "prop:options": readonly AgentSelectOption[];
         "prop:variant"?: AgentSelectElement["variant"];
         "prop:identityById"?: AgentSelectElement["identityById"];
+        "prop:identityTargetsRef"?: AgentSelectElement["identityTargetsRef"];
+        "prop:onIdentityTargetsChange"?: AgentSelectElement["onIdentityTargetsChange"];
         "prop:menuLabel"?: string;
         "prop:value": string;
         "prop:accessibleLabel": string;

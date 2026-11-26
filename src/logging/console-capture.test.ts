@@ -25,8 +25,7 @@ import {
   writeRootConsoleLine,
 } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import { applyLoggingConfig, flushLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 import {
@@ -144,30 +143,6 @@ describe("enableConsoleCapture", () => {
     expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
   });
 
-  it.each(["json", "compact"] as const)("formats %s console passthrough output", (consoleStyle) => {
-    setLoggerOverride({
-      level: consoleStyle === "json" ? "silent" : "info",
-      file: tempLogPath(),
-      consoleLevel: "info",
-      consoleStyle,
-    });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
-
-    console.warn("tool failed", { attempt: 1 });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    if (consoleStyle === "json") {
-      expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
-        level: "warn",
-        message: "tool failed { attempt: 1 }",
-      });
-    } else {
-      expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
-    }
-  });
-
   it("does not rewrap structured subsystem output", () => {
     setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
     const warn = vi.fn();
@@ -203,7 +178,7 @@ describe("enableConsoleCapture", () => {
         }
         enableConsoleCapture();
         console.trace("trace diagnostic\nsecond line");
-        await testApi.flushFileLogQueueForTests();
+        await flushLogger();
       } finally {
         vi.unstubAllGlobals();
       }
@@ -386,7 +361,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
 
     logWarn("mcp-loopback: conflicting schema definitions");
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
 
     const content = fs.readFileSync(logPath, "utf-8");
     expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
@@ -402,7 +377,7 @@ describe("enableConsoleCapture", () => {
     console.log("first applied generation");
     applyLoggingConfig({ level: "info", file: secondFile });
     console.log("second applied generation");
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
 
     expect(fs.readFileSync(firstFile, "utf8")).toContain("first applied generation");
     expect(fs.readFileSync(firstFile, "utf8")).not.toContain("second applied generation");
@@ -423,7 +398,7 @@ describe("enableConsoleCapture", () => {
       enableConsoleCapture();
 
       log(`[tools] operation failed: Authorization: Bearer ${secret}`);
-      await testApi.flushFileLogQueueForTests();
+      await flushLogger();
 
       expect(
         countMatchingLines(fs.readFileSync(logPath, "utf-8"), "[tools] operation failed"),

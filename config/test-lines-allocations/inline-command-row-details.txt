@@ -1,0 +1,3 @@
+# Mounted row work-count regression: unused command details are not derived.
+# Direct/wrapped identity, preamble display, focus and generic fallback transitions.
+72

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it } from "vitest";
 import { assertDoctorAgentLeaseAdmission } from "../commands/doctor-agent-lease-refusal.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";

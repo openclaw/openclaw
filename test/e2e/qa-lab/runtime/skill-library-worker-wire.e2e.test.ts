@@ -22,6 +22,7 @@ import {
   wireMessageText,
   type PublishedWireWorkspace,
 } from "./paired-node-worker-wire-fixture.js";
+import { readSkillLibraryNodeDiagnostics } from "./skill-library-node-diagnostics.js";
 import { prepareSkillLibraryNodeProcess } from "./skill-library-node-process.js";
 import {
   createSkillLibraryWireInstance,
@@ -392,9 +393,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       });
       await settlement.wait(admin, remoteKey, signal);
       const authorOutput = provider.authorOutputs.get("bob-worker");
-      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
+      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_library"));
       if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
-        throw new Error("Worker did not return real Workshop create, read and update results");
+        throw new Error("Worker did not return real skill_library create, read and update results");
       }
       const created = JSON.parse(authorOutput.created) as SkillsLibraryReceipt;
       const authored = JSON.parse(authorOutput.updated) as SkillsLibraryReceipt;
@@ -529,20 +530,38 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
         provider.observations.get("removed-default")!.catalogs[0]!.map((skill) => skill.name),
       ).not.toContain(saved.entry.name);
 
-      const cancelledId = await startHeldTurn("cancelled-worker");
-      await expect(
-        alice.request("chat.abort", { sessionKey: remoteKey, runId: cancelledId }),
-      ).resolves.toMatchObject({ aborted: true });
-      const cancelled = await waitRun(alice, cancelledId);
-      expect(cancelled.status).not.toBe("timeout");
-      provider.release("cancelled-worker");
-      // The replacement send can race cancelled-turn persistence; chat admission joins it.
-      await settlement.wait(admin, remoteKey, signal);
-      expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
-        "ALICE-RESOURCE-2\n",
-      );
-      expect(provider.observations.get("cancelled-worker")!.execOutput).toBeUndefined();
-      expect(provider.errors).toEqual([]);
+      let cancellationStage = "cancellation-start";
+      try {
+        const cancelledId = await startHeldTurn("cancelled-worker");
+        await expect(
+          alice.request("chat.abort", { sessionKey: remoteKey, runId: cancelledId }),
+        ).resolves.toMatchObject({ aborted: true });
+        cancellationStage = "cancellation-result";
+        const cancelled = await waitRun(alice, cancelledId);
+        expect(cancelled.status).not.toBe("timeout");
+        provider.release("cancelled-worker");
+        // The replacement send can race cancelled-turn persistence; chat admission joins it.
+        cancellationStage = "cancelled-workspace-settlement";
+        await settlement.wait(admin, remoteKey, signal);
+        cancellationStage = "replacement-result";
+        expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
+          "ALICE-RESOURCE-2\n",
+        );
+        expect(provider.observations.get("cancelled-worker")!.execOutput).toBeUndefined();
+        expect(provider.errors).toEqual([]);
+      } catch (error) {
+        // Capture before runQaGatewayTestFixture tears down the node and its state.
+        try {
+          const diagnostics = await readSkillLibraryNodeDiagnostics(node!, cancellationStage);
+          if (error instanceof Error) {
+            // E2E CI silences console output; retain the original assertion for its reporter.
+            error.message += "\nSKILL_LIBRARY_NODE_FAILURE " + JSON.stringify(diagnostics);
+          }
+        } catch {
+          // Best-effort diagnostics must never replace the failing proof.
+        }
+        throw error;
+      }
 
       // Reclaim joins reconciliation before inspecting the final project state.
       await admin.request("sessions.reclaim", { key: remoteKey }, PROOF_TIMEOUT_MS);

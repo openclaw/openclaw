@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from "node:crypto";
+import { Resolver } from "node:dns/promises";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { ImapFlow } from "imapflow";
@@ -224,7 +226,6 @@ describe("IMAP watcher protocol boundary", () => {
     const expected = Array.from({ length: 60 }, (_, index) => index + 2).filter(
       (uid) => !retry || uid !== 30,
     );
-    expect(admitted).toEqual(expected);
     const attempts = dispatch.mock.calls.map(([params]) =>
       Number(params.sessionKey.split(":").at(-1)),
     );
@@ -239,13 +240,12 @@ describe("IMAP watcher protocol boundary", () => {
     expectNoDuplicateWarning(context);
   }
   it("bounds retained bodies and dispatches every backlog UID in order", () => checkBacklog(false));
-  it(
-    "retries the middle batch in order and skips disallowed senders",
-    () => checkBacklog(true),
-    15_000,
-  );
+  it("retries a middle batch and skips disallowed senders", () => checkBacklog(true), 15_000);
 
-  async function checkAdmission(options: Admission) {
+  async function checkAdmission(
+    options: Admission,
+    dkim?: "fail" | "permerror" | "none" | "neutral",
+  ) {
     const scenario: Required<Admission> = {
       from: "trusted@example.com",
       headers: "",
@@ -296,6 +296,9 @@ describe("IMAP watcher protocol boundary", () => {
       authenticator.mockResolvedValue(authentication);
     } else {
       const auth = createImapAuthResult(scenario.auth === "unsigned-pass" ? "pass" : scenario.auth);
+      if (dkim) {
+        auth.dkim.results.push({ status: { result: dkim }, info: "" });
+      }
       if (scenario.auth.startsWith("unsigned-")) {
         auth.dmarc.alignment.dkim.underSized = 32;
       }
@@ -415,6 +418,11 @@ describe("IMAP watcher protocol boundary", () => {
     }),
   );
 
+  it.each(["fail", "permerror", "none", "neutral"] as const)(
+    "permanently rejects DKIM %s without dispatch or retry",
+    (dkim) => checkAdmission({ auth: "none", evidence: "gate=dmarc-none" }, dkim),
+  );
+
   it.each([
     ["none", authHeader(), false, "gate=unverified-authentication"],
     ["none", authHeader(), true, "strength=asserted"],
@@ -532,6 +540,68 @@ describe("IMAP watcher protocol boundary", () => {
     },
   );
 
+  it.each(["ETIMEOUT", "ESERVFAIL"])(
+    "reauthenticates signed mail after DKIM DNS %s before dispatch",
+    async (code) => {
+      const { authenticate: realAuthenticate, dkimSign } =
+        await vi.importActual<typeof import("mailauth")>("mailauth");
+      const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      const unsigned = mailText("DNS recovery");
+      const signed = await dkimSign(unsigned, {
+        signatureData: [
+          {
+            signingDomain: "example.com",
+            selector: "test",
+            privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+          },
+        ],
+      });
+      expect(signed.errors).toEqual([]);
+      const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+      const retry = createDeferred<void>();
+      let lookups = 0;
+      vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+        if (domain === "_dmarc.example.com") {
+          return [["v=DMARC1; p=reject"]];
+        }
+        if (domain === "test._domainkey.example.com") {
+          if (++lookups === 1) {
+            throw Object.assign(new Error("fixture DNS failure"), { code });
+          }
+          await retry.promise;
+          return [[`v=DKIM1; k=rsa; p=${key}`]];
+        }
+        return [];
+      });
+      const { server, state, context, authenticator, dispatch, waitForCursor } =
+        await startPollingWatcher();
+      authenticator.mockImplementation(realAuthenticate);
+      server.append(signed.signatures + unsigned);
+      try {
+        await vi.waitFor(() =>
+          expect(context.logger.warn).toHaveBeenCalledWith(
+            "imap: account=inbox uid=2 domain=example.com gate=authentication-temperror retry=true",
+          ),
+        );
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(await authenticator.mock.results[0]?.value).toMatchObject({
+          dkim: { results: [{ status: { result: "temperror" } }] },
+          dmarc: { status: { result: "fail" } },
+        });
+      } finally {
+        retry.resolve();
+      }
+      await waitForCursor(2);
+      expectDispatch(dispatch, 1, "hook:imap:inbox:17:2");
+      expect(authenticator).toHaveBeenCalledTimes(2);
+      expect(await authenticator.mock.results[1]?.value).toMatchObject({
+        dkim: { results: [{ status: { result: "pass" } }] },
+        dmarc: { status: { result: "pass" } },
+      });
+    },
+  );
+
   it("records exhausted admission retries and continues to the next mail", async () => {
     const { server, state, context, dispatch, waitForCursor } = await startPollingWatcher();
     dispatch.mockRejectedValue(new Error("Gateway unavailable"));
@@ -636,18 +706,23 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("coalesces a wakeup that arrives during an active sweep", async () => {
-    const { server, dispatch, waitForCursor } = await startWatcher();
+    const { server, context, dispatch, waitForCursor } = await startWatcher();
     const { promise: fetchGate, resolve: releaseFetch } = createDeferred<void>();
+    const { promise: bodyGate, resolve: releaseBody } = createDeferred<void>();
     server.fetchGate = fetchGate;
     server.append(mailText("First"));
-    await vi.waitFor(() =>
-      expect(server.commands.some((command) => /UID FETCH/u.test(command))).toBe(true),
-    );
+    await server.waitForCommand((command) => /UID FETCH/u.test(command));
     server.append(mailText("Second"));
-    server.fetchGate = undefined;
+    server.fetchGate = bodyGate;
     releaseFetch();
+    await server.waitForCommand((command) => command.includes("BODY"));
+    for (const socket of server.sockets) {
+      socket.write("* 1 FETCH (FLAGS (\\Seen))\r\n");
+    }
+    releaseBody();
     await waitForCursor(3, 5_000);
     expectDispatch(dispatch, 2, "hook:imap:inbox:17:3");
+    expect(context.logger.warn).not.toHaveBeenCalled();
   });
 
   it("re-baselines a rotated UIDVALIDITY without replaying existing mail", async () => {

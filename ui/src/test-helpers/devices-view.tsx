@@ -8,7 +8,28 @@ import { mountSolid } from "./mount-solid.ts";
 const fixtures = new Map<HTMLElement, (props: DevicesProps) => void>();
 afterEach(() => fixtures.clear());
 
-export function renderDevicesInto(container: HTMLElement, overrides: Partial<DevicesProps>) {
+export function openDeviceDisclosures(container: ParentNode) {
+  // Rendering tests inspect body controls; reveal them through the native event contract.
+  for (;;) {
+    const closed = container.querySelectorAll<HTMLDetailsElement>(
+      "details.device-entry:not([open])",
+    );
+    if (closed.length === 0) {
+      return;
+    }
+    for (const row of closed) {
+      row.open = true;
+      row.dispatchEvent(new Event("toggle"));
+    }
+    flush();
+  }
+}
+
+export function renderDevicesInto(
+  container: HTMLElement,
+  overrides: Partial<DevicesProps>,
+  expandDisclosures = true,
+) {
   const props = createDevicesViewProps(overrides);
   const update = fixtures.get(container);
   if (update) {
@@ -24,12 +45,18 @@ export function renderDevicesInto(container: HTMLElement, overrides: Partial<Dev
     );
   }
   flush();
+  if (expandDisclosures) {
+    openDeviceDisclosures(container);
+  }
 }
 
-export function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {
+export function renderDevicesContainer(
+  overrides: Partial<DevicesProps>,
+  expandDisclosures = true,
+): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
-  renderDevicesInto(container, overrides);
+  renderDevicesInto(container, overrides, expandDisclosures);
   return container;
 }
 
@@ -52,5 +79,5 @@ export function getDeviceSettingsRow(container: Element, title: string): Element
   if (!(row instanceof Element)) {
     throw new Error(`Expected ${title} row`);
   }
-  return row;
+  return row.matches(".device-entry__summary") ? (row.closest(".device-entry") ?? row) : row;
 }

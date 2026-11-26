@@ -24,11 +24,12 @@ import {
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { suspendUpdateProgressForDoctor } from "./progress.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
-/** Inspect the same published --check contract consumed by candidate canary. */
+/** Inspect the same published --check contract consumed by the candidate check. */
 export async function inspectUpdateDoctorChildSupport(
   worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
@@ -39,7 +40,7 @@ export async function inspectUpdateDoctorChildSupport(
     await fs.lstat(worker.workerUrl);
   } catch (cause) {
     if (hasErrnoCode(cause, "ENOENT")) {
-      // Candidate canary preserves this pre-worker published-target contract.
+      // The candidate check preserves this pre-worker published-target contract.
       // Only the expected worker's absence qualifies, never a failed command.
       assertCurrent();
       return { doctorConfigWrites: false, doctorRetirementOnly: false };
@@ -124,7 +125,12 @@ export async function runUpdateDoctorProcess(
     context.processNamespace,
     context.privateInputContract,
   );
+  let resumeProgress = () => {};
   try {
+    // Doctor migrations take exclusive native custody of shared state; a retained
+    // parent progress reader refuses them, so observation pauses until settlement.
+    resumeProgress = await suspendUpdateProgressForDoctor(context.runId);
+    await closeOpenClawStateDatabaseByPathAsync(statePath);
     let outcome: { result: SpawnResult } | { error: unknown };
     try {
       outcome = {
@@ -174,7 +180,11 @@ export async function runUpdateDoctorProcess(
       try {
         revokeSqliteDatabaseAdmissionsForPath(statePath);
       } finally {
-        custody.close();
+        try {
+          custody.close();
+        } finally {
+          resumeProgress();
+        }
       }
     }
   }
