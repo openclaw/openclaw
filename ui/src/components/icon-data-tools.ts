@@ -225,8 +225,12 @@ export const toolIconData = {
     ["path", { d: "m7 11 2-2-2-2M11 13h4" }],
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
   ]),
-  // Lucide list-collapse (ISC).
-  listCollapse: strokePathData("M10 5h11M10 12h11M10 19h11", "m3 10 3-3-3-3", "m3 20 3-3-3-3"),
+  // Lucide list-collapse (ISC), raised to align with the chat label's visible bounds.
+  listCollapse: strokePathData(
+    "M10 3.5h11M10 10.5h11M10 17.5h11",
+    "m3 8.5 3-3-3-3",
+    "m3 18.5 3-3-3-3",
+  ),
   listTree: strokePathData(
     "M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3",
   ),
