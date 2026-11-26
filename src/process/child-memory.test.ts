@@ -222,6 +222,25 @@ it("lets one command borrow unused capacity and cancels one large contributor af
   expect(small.onLimit).not.toHaveBeenCalled();
 });
 
+it("charges a forked tree by proportional set size instead of per-process RSS", async () => {
+  mockFiles({
+    "/proc/100/smaps_rollup": "Rss: 1028 kB\nPss: 331 kB\nPss_Dirty: 0 kB\nSwapPss: 12 kB\n",
+    "/proc/100/status": "VmRSS:\t1028 kB\nVmSwap:\t96 kB\n",
+  });
+  memoryOwner.current!.budget = { memoryBytes: 512 * 1024, swapBytes: 64 * 1024 };
+  const { onLimit } = watch(100);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(onLimit).not.toHaveBeenCalled();
+});
+
+it("falls back to VmRSS when smaps_rollup is unavailable", async () => {
+  mockFiles({ "/proc/100/status": "VmRSS:\t900 kB\n" });
+  memoryOwner.current!.budget = { memoryBytes: 512 * 1024, swapBytes: 64 * 1024 };
+  const { onLimit } = watch(100);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(onLimit).toHaveBeenCalledOnce();
+});
+
 it.each(["throw", "reject"])(
   "retries a failed cancellation on the next sample: %s",
   async (mode) => {
@@ -360,17 +379,20 @@ it.each(["half the budget", "new descendants"])(
 
 it("retries failed samples and cancels pending reads without retaining callbacks", async () => {
   const blocked = createDeferred<string>();
+  const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
   procfs.readFile
-    .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }))
+    .mockRejectedValueOnce(denied())
+    // The sample reads smaps_rollup first, then falls back to status.
+    .mockRejectedValueOnce(denied())
     .mockImplementation(() => blocked.promise);
   const { onLimit, onDiagnostic, stop } = watch();
   await vi.advanceTimersByTimeAsync(2000);
   expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("protection is degraded"),
   );
-  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   stop();
   blocked.resolve("VmRSS:\t256 kB\n");
   await vi.advanceTimersByTimeAsync(1000);

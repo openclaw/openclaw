@@ -11,6 +11,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
+const pssField = Buffer.from("\nPss:");
+const swapPssField = Buffer.from("\nSwapPss:");
 
 // Reuse the buffer API where available; Node 26.8+'s native one-shot reader is
 // faster and exposes only the final file size to V8. Leave Bun's reader intact.
@@ -163,6 +165,21 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 }
 
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
+  // Prefer the proportional set size: VmRSS charges shared pages once per
+  // process, so a forked tree (headless Chrome, zygote children) accumulates the
+  // same libraries for every member and trips the shared budget far below its
+  // real footprint. smaps_rollup is Linux 4.14+.
+  try {
+    const rollup = await readKernelFile(`/proc/${pid}/smaps_rollup`);
+    if (rollup.indexOf(pssField) >= 0) {
+      return {
+        memoryBytes: readStatusNumber(rollup, pssField) * 1024,
+        swapBytes: readStatusNumber(rollup, swapPssField) * 1024,
+      };
+    }
+  } catch {
+    // Older kernels and ptrace-restricted processes keep the status reader.
+  }
   const status = await readKernelFile(`/proc/${pid}/status`);
   return {
     memoryBytes: readStatusNumber(status, rssField) * 1024,
