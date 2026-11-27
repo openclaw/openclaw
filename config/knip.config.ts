@@ -1711,6 +1711,7 @@ const config = {
       // Copied to dist and spawned by the MXC backend.
       "src/mxc-spawn-launcher.mjs!",
     ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/nodecode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: {
       ...bundledPluginWorkspace([

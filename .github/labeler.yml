@@ -800,6 +800,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/moonshot/**"
+"extensions: nodecode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nodecode/**"
+          - "docs/providers/nodecode.md"
 "extensions: nvidia":
   - changed-files:
       - any-glob-to-any-file:

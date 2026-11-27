@@ -1,0 +1,104 @@
+{
+  "id": "nodecode",
+  "categories": [
+    "models"
+  ],
+  "name": "Nodecode",
+  "description": "OpenClaw Nodecode provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "nodecode"
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "nodecode",
+        "envVars": [
+          "NODECODE_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "nodecode",
+      "method": "api-key",
+      "choiceId": "nodecode-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Nodecode API key",
+      "choiceHint": "Cyber v1, an abliterated model for security work",
+      "groupId": "nodecode",
+      "groupLabel": "Nodecode",
+      "groupHint": "Cyber v1, an abliterated model for security work",
+      "optionKey": "nodecodeApiKey",
+      "cliFlag": "--nodecode-api-key",
+      "cliOption": "--nodecode-api-key <key>",
+      "cliDescription": "Nodecode API key"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "nodecode": {
+        "baseUrl": "https://api.nodecode.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "nodecode-cyber-v1",
+        "models": [
+          {
+            "id": "nodecode-cyber-v1",
+            "name": "Cyber v1",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.33,
+              "output": 1.32,
+              "cacheRead": 0.009,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": true,
+              "supportsPromptCacheKey": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "thinkingFormat": "openai",
+              "supportedReasoningEfforts": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "reasoningEffortMap": {
+                "off": "none",
+                "minimal": "minimal",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "xhigh",
+                "max": "max"
+              },
+              "supportsLongCacheRetention": false
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "nodecode": "refreshable"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

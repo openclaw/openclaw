@@ -81,6 +81,21 @@ the Requesty team with permission to use it here:
   renders on both light and dark themes; the geometry otherwise matches the
   supplied source.
 
+## Nodecode icon
+
+`ProviderIcon-nodecode.svg` is the official Nodecode mark, contributed by
+Foresight Labs, the company behind Nodecode, with permission to use it here:
+
+- Source: https://nodecode.ai/icon.svg, referenced by https://nodecode.ai/ and
+  retrieved on November 26, 2026.
+- The black background plate was removed and the pixel axolotl's colored
+  pixels were merged into one `currentColor` shape, with the eyes and mouth left
+  open, so the mark renders on both light and dark themes; the pixel geometry
+  otherwise matches the cited source. The same shape supplies the plugin
+  activity icon and, in brand orange (`#f2570f`), the opaque white package tile.
+
+The name and mark remain the property of Foresight Labs.
+
 ## llama.cpp icon
 
 `ProviderIcon-llamacpp.svg` is a metadata-cleaned copy of
