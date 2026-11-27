@@ -160,6 +160,47 @@ describe("Qwen streams", () => {
     expect(messages[0]?.reasoning_content).toBe("original reasoning");
   });
 
+  it.each([
+    ["off", undefined],
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "high"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "xhigh"],
+  ] as const)("sends Token Plan Qwen4-Max %s as %s", (level, effort) => {
+    const captured = captureProviderPayload(tokenPlanModel("qwen4-max"), level, {
+      messages: [],
+      reasoning_effort: "medium",
+    });
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: level !== "off",
+      ...(effort ? { reasoning_effort: effort } : {}),
+    });
+  });
+
+  it("honors a Qwen4-Max caller payload replacement and its explicit thinking budget", async () => {
+    const capture = createAsyncPayloadCapture(tokenPlanModel("qwen4-max"), "low", () => ({}));
+    await expect(
+      capture(async (payload) => {
+        expect(payload).toEqual({ enable_thinking: true, reasoning_effort: "low" });
+        return { reasoning_effort: "max" };
+      }),
+    ).resolves.toEqual({ enable_thinking: true, reasoning_effort: "xhigh" });
+    await expect(capture(() => ({ enable_thinking: true }))).resolves.toEqual({
+      enable_thinking: true,
+      reasoning_effort: "low",
+    });
+    await expect(capture(() => ({ reasoning_effort: "none" }))).resolves.toEqual({
+      enable_thinking: false,
+    });
+    await expect(capture(() => ({ thinking_budget: 512 }))).resolves.toEqual({
+      enable_thinking: true,
+      thinking_budget: 512,
+    });
+  });
+
   it.each(["in-place mutation", "sync replacement", "async replacement"] as const)(
     "honors caller budgets and reasoning overrides after %s",
     async (mode) => {

@@ -306,7 +306,9 @@ OpenClaw omits the nested effort and preserves the server template default.
 
 Token Plan models are also marked reasoning-capable. `kimi-k2.7-code` and
 `MiniMax-M2.5` are thinking-only, so OpenClaw keeps thinking enabled even when
-the session requests `/think off`. DeepSeek V4 maps `minimal` through `high` to
+the session requests `/think off`. `qwen4-max` supports `off`, `low`, `high`,
+and `xhigh`, with `high` as the default. `minimal` maps to `low`, `medium` maps
+to `high`, and `max` maps to `xhigh`. DeepSeek V4 maps `minimal` through `high` to
 the service's `high` effort and maps `xhigh` or `max` to `max`. GLM 5.2 accepts
 the full `minimal` through `max` range; GLM 5.1 and GLM 5 accept through
 `xhigh`, and all three default to `high`. Other hybrid models follow the

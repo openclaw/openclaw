@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isQwen38ModelId,
+  isQwen4MaxModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanKimiModelId,
@@ -33,6 +34,7 @@ type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 type QwenThinkingFormat = string | undefined;
 type QwenThinkingContract =
   | { family: "qwen-3.8" }
+  | { family: "qwen-4-max" }
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
@@ -112,6 +114,9 @@ function resolveQwenThinkingContract(
   if (!isQwenTokenPlanProviderId(providerId)) {
     return undefined;
   }
+  if (isQwen4MaxModelId(modelId)) {
+    return { family: "qwen-4-max" };
+  }
   if (isQwenTokenPlanDeepSeekV4ModelId(modelId)) {
     return { family: "deepseek-v4" };
   }
@@ -142,6 +147,31 @@ function patchQwen38Payload(
       : thinkingLevel === "medium"
         ? "medium"
         : "xhigh";
+}
+
+function patchQwen4MaxPayload(
+  payload: Record<string, unknown>,
+  thinkingLevel: QwenThinkingLevel,
+  enableThinking: boolean,
+): void {
+  delete payload.thinking;
+  if (!enableThinking || payload.thinking_budget !== undefined) {
+    delete payload.reasoning_effort;
+    return;
+  }
+  // Chat Completions accepts low, high, and xhigh: https://help.aliyun.com/zh/model-studio/qwen4-max
+  switch (thinkingLevel) {
+    case "minimal":
+    case "low":
+      payload.reasoning_effort = "low";
+      break;
+    case "xhigh":
+    case "max":
+      payload.reasoning_effort = "xhigh";
+      break;
+    default:
+      payload.reasoning_effort = "high";
+  }
 }
 
 function patchTokenPlanDeepSeekV4Payload(
@@ -234,6 +264,11 @@ function createQwenThinkingPayloadPatch(
     }
     if (isQwen38ModelId(model.id) && effectiveThinkingFormat === undefined) {
       patchQwen38Payload(payloadObj, effectiveThinkingLevel, enableThinking);
+    } else if (
+      tokenPlanContract?.family === "qwen-4-max" &&
+      effectiveThinkingFormat === undefined
+    ) {
+      patchQwen4MaxPayload(payloadObj, effectiveThinkingLevel, enableThinking);
     } else if (tokenPlanContract?.family === "deepseek-v4") {
       // DashScope's OpenAI endpoint uses enable_thinking, while DeepSeek V4
       // also requires replay reasoning_content and high/max effort mapping.
@@ -355,7 +390,9 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
               if (
                 !forceThinking &&
                 (rawThinkingLevel === "off" ||
-                  (tokenPlanContract?.family === "qwen-3.8" && rawThinkingLevel === "none"))
+                  (rawThinkingLevel === "none" &&
+                    (tokenPlanContract?.family === "qwen-3.8" ||
+                      tokenPlanContract?.family === "qwen-4-max")))
               ) {
                 enableThinking = false;
               }
@@ -384,6 +421,12 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                 patchQwen38Payload(
                   payload,
                   normalizeQwenThinkingLevel(rawThinkingLevel),
+                  enableThinking,
+                );
+              } else if (tokenPlanContract?.family === "qwen-4-max") {
+                patchQwen4MaxPayload(
+                  payload,
+                  normalizeQwenThinkingLevel(rawThinkingLevel, requestedThinkingLevel),
                   enableThinking,
                 );
               } else if (tokenPlanContract?.family === "deepseek-v4") {

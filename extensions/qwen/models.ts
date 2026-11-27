@@ -28,6 +28,11 @@ const QWEN_38_MODEL_IDS = new Set(["qwen3.8-max", "qwen3.8-flash"]);
 export function isQwen38ModelId(modelId: string): boolean {
   return QWEN_38_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
+
+export function isQwen4MaxModelId(modelId: string): boolean {
+  return modelId.trim().toLowerCase() === "qwen4-max";
+}
+
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,

@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { classifyQwenFailoverReason } from "./failover.js";
 import {
   isQwen38ModelId,
+  isQwen4MaxModelId,
   isQwenCodingPlanBaseUrl,
   isQwenStandardOnlyModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
@@ -212,6 +213,12 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
     return qwenProfile;
   }
   // Uncataloged exact refs remain selectable, so family predicates preserve their request controls.
+  if (isQwen4MaxModelId(modelId)) {
+    return {
+      levels: (["off", "low", "high", "xhigh"] as const).map((id) => ({ id })),
+      defaultLevel: "high" as const,
+    };
+  }
   if (isQwenTokenPlanThinkingOnlyModelId(modelId)) {
     return {
       levels: [{ id: "low" as const, label: "on" }],
