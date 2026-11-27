@@ -2,6 +2,10 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  checkGatewayAuthRepairPending,
+  runGatewayAuthHealth,
+} from "./doctor-gateway-auth-repair.js";
 import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
 import { checkInitialConfigWriteHealthPending } from "./doctor-health-contribution-runners.config-plan.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
@@ -17,14 +21,19 @@ import {
   checkLegacyRuntimeFilesContributionPending,
   checkLegacyStatePending,
   checkPluginRegistryContributionPending,
+  checkSessionTranscriptHeadersContributionPending,
+  checkSessionTranscriptLabelsContributionPending,
   checkTelegramGeneralTopicConversationsPending,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfiguredPluginInstallReleaseHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
+  runSessionTranscriptHeadersHealth,
+  runSessionTranscriptLabelsHealth,
   runSessionTranscriptsHealth,
 } from "./doctor-health-contribution-runners.state.js";
+import { checkSandboxContributionPending } from "./doctor-health-contribution-runners.workspace.js";
 import type {
   DoctorHealthCheckContext,
   DoctorHealthContribution,
@@ -51,7 +60,6 @@ export function resolveInitialDoctorHealthContributions(params: {
   runGatewayConfigHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runAuthProfileMigration: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runAuthProfileHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
-  runGatewayAuthHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runLegacyStateHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
   return [
@@ -138,6 +146,14 @@ export function resolveInitialDoctorHealthContributions(params: {
           return collectAuthProfileHealthFindings({ cfg: ctx.cfg, allowKeychainPrompt: false });
         },
       },
+      async pending(ctx) {
+        const { checkAuthProfileRefreshPending } = await import("../commands/doctor-auth.js");
+        return checkAuthProfileRefreshPending({
+          cfg: ctx.cfg,
+          env: ctx.env,
+          inspectProfiles: ctx.authProfileHealthReady !== false,
+        });
+      },
       run: params.runAuthProfileHealth,
     }),
     createDoctorHealthContribution("doctor:claude-cli", "Claude CLI", {
@@ -152,7 +168,8 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:gateway-auth", "Gateway auth", {
       healthCheckIds: ["core/doctor/gateway-auth"],
-      run: params.runGatewayAuthHealth,
+      pending: checkGatewayAuthRepairPending,
+      run: runGatewayAuthHealth,
     }),
     createDoctorHealthContribution(
       "doctor:node-hosting-preconditions",
@@ -183,6 +200,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Plugin health inspection and repair",
       {
         updateWork: { kind: "inspection", scope: "agent", repairs: true },
+        async pending(ctx) {
+          const { checkStructuredHealthRepairsContributionPending } =
+            await import("./doctor-health-contribution-core.js");
+          return checkStructuredHealthRepairsContributionPending(ctx);
+        },
         run: params.runStructuredHealthRepairs,
       },
     ),
@@ -523,34 +545,14 @@ export function resolveInitialDoctorHealthContributions(params: {
         pending: checkTelegramGeneralTopicConversationsPending,
       },
     ),
-    createDoctorHealthContribution(
-      "doctor:session-transcript-headers",
-      "Chat history headers",
-      async (ctx) => {
-        const { noteSessionTranscriptHeaderHealth } =
-          await import("../commands/doctor-session-transcript-headers.js");
-        await noteSessionTranscriptHeaderHealth({
-          cfg: ctx.cfg,
-          env: ctx.env ?? process.env,
-          shouldRepair: ctx.prompter.shouldRepair,
-          integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
-        });
-      },
-    ),
-    createDoctorHealthContribution(
-      "doctor:session-transcript-labels",
-      "Chat history labels",
-      async (ctx) => {
-        const { noteSessionTranscriptLabelHealth } =
-          await import("../commands/doctor-session-transcript-labels.js");
-        await noteSessionTranscriptLabelHealth({
-          cfg: ctx.cfg,
-          env: ctx.env ?? process.env,
-          shouldRepair: ctx.prompter.shouldRepair,
-          integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
-        });
-      },
-    ),
+    createDoctorHealthContribution("doctor:session-transcript-headers", "Chat history headers", {
+      pending: checkSessionTranscriptHeadersContributionPending,
+      run: runSessionTranscriptHeadersHealth,
+    }),
+    createDoctorHealthContribution("doctor:session-transcript-labels", "Chat history labels", {
+      pending: checkSessionTranscriptLabelsContributionPending,
+      run: runSessionTranscriptLabelsHealth,
+    }),
     createDoctorHealthContribution("doctor:session-snapshots", "Session snapshots", {
       pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "agent" },
@@ -636,6 +638,7 @@ export function resolveInitialDoctorHealthContributions(params: {
         memberRolesCheck,
         openClawIdAccessCheck,
       ],
+      pending: checkSandboxContributionPending,
       async run(ctx) {
         await runOpenClawIdAccessHealth(ctx);
         await runMemberRolesHealth(ctx);
