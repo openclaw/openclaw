@@ -11,6 +11,10 @@ import {
   resolveRequesterPrincipalKey,
   requesterCreatorProfileId,
 } from "../../agents/requester-origin.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -245,7 +249,13 @@ export async function captureSessionEventTargetForHost(
       sessionKey,
       storePath,
       toolsAllow,
-      deliver,
+      // A hidden subagent reports to its requester through the completion handoff, so its
+      // event turns (an exec wake after sessions_yield) must not also post to the chat.
+      deliver:
+        isSubagentEnvelopeSession(sessionKey, { entry }) &&
+        !isVisibleSpawnedSession(sessionKey, { entry })
+          ? false
+          : deliver,
       assertCurrent: options.assertCurrent,
       // Empty identity pins absence until normal admission creates the first session.
       sessionId: entry?.sessionId ?? "",
