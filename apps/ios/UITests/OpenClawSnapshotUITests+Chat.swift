@@ -919,25 +919,33 @@ extension OpenClawSnapshotUITests {
         let app = try XCTUnwrap(self.app)
         self.sendFixtureChatMessage(prompt)
 
-        let thumbsUp = app.buttons["chat-reaction-👍"]
-        XCTAssertTrue(thumbsUp.waitForExistence(timeout: 5))
-        XCTAssertTrue(thumbsUp.isSelected)
-        XCTAssertTrue(thumbsUp.label.contains("You, Casey"))
-        XCTAssertTrue(app.buttons["chat-reaction-🚀"].exists)
+        // All of a message's reactions share one pill; it opens the picker that toggles yours.
+        let pill = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat-message-reactions-", "👍")).firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 5))
+        XCTAssertTrue(pill.label.contains("You, Casey reacted with 👍"))
+        XCTAssertTrue(pill.label.contains("Morgan reacted with 🚀"))
         self.attachScreenshot(named: "ios-reactions-prompt-after")
 
+        let thumbsUp = app.buttons["chat-reaction-👍"]
+        let picker = app.descendants(matching: .any)["chat-reaction-picker"].firstMatch
+        pill.tap()
+        XCTAssertTrue(thumbsUp.waitForExistence(timeout: 3))
+        XCTAssertTrue(thumbsUp.isSelected)
         thumbsUp.tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
+        pill.tap()
         XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: false, timeout: 5))
         XCTAssertEqual(thumbsUp.label, "Casey reacted with 👍")
         thumbsUp.tap()
-        XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: true, timeout: 5))
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
 
         app.staticTexts[prompt].press(forDuration: 0.8)
         let addReaction = app.buttons["chat-add-reaction"]
         XCTAssertTrue(addReaction.waitForExistence(timeout: 3))
         addReaction.tap()
-        let picker = app.descendants(matching: .any)["chat-reaction-picker"].firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        XCTAssertTrue(thumbsUp.isSelected)
         let quickEmoji = ["👍", "❤️", "🎉", "👀", "🚀", "😂"]
         let choices = quickEmoji.map { app.buttons["chat-reaction-choice-\($0)"] }
         for choice in choices {
@@ -952,12 +960,12 @@ extension OpenClawSnapshotUITests {
 
         app.buttons["chat-reaction-choice-😂"].tap()
         XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
-        let addedReaction = app.buttons["chat-reaction-😂"]
-        XCTAssertTrue(addedReaction.waitForExistence(timeout: 5))
-        XCTAssertTrue(addedReaction.isSelected)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chat-message-reactions-", "😂"))
+            .firstMatch.waitForExistence(timeout: 5))
     }
 
-    func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
+    func testAssistantReplyHoldOffersActionsInMenu() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
@@ -969,21 +977,18 @@ extension OpenClawSnapshotUITests {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
-        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
-        assistant.press(forDuration: 0.8)
-        XCTAssertTrue(assistant.exists)
-        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
-        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["chat-add-reaction"].exists)
-        self.attachScreenshot(named: "assistant-message-actions")
+        // An unreacted reply has no footer or action bar at rest.
+        for action in ["Copy Message", "Reply", "Listen", "chat-add-reaction"] {
+            XCTAssertFalse(app.buttons[action].exists, action)
+        }
 
-        app.buttons["Select Text"].tap()
-        let selectableText = app.textViews["chat-selectable-text"]
-        XCTAssertTrue(selectableText.waitForExistence(timeout: 3))
-        XCTAssertTrue((selectableText.value as? String)?.contains("Ready when you are") == true)
-        self.attachScreenshot(named: "assistant-select-text")
-        app.buttons["Close"].tap()
-        XCTAssertTrue(selectableText.waitForNonExistence(timeout: 3))
+        // Holding the reply opens its menu instead of selecting a word.
+        assistant.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        for action in ["chat-add-reaction", "Select Text", "Reply", "Listen"] {
+            XCTAssertTrue(app.buttons[action].exists, action)
+        }
+        self.attachScreenshot(named: "assistant-message-menu")
     }
 
     func testCodeBlockCopyButtonCopiesRawCode() throws {
