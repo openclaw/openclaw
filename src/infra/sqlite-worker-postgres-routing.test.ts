@@ -64,9 +64,12 @@ it.runIf(capabilities.explicitSqliteCloseReleasesNativeResources)(
       expect(attach).toHaveBeenCalledTimes(1);
       expect(services).toHaveLength(4);
       expect(endpoints).toHaveBeenCalledExactlyOnceWith(true);
-      expect(endpoints.mock.results[0]?.value?.services.map(({ signal }) => signal)).toEqual(
-        services.map(({ signal }) => signal),
-      );
+      const [borrowed] = endpoints.mock.results;
+      assert.ok(borrowed?.type === "return" && borrowed.value);
+      expect(borrowed.value.services).toHaveLength(services.length);
+      for (const [index, service] of services.entries()) {
+        expect(borrowed.value.services[index]?.signal).toBe(service.signal);
+      }
     } finally {
       try {
         await Promise.all([...stores].map((store) => store.close()));
@@ -101,7 +104,9 @@ it("delivers the PG pool on the first command after an explicit family joins a p
     expect(endpoints).not.toHaveBeenCalled();
     expect(await readWorkerRows(joined)).toEqual([]);
     expect(endpoints).toHaveBeenCalledExactlyOnceWith(true);
-    expect(endpoints.mock.results[0]?.value?.services).toHaveLength(4);
+    const [borrowed] = endpoints.mock.results;
+    assert.ok(borrowed?.type === "return");
+    expect(borrowed.value?.services).toHaveLength(4);
   } finally {
     try {
       await Promise.all([...stores].map((store) => store.close()));
