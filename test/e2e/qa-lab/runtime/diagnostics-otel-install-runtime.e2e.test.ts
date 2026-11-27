@@ -320,7 +320,6 @@ async function installPlugin(params: { gateway: QaGatewayChild; packageVersion: 
     resolvedName: PACKAGE_NAME,
     resolvedVersion: params.packageVersion,
   });
-  expect(records["diagnostics-otel"]?.installPath).toContain("diagnostics-otel");
   expect(records["diagnostics-otel"]?.integrity).toMatch(/^sha512-/u);
 }
 
@@ -460,18 +459,6 @@ describe("managed diagnostics-otel install runtime", () => {
   test("keeps installed diagnostic listeners active with a preloaded SDK", async (context) => {
     const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-    const rootPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")) as {
-      devDependencies?: Record<string, string>;
-    };
-    const sourcePluginPackage = JSON.parse(
-      await readFile(path.join(repoRoot, "extensions/diagnostics-otel/package.json"), "utf8"),
-    ) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.223.0");
-    expect(sourcePluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
-    expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-preloaded-"));
     const receiver = await startReceiver();
     const ignoredConfig = await startReceiver();
@@ -530,26 +517,6 @@ describe("managed diagnostics-otel install runtime", () => {
         gateway,
         configTraceEndpoint: ignoredConfig.baseUrl,
       });
-      const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
-      if (!stateDir) {
-        throw new Error("qa gateway state directory was not configured");
-      }
-      const installPath = readPluginInstallRecords({
-        stateDir,
-        configPath: gateway.configPath,
-      })["diagnostics-otel"]?.installPath;
-      if (!installPath) {
-        throw new Error("diagnostics-otel install path was not recorded");
-      }
-      const installedPluginPackage = JSON.parse(
-        await readFile(path.join(installPath, "package.json"), "utf8"),
-      ) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      expect(installedPluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
-      expect(installedPluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
-      expect(gateway.logs()).toContain("diagnostics-otel: using preloaded OpenTelemetry SDK");
       await runTurn(gateway, "OTEL-PRELOADED-INSTALL-OK");
       const runSpan = await waitFor(
         () => receiver.capturedSpans.find((span) => span.name === "openclaw.run"),

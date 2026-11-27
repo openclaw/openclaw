@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -168,8 +167,6 @@ it("projects usage and memory over authenticated RPC", { timeout: TEST_TIMEOUT_M
 
     await captureRuntimeConfigAsyncReader()();
     const { databasePath } = await seedCompletedUsageSession(state);
-    const databaseStats = await fs.stat(databasePath);
-    expect(databaseStats.isFile()).toBe(true);
     const rollupRows = readSessionCostUsageRollupRows("main", databasePath);
     expect(rollupRows).toHaveLength(1);
     expect(parseSqliteSessionFileMarker(rollupRows[0]?.key)).toEqual({

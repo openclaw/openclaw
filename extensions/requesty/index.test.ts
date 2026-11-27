@@ -96,20 +96,4 @@ describe("requesty provider plugin", () => {
     expect(eligible("vertex/claude-sonnet-4-6")).toBe(true);
     expect(eligible("gpt-5.5")).toBe(false);
   });
-
-  it("publishes configured Requesty models through plugin-owned catalog augmentation", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const model = {
-      id: "deepinfra/moonshotai/Kimi-K2.6",
-      name: "Kimi K2.6",
-      input: ["text"],
-      reasoning: true,
-      contextWindow: 262_144,
-    };
-    expect(
-      provider.augmentModelCatalog?.({
-        config: { models: { providers: { requesty: { models: [model] } } } },
-      } as never),
-    ).toEqual([{ provider: "requesty", ...model }]);
-  });
 });

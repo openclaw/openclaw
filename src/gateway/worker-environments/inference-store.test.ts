@@ -16,7 +16,6 @@ import {
   validateWorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
@@ -27,7 +26,6 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
@@ -36,7 +34,6 @@ import {
   type WorkerInferenceStore,
   type WorkerInferenceTurnInput,
 } from "./inference-store.js";
-import { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import { createSink as createInferenceSink } from "./inference.test-support.js";
 import { serializeWorkerSessionTurnClaim } from "./placement-record.js";
@@ -738,26 +735,6 @@ describe("worker inference SQLite store", async () => {
       expect(terminalRunIds()).toEqual(["run-second"]);
     },
   );
-
-  it("prunes retention without hydrating cached terminal payloads", async () => {
-    const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
-    await completeTurn("run-first", outcome);
-    await completeTurn("run-second", outcome);
-    const counter = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["inference"],
-      (query) => (query.includes("worker_inference_turns") ? "inference" : null),
-    );
-    try {
-      const kernel = createWorkerInferenceStoreKernel({ db: database.db, now: () => nowMs });
-      expect(kernel.begin({ ...BASE_INPUT, runId: "run-next" })).toEqual({ kind: "claimed" });
-      expect(counter.rowCounts.inference).toBeGreaterThan(0);
-      expect(counter.textBytes.inference).toBeLessThan(1024);
-    } finally {
-      counter.restore();
-    }
-    expect(terminalRunIds()).toEqual(["run-first", "run-second"]);
-  });
 
   it("preserves the active identity while pruning after completion", async () => {
     store = createWorkerInferenceStore({

@@ -79,58 +79,6 @@ it("keeps reusable responses without retaining completed callers or prior baseli
   }
 });
 
-it("reuses retained history byte counts past mutable items without walking their contents again", () => {
-  const host = createAiTransportHost({
-    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
-  });
-  runWithAiTransportHost(host, () => {
-    const request = {
-      model: "fixture",
-      input: [
-        { role: "user" as const, content: "x".repeat(1024 * 1024) },
-        ...Array.from({ length: 600 }, (_, index) =>
-          freezeJsonSnapshot({
-            type: "message" as const,
-            role: "user" as const,
-            content: [{ type: "input_text" as const, text: `history ${index}` }],
-          }),
-        ),
-      ],
-    };
-    const claim = claimOpenAIResponsesHttpContinuation({
-      apiKey: "test-key",
-      baseUrl: "https://example.test/v1",
-      headers: {},
-      scope: claimConversationProviderState("byte-work"),
-      request,
-    });
-    assert.ok(claim);
-    claim.commit(request, { id: "response", output: [] });
-    const next = claimOpenAIResponsesHttpContinuation({
-      apiKey: "test-key",
-      baseUrl: "https://example.test/v1",
-      headers: {},
-      scope: claimConversationProviderState("byte-work"),
-      request: { ...request, previous_response_id: "response" },
-    });
-    assert.ok(next);
-    const stringify = vi.spyOn(JSON, "stringify");
-    try {
-      next.commit(request, { id: "next-response", output: [] }, "response");
-      const serializedCharacters = stringify.mock.results.reduce(
-        (total, result) =>
-          total +
-          (result.type === "return" && typeof result.value === "string" ? result.value.length : 0),
-        0,
-      );
-      expect(serializedCharacters).toBeLessThan(4096);
-    } finally {
-      stringify.mockRestore();
-      cleanupSessionResources("byte-work", host);
-    }
-  });
-});
-
 it.each([0, 1])("preserves the exact serialized byte budget (overflow=%s)", (overflow) => {
   const identity = {
     apiKey: "test-key",

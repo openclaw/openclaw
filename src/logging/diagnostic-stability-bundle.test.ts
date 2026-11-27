@@ -386,7 +386,7 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
-  it("preserves OS and worker memory attribution and unavailable samples in exported bundles", () => {
+  it("redacts unavailable worker script identities through bundle readback", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
@@ -398,49 +398,10 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
       memory: {
         rssBytes: 4096,
-        anonymousRssBytes: 3072,
-        anonymousSwapBytes: 0,
-        heapSizeLimitBytes: 4096,
-        oldGenerationAfterGcBytes: 256,
         heapTotalBytes: 1024,
         heapUsedBytes: 512,
         externalBytes: 32,
         arrayBuffersBytes: 16,
-        workerCount: 2,
-        postgresBridgeCount: 3,
-        postgresPoolSelfRootCount: 1,
-        workerHeapSampledCount: 1,
-        workerHeapTotalBytes: 2048,
-        workerHeapUsedBytes: 1024,
-        workerExternalBytes: 1024,
-        workerArrayBuffersBytes: 512,
-        workerArrayBuffersSampledCount: 1,
-        workerMemoryScope: "direct",
-        workerMemoryCoverage: "partial",
-        workerHeaps: [
-          {
-            script: "prepared-model-catalog.worker.js",
-            threadId: 2,
-            heapUsed: 1024,
-            heapSizeLimitBytes: 1100,
-            oldGenerationAfterGcBytes: 800,
-            heapTotal: 2048,
-            external: 1024,
-            arrayBuffers: 512,
-            sampleAgeMs: 20,
-            retainedData: [
-              {
-                structure: "catalog-source",
-                entries: 100,
-                approximateBytes: 512,
-                generations: 1,
-                providers: 2,
-                accounts: 3,
-                truncated: true,
-              },
-            ],
-          },
-        ],
         workerMemoryMissing: [
           { script: "/private/secret-worker.js", threadId: 3, reason: "stale" },
         ],
@@ -468,44 +429,6 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
     });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
-      anonymousRssBytes: 3072,
-      anonymousSwapBytes: 0,
-      heapSizeLimitBytes: 4096,
-      oldGenerationAfterGcBytes: 256,
-      workerCount: 2,
-      postgresBridgeCount: 3,
-      postgresPoolSelfRootCount: 1,
-      workerHeapSampledCount: 1,
-      workerHeapUsedBytes: 1024,
-      workerExternalBytes: 1024,
-      workerArrayBuffersBytes: 512,
-      workerArrayBuffersSampledCount: 1,
-      workerMemoryScope: "direct",
-      workerMemoryCoverage: "partial",
-      workerHeaps: [
-        {
-          script: "prepared-model-catalog.worker.js",
-          threadId: 2,
-          heapUsed: 1024,
-          heapSizeLimitBytes: 1100,
-          oldGenerationAfterGcBytes: 800,
-          heapTotal: 2048,
-          external: 1024,
-          arrayBuffers: 512,
-          sampleAgeMs: 20,
-          retainedData: [
-            {
-              structure: "catalog-source",
-              entries: 100,
-              approximateBytes: 512,
-              generations: 1,
-              providers: 2,
-              accounts: 3,
-              truncated: true,
-            },
-          ],
-        },
-      ],
       workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
     });
     expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");

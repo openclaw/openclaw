@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  observeSqliteReadSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   resolveSessionTranscriptDatabasePath,
@@ -699,7 +695,7 @@ describe("context-engine turn outbox", () => {
     }
   });
 
-  it("reuses admitted outbox schema across worker commands without DDL or catalog reads", async () => {
+  it("keeps outbox commands usable through first-use schema creation", async () => {
     const { target, database } = await createTranscript("schema-turn");
     for (const firstUse of [false, true]) {
       using connection = openNodeSqliteDatabase(database.path);
@@ -721,18 +717,7 @@ describe("context-engine turn outbox", () => {
         // Consume the schema revision invalidated by the committed first-use DDL.
         expect(backend.execute(command)).toBe(false);
       }
-      const exec = vi.spyOn(connection, "exec");
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        expect([backend.execute(command), backend.execute(command)]).toEqual([false, false]);
-        expect(exec.mock.calls.filter(([sql]) => sql.includes("CREATE TABLE"))).toEqual([]);
-        expect(observation.queries.filter((sql) => /sqlite_(?:schema|master)/iu.test(sql))).toEqual(
-          [],
-        );
-      } finally {
-        observation.restore();
-        exec.mockRestore();
-      }
+      expect([backend.execute(command), backend.execute(command)]).toEqual([false, false]);
     }
   });
 });

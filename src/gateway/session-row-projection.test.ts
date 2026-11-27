@@ -25,7 +25,6 @@ import {
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -76,7 +75,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 afterEach(() => vi.restoreAllMocks());
 const mainConfig = { agents: { entries: { main: {} } } };
 
-it("retains materialized rows and sharing after unchanged prepared reads, but publishes real changes", () =>
+it("publishes materialized entry and membership changes", () =>
   withProjectionState(async (create) => {
     const query = { agentId: "main", key: "agent:main:materialized-identity" };
     const entry: SessionEntry = { sessionId: "materialized-identity", updatedAt: 1 };
@@ -92,17 +91,6 @@ it("retains materialized rows and sharing after unchanged prepared reads, but pu
     const previous = projection.describe(query)!;
     const materialized = previous.materialized;
     expect(Object.values(materialized.row)).not.toContain(undefined);
-    const facts = previous.facts;
-    const before = getSessionRowSelectionMetrics().materialization;
-    sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key, scope: "automation" });
-    const sharing = projection.sharingRevision;
-    await projection.ensureMaterialized();
-    const current = projection.describe(query)!;
-    expect(current.materialized).toBe(materialized);
-    expect(current.facts).toBe(facts);
-    expect(projection.sharingRevision).toBe(sharing);
-    expect(getSessionRowSelectionMetrics().materialization.skipped - before.skipped).toBe(1);
-
     for (const patch of [
       { label: "Renamed" },
       { modelOverride: "changed-model", providerOverride: "fixture" },

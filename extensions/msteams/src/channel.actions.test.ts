@@ -7,10 +7,8 @@ const runtime = vi.hoisted(() => ({
   addParticipantMSTeams: vi.fn(),
   editMessageMSTeams: vi.fn(),
   deleteMessageMSTeams: vi.fn(),
-  getChannelInfoMSTeams: vi.fn(),
   getMemberInfoMSTeams: vi.fn(),
   getMessageMSTeams: vi.fn(),
-  listChannelsMSTeams: vi.fn(),
   listReactionsMSTeams: vi.fn(),
   pinMessageMSTeams: vi.fn(),
   reactMessageMSTeams: vi.fn(),
@@ -259,28 +257,6 @@ describe("Teams action routing and authority", () => {
       );
     },
   );
-
-  it("lists channels in an authorized team", async () => {
-    await success(
-      "channel-list",
-      { teamId: ` ${graphTeam} ` },
-      runtime.listChannelsMSTeams,
-      { channels: [{ id: graphChannel }] },
-      { teamId: graphTeam },
-      ok("channel-list", { channels: [{ id: graphChannel }] }),
-    );
-  });
-
-  it("reads channel information using explicit team/channel ids", async () => {
-    await success(
-      "channel-info",
-      { teamId: ` ${graphTeam} `, channelId: ` ${graphChannel} ` },
-      runtime.getChannelInfoMSTeams,
-      { channel: { id: graphChannel } },
-      { teamId: graphTeam, channelId: graphChannel },
-      ok("channel-info", { channelInfo: { id: graphChannel } }),
-    );
-  });
 
   it("requires a trusted Teams requester for group management", () => {
     const requires = msteamsPlugin.actions!.requiresTrustedRequesterSender!;

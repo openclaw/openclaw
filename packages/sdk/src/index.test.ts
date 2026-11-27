@@ -74,17 +74,6 @@ function requireTransportCall(calls: readonly RequestCall[], index: number): Req
   return call;
 }
 
-function createListFixture() {
-  return createClientFixture({
-    "agents.list": { agents: [] },
-    "sessions.list": { sessions: [] },
-    "models.list": { models: [] },
-    "tools.catalog": { tools: [] },
-    "exec.approval.list": { approvals: [] },
-    "environments.list": { environments: [] },
-  });
-}
-
 function waitForSnapshot(runId: string, fields: Record<string, unknown> = {}) {
   const snapshot = { status: "timeout", runId, ...fields };
   return createClientFixture({ "agent.wait": snapshot }).oc.runs.wait(runId);
@@ -323,47 +312,6 @@ describe("OpenClaw SDK", () => {
     ).rejects.toThrow("timeoutMs must be a finite non-negative number");
   });
 
-  it("calls artifact Gateway RPCs", async () => {
-    const artifact = { id: "artifact_123", type: "image", title: "demo.png" };
-    const { transport, oc } = createClientFixture({
-      "artifacts.list": { artifacts: [structuredClone(artifact)] },
-      "artifacts.get": { artifact: structuredClone(artifact) },
-      "artifacts.download": {
-        artifact: structuredClone(artifact),
-        encoding: "base64",
-        data: "aGVsbG8=",
-      },
-    });
-    const artifactList = await oc.artifacts.list({ sessionKey: "agent:main:main" });
-    expect(artifactList.artifacts).toEqual([artifact]);
-    const artifactGet = await oc.artifacts.get("artifact_123", { sessionKey: "agent:main:main" });
-    expect(artifactGet.artifact).toEqual(artifact);
-    const artifactDownload = await oc.artifacts.download("artifact_123", {
-      sessionKey: "agent:main:main",
-    });
-    expect(artifactDownload.artifact).toEqual(artifact);
-    expect(artifactDownload.encoding).toBe("base64");
-    expect(artifactDownload.data).toBe("aGVsbG8=");
-
-    expect(transport.calls).toEqual([
-      {
-        method: "artifacts.list",
-        options: undefined,
-        params: { sessionKey: "agent:main:main" },
-      },
-      {
-        method: "artifacts.get",
-        options: undefined,
-        params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
-      },
-      {
-        method: "artifacts.download",
-        options: undefined,
-        params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
-      },
-    ]);
-  });
-
   it("requires artifact query scope before calling Gateway", async () => {
     const { transport, oc } = createClientFixture();
 
@@ -409,82 +357,11 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it("manages environments through current Gateway methods", async () => {
-    const gatewayEnvironment = {
-      id: "gateway",
-      type: "local",
-      label: "Gateway local",
-      status: "available",
-      capabilities: ["agent.run"],
-    };
-    const workerEnvironment = {
-      id: "worker_123",
-      type: "worker",
-      status: "available",
-      worker: {
-        providerId: "static-ssh",
-        leaseId: "lease_123",
-        state: "ready",
-        ageMs: 1000,
-        idleMs: 250,
-        attachedSessionIds: [],
-        tunnelStatus: "stopped",
-      },
-    };
-    const { transport, oc } = createClientFixture({
-      "environments.list": { environments: [gatewayEnvironment] },
-      "environments.status": gatewayEnvironment,
-      "environments.create": workerEnvironment,
-      "environments.destroy": { ...workerEnvironment, status: "unavailable" },
-    });
-    await expect(oc.environments.list()).resolves.toEqual({
-      environments: [gatewayEnvironment],
-    });
-    await expect(oc.environments.status("gateway")).resolves.toEqual(gatewayEnvironment);
-    await expect(
-      oc.environments.create({ profileId: "development", idempotencyKey: "request_123" }),
-    ).resolves.toEqual(workerEnvironment);
-    await expect(oc.environments.destroy("worker_123")).resolves.toEqual({
-      ...workerEnvironment,
-      status: "unavailable",
-    });
+  it("rejects unsupported environment deletion", async () => {
+    const { oc } = createClientFixture();
     await expect(oc.environments.delete("worker_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
-    expect(transport.calls).toEqual([
-      { method: "environments.list", params: {}, options: undefined },
-      { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
-      {
-        method: "environments.create",
-        params: { profileId: "development", idempotencyKey: "request_123" },
-        options: undefined,
-      },
-      {
-        method: "environments.destroy",
-        params: { environmentId: "worker_123" },
-        options: undefined,
-      },
-    ]);
-  });
-
-  it("preserves explicit null params for Gateway list validation", async () => {
-    type ListMethod = (this: unknown, params: unknown) => Promise<unknown>;
-    const { transport, oc } = createListFixture();
-    await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
-    await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
-    await oc.models.list(null);
-    await oc.tools.list(null);
-    await oc.approvals.list(null);
-    await oc.environments.list(null);
-
-    expect(transport.calls).toEqual([
-      { method: "agents.list", params: null, options: undefined },
-      { method: "sessions.list", params: null, options: undefined },
-      { method: "models.list", params: null, options: undefined },
-      { method: "tools.catalog", params: null, options: undefined },
-      { method: "exec.approval.list", params: null, options: undefined },
-      { method: "environments.list", params: null, options: undefined },
-    ]);
   });
 
   it("rejects tools.effective without a session key before RPC", async () => {

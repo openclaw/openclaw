@@ -324,10 +324,40 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   ] as const)(
     "recovers a queued final after its Gateway dies at %s",
     { timeout: 90_000 },
-    async (window, { signal }) => {
+    async (window, { signal, onTestFailed }) => {
       const receiptCommitted = window === "receipt-before-ack";
       const noticeCrash = window.startsWith("notice-");
       await using resources = new AsyncDisposableStack();
+      const caseStartedAt = performance.now();
+      let restartStartedAt: number | undefined = undefined;
+      let recoveredRequests = 0;
+      let phase = "fixture.setup";
+      let phaseReported = false;
+      // Timeout aborts before teardown; failure hooks run afterward.
+      const reportFailurePhase = () => {
+        if (phaseReported) {
+          return;
+        }
+        phaseReported = true;
+        try {
+          const elapsedMs = Math.round(performance.now() - caseStartedAt);
+          const restartElapsedMs =
+            restartStartedAt === undefined
+              ? null
+              : Math.round(performance.now() - restartStartedAt);
+          console.error(
+            "[postgres-final-crash-phase]",
+            JSON.stringify({ window, phase, elapsedMs, restartElapsedMs, recoveredRequests }),
+          );
+        } catch {
+          // Diagnostic output must not replace the original failure.
+        }
+      };
+      if (window === "receipt-before-ack" || window === "acceptance-before-receipt") {
+        signal.addEventListener("abort", reportFailurePhase, { once: true });
+        resources.defer(() => signal.removeEventListener("abort", reportFailurePhase));
+        onTestFailed(reportFailurePhase);
+      }
       type Boundary = { id: string; pid: number };
       const held = createDeferred<Boundary>();
       const recovered = createDeferred<Boundary>();
@@ -349,6 +379,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
             held.resolve(JSON.parse(body));
             response.writeHead(204).end();
           } else if (request.method === "POST" && request.url === "/recovered") {
+            recoveredRequests += 1;
             recovered.resolve(JSON.parse(body));
             response.writeHead(204).end();
           } else {
@@ -356,10 +387,12 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           }
         })().catch((error: unknown) => response.writeHead(500).end(String(error)));
       });
+      phase = "fixture.listen";
       const serverUrl = await listenLoopback(server);
       resources.defer(() => closeHttpServer(server));
       const nodeExecutable = resolveTestNodeExecPath();
       const gatewayPrefix = [nodeExecutable];
+      phase = "fixture.instance";
       const instance = await createOpenClawTestInstance({
         name: "postgres-final-receipt-crash",
         signal,
@@ -417,28 +450,35 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           },
         },
       };
+      phase = "seed.config";
       await current.writeConfig(config);
       delete instance.env.VITEST;
       delete instance.env.NODE_ENV;
       // Preflight owns migration completion; full runtime bootstrap belongs to the real Gateways.
+      phase = "seed.preflight";
       const preflight = await runStartupConfigPreflight({ gateway: true, observe: false });
       try {
         expect(preflight.snapshot.valid).toBe(true);
       } finally {
         await preflight.pluginCache?.[Symbol.asyncDispose]();
       }
+      phase = "seed.close-agent-before-anchor";
       await closeOpenClawAgentDatabasesAsync(current.stateDir);
+      phase = "seed.close-state-before-anchor";
       await closeStateDatabaseForTest();
+      phase = "seed.bootstrap-anchor";
       const bootstrapAnchor = await readPostgresAnchor(current);
       if (!bootstrapAnchor) {
         throw new Error("Gateway startup did not persist its PostgreSQL anchor");
       }
+      phase = "seed.bootstrap-facts";
       expect(
         await queryRows(
           `SELECT value_json FROM ${quoteIdentifier(bootstrapAnchor.namespace)}.config_machine_state WHERE state_key = $1`,
           [`webhookListeners:${current.configPath}`],
         ),
       ).toEqual([{ value_json: "true" }]);
+      phase = "seed.engine";
       await installGatewayDatabaseEngine(preflight.snapshot, preflight.databaseEngineSelection);
       const sessionKey = "agent:main:final-receipt-crash";
       const target = "provenance-final-receipt-crash";
@@ -464,12 +504,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           : {}),
       };
       // Seed produced output through real workers; Gateway startup owns both transport settlements.
+      phase = "seed.session";
       await replaceSessionEntry(scope, source);
+      phase = "seed.pending-final";
       await markFinal(scope, source, payloads, context);
       const completion = resolvePendingFinalDeliveryCompletion(payloads);
       if (!completion) {
         throw new Error("Missing queued pending-final completion");
       }
+      phase = "seed.queue";
       await enqueueDeliveryOnce(
         { ...context, payloads, deliveryCompletion: completion, requiresProducerClaim: true },
         completion.deliveryId,
@@ -480,19 +523,25 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       if (noticeCrash) {
         await markDeliveryPlatformOutcomeUnknown(completion.deliveryId, current.stateDir);
       }
+      phase = "seed.close-agent";
       await closeOpenClawAgentDatabasesAsync(current.stateDir);
+      phase = "seed.close-state";
       await closeStateDatabaseForTest();
       const noticeId = `main-session-restart-recovery:pending-final:${completion.intentId}`;
       gatewayPrefix.push(
         "--import",
         createDeliveryCrashPreload({ window, id: completion.deliveryId, noticeId, serverUrl }),
       );
+      phase = "first.start";
       await instance.startGateway();
       const firstChild = instance.child!;
+      phase = "first.held";
       const boundary = await withinTest(held.promise, signal);
       expect(boundary.pid).toBe(firstChild.pid);
       expect(boundary.id).toBe(completion.deliveryId);
+      phase = "first.state-anchor";
       const anchor = await readPostgresAnchor(current);
+      phase = "first.agent-anchor";
       const agentAnchor = await readPostgresAnchor(
         current,
         resolveOpenClawAgentSqlitePath({ agentId: "main", env: current.env }),
@@ -524,8 +573,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         });
         return;
       }
+      phase = "first.entry";
       const entry = await readEntry();
       expect(entry.sessionId).toEqual(expect.any(String));
+      phase = "first.queue";
       const queue = await readQueue();
       expect(queue).toMatchObject([{ status: "pending" }]);
       const queued: QueuedDelivery = JSON.parse(queue[0]!.entry_json);
@@ -562,9 +613,12 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       });
       expect(deliveries).toMatchObject([{ to: target, text: summary }]);
       expect(deliveries).toHaveLength(1);
+      phase = "crash.kill";
       await instance.crashGateway();
       expect(firstChild.signalCode).toBe("SIGKILL");
+      phase = "crash.entry";
       expect((await readEntry()).pendingFinalDelivery).toEqual(identity);
+      phase = "crash.queue";
       const afterCrash = await readQueue();
       expect(afterCrash).toMatchObject([{ status: "pending" }]);
       const crashed: QueuedDelivery = JSON.parse(afterCrash[0]!.entry_json);
@@ -587,15 +641,48 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
               Date.now(),
           ) + 1_000,
       });
-      await instance.startGateway();
+      const priorReadiness = instance.readiness.at(-1);
+      phase = "restart.start";
+      restartStartedAt = performance.now();
+      try {
+        await instance.startGateway();
+      } catch (error) {
+        if (receiptCommitted || window === "acceptance-before-receipt") {
+          try {
+            const latestReadiness = instance.readiness.at(-1);
+            const receipt = latestReadiness === priorReadiness ? undefined : latestReadiness;
+            const probe = receipt?.lastProbe;
+            console.error(
+              "[postgres-final-crash-restart]",
+              JSON.stringify({
+                window,
+                readinessFresh: receipt !== undefined,
+                outcome: receipt?.outcome ?? null,
+                elapsedMs: receipt?.elapsedMs ?? null,
+                attempts: receipt?.attempts ?? null,
+                status: probe?.status ?? null,
+                startupStatus: probe?.startupStatus ?? null,
+                error: probe?.error ?? null,
+              }),
+            );
+          } catch {
+            // Diagnostic output must not replace the original restart failure.
+          }
+        }
+        throw error;
+      }
+      phase = "restart.recovered";
       const ack = await withinTest(recovered.promise, signal);
       expect(ack).toEqual({ id: boundary.id, pid: instance.child?.pid });
       expect(ack.pid).not.toBe(firstChild.pid);
+      phase = "restart.entry";
       const settledEntry = await readEntry();
       if (receiptCommitted) {
+        phase = "restart.queue-empty";
         expect(await readQueue()).toEqual([]);
         expect(settledEntry.pendingFinalDelivery).toEqual(identity);
       } else {
+        phase = "restart.queue-failure";
         const failed = await readQueue();
         expect(failed).toMatchObject([{ status: "failed" }]);
         expect(JSON.parse(failed[0]!.entry_json)).toMatchObject({
@@ -613,8 +700,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           state: "owed",
         });
       }
+      phase = "gateway.stop";
       await instance.stopGateway();
       expect(deliveries).toHaveLength(1);
+      phase = "body.complete";
     },
   );
 

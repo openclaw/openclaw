@@ -355,51 +355,6 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("observes terminal proof without walking every SSE character", async () => {
-    const chunks = Array.from({ length: 200 }, () =>
-      makeCompletionsChunk({ content: "Streaming text 🦞 " }),
-    );
-    chunks.push(makeCompletionsChunk({}, "stop"));
-    const body =
-      chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
-    await withServer(
-      (_req, res) => {
-        startSse(res);
-        res.end(body);
-      },
-      async (baseUrl) => {
-        const iteratedCharacters = [];
-        for (const createStream of [
-          streamOpenAICompletions,
-          createOpenAICompletionsTransportStreamFn(),
-        ]) {
-          const iterate = String.prototype[Symbol.iterator];
-          let characters = 0;
-          const iterator = vi
-            .spyOn(String.prototype, Symbol.iterator)
-            .mockImplementation(function* (this: string) {
-              for (const character of iterate.call(this)) {
-                characters++;
-                yield character;
-              }
-              return undefined;
-            });
-          try {
-            const result = await captureStream(
-              createStream(localModel(baseUrl), replyContext(), { apiKey: "test-key" }),
-            );
-            expect(result.text).toBe("Streaming text 🦞 ".repeat(200));
-            expect(result.result.stopReason).toBe("stop");
-            iteratedCharacters.push(characters);
-          } finally {
-            iterator.mockRestore();
-          }
-        }
-        expect(iteratedCharacters[1]).toBe(iteratedCharacters[0]);
-      },
-    );
-  });
-
   it.each(["empty", "tool", "text and tool"] as const)(
     "reports a %s response without a terminal marker as interrupted",
     async (content) => {

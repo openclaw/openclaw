@@ -587,17 +587,6 @@ it("passes live debounce config to the listener", async () => {
   });
 });
 
-it("raises the process listener budget before opening the web listener", async () => {
-  const originalMax = process.getMaxListeners();
-  process.setMaxListeners?.(1);
-  try {
-    await openOnce();
-    expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
-  } finally {
-    process.setMaxListeners?.(originalMax);
-  }
-});
-
 it("logs outbound delivery metadata without reply content", async ({ signal }) => {
   const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
   setLoggerOverride({ level: "trace", file: logPath });

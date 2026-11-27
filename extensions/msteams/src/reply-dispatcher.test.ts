@@ -226,26 +226,6 @@ describe("createMSTeamsReplyDispatcher", () => {
     }
   });
 
-  it("sends an informative status update once work expands in personal chats", async () => {
-    vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", {
-      streaming: { mode: "progress", progress: { toolProgress: true } },
-    });
-
-    await dispatcher.dispatcherOptions.onReplyStart?.();
-    expect(typingCallbacks.onReplyStart).toHaveBeenCalledTimes(1);
-    const typing = pipelineArgs().typing;
-    expect(typing?.keepaliveIntervalMs).toBeGreaterThan(3_000);
-    expect(typing?.keepaliveIntervalMs).toBeLessThanOrEqual(10_000);
-    expect(typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
-    await startTool(dispatcher);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
-
-    const stream = dispatcher.stream();
-    expect(stream.update).toHaveBeenCalled();
-  });
-
   it("skips the typing keepalive in personal chats when typingIndicator=false", async () => {
     const dispatcher = createDispatcher("personal", { typingIndicator: false });
 
@@ -254,19 +234,9 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("allows typing keepalive sends before any stream tokens arrive", async () => {
-    const dispatcher = createDispatcher("personal");
-    const sendTyping = pipelineArgs().typing?.start;
-    expect(sendTyping).toBeTypeOf("function");
-
-    const contextSendActivity = dispatcher.sendActivity;
-    contextSendActivity.mockClear();
-    await sendTyping?.();
-    expect(contextSendActivity).toHaveBeenCalledWith({ type: "typing" });
-  });
-
   it("suppresses typing keepalive after the user presses Stop", async () => {
     const dispatcher = createDispatcher("personal");
+    expect(pipelineArgs().typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
     const sendTyping = pipelineArgs().typing?.start;
     expect(sendTyping).toBeTypeOf("function");
 

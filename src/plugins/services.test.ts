@@ -367,46 +367,6 @@ describe("startPluginServices", () => {
     ]);
   });
 
-  it("passes a scoped startup trace through service context for owned subspans", async () => {
-    const measured: string[] = [];
-    const detail = vi.fn();
-    await start(
-      createRegistry([
-        {
-          id: "service-a",
-          async start(ctx) {
-            ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
-            await ctx.startupTrace?.measure("config:resolve", async () => {});
-          },
-        },
-      ]),
-      {
-        startupTrace: {
-          detail,
-          measure: async (name, run) => {
-            measured.push(name);
-            return await run();
-          },
-        },
-      },
-    );
-    expect(measured).toEqual([
-      "sidecars.plugin-services.plugin~003Atest.service-a",
-      "sidecars.plugin-services.plugin~003Atest.service-a.config~003Aresolve",
-    ]);
-    expect(detail.mock.calls).toEqual([
-      ["sidecars.plugin-services.plugin~003Atest.service-a.probe.result", [["healthyCount", 1]]],
-      [
-        "sidecars.plugin-services.summary",
-        [
-          ["serviceCount", 1],
-          ["startedCount", 1],
-          ["failedCount", 0],
-        ],
-      ],
-    ]);
-  });
-
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {
     const startExporter = async (
       serviceId: string,

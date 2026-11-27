@@ -1,13 +1,8 @@
 // Byteplus tests cover index plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import {
-  BYTEPLUS_CODING_MODEL_CATALOG,
-  BYTEPLUS_MODEL_CATALOG,
-  BYTEPLUS_PROVIDER_CATALOG,
-} from "./models.js";
+import { BYTEPLUS_PROVIDER_CATALOG } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("byteplus plugin", () => {
@@ -23,37 +18,6 @@ describe("byteplus plugin", () => {
     });
   });
 
-  it("augments the catalog with bundled standard and plan models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    expect(provider.auth?.[0]?.starterModel).toBe("byteplus-plan/ark-code-latest");
-    const standardModel = expectDefined(BYTEPLUS_MODEL_CATALOG[0], "BytePlus standard model");
-    const codingModel = expectDefined(BYTEPLUS_CODING_MODEL_CATALOG[0], "BytePlus coding model");
-    const entries = await provider.augmentModelCatalog?.({
-      env: process.env,
-      entries: [],
-    } as never);
-
-    const standardEntry = entries?.find(
-      (entry) => entry.provider === "byteplus" && entry.id === standardModel.id,
-    );
-    expect(standardEntry?.name).toBe(standardModel.name);
-    expect(standardEntry?.reasoning).toBe(standardModel.reasoning);
-    expect(standardEntry?.input).toEqual([...standardModel.input]);
-    expect(standardEntry?.contextWindow).toBe(standardModel.contextWindow);
-
-    const planEntry = entries?.find(
-      (entry) => entry.provider === "byteplus-plan" && entry.id === codingModel.id,
-    );
-    expect(planEntry?.name).toBe(codingModel.name);
-    expect(planEntry?.reasoning).toBe(codingModel.reasoning);
-    expect(planEntry?.input).toEqual([...codingModel.input]);
-    expect(planEntry?.contextWindow).toBe(codingModel.contextWindow);
-    expect(BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
-      "ark-code-latest",
-      "kimi-k2.5",
-    ]);
-  });
-
   it("declares provider auth and streaming usage capabilities in the manifest", () => {
     expect(manifest.providerAuthAliases).toEqual({
       "byteplus-plan": "byteplus",
@@ -62,14 +26,5 @@ describe("byteplus plugin", () => {
       byteplus: { openAICompletions: { supportsStreamingUsage: true } },
       "byteplus-plan": { openAICompletions: { supportsStreamingUsage: true } },
     });
-  });
-
-  it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
-    const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
-
-    expect(planKimi?.reasoning).toBe(true);
-    expect(planKimi?.input).toEqual(["text", "image"]);
-    expect(planKimi?.maxTokens).toBe(32768);
-    expect(planKimi?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 });

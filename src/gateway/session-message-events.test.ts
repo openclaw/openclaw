@@ -19,6 +19,7 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as secureRandom from "../infra/secure-random.js";
+import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -882,9 +883,23 @@ describe("session.message websocket events", () => {
       await workEvent;
       await noMainEvent;
       // A response on each socket follows every event already queued for that client.
-      await expect(
-        rpcReq(workWs, "sessions.messages.subscribe", { key: "global", agentId: "work" }),
-      ).resolves.toMatchObject({ ok: true });
+      const subscription = await rpcReq(workWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "work",
+      });
+      expect(
+        subscription,
+        subscription.ok
+          ? undefined
+          : JSON.stringify({
+              code: subscription.error?.code,
+              message: redactSupportDiagnosticLine(
+                subscription.error?.message ?? "",
+                { env: {}, stateDir: "", redactRelativePaths: true },
+                512,
+              ),
+            }),
+      ).toMatchObject({ ok: true });
       await expect(
         rpcReq(mainWs, "sessions.observer.visibility", { visible: true }),
       ).resolves.toMatchObject({ ok: true });

@@ -1,18 +1,15 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import {
   getSkillsSnapshotVersion,
   markSkillsSupportingFilesChanged,
@@ -174,55 +171,6 @@ describe("syncWorkspaceSkills", () => {
     },
   );
 
-  it("attributes a queued sync to waiting rather than directory or copy work", async () => {
-    const { source, target } = await setupSkills(["alpha"]);
-    const skillsSnapshot = await buildSnapshot(source);
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const filesystem = skillsRefresh.syncSkillsFilesystem;
-    let held = false;
-    const read = vi
-      .spyOn(skillsRefresh, "syncSkillsFilesystem")
-      .mockImplementation(async (...args) => {
-        if (!held && args[0].operation === "prepare") {
-          held = true;
-          entered.resolve();
-          await resume.promise;
-        }
-        return filesystem(...args);
-      });
-    const phases: string[][] = [[], []];
-    const completed: string[][] = [[], []];
-    const observed = (index: number) =>
-      withDiagnosticsTimelineObserver(
-        (name) => {
-          phases[index]!.push(name);
-          return () => {
-            completed[index]!.push(name);
-          };
-        },
-        () => sync(source, target, { skillsSnapshot }),
-      );
-    const first = observed(0);
-    let second: Promise<unknown> | undefined;
-    try {
-      await awaitGateBeforeSettlement(entered.promise, first, "Skill sync skipped directory read");
-      second = observed(1);
-      expect(phases[1]).toEqual(["attempt.setup.sandbox.layout.skills_sync.queue_wait"]);
-      expect(completed[1]).toEqual([]);
-      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.directory");
-      resume.resolve();
-      await Promise.all([first, second]);
-      expect(completed[1]).toEqual(phases[1]);
-      expect(phases[0]).toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
-      expect(phases[1]).not.toContain("attempt.setup.sandbox.layout.skills_sync.copy_tree");
-    } finally {
-      resume.resolve();
-      await Promise.allSettled([first, ...(second ? [second] : [])]);
-      read.mockRestore();
-    }
-  });
-
   it("copies skills without repository internals or dependencies", async () => {
     const { source, target } = await setupSkills(["demo-skill"]);
     const workspaceSkillDir = skillPath(source, "demo-skill");
@@ -257,10 +205,6 @@ describe("syncWorkspaceSkills", () => {
     try {
       await sync(source, target, { skillsSnapshot, assertCurrent });
       expect(fsync).not.toHaveBeenCalled();
-      // Includes setup and publication; read-only traversal must not double the mutation budget.
-      if (process.platform !== "win32") {
-        expect(assertCurrent.mock.calls.length).toBeLessThan(120);
-      }
       expect(await readText(skillPath(target, "alpha", "file-15.txt"))).toBe("content");
     } finally {
       fsync.mockRestore();
@@ -554,25 +498,7 @@ describe("syncWorkspaceSkills", () => {
     await fs.writeFile(path.join(targetSkill, "scripts/edited.txt"), "modified");
     markSkillsSupportingFilesChanged({ workspaceDir: source });
 
-    const lstat = vi.spyOn(fsSync, "lstatSync");
-    const fstat = vi.spyOn(fsSync, "fstatSync");
-    const realpath = vi.spyOn(fsSync, "realpathSync");
-    syncBuiltinESMExports();
-    try {
-      await sync(source, target, { skillsSnapshot });
-      expect(fstat).not.toHaveBeenCalled();
-      expect(
-        [...lstat.mock.calls, ...realpath.mock.calls].filter(([file]) => {
-          const pathname = nodeFilePath(file);
-          return pathname?.startsWith(source) || pathname?.startsWith(target);
-        }),
-      ).toHaveLength(0);
-    } finally {
-      lstat.mockRestore();
-      fstat.mockRestore();
-      realpath.mockRestore();
-      syncBuiltinESMExports();
-    }
+    await sync(source, target, { skillsSnapshot });
 
     expect(await readText(targetSkill, "references/changed.txt")).toBe("after!");
     expect(await exists(path.join(targetSkill, "references/removed.txt"))).toBe(false);

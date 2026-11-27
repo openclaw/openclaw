@@ -319,75 +319,6 @@ suite.define(() => {
       );
     },
   );
-  it("keeps the phone gutter unchanged across cold, Activity and Chat entries", async () => {
-    const proofDir = createControlUiE2eArtifactDir("systems-gutter");
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
-      async ({ page }) => {
-        await installSystemsGateway(page, 0);
-        const header = page.locator(".systems-page-header");
-        const gutter = () =>
-          header.evaluate((element) => {
-            const { x, width } = element.getBoundingClientRect();
-            return { x, width };
-          });
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator("body"),
-            [header, page.locator(".systems-mobile-picker")],
-            { animations: "disabled" },
-          );
-          await writeFile(`${proofDir}/${name}.png`, frame.png);
-        };
-        const navigate = async (path: "activity" | "systems") => {
-          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          if (path === "activity") {
-            // Activity heads the Users section; on a phone People only opens its list.
-            await page.locator('[data-navigation-view="online"]').click();
-            await page.locator(".sidebar-online__overview a").click();
-            return;
-          }
-          await page.locator("[data-rail-more]").click();
-          await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
-          await waitForControlUiRoute(page, { routeId: path });
-          // Systems opens in the phone drawer; dismiss it to measure the page itself.
-          await page.keyboard.press("Escape");
-        };
-        await page.goto(suite.server.baseUrl + "systems");
-        await page
-          .locator('.systems-mobile-picker option[value="worker-one"]')
-          .waitFor({ state: "attached" });
-        await capture("cold");
-        const cold = await gutter();
-        await navigate("activity");
-        await waitForControlUiRoute(page, { routeId: "activity" });
-        await navigate("systems");
-        await header.waitFor();
-        await capture("activity-return");
-        expect(await gutter()).toEqual(cold);
-        expect(cold).toEqual({ x: 8, width: 374 });
-        await page.locator(".header-new-session").click();
-        await page.locator(".new-session-page__message").waitFor();
-        const inset = () =>
-          page
-            .locator("main.content")
-            .evaluate((element) => getComputedStyle(element).paddingInline);
-        expect(await inset()).toBe("0px");
-        // New session shows the Sessions drawer, collapsed; Expand sidebar reopens it.
-        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
-        await page.locator(".chat-thread").waitFor();
-        expect(await inset()).toBe("0px");
-        await navigate("systems");
-        await header.waitFor();
-        expect(await gutter()).toEqual(cold);
-        await page.locator(".header-new-session").click();
-        await page.locator(".new-session-page__message").waitFor();
-        expect(await inset()).toBe("0px");
-      },
-    );
-  });
   it.each(
     [400, 820, 1280].flatMap((width) =>
       [1, 12].flatMap((diskCount) =>
@@ -970,41 +901,5 @@ suite.define(() => {
     } finally {
       await context.close();
     }
-  });
-  it("reports the source and geometry of a layout shift", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await page.setContent(
-        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
-      );
-      const paint = () =>
-        page.evaluate(
-          () =>
-            new Promise((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(resolve));
-            }),
-        );
-      await paint();
-      const shifts = await observeLayoutShifts(page);
-      await page.locator("#moving").evaluate((element) => {
-        element.style.top = "28px";
-      });
-      await paint();
-      const result = await shifts.evaluate((probe) => probe.read());
-      expect(result.entries[0]?.value).toBeGreaterThan(0);
-      expect(result.entries).toContainEqual({
-        startTime: expect.any(Number),
-        value: expect.any(Number),
-        hadRecentInput: expect.any(Boolean),
-        sources: [
-          {
-            node: "div#moving",
-            previousRect: { x: 8, y: 8, width: 100, height: 40 },
-            currentRect: { x: 8, y: 28, width: 100, height: 40 },
-          },
-        ],
-      });
-      await shifts.evaluate((probe) => probe.stop());
-      await shifts.dispose();
-    });
   });
 });

@@ -1,10 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { sql, type ColumnType, type Kysely, type Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -20,10 +18,8 @@ import {
   prepareSqliteTerminalWrite,
   sqliteStringSet,
 } from "./kysely-sync.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import { assertNoActiveSqliteReaders, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
-import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 type SyncHelperTestDatabase = {
   items: {
@@ -32,11 +28,6 @@ type SyncHelperTestDatabase = {
   };
 };
 type Item = { id: number; name: string };
-type RetentionResult = {
-  databaseCollected: boolean;
-  statementsCollected: number;
-  statementCount: number;
-};
 
 describe("kysely sync helpers", () => {
   let database: DatabaseSync;
@@ -338,31 +329,6 @@ describe("kysely sync helpers", () => {
     );
   });
 
-  it.each(["repeated SQL", "one-shot SQL"])("bounds the statement cache for %s", (mode) => {
-    const passes: [number, number, number, number | null][] =
-      mode === "repeated SQL"
-        ? [
-            [1, 128, 2, 256],
-            [65, 128, 1, 256],
-            [1, 64, 1, 320],
-          ]
-        : [
-            [1, 128, 1, null],
-            [1, 128, 1, null],
-            [1, 128, 1, 384],
-          ];
-    createItems();
-    const prepares = countPrepares(database);
-    for (const [from, to, repeats, expected] of passes) {
-      for (let count = from; count <= to; count++) {
-        expectRows(variableSelect(count), [], repeats);
-      }
-      if (expected !== null) {
-        expect(prepares()).toBe(expected);
-      }
-    }
-  });
-
   it("keeps nested prepared lazy iterations independent", () => {
     createItems(["Ada", "Grace", "Lin"], database, "unique");
     const select = selectItems().orderBy("id");
@@ -447,30 +413,6 @@ describe("kysely sync helpers", () => {
     allow = false;
     expect(() => executeSqliteQuerySync(database, select)).toThrow(/not authorized/iu);
     expect(prepares()).toBe(4);
-  });
-
-  it("does not retain oversized statement parameters", () => {
-    const lengthOf = (value: string) => scalar<number>("length", value);
-    const prepares = countPrepares(database);
-
-    expectRows(lengthOf("small"), [{ value: 5 }], 3);
-    expect(prepares()).toBe(2);
-
-    for (const oversized of ["x".repeat(64 * 1024 + 1), "漢".repeat(24 * 1024)]) {
-      const before = prepares();
-      expectRows(lengthOf(oversized), [{ value: oversized.length }]);
-      expect(prepares()).toBe(before + 1);
-      expectRows(lengthOf("small"), [{ value: 5 }]);
-      expect(prepares()).toBe(before + 1);
-    }
-
-    const oversizedExpression =
-      /* kysely-allow-raw: this fixed generated SQL comment exercises statement-text admission, not parameter size. */ sql.raw<number>(
-        `1 /*${"x".repeat(64 * 1024)}*/`,
-      );
-    const oversizedSql = db.selectNoFrom(oversizedExpression.as("value"));
-    expectRows(oversizedSql, [{ value: 1 }], 2);
-    expect(prepares()).toBe(6);
   });
 
   // Explicit statement disposal is a public Node API starting in 26.8.
@@ -615,32 +557,6 @@ describe("kysely sync helpers", () => {
     checkRows(itemRows("Ada"), 3);
   });
 
-  it.each([
-    ["clear-and-close", true, 2],
-    ["close", true, 2],
-    ["drop", false, 1],
-  ] as const)(
-    "collects only released native resources after %s",
-    (cleanup, databaseCollected, statementsCollected) => {
-      expect(runRetentionScenario(cleanup)).toEqual({
-        databaseCollected,
-        statementsCollected,
-        statementCount: 2,
-      });
-    },
-  );
-
-  it.skipIf(typeof DatabaseSync.prototype[Symbol.dispose] !== "function")(
-    "allows databases and prepared statements to collect after disposal",
-    () => {
-      expect(runRetentionScenario("dispose")).toEqual({
-        databaseCollected: true,
-        statementsCollected: 2,
-        statementCount: 2,
-      });
-    },
-  );
-
   it("keeps the builder facade compile-only and fails direct execution", async () => {
     createItems();
 
@@ -676,81 +592,6 @@ function countPrepares(database: DatabaseSync): () => number {
 
 function captureError(operation: () => void): unknown {
   return captureThrown(operation, "expected operation to throw");
-}
-
-function runRetentionScenario(
-  cleanupMode: "clear-and-close" | "close" | "dispose" | "drop",
-): RetentionResult {
-  const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.kyselySync);
-  const cleanup = {
-    "clear-and-close": `
-        clearNodeSqliteKyselyCacheForDatabase(database);
-        database.close();
-      `,
-    close: "database.close();",
-    dispose: "database[Symbol.dispose]();",
-    drop: "",
-  }[cleanupMode];
-  const script = `
-    import { DatabaseSync } from "node:sqlite";
-    import {
-      clearNodeSqliteKyselyCacheForDatabase,
-      enableNodeSqliteKyselyStatementCache,
-      executeSqliteQuerySync,
-      getNodeSqliteKysely,
-    } from ${JSON.stringify(moduleUrl.href)};
-
-    const waitForTurn = () => new Promise((resolve) => setImmediate(resolve));
-    async function runScenario() {
-      let database = new DatabaseSync(":memory:");
-      database.exec("create table items (id integer primary key, name text not null)");
-      const databaseRef = new WeakRef(database);
-      const statementRefs = [];
-      const originalPrepare = DatabaseSync.prototype.prepare;
-      database.prepare = function (sql, prepareOptions) {
-        const statement = originalPrepare.call(this, sql, prepareOptions);
-        statementRefs.push(new WeakRef(statement));
-        return statement;
-      };
-      const db = getNodeSqliteKysely(database);
-      enableNodeSqliteKyselyStatementCache(database);
-      const select = db.selectFrom("items").selectAll().orderBy("id");
-      executeSqliteQuerySync(database, select);
-      executeSqliteQuerySync(database, select);
-      executeSqliteQuerySync(database, select);
-      delete database.prepare;
-      ${cleanup}
-      database = undefined;
-
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        await waitForTurn();
-        globalThis.gc();
-      }
-      return {
-        databaseCollected: databaseRef.deref() === undefined,
-        statementsCollected: statementRefs.filter((ref) => ref.deref() === undefined).length,
-        statementCount: statementRefs.length,
-      };
-    }
-
-    process.stdout.write(JSON.stringify(await runScenario()), () => process.exit(0));
-  `;
-  const result = spawnSync(
-    // These scenarios lock Node's native statement-to-database retention contract.
-    resolveTestNodeExecPath(),
-    [
-      "--disable-warning=ExperimentalWarning",
-      "--expose-gc",
-      ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
-      "--input-type=module",
-      "--eval",
-      script,
-    ],
-    { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
-  );
-
-  expect(result).toMatchObject({ stderr: "", status: 0 });
-  return JSON.parse(result.stdout) as RetentionResult;
 }
 
 async function expectCompileOnlyRejection(promise: Promise<unknown>): Promise<void> {

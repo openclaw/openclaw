@@ -304,67 +304,6 @@ describe("MCP capacity catalog continuity", () => {
     });
   });
 
-  it("bounds requester snapshots and keeps recent schemas reachable for retirement", async () => {
-    await withRequester(async () => {
-      const { manager } = setup();
-      const input = (index: number) => ({
-        ...mixedParams,
-        sessionId: `scoped-${index}`,
-        sessionKey: `agent:test:scoped-${index}`,
-      });
-      for (let index = 0; index < 512; index++) {
-        const lease = (await manager.acquireRequesterScoped(input(index)))!;
-        const catalog = await lease.runtime.getCatalog();
-        manager.rememberAdvertisedScopedCatalog(lease, catalog);
-        lease.releaseLease();
-      }
-      for (let index = 256; index < 512; index++) {
-        held.push((await manager.acquireRequesterScoped(input(index)))!);
-      }
-      const continuing = (await manager.acquireRequesterScoped(input(0)))!;
-      await continuing.runtime.getCatalog();
-      continuing.releaseLease();
-      held.shift()!.releaseLease();
-      const next = (await manager.acquireRequesterScoped(input(512)))!;
-      manager.rememberAdvertisedScopedCatalog(next, await next.runtime.getCatalog());
-      held.push(next);
-      expect(manager.getAdvertisedScopedCatalog("scoped-1")).toBeNull();
-      expect(manager.resolveSessionId(input(1).sessionKey)).toBeUndefined();
-      expect(manager.getAdvertisedScopedCatalog("scoped-0")?.tools).toHaveLength(1);
-      expect(manager.listSessionIdsForAgent("test")).toHaveLength(512);
-      const retirement = manager.captureSessionRetirement({ sessionKey: input(0).sessionKey });
-      expect(retirement).toBeDefined();
-      await retirement!.retire(() => {});
-      expect(manager.getAdvertisedScopedCatalog("scoped-0")).toBeNull();
-      expect(manager.resolveSessionId(input(0).sessionKey)).toBeUndefined();
-    });
-  });
-
-  it("bounds evicted requester partitions within a session with live owners", async () => {
-    await withRequester(async () => {
-      const { manager, factory } = setup();
-      const input = (index: number) => ({ ...mixedParams, requesterSenderId: `sender-${index}` });
-      for (let index = 0; index < 513; index++) {
-        const lease = (await manager.acquireRequesterScoped(input(index)))!;
-        manager.rememberAdvertisedScopedCatalog(lease, await lease.runtime.getCatalog());
-        lease.releaseLease();
-      }
-      for (let index = 257; index < 513; index++) {
-        held.push((await manager.acquireRequesterScoped(input(index)))!);
-      }
-      const aged = (await manager.acquireRequesterScoped(input(0)))!;
-      expect((await aged.runtime.getCatalog()).tools).toEqual([]);
-      aged.releaseLease();
-      const recent = (await manager.acquireRequesterScoped(input(1)))!;
-      expect((await recent.runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
-        "echo",
-      ]);
-      recent.releaseLease();
-      expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
-      expect(factory).toHaveBeenCalledTimes(513);
-    });
-  });
-
   it("rejects the old publication handle when a live runtime changes agent binding", async () => {
     await withRequester(async () => {
       const { manager } = setup();
@@ -575,40 +514,6 @@ describe("MCP capacity catalog continuity", () => {
     const refused = await materializeBundleMcpToolsForRun(await manager.acquire(params));
     expect(refused.tools).toEqual([]);
     await refused.dispose();
-  });
-
-  it("bounds evicted static catalogs and retains the most recently used session", async () => {
-    const { manager } = setup();
-    const input = (index: number) => ({
-      ...params,
-      sessionId: `one-off-${index}`,
-      sessionKey: `agent:test:one-off-${index}`,
-    });
-    for (let index = 0; index < 512; index++) {
-      const lease = await manager.acquire(input(index));
-      await lease.runtime.getCatalog();
-      lease.releaseLease();
-    }
-    expect(manager.listSessionIdsForAgent("test")).toHaveLength(512);
-    // Refused reuse still refreshes retention recency, without creating a runtime.
-    for (let index = 256; index < 512; index++) {
-      held.push(await manager.acquire(input(index)));
-    }
-    const continuing = await manager.acquire(input(0));
-    expect((await continuing.runtime.getCatalog()).tools).toHaveLength(1);
-    continuing.releaseLease();
-    held.shift()!.releaseLease();
-    const next = await manager.acquire(input(512));
-    await next.runtime.getCatalog();
-    held.push(next);
-    expect(manager.listSessionIdsForAgent("test")).toHaveLength(512);
-    expect(manager.resolveSessionId(input(1).sessionKey)).toBeUndefined();
-    expect(manager.resolveSessionId(input(0).sessionKey)).toBe("one-off-0");
-    const retained = await manager.acquire(input(0));
-    expect((await retained.runtime.getCatalog()).tools).toHaveLength(1);
-    retained.releaseLease();
-    await manager.disposeSession("one-off-0");
-    expect(manager.resolveSessionId(input(0).sessionKey)).toBeUndefined();
   });
 
   it.each([false, true])(

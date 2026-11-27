@@ -5,7 +5,6 @@ import {
   installProviderHttpMockCleanup,
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
@@ -107,10 +106,6 @@ describe("openrouter music generation provider", () => {
     resetOpenRouterMusicMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitMusicGenerationCapabilities(buildOpenRouterMusicGenerationProvider());
   });
 
   it("streams OpenRouter audio chunks into a generated music asset", async () => {

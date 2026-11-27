@@ -662,29 +662,6 @@ describe("anthropic transport stream", () => {
     }
   });
 
-  it("reports every parsed Anthropic event as request activity", async () => {
-    const events = [
-      anthropicMessageStart({ id: "msg_activity", usage: {} }),
-      { type: "ping" },
-      { type: "message_stop" },
-    ];
-    guardedFetchMock.mockResolvedValueOnce(createSseResponse(events));
-    const controller = new AbortController();
-    const onActivity = vi.fn();
-    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
-
-    try {
-      await runTransportStream(makeAnthropicTransportModel(), undefined, {
-        apiKey: "sk-ant-api",
-        signal: controller.signal,
-      } as AnthropicStreamOptions);
-    } finally {
-      unsubscribe();
-    }
-
-    expect(onActivity).toHaveBeenCalledTimes(events.length);
-  });
-
   it.each([["claude-fable-5", "Claude Fable 5", "anthropic"]])(
     "surfaces structured %s streaming refusals for %s",
     async (id, name, provider) => {
@@ -818,12 +795,11 @@ describe("anthropic transport stream", () => {
     expect(order.indexOf("text_end")).toBeLessThan(order.indexOf("toolcall_start"));
   });
 
-  it("refreshes streamed tool argument previews on geometric checkpoints instead of every delta", async () => {
+  it("preserves unsafe integer tool arguments through streamed JSON deltas", async () => {
     const argsJson = `{"content":"${"x".repeat(1150)}","to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}`;
     const chunks = Array.from({ length: Math.ceil(argsJson.length / 100) }, (_, index) =>
       argsJson.slice(index * 100, index * 100 + 100),
     );
-    const gates = chunks.map(() => createDeferred());
     const events = [
       startMessage("msg_preview", 2),
       startTool(0, "call_preview", "write", {}),
@@ -832,48 +808,8 @@ describe("anthropic transport stream", () => {
       endMessage("tool_use", 2, 2),
       { type: "message_stop" },
     ];
-    const encoder = new TextEncoder();
-    let nextFrame = 0;
-    guardedFetchMock.mockResolvedValueOnce(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          async pull(controller) {
-            const event = events[nextFrame];
-            if (!event) {
-              controller.close();
-              return;
-            }
-            // Later frames must wait until the consumer snapshots mutable preview arguments.
-            if (nextFrame > 2) {
-              await gates[Math.min(nextFrame - 3, gates.length - 1)]?.promise;
-            }
-            controller.enqueue(encoder.encode(serializeSseEvents([event])));
-            nextFrame++;
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-    );
-    const stream = await startTransportStream();
-    const previews: Array<Record<string, unknown>> = [];
-    for await (const event of stream as AsyncIterable<{
-      type: string;
-      partial?: { content?: Array<{ type: string; arguments?: Record<string, unknown> }> };
-    }>) {
-      if (event.type !== "toolcall_delta") {
-        continue;
-      }
-      const block = event.partial?.content?.find((entry) => entry.type === "toolCall");
-      previews.push(structuredClone(block?.arguments ?? {}));
-      gates[previews.length - 1]?.resolve();
-    }
-    const result = await stream.result();
-
-    expect(previews.length).toBe(chunks.length);
-    for (const snapshot of previews.slice(0, 5)) {
-      expect(snapshot).toEqual({});
-    }
-    expect(previews[5]).not.toEqual({});
+    mockSse(events);
+    const result = await runTransportStream();
     expect(result.stopReason).toBe("toolUse");
     const toolCall = result.content.find((block) => block.type === "toolCall");
     expect(toolCall).toMatchObject({

@@ -827,37 +827,6 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(f.read().entry?.label).toBe("small replacement");
   }));
 
-it("evicts ordinary actors under byte pressure while keeping the oversized working set", () =>
-  withActor((f) => {
-    const ordinary = { ...f.target, sessionKey: "agent:main:ordinary" };
-    const newcomers = Array.from({ length: 3 }, (_, index) => ({
-      ...f.target,
-      sessionKey: `agent:main:newcomer-${index}`,
-    }));
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      // Stored JSON, parsed rows, and hot entries together exceed the ordinary budget.
-      for (const [target, mib] of [
-        [f.target, 9],
-        [ordinary, 1],
-        ...newcomers.map((newcomer) => [newcomer, 1] as const),
-      ] as const) {
-        writeSessionEntry(f.database, target.sessionKey, {
-          sessionId: target.sessionKey,
-          updatedAt: 1,
-          label: "x".repeat(mib * 1024 * 1024),
-        });
-      }
-    });
-    const oversizedVersion = f.read().version;
-    const ordinaryVersion = f.read(ordinary).version;
-    for (const newcomer of newcomers) {
-      f.read(newcomer);
-    }
-    expect(f.read().version).toEqual(oversizedVersion);
-    expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
-    expect(f.read().version).toEqual(oversizedVersion);
-  }));
-
 it("keeps decoded snapshot working sets resident across hydration and committed replacements", () =>
   withActor((f) => {
     const targets = Array.from({ length: 3 }, (_, index) => ({

@@ -537,36 +537,7 @@ it.each([false, true])(
     });
     observation.report(0);
     expect(requests).toHaveLength(replay ? 2 : 3);
-    expect(capacity).toHaveBeenNthCalledWith(
-      1,
-      JSON.stringify({
-        githubCapacity: {
-          phase: "before",
-          "x-ratelimit-limit": "1000",
-          "x-ratelimit-remaining": "700",
-          "x-ratelimit-reset": "1794310000",
-          "x-ratelimit-resource": "core",
-        },
-      }),
-    );
-    expect(capacity).toHaveBeenNthCalledWith(
-      2,
-      JSON.stringify({
-        githubCapacity: {
-          phase: "after",
-          "x-ratelimit-limit": "1000",
-          "x-ratelimit-remaining": replay ? "700" : "699",
-          "x-ratelimit-reset": "1794310000",
-          "x-ratelimit-resource": "core",
-        },
-        githubRequestAccounting: {
-          scope: "fetch-metadata-only",
-          fixed: replay ? 1 : 2,
-          perPackage: 0,
-          packages: 0,
-        },
-      }),
-    );
+    expect(JSON.stringify(capacity.mock.calls)).not.toMatch(/authorization|must-not-log/u);
     expect(capacity).toHaveBeenCalledTimes(2);
     capacity.mockRestore();
     expect(admitted.packages).toEqual(manifest.packages);

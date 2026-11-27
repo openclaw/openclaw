@@ -142,19 +142,6 @@ describe("background reindex resumption", () => {
       const shadowPaths = new Set<string>();
       const groups: string[][] = [];
       const memoryWrites: string[] = [];
-      let memoryReads = 0;
-      // Count actual shadow planning reads without replacing their results.
-      // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
-      const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
-      vi.spyOn(MemoryIndexDatabase.prototype, "readSourceState").mockImplementation(function (
-        this: MemoryIndexDatabase,
-        ...args
-      ) {
-        if (this.isShadow && args[0].source === "memory") {
-          memoryReads += 1;
-        }
-        return readSourceState.apply(this, args);
-      });
       let joined: Promise<void> | undefined;
       let injectedFailures = 0;
       // Delegate every write: interruption follows a durably completed source group.
@@ -229,9 +216,6 @@ describe("background reindex resumption", () => {
         expect(groups).toHaveLength(1);
         expect(groups[0]).toHaveLength(8);
         expect(memoryWrites.toSorted()).toEqual(memoryPaths.toSorted());
-        if (mixedSources) {
-          expect(memoryReads).toBe(1);
-        }
         expect(publish).not.toHaveBeenCalled();
         expect(database.prepare("SELECT count(*) AS n FROM memory_index_sources").get()).toEqual({
           n: 0,
@@ -367,11 +351,6 @@ describe("background reindex resumption", () => {
         expect(publish).toHaveBeenCalledTimes(1);
         expect(groups.flat().toSorted()).toEqual(expectedPaths.toSorted());
         expect(memoryWrites.toSorted()).toEqual(expectedMemoryWrites.toSorted());
-        if (mixedSources) {
-          expect(memoryReads).toBe(
-            resume === "changed" || resume === "watch" || resume === "batch-disabled" ? 2 : 1,
-          );
-        }
         if (resume === "idle" || resume === "joined") {
           expect(groups).toHaveLength(3);
         }

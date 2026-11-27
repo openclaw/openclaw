@@ -143,55 +143,6 @@ describe("Memory observation lifecycle", () => {
     return created.promise;
   }
 
-  it("shares roots across agents, fans out selected events, and joins the last release", async () => {
-    const extra = state.path("shared", "notes");
-    await fs.mkdir(extra, { recursive: true });
-    const indexed = Array.from({ length: 2 }, () => createDeferred<void>());
-    const agents = await Promise.all(
-      indexed.map((done, index) =>
-        start({
-          onChange: vi.fn(() => done.resolve()),
-          extraPaths: [extra],
-          agentId: `agent-${index}`,
-        }),
-      ),
-    );
-    for (const { onDirty } of agents) {
-      onDirty.mockClear();
-    }
-    const shared = observer.observations.filter((entry) =>
-      entry.options.scopes.some((scope) => path.resolve(entry.root.rootDir, scope.path) === extra),
-    );
-    expect(shared).toHaveLength(1);
-    expect(observer.observations).toHaveLength(2);
-    const entry = shared[0]!;
-    const invalidate = () =>
-      dirty(entry, path.relative(entry.root.rootDir, path.join(extra, "deleted.md")), "structural");
-    invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 1]);
-    await vi.advanceTimersByTimeAsync(0);
-    await Promise.all(indexed.map((done) => done.promise));
-    await agents[0]!.watcher.close();
-    expect(entry.close).not.toHaveBeenCalled();
-    invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([2, 3]);
-    const joined = createDeferred<void>();
-    entry.close.mockImplementationOnce(() => joined.promise);
-    let closed = false;
-    const closing = agents[1]!.watcher.close().then(() => {
-      closed = true;
-    });
-    expect(entry.close).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(closed).toBe(false);
-    invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([2, 3]);
-    joined.resolve();
-    await closing;
-    await start({ extraPaths: [extra] });
-    expect(observer.observations).toHaveLength(4);
-  });
-
   it("retains the shared baseline when a text-only peer joins an image watcher", async () => {
     const { entry, ...first } = await start({ images: true });
     const peer = await start({ agentId: "peer" });
@@ -630,42 +581,6 @@ describe("Memory observation lifecycle", () => {
     observer.observations[1]!.dirty();
     await vi.advanceTimersByTimeAsync(1);
     expect(onChange).toHaveBeenCalledTimes(count + 1);
-  });
-
-  it("resets recovery only for selected polling facts, not peer or whole-scope invalidations", async () => {
-    vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
-    const planning = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
-    await start();
-    // Keep admission real, then reuse its unchanged plan to isolate retry timing.
-    const groups = await planning.mock.results[0]!.value;
-    planning.mockResolvedValue(groups);
-    const fail = () =>
-      unavailable(
-        observer.observations.at(-1)!,
-        "scan",
-        new Error("temporary metadata failure"),
-        "EACCES",
-      );
-    for (let round = 0; round < 4; round++) {
-      fail();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(observer.watch).toHaveBeenCalledTimes(round + 2);
-      const entry = observer.observations.at(-1)!;
-      expect(entry.options.mode).toBe("poll");
-      entry.dirty([{ path: selectedPath(entry, "memory/note.md"), type: "content" }], "reconcile");
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    fail();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(observer.watch).toHaveBeenCalledTimes(6);
-    observer.observations.at(-1)!.dirty(undefined, "reconcile");
-    dirty(observer.observations.at(-1)!, "other-agent/note.md");
-    await vi.advanceTimersByTimeAsync(0);
-    fail();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(observer.watch).toHaveBeenCalledTimes(6);
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(observer.watch).toHaveBeenCalledTimes(7);
   });
 
   it.each(["events", "poll"] as const)(

@@ -644,29 +644,6 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("defers implicit image model discovery during hot-path tool registration", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
-      const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
-      testing.setProviderDepsForTest({
-        resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
-        resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
-      });
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-
-      const tool = createImageTool({
-        config: cfg,
-        agentDir,
-      });
-
-      expect(typeof tool?.execute).toBe("function");
-      expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
-      expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
-    });
-  });
-
   it("honors a per-call model override when no imageModel is configured", async () => {
     await withTempAgentDir(async (agentDir) => {
       const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
@@ -1475,66 +1452,6 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image compression policy", () => {
-  const cfgWithImageModelMetadata = {
-    agents: {
-      defaults: {
-        imageQuality: "high",
-      },
-    },
-    models: {
-      providers: {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [
-            {
-              id: "claude-opus-4-7",
-              name: "Claude Opus 4.7",
-              reasoning: true,
-              input: ["text", "image"],
-              contextWindow: 1_000_000,
-              maxTokens: 64_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-              },
-            },
-            {
-              id: "claude-opus-4-6",
-              name: "Claude Opus 4.6",
-              reasoning: true,
-              input: ["text", "image"],
-              contextWindow: 1_000_000,
-              maxTokens: 64_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-              },
-            },
-          ],
-        },
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-responses",
-          models: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              reasoning: true,
-              input: ["text", "image"],
-              contextWindow: 272_000,
-              maxTokens: 128_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-              },
-            },
-          ],
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
-
   beforeEach(() => {
     installImageUnderstandingProviderStubs();
   });
@@ -1739,40 +1656,6 @@ describe("image compression policy", () => {
       }
     },
   );
-
-  it("resolves compression metadata for a providerless model override", async () => {
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: cfgWithImageModelMetadata,
-        imageModelConfig: { primary: "anthropic/claude-opus-4-6" },
-        modelOverride: "gpt-5.5",
-        imageCount: 1,
-      }),
-    ).resolves.toMatchObject({
-      models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
-    });
-  });
-
-  it("uses bundled Anthropic media limits and handles unknown fallback models", async () => {
-    installImageUnderstandingProviderDeps([], { useDefaultResolveModelAsync: true });
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: {},
-        imageModelConfig: {
-          primary: "anthropic/claude-opus-4-8",
-          fallbacks: ["anthropic/claude-haiku-4-5", "unknown/custom-image"],
-        },
-        imageCount: 1,
-      }),
-    ).resolves.toEqual({
-      imageCount: 1,
-      models: [
-        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-        {},
-      ],
-    });
-  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

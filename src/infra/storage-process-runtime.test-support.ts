@@ -14,7 +14,6 @@ export const storageProcessTestEntrypoints = {
   ),
   deviceIdentity: entrypoint("device-identity"),
   deviceIdentityStore: entrypoint("device-identity-store"),
-  kyselySync: entrypoint("kysely-sync"),
   updateDoctorResult: entrypoint("update-doctor-result"),
   updateModelRetirement: entrypoint("update-deferred-model-retirement"),
   sqliteReadOnlyLocation: entrypoint("sqlite-readonly-location"),

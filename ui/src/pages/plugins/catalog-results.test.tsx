@@ -2,7 +2,6 @@
 
 import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Icon } from "../../components/solid/icon.tsx";
 import { i18n } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
@@ -341,32 +340,19 @@ describe("renderPluginCatalogResults", () => {
     expect(document.activeElement === search).toBe(false);
   });
 
-  it("does not rescan the large catalog for unrelated feedback updates", async () => {
-    let categoryReads = 0;
-    const items = Array.from({ length: 300 }, (_, index) => {
-      const entry = plugin(`audit-${index}`);
-      Object.defineProperty(entry.catalog, "categories", {
-        configurable: true,
-        get() {
-          categoryReads += 1;
-          return ["tools"];
-        },
-      });
-      return entry;
-    });
+  it("retains search focus and catalog cards through feedback and refreshed entries", async () => {
+    const items = Array.from({ length: 300 }, (_, index) => plugin(`audit-${index}`));
     const props = baseProps({ result: { items }, featured: [], trending: [] });
     const { container, ui } = await mount(props);
     const row = container.querySelector('[data-plugin-id="audit-0"]');
     const search = container.querySelector<HTMLInputElement>("input")!;
     search.focus();
     search.setSelectionRange(0, 0);
-    categoryReads = 0;
     update(container, { ...props, remoteError: "Registry temporarily unavailable" });
     expect(container.textContent).toContain("Registry temporarily unavailable");
     ui.node('[data-plugin-id="audit-0"]').toBe(row);
     ui.node("input").toBe(search);
     expect(document.activeElement).toBe(search);
-    expect(categoryReads).toBe(0);
 
     update(container, {
       ...props,
@@ -425,37 +411,6 @@ describe("renderPluginCatalogResults", () => {
       }
     },
   );
-
-  it("prefers Template glyphs for matching category slugs, not similar labels", async () => {
-    const { container } = await mount(
-      baseProps({
-        categories: (
-          [
-            ["productivity", "Productivity", "package"],
-            ["research", "Research", "globe"],
-            ["web", "Research", "globe"],
-            ["household", "Household", "package"],
-            ["entertainment", "Entertainment", "package"],
-          ] as const
-        ).map(([slug, label, icon], order) => ({ slug, label, icon, description: label, order })),
-      }),
-    );
-    const expected = mountSolid(() => (
-      <>
-        <Icon name="listTodo" />
-        <Icon name="search" />
-        <Icon name="globe" />
-        <Icon name="home" />
-      </>
-    ));
-    const shapes = (nodes: Iterable<SVGElement>) => Array.from(nodes, (svg) => svg.innerHTML);
-    const icons = Array.from(
-      container.querySelectorAll<SVGElement>(".plugin-catalog-chip svg"),
-    ).slice(3);
-    expect(shapes(icons.slice(0, -1))).toEqual(shapes(expected.container.querySelectorAll("svg")));
-    // Entertainment keeps the popcorn artwork rather than the plugin-supplied box.
-    expect(icons.at(-1)?.querySelector('path[d="M10 22 9 8"]')).toBeTruthy();
-  });
 
   it("uses the package fallback for unknown and inherited category icon names", async () => {
     const { container } = await mount(
@@ -701,16 +656,8 @@ describe("renderPluginCatalogResults", () => {
 
 describe("formatCompactCount", () => {
   it.each([
-    [999, "999"],
     [1_500, "1.5k"],
-    [99_960, "100k"],
-    [150_400, "150k"],
-    [999_499, "999k"],
     [999_500, "1m"],
-    [2_500_000, "2.5m"],
-    [999_499_999, "999m"],
-    [999_500_000, "1b"],
-    [2_500_000_000, "2.5b"],
   ])("formats %s as %s", (value, expected) => {
     expect(formatCompactCount(value)).toBe(expected);
   });

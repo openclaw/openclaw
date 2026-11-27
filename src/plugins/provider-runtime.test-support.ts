@@ -1,9 +1,6 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { expect, vi, type Mock } from "vitest";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { AnyAgentTool } from "./types.js";
 
 type ProviderRuntime = typeof import("./provider-runtime.js");
 
@@ -32,25 +29,6 @@ export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel & {
   contextWindow: 128_000,
   maxTokens: 8_192,
 };
-
-export const DEMO_SANITIZED_MESSAGE: AgentMessage = {
-  role: "assistant",
-  content: [{ type: "text", text: "sanitized" }],
-  api: PROVIDER_RUNTIME_TEST_MODEL.api,
-  provider: PROVIDER_RUNTIME_TEST_MODEL.provider,
-  model: PROVIDER_RUNTIME_TEST_MODEL.id,
-  usage: createZeroUsageFixture(),
-  stopReason: "stop",
-  timestamp: 2,
-};
-
-export const DEMO_TOOL = {
-  name: "demo-tool",
-  label: "Demo tool",
-  description: "Demo tool",
-  parameters: { type: "object", properties: {} },
-  execute: vi.fn(async () => ({ content: [], details: undefined })),
-} as unknown as AnyAgentTool;
 
 const openaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },

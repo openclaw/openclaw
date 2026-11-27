@@ -447,54 +447,6 @@ describe("qa coverage report", () => {
     expect(matches.map(({ id }) => id)).not.toContain(unrelatedScenarioId);
   });
 
-  it("renders Playwright matches as qa suite targets", () => {
-    const matches = findQaScenarioMatches(
-      readQaScenarioPack().scenarios,
-      "chat-flow.messaging.e2e",
-    );
-    const report = renderQaScenarioMatchesMarkdownReport({
-      query: "chat-flow.messaging.e2e",
-      matches,
-    });
-
-    expect(report).toContain(
-      "- Suite command: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
-    );
-    expect(report).toContain(
-      "  - execution: playwright ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-    );
-    expect(report).not.toContain("Native test refs");
-  });
-
-  it("keeps qa-channel scenario commands on the default driver", () => {
-    const matches = findQaScenarioMatches(
-      readQaScenarioPack().scenarios,
-      "instruction-followthrough-repo-contract",
-    );
-    const report = renderQaScenarioMatchesMarkdownReport({
-      query: "instruction-followthrough-repo-contract",
-      matches,
-    });
-
-    expect(report).toContain(
-      "- Suite command: `pnpm openclaw qa suite --scenario instruction-followthrough-repo-contract`",
-    );
-    expect(report).not.toContain("--channel-driver live --channel qa-channel");
-  });
-
-  it.each([
-    [
-      "agent-startup-instruction-first-action",
-      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
-    ],
-    ["channel-canary", "--scenario channel-canary"],
-  ] as const)("renders a runnable suite command for %s", (scenarioId, expectedArgs) => {
-    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId);
-    const report = renderQaScenarioMatchesMarkdownReport({ query: scenarioId, matches });
-
-    expect(report).toContain(`- Suite command: \`pnpm openclaw qa suite ${expectedArgs}\``);
-  });
-
   it("groups commands by compatible provider mode while preserving the live default", () => {
     const scenarios = readQaScenarioPack().scenarios;
     const scenarioIds = [

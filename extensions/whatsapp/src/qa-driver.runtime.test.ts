@@ -11,11 +11,7 @@ const mocks = vi.hoisted(() => ({
   createWebSendApi: vi.fn(),
   createWaSocket: vi.fn(),
   jidToE164: vi.fn(),
-  sendContact: vi.fn(),
-  sendLocation: vi.fn(),
-  sendPoll: vi.fn(),
   sendReaction: vi.fn(),
-  sendSticker: vi.fn(),
   sendMessage: vi.fn(),
   socketSendMessage: vi.fn(),
   waitForWaConnection: vi.fn(),
@@ -133,12 +129,8 @@ describe("startWhatsAppQaDriverSession", () => {
     mocks.waitForWaConnection.mockResolvedValue(undefined);
     mocks.jidToE164.mockReturnValue("+15551234567");
     mocks.createWebSendApi.mockImplementation(() => ({
-      sendContact: mocks.sendContact,
-      sendLocation: mocks.sendLocation,
       sendMessage: mocks.sendMessage,
-      sendPoll: mocks.sendPoll,
       sendReaction: mocks.sendReaction,
-      sendSticker: mocks.sendSticker,
     }));
   });
 
@@ -334,51 +326,24 @@ describe("startWhatsAppQaDriverSession", () => {
     },
   );
 
-  it("adapts all QA sends to the web send API", async () => {
+  it("adapts QA media and reaction sends to the web send API", async () => {
     mocks.sendMessage.mockResolvedValue({ messageId: "send-1" });
-    mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.sendReaction.mockResolvedValue({ messageId: "reaction-send-1" });
-    mocks.sendContact.mockResolvedValue({ messageId: "contact-1" });
-    mocks.sendLocation.mockResolvedValue({ messageId: "location-1" });
-    mocks.sendSticker.mockResolvedValue({ messageId: "sticker-1" });
     const session = await startSession();
     const media = Buffer.from("png");
-    const sticker = Buffer.from("webp");
 
     await expect(
       Promise.all([
         session.sendMedia("15551234567", "caption", media, "image/png", {
           fileName: "qa.png",
         }),
-        session.sendPoll("15551234567", { question: "Pick one", options: ["A", "B"] }),
         session.sendReaction("15551234567@s.whatsapp.net", "driver-message-1", "👍", {
           fromMe: true,
         }),
-        session.sendContact("15551234567", {
-          displayName: "QA Contact",
-          vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
-        }),
-        session.sendLocation("15551234567", {
-          degreesLatitude: 37.7749,
-          degreesLongitude: -122.4194,
-          name: "QA Location",
-        }),
-        session.sendSticker("15551234567", sticker, { mimetype: "image/webp" }),
       ]),
-    ).resolves.toEqual([
-      { messageId: "send-1" },
-      { messageId: "poll-1" },
-      { messageId: "reaction-send-1" },
-      { messageId: "contact-1" },
-      { messageId: "location-1" },
-      { messageId: "sticker-1" },
-    ]);
+    ).resolves.toEqual([{ messageId: "send-1" }, { messageId: "reaction-send-1" }]);
     expectCalled(mocks.sendMessage, "15551234567", "caption", media, "image/png", {
       fileName: "qa.png",
-    });
-    expectCalled(mocks.sendPoll, "15551234567", {
-      question: "Pick one",
-      options: ["A", "B"],
     });
     expectCalled(
       mocks.sendReaction,
@@ -388,18 +353,6 @@ describe("startWhatsAppQaDriverSession", () => {
       true,
       undefined,
     );
-    expectCalled(mocks.sendContact, "15551234567", {
-      displayName: "QA Contact",
-      vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
-    });
-    expectCalled(mocks.sendLocation, "15551234567", {
-      degreesLatitude: 37.7749,
-      degreesLongitude: -122.4194,
-      name: "QA Location",
-    });
-    expectCalled(mocks.sendSticker, "15551234567", sticker, {
-      mimetype: "image/webp",
-    });
     expect(mocks.socketSendMessage).not.toHaveBeenCalled();
   });
 

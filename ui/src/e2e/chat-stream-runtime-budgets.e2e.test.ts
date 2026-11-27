@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
-import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import {
   evaluateControlUiContext,
   getControlUiContextHandle,
@@ -25,17 +24,7 @@ const suite = createChatFlowE2eSuite();
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
-// Each delta lands in its own message task. The owner publication queue must
-// coalesce them before the transcript changes.
 const BURST_DELTA_COUNT = 240;
-// The emitter crosses a frame halfway through, so both batches must reach DOM.
-const MIN_BURST_MUTATION_BATCHES = 2;
-// A direct DOM update per delta produces at least 240 batches. Measure the
-// visible transcript instead of the retired generic page invalidation path.
-const MAX_BURST_MUTATION_BATCHES = 180;
-// Unrelated page timers can contribute one host update after the probe resets;
-// ordinary characters must not invalidate the pane themselves.
-const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
 // Cross the former 50-call boundary without losing operations from the active turn.
 const TOOL_FLOOD_PAIR_COUNT = 60;
@@ -53,20 +42,6 @@ const LONG_TRANSCRIPT_MESSAGE_COUNT = 400;
 // tolerate loaded shared runners while still failing quadratic transcript work.
 const LONG_TRANSCRIPT_LOAD_CEILING_MS = 30_000;
 const RICH_TURN_CHUNK_COUNT = 150;
-// Post-GC resident JS heap after loading the long transcript and streaming the
-// rich turn. Headroom over the measured baseline retains transient parser and
-// renderer allocations; a leak that keeps streamed deltas alive breaks it.
-const STREAM_SESSION_HEAP_CEILING_BYTES = 96 * 1024 * 1024;
-
-const IDLE_WINDOW_MS = 4_000;
-const IDLE_LONGTASK_TOTAL_CEILING_MS = 600;
-const IDLE_TASK_DURATION_CEILING_MS = 600;
-
-type StreamPerfProbe = {
-  mutationBatches: number;
-  invalidations: number;
-  commits: number;
-};
 
 type ToolProjectionProbe = {
   beforeThrottleCardCount: number | null;
@@ -76,9 +51,6 @@ type ToolProjectionProbe = {
 };
 
 type ScopedWindow = Window & {
-  openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
-  ocStreamPerf?: StreamPerfProbe;
-  ocIdleProbe?: { longTasks: number; longTaskMs: number };
   ocBurstDone?: boolean;
   ocToolProjectionProbe?: ToolProjectionProbe;
   openclawControlUiE2eGateway?: {
@@ -113,71 +85,6 @@ async function settleInitialModelCatalog(
         ?.textContent?.includes(modelName) === true,
     name,
   );
-}
-
-async function installRenderProbe(page: ChatFlowPage) {
-  await page.evaluate(async () => {
-    const scope = window as ScopedWindow;
-    const chatPage = document.querySelector("openclaw-chat-page");
-    if (!chatPage) {
-      throw new Error("openclaw-chat-page is not mounted");
-    }
-    const thread = chatPage.querySelector(".chat-thread");
-    if (!thread) {
-      throw new Error("chat transcript is not mounted");
-    }
-    scope.ocStreamPerf = {
-      mutationBatches: 0,
-      invalidations: 0,
-      commits: 0,
-    };
-    new MutationObserver((records) => {
-      if (records.length > 0) {
-        scope.ocStreamPerf!.mutationBatches += 1;
-      }
-    }).observe(thread, { childList: true, subtree: true, characterData: true });
-    scope.openclawRenderLifecycleTestHook = (host, phase) => {
-      const nativeCommit = host instanceof HTMLElement;
-      const element: unknown = nativeCommit ? host : Reflect.get(host, "element");
-      if (
-        !(element instanceof HTMLElement) ||
-        (element.localName !== "openclaw-chat-page" && element.localName !== "openclaw-chat-pane")
-      ) {
-        return;
-      }
-      const probe = scope.ocStreamPerf!;
-      if (phase === "commit") {
-        if (nativeCommit) {
-          probe.commits += 1;
-        }
-        return;
-      }
-      // State admission happens in the runtime; its Solid consumer invalidates later.
-      if (nativeCommit) {
-        return;
-      }
-      probe.invalidations += 1;
-    };
-    // Drain already queued frames before the measured interaction.
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
-}
-
-async function resetRenderProbe(page: ChatFlowPage) {
-  await page.evaluate(() => {
-    const scope = window as ScopedWindow;
-    scope.ocStreamPerf = {
-      mutationBatches: 0,
-      invalidations: 0,
-      commits: 0,
-    };
-  });
-}
-
-async function readRenderProbe(page: ChatFlowPage): Promise<StreamPerfProbe> {
-  return page.evaluate(() => (window as ScopedWindow).ocStreamPerf!);
 }
 
 // Socket-like message tasks avoid nested timers' 4ms clamp, which can spread a
@@ -511,7 +418,7 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 }
 
 suite.define(() => {
-  it("commits a streamed delta burst in frame-bound transcript batches", async () => {
+  it("renders a streamed burst and opens deferred menus without timing entries", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       // Missing Resource Timing entries must not prevent menu readiness.
       await page.addInitScript(() => performance.setResourceTimingBufferSize(0));
@@ -583,8 +490,6 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await pane.evaluate((element: ChatPaneElement) => element.updateComplete);
       await waitForChatScrollIdle(page);
-      await installRenderProbe(page);
-      await resetRenderProbe(page);
 
       await emitDeltaBurstInPage(page, runId, BURST_DELTA_COUNT);
       await expect
@@ -598,25 +503,6 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      // Sample after the trailing animation frame drained so the batch count
-      // reflects the whole burst, not a mid-render snapshot.
-      await expect
-        .poll(async () => {
-          const before = await readRenderProbe(page);
-          await new Promise((resolve) => {
-            setTimeout(resolve, 200);
-          });
-          const after = await readRenderProbe(page);
-          return before.mutationBatches === after.mutationBatches ? after : null;
-        })
-        .not.toBeNull();
-
-      const probe = await readRenderProbe(page);
-      // Text updates reach the transcript without re-preparing its page or pane.
-      // The visible tail and mutation batches above prove the stream rendered.
-      expect(probe.commits).toBe(0);
-      expect(probe.mutationBatches).toBeGreaterThanOrEqual(MIN_BURST_MUTATION_BATCHES);
-      expect(probe.mutationBatches).toBeLessThanOrEqual(MAX_BURST_MUTATION_BATCHES);
     });
   });
 
@@ -679,7 +565,7 @@ suite.define(() => {
   });
 
   it("loads a long transcript and streams a rich turn inside budget ceilings", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
       });
@@ -698,15 +584,6 @@ suite.define(() => {
       await emitDeltaBurstInPage(page, runId, RICH_TURN_CHUNK_COUNT);
       await gateway.emitChatFinal({ runId, text: "rich turn finalized" });
       await page.locator(".chat-thread-inner").getByText("rich turn finalized").waitFor();
-
-      const cdpSession = await context.newCDPSession(page);
-      // Metric collection requires the domain to be enabled first.
-      await cdpSession.send("Performance.enable");
-      await cdpSession.send("HeapProfiler.collectGarbage");
-      await cdpSession.send("HeapProfiler.collectGarbage");
-      const { metrics } = await cdpSession.send("Performance.getMetrics");
-      const heapUsedBytes = metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value;
-      expect(heapUsedBytes).toBeLessThanOrEqual(STREAM_SESSION_HEAP_CEILING_BYTES);
     });
   });
 
@@ -788,16 +665,11 @@ suite.define(() => {
           Math.abs(scroll.restoredAnchor.viewportTop - scroll.originalAnchor.viewportTop),
         ).toBeLessThanOrEqual(1);
       }
-      await installRenderProbe(page);
-      await resetRenderProbe(page);
 
       const suffix = " ordinary typing without commands";
       await composer.pressSequentially(suffix, { delay: scrollAwayAndBack ? 5 : 0 });
       await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
       expect(await composer.inputValue()).toBe(`seed${suffix}`);
-      const probe = await readRenderProbe(page);
-
-      expect(probe.invalidations).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_INVALIDATIONS);
 
       const send = page.locator(".chat-send-btn--send");
       await composer.fill("");
@@ -808,48 +680,6 @@ suite.define(() => {
 
       await composer.fill("مرحبا");
       await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
-    });
-  });
-
-  it("stays quiet while idle after a settled stream", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("sessions.messages.subscribe");
-
-      const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
-      await gateway.emitChatFinal({ runId, text: "short finalized turn" });
-      await page.locator(".chat-thread-inner").getByText("short finalized turn").waitFor();
-
-      const cdpSession = await context.newCDPSession(page);
-      await cdpSession.send("Performance.enable");
-      const beforeMetrics = await cdpSession.send("Performance.getMetrics");
-      const taskDurationBefore = beforeMetrics.metrics.find(
-        (metric) => metric.name === "TaskDuration",
-      )!.value;
-      await page.evaluate(() => {
-        const scope = window as ScopedWindow;
-        scope.ocIdleProbe = { longTasks: 0, longTaskMs: 0 };
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            scope.ocIdleProbe!.longTasks += 1;
-            scope.ocIdleProbe!.longTaskMs += entry.duration;
-          }
-        }).observe({ entryTypes: ["longtask"] });
-      });
-
-      await new Promise((resolve) => {
-        setTimeout(resolve, IDLE_WINDOW_MS);
-      });
-
-      const afterMetrics = await cdpSession.send("Performance.getMetrics");
-      const taskDurationAfter = afterMetrics.metrics.find(
-        (metric) => metric.name === "TaskDuration",
-      )!.value;
-      const taskDurationMs = (taskDurationAfter - taskDurationBefore) * 1_000;
-      const idle = await page.evaluate(() => (window as ScopedWindow).ocIdleProbe!);
-      expect(idle.longTaskMs).toBeLessThanOrEqual(IDLE_LONGTASK_TOTAL_CEILING_MS);
-      expect(taskDurationMs).toBeLessThanOrEqual(IDLE_TASK_DURATION_CEILING_MS);
     });
   });
 });

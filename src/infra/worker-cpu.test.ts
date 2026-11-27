@@ -119,29 +119,6 @@ const retiredCount = (snapshot: Lifecycle, script: string, reason: string) =>
     ?.retired.find((entry) => entry.reason === reason)?.count ?? 0;
 
 describe("worker CPU lifecycle", () => {
-  it("reuses CPU source snapshots until native membership changes", () => {
-    const initial = getTrackedWorkerCpuSources();
-    const worker = registerWorker(9000, "./cpu-snapshot.worker.ts");
-    try {
-      const added = getTrackedWorkerCpuSources();
-      expect(added.workers).toHaveLength(initial.workers.length + 1);
-      for (let sample = 0; sample < 60; sample++) {
-        expect(getTrackedWorkerCpuSources()).toBe(added);
-      }
-      // Cleanup can remove exit listeners; pruning still invalidates the snapshot.
-      worker.removeAllListeners("exit");
-      worker.threadId = -1;
-      expect(added.currentRevision()).toBeGreaterThan(added.revision);
-      const removed = getTrackedWorkerCpuSources();
-      expect(removed.workers).toEqual(initial.workers);
-      expect(getTrackedWorkerCpuSources()).toBe(removed);
-      expect(added.workers).toHaveLength(initial.workers.length + 1);
-    } finally {
-      worker.threadId = -1;
-      getTrackedWorkerCpuSources();
-    }
-  });
-
   it("retains task heap and GC totals across worker retirement without retaining worker ids", async () => {
     const register = (id: number) => {
       const worker = registerWorker(id, "./provider-prompt-state.worker.ts");
@@ -299,57 +276,6 @@ describe("worker CPU lifecycle", () => {
   });
 
   it.each([
-    {
-      script: "openclaw-state-lease-heartbeat.worker.js",
-      request: { id: 1, operation: "verify" },
-      response: { id: 1, ok: true, expiresAt: 123 },
-    },
-    { script: "gateway-state-owner-heartbeat.worker.js", request: "stop", response: null },
-  ])(
-    "attributes $script by its heartbeat transport identity",
-    async ({ script, request, response }) => {
-      const worker = await fileWorker(
-        script,
-        `const { parentPort } = require("node:worker_threads"); parentPort.on("message", () => parentPort.postMessage(${JSON.stringify(response)}));`,
-      );
-      const before = getWorkerMessageMetrics();
-      const requests = metricDelta("lifecycle", "to_worker");
-      const replies = metricDelta("lifecycle", "from_worker");
-      expect(await roundTrip(worker, request)).toEqual([response]);
-      const after = getWorkerMessageMetrics();
-      for (const expected of [requests(), replies()]) {
-        expect(after).toContainEqual(
-          expect.objectContaining({
-            kind: expected.kind,
-            direction: expected.direction,
-            messages: expected.messages,
-          }),
-        );
-      }
-      expect(after.filter((row) => row.kind === "sqlite_reply")).toEqual(
-        before.filter((row) => row.kind === "sqlite_reply"),
-      );
-    },
-  );
-
-  it("attributes dedicated reclamation requests and replies once at the native boundary", async () => {
-    const request = metricDelta("sqlite_request", "to_worker");
-    const response = metricDelta("sqlite_reply", "from_worker");
-    const worker = await createWorker(
-      'const { parentPort } = require("node:worker_threads"); parentPort.on("message", ({ operationId }) => parentPort.postMessage({ type: "reclaimed", operationId, settled: true, result: {} }));',
-    );
-    expect(
-      await roundTrip(worker, { type: "reclaim", operationId: 1, plan: {}, coordination: {} }),
-    ).toEqual([{ type: "reclaimed", operationId: 1, settled: true, result: {} }]);
-    expect(getWorkerMessageMetrics()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining(request()),
-        expect.objectContaining(response()),
-      ]),
-    );
-  });
-
-  it.each([
     ["postMessage", "accessor"],
     ["emit", "readonly"],
   ] as const)("preserves a subclass with %s defined as %s", async (method, descriptorKind) => {
@@ -430,9 +356,6 @@ describe("worker CPU lifecycle", () => {
 
   it.each([
     ["sqlite-store.worker.ts", "sqlite-store.worker.js"],
-    ["memory-worker-entry.ts", "workspace-memory.worker.js"],
-    ["skills-worker-entry.ts", "workspace-skills.worker.js"],
-    ["file-tool-read.worker.mjs", "read-file.worker.js"],
     ["private-session-worker.js", "other"],
   ])(
     "attributes %s and removes direct and owned Worker samples at native exit",

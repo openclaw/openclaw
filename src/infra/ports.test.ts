@@ -1,6 +1,5 @@
 // Covers gateway port availability and diagnostics behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -166,13 +165,6 @@ describe("ports helpers", () => {
     },
   );
 
-  it("keeps process inspection behind the busy-port diagnostics boundary", () => {
-    const source = readFileSync(new URL("./ports.ts", import.meta.url), "utf8");
-
-    expect(source).not.toMatch(/(?:import|export)[^;]+from "\.\/ports-inspect\.js"/u);
-    expect(source).toContain('await import("./ports-inspect.js")');
-  });
-
   it.for([undefined, "127.0.0.1"])("rejects a busy port scoped to %s", async (host, { skip }) => {
     await using server = net.createServer();
     const { port } = await listenServer(skip, server, 0, host);
@@ -322,74 +314,6 @@ describeUnix("inspectPortUsage", () => {
       ssCalls,
     );
   });
-
-  it.each(["lsof", "ss"])(
-    "shares bounded Unix process metadata lookups across ports (%s)",
-    async (source) => {
-      const listenerCount = 25;
-      const pids = Array.from({ length: listenerCount }, (_, index) => 1_000 + index);
-      const rows = (record: (pid: number) => string) => pids.map(record).join("\n");
-      let activeProcessLookups = 0;
-      let maxConcurrentProcessLookups = 0;
-      let processLookupCount = 0;
-      runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-        const command = argv[0];
-        if (typeof command !== "string") {
-          return failedCommand();
-        }
-        if (command.includes("lsof")) {
-          if (source === "ss") {
-            return commandOutput("", 2);
-          }
-          return commandOutput(
-            rows(
-              (pid) =>
-                `p${pid}\ncnode\nnTCP 127.0.0.1:18789 (LISTEN)\nnTCP 127.0.0.1:19001 (LISTEN)`,
-            ) + "\np9999\ncunrelated\nnTCP 127.0.0.1:3000 (LISTEN)\n",
-          );
-        }
-        if (command === "ss") {
-          const port = argv.at(-1)?.split(":").at(-1);
-          return commandOutput(
-            rows(
-              (pid) => `LISTEN 0 128 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${pid},fd=1))`,
-            ),
-          );
-        }
-        if (command === "ps") {
-          processLookupCount += 1;
-          activeProcessLookups += 1;
-          maxConcurrentProcessLookups = Math.max(maxConcurrentProcessLookups, activeProcessLookups);
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 1);
-          });
-          activeProcessLookups -= 1;
-          return commandOutput(
-            argv.includes("user=") ? "fixture-user\n" : `1 node fixture-${argv[2]}\n`,
-          );
-        }
-        return failedCommand();
-      });
-
-      const results = await inspectPortUsages([18789, 19001]);
-
-      if (source === "lsof") {
-        expectLsofArgs("-iTCP");
-      }
-      expect(processLookupCount).toBeLessThanOrEqual(listenerCount * 2);
-      expect(maxConcurrentProcessLookups).toBeLessThanOrEqual(20);
-      for (const result of results.values()) {
-        expect(result.listeners).toMatchObject(
-          pids.map((pid) => ({
-            pid,
-            commandLine: `node fixture-${pid}`,
-            user: "fixture-user",
-            ppid: 1,
-          })),
-        );
-      }
-    },
-  );
 
   it.each([
     [

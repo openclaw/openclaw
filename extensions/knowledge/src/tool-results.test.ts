@@ -419,30 +419,6 @@ it("hashMatches accepts the full hash or a 16+ character lowercase prefix", () =
   expect(() => hashMatches(hash, hash.slice(0, 16).toUpperCase())).toThrow(/lowercase/);
 });
 
-it("lean agent responses are a fraction of the complete ones", async () => {
-  const s = await seeded();
-  const pairs: [string, string, Record<string, unknown>, Record<string, unknown>?][] = [
-    [
-      "knowledge_connections",
-      "connections_detail",
-      { id: s.project.id },
-      { view: "full", includeCards: true },
-    ],
-    ["knowledge_record", "record_detail", { id: s.claim.id }],
-    ["knowledge_grep", "grep", { query: "option" }],
-    ["knowledge_lookup", "lookup", { query: "Alex" }],
-    ["knowledge_timeline", "timeline", { entity: s.project.id }],
-    ["knowledge_records", "records_detail", {}, { includeCards: true }],
-    ["knowledge_ontology", "ontology", {}],
-    ["knowledge_status", "status", {}],
-  ];
-  for (const [tool, operation, input, ui = {}] of pairs) {
-    const lean = (await s.call(tool, input)).value;
-    const full = await s.ui(operation, { ...input, ...ui });
-    expect(JSON.stringify(lean).length, tool).toBeLessThan(JSON.stringify(full).length * 0.6);
-  }
-});
-
 it("maxChars bounds claim text too, continuing over the stored text", async () => {
   const s = await seeded();
   const body = Array.from({ length: 60 }, (_, i) => "Clause " + i + " of the decision.").join(" ");

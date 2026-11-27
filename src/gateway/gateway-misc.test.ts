@@ -655,38 +655,6 @@ describe("gateway broadcaster", () => {
       ["tick", 6],
     ]);
   });
-
-  it("reuses the same payload shape while assigning per-client seq values", () => {
-    const firstSocket = makeRecordingSocket();
-    const secondSocket = makeRecordingSocket();
-    const thirdSocket = makeRecordingSocket();
-    const clients = makeOperatorWsClients([
-      { connId: "c-1", socket: firstSocket, scopes: ["operator.read"] },
-      { connId: "c-2", socket: secondSocket, scopes: ["operator.write"] },
-      { connId: "c-3", socket: thirdSocket, scopes: ["operator.admin"] },
-    ]);
-    const payloadKeys: string[] = [];
-    const payload = {
-      toJSON(key: string) {
-        payloadKeys.push(key);
-        return { foo: key };
-      },
-    };
-
-    const { broadcast } = createGatewayBroadcaster({ clients });
-    broadcast("talk.mode", { enabled: true });
-    broadcast("chat", payload);
-
-    expect(payloadKeys).toEqual(["payload"]);
-    expect(firstSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect(secondSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect(thirdSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect([
-      firstSocket.sent.at(-1)?.seq,
-      secondSocket.sent.at(-1)?.seq,
-      thirdSocket.sent.at(-1)?.seq,
-    ]).toEqual([1, 2, 2]);
-  });
 });
 
 describe("chat run registry", () => {

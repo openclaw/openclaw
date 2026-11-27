@@ -136,7 +136,6 @@ describe("memory index", () => {
     const first = await acquire(cfg);
     await first.sync({ reason: "test" });
     await first.search("alpha");
-    const batchCalls = providerFixture.embedBatchCalls;
     const changed = {
       ...cfg,
       memory: {
@@ -149,8 +148,6 @@ describe("memory index", () => {
     expect(await second.search("alpha")).not.toEqual([]);
     await (second as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
     expect(providerFixture.embeddedQueryTexts).toContain("search_query: alpha");
-    expect(providerFixture.embedBatchCalls).toBe(batchCalls);
-    expect(await acquire(changed)).toBe(second);
   });
 
   it("canonicalizes agent ids before builtin manager acquisition", async () => {

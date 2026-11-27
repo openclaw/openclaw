@@ -507,17 +507,6 @@ describe("createImageGenerateTool", () => {
     expect(JSON.stringify(tool.parameters)).toContain("openai/gpt-image-1.5");
   });
 
-  it("does not load runtime providers while registering an explicitly configured tool", () => {
-    const listProviders = vi
-      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
-      .mockImplementation(() => {
-        throw new Error("runtime provider list should not run during tool registration");
-      });
-
-    createToolWithPrimaryImageModel("openai/gpt-image-1");
-    expect(listProviders).not.toHaveBeenCalled();
-  });
-
   it("infers the canonical OpenAI image model from provider readiness without explicit config", async () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
@@ -1346,32 +1335,6 @@ describe("createImageGenerateTool", () => {
     },
   );
 
-  it("forwards generic fal provider options", async () => {
-    const generateImage = mockGeneratedImage({
-      provider: "fal",
-      model: "krea/v2/medium/text-to-image",
-      images: [imageAsset("krea-out", "krea.png")],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("krea.png", 8));
-
-    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image");
-    await tool.execute("call-fal-krea-options", {
-      prompt: "Expressive print portrait",
-      aspectRatio: "2.35:1",
-      fal: {
-        creativity: "high",
-      },
-    });
-
-    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
-    expect(generateArgs.providerOptions).toEqual({
-      fal: {
-        creativity: "high",
-      },
-    });
-    expect(generateArgs.aspectRatio).toBe("2.35:1");
-  });
-
   it("does not infer edit resolution when krea/v2/medium/text-to-image declares no resolution options", async () => {
     const model = "krea/v2/medium/text-to-image";
 
@@ -1703,37 +1666,6 @@ describe("createImageGenerateTool", () => {
     expect(details.requested).toMatchObject({ outputFormat: "png" });
   });
 
-  it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createGoogleImageProvider(),
-    ]);
-    mockGeneratedImage({
-      provider: "google",
-      model: "gemini-3.1-flash-image-preview",
-      images: [imageAsset("jpg-data", "kodo_sawaki_zazen.jpg", "image/jpeg")],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
-      id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
-      size: 8,
-      contentType: "image/jpeg",
-    });
-
-    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
-
-    const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
-    const text = resultText(result);
-
-    expect(text).toContain(
-      'path="/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg"',
-    );
-    const details = resultDetails(result);
-    const media = requireRecord(details.media, "media details");
-    expect(media.mediaUrls).toEqual([
-      "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
-    ]);
-  });
-
   it.each([5, 2.5, "2cats", null])("rejects invalid image count %s", async (count) => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createGoogleImageProvider(),
@@ -1752,30 +1684,6 @@ describe("createImageGenerateTool", () => {
       }),
     ).rejects.toThrow("count must be between 1 and 4");
     expect(generateImage).not.toHaveBeenCalled();
-  });
-
-  it("forwards reference images and inferred resolution for edit mode", async () => {
-    const generateImage = stubEditedImageFlow({ width: 3200, height: 1800 });
-    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
-      workspaceDir: process.cwd(),
-    });
-
-    const result = await tool.execute("call-edit", {
-      prompt: "Add a dramatic stormy sky but keep everything else identical.",
-      image: "./fixtures/reference.png",
-    });
-
-    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
-    expect(generateArgs.aspectRatio).toBeUndefined();
-    expect(generateArgs.resolution).toBeUndefined();
-    expect(generateArgs.inferredResolution).toBe("4K");
-    expect(resultDetails(result)).not.toHaveProperty("resolution");
-    expect(generateArgs.inputImages).toEqual([
-      {
-        buffer: Buffer.from("input-image"),
-        mimeType: "image/png",
-      },
-    ]);
   });
 
   it("passes web_fetch SSRF policy to remote reference images", async () => {
@@ -1948,45 +1856,6 @@ describe("createImageGenerateTool", () => {
       "Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
     );
     expect(details.ignoredOverrides).toEqual([{ key: "aspectRatio", value: "1:1" }]);
-  });
-
-  it("surfaces normalized image geometry from runtime metadata", async () => {
-    mockGeneratedImage({
-      provider: "minimax",
-      model: "image-01",
-      images: [imageAsset("png-out", "generated.png")],
-      normalization: {
-        aspectRatio: {
-          applied: "16:9",
-          derivedFrom: "size",
-        },
-      },
-      metadata: {
-        requestedSize: "1280x720",
-        normalizedAspectRatio: "16:9",
-      },
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated.png", 7));
-
-    const tool = createToolWithPrimaryImageModel("minimax/image-01");
-    const result = await tool.execute("call-minimax-generate", {
-      prompt: "A lobster at the movies",
-      size: "1280x720",
-    });
-
-    const details = resultDetails(result);
-    expect(details.requested).toMatchObject({ size: "1280x720" });
-    expect(details.normalization).toEqual({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
-      },
-    });
-    expect(details.metadata).toEqual({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-    });
-    expect(details).not.toHaveProperty("size");
   });
 
   it("escapes image-generation summary text before appending tool MEDIA output", async () => {

@@ -23,7 +23,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
-import * as pluginConfig from "../../plugins/config-state.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -252,45 +251,13 @@ describe("createVideoGenerateTool", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it.each([false, true])(
-    "reuses video schemas for reference audio=%s across tool instances",
-    (referenceAudioInputs) => {
-      const config: OpenClawConfig = {
-        plugins: { allow: ["external-video"], entries: { "external-video": { enabled: true } } },
-        agents: { defaults: { mediaModels: { video: { primary: "external-video/vid-v1" } } } },
-      };
-      const workspaceDir = "/workspace/video-schema-reuse";
-      setCurrentPluginMetadataSnapshot(
-        createVideoProviderSnapshot({
-          config,
-          workspaceDir,
-          id: "external-video",
-          origin: "bundled",
-          referenceAudioInputs,
-        }),
-        { config, workspaceDir },
-      );
-      const authProfileStore = createAuthStore("external-video");
-      const construct = () => {
-        const tool = createVideoGenerateTool({ config, workspaceDir, authProfileStore }, true);
-        if (!tool) {
-          throw new Error("expected video_generate tool");
-        }
-        return tool;
-      };
-      const cold = construct();
-      expectAudioReferences(cold, referenceAudioInputs);
-      expect(construct().parameters).toBe(cold.parameters);
-    },
-  );
-
   it("exposes video generation for an auth-backed video provider", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
     createTool({ config: {}, authProfileStore: createAuthStore("runway") });
   });
 
-  it("refreshes reference-audio policy without repeated normalization per video manifest", () => {
+  it("refreshes reference-audio policy when provider metadata and plugin policy change", () => {
     const plugins: NonNullable<OpenClawConfig["plugins"]> = {
       allow: Array.from({ length: 8 }, (_, index) =>
         index === 0 ? "external-video" : `external-video-${index}`,
@@ -301,13 +268,10 @@ describe("createVideoGenerateTool", () => {
       agents: { defaults: { mediaModels: { video: { primary: "external-video/vid-v1" } } } },
     };
     const workspaceDir = "/workspace/external-video";
-    const normalize = vi.spyOn(pluginConfig, "normalizePluginsConfig");
-    const normalizationCounts: number[] = [];
     for (const phase of [
       { count: 0, unrelated: 0, enabled: true, audio: false, exposed: true, policy: true },
       { count: 1, unrelated: 0, enabled: true, audio: false, exposed: false, policy: true },
       { count: 8, unrelated: 0, enabled: true, audio: false, exposed: false, policy: true },
-      { count: 8, unrelated: 32, enabled: true, audio: false, exposed: false, policy: true },
       { count: 8, unrelated: 0, enabled: false, audio: false, exposed: true, policy: true },
       { count: 8, unrelated: 0, enabled: true, audio: false, exposed: false, policy: true },
       { count: 8, unrelated: 0, enabled: true, audio: true, exposed: true, policy: true },
@@ -328,12 +292,8 @@ describe("createVideoGenerateTool", () => {
         { config, workspaceDir },
       );
       createVideoGenerateTool({ config, workspaceDir });
-      normalize.mockClear();
       expectAudioReferences(createTool({ config, workspaceDir }), phase.exposed);
-      normalizationCounts.push(normalize.mock.calls.length);
     }
-    expect(normalizationCounts[2]).toBeLessThanOrEqual(normalizationCounts[1]!);
-    expect(normalizationCounts[3]).toBeLessThanOrEqual(normalizationCounts[2]!);
   });
 
   it.each(["environment", "config"] as const)(

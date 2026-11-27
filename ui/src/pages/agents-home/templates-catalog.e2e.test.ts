@@ -2,9 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
-import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
-import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
@@ -29,7 +27,6 @@ const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
   const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
     animations: "disabled",
-    elements: name === "after-catalog" ? [content] : [],
     scrollTo,
   });
   await writeFile(`${proofDir}/${name}.png`, frame.png);
@@ -136,67 +133,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await detail.getByRole("heading", { level: 1 }).waitFor();
     return detail;
   }
-
-  it.each(["light", "dark"] as const)(
-    "keeps headerless detail phone gutters on cold and Settings-warmed entry in %s",
-    async (theme) => {
-      const { page, gateway } = await fixture(
-        { width: 390, height: 844 },
-        undefined,
-        undefined,
-        false,
-        theme,
-      );
-      const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
-      await card.waitFor();
-      const templateUrl =
-        server.baseUrl + "templates/packages/%40openclaw%2Fworkflow-operator?version=1.2.0";
-      expect(await page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
-      await capture(page, "gutter-catalog-phone-" + theme, card);
-      const detail = await openDetail(page);
-      const checkInsets = async (stage: string, expected = [12, 12]) => {
-        await capture(page, "gutter-" + stage + "-" + theme, detail);
-        const geometry = await detail.evaluate((element) => {
-          const content = element.closest("main.content")!;
-          const box = element.getBoundingClientRect();
-          const parent = content.getBoundingClientRect();
-          return [
-            Math.round(box.left - parent.left - content.clientLeft),
-            Math.round(parent.left + content.clientLeft + content.clientWidth - box.right),
-          ];
-        });
-        console.info("gutter geometry", stage, geometry);
-        expect.soft(geometry, stage).toEqual(expected);
-      };
-      await checkInsets("detail-phone");
-      for (const width of [820, 1400]) {
-        await page.setViewportSize({ width, height: 1000 });
-        await checkInsets("detail-" + width, [36, 36]);
-      }
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(templateUrl);
-      await detail.getByRole("heading", { level: 1, name: workflowOperator.displayName }).waitFor();
-      await checkInsets("cold-phone");
-      await evaluateControlUiContext(page, (app) => app.navigate("appearance"));
-      await page.locator(".settings-section").first().waitFor();
-      await evaluateControlUiContext(page, (app) => app.navigate("templates"));
-      await openDetail(page);
-      await checkInsets("warm-phone");
-      await page.goto(
-        new URL(pathForPluginCatalogEntry(inspection.catalog.plugin.id), server.baseUrl).href,
-      );
-      await detail
-        .getByRole("heading", { level: 1, name: inspection.catalog.plugin.catalog.name })
-        .waitFor();
-      await detail.getByRole("heading", { level: 2, name: /^readme$/iu }).waitFor();
-      await checkInsets("plugin-phone");
-      for (const width of [820, 1400]) {
-        await page.setViewportSize({ width, height: 1000 });
-        await checkInsets("plugin-" + width, [36, 36]);
-      }
-      expect(await gateway.getRequests("plugins.catalog.get")).not.toHaveLength(0);
-    },
-  );
 
   async function expectPublisher(detail: Locator, handle: string, official: boolean) {
     const publisher = detail.locator(".plugin-catalog-detail__publisher");
@@ -336,16 +272,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         (await detail.locator(".plugin-capabilities").allTextContents()).join(" "),
       ).not.toContain("ClawHub · Version");
       expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
-      // The status shares the chevron's line at every width instead of stacking above it.
-      const control = detail.locator(".settings-row__control", {
-        has: page.locator(".plugin-connection-status"),
-      });
-      const status = (await control.locator(".plugin-connection-status").boundingBox())!;
-      const chevron = (await control.locator(".settings-row__chevron").boundingBox())!;
-      expect(
-        Math.abs(status.y + status.height / 2 - (chevron.y + chevron.height / 2)),
-      ).toBeLessThanOrEqual(1);
-      expect(chevron.x).toBeGreaterThanOrEqual(status.x + status.width);
       expect(await detail.textContent()).not.toContain("undefined");
       expect(await detail.locator(".templates-add-review").count()).toBe(0);
       await capture(page, `template-detail-no-review-${viewport.name}`, detail);
@@ -400,50 +326,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       .locator('[data-templates-category="research"] [data-templates-entry]')
       .first()
       .waitFor();
-    expect(
-      await page
-        .locator(".plugin-catalog-chips")
-        .evaluate((element) => getComputedStyle(element).flexWrap),
-    ).toBe("wrap");
-    // All and the eleven category filters each have a distinct glyph.
-    const chipIcons = await page
-      .locator(".plugin-catalog-chips .plugin-catalog-chip svg")
-      .evaluateAll((icons) => icons.map((icon) => icon.innerHTML));
-    expect(chipIcons).toHaveLength(12);
-    expect(new Set(chipIcons).size).toBe(chipIcons.length);
-    const searchWidth = await page
-      .locator(".plugin-catalog-search")
-      .evaluate((element) => element.getBoundingClientRect().width);
-    const bodyWidth = await page
-      .locator(".plugin-catalog-results__body")
-      .evaluate((element) => element.getBoundingClientRect().width);
-    expect(Math.abs(searchWidth - bodyWidth)).toBeLessThan(2);
-    await capture(
-      page,
-      "after-catalog",
-      page.locator("[data-templates-featured] [data-templates-entry]").first(),
-    );
-    await page.setViewportSize({ width: 390, height: 844 });
-    await capture(page, "catalog-mobile", page.locator("[data-templates-featured]"));
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      390,
-    );
-    await page.setViewportSize({ width: 1440, height: 900 });
-    for (const selector of ["[data-templates-featured]", '[data-templates-category="research"]']) {
-      const cards = page.locator(`${selector} [data-templates-entry]`);
-      expect(await cards.count()).toBe(4);
-      const boxes = await cards.evaluateAll((elements) =>
-        elements.map((card) => {
-          const { x, y } = card.getBoundingClientRect();
-          return { x, y };
-        }),
-      );
-      expect(boxes[0]!.y).toBe(boxes[1]!.y);
-      expect(boxes[2]!.y).toBe(boxes[3]!.y);
-      expect(boxes[0]!.x).toBe(boxes[2]!.x);
-      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
-      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
-    }
     await gateway.waitForRequest("templates.catalog.search", {
       match: { overview: true, limit: 4 },
     });

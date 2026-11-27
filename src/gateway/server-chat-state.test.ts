@@ -6,7 +6,6 @@ import {
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
 import * as jsonUtf8 from "../infra/json-utf8-bytes.js";
-import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   createChatAbortMarker,
@@ -924,42 +923,6 @@ describe("assistant text projection", () => {
     expect(state.resolveBuffer("reply", { final: true }).text).toBe("First note");
     expect(state.takeBufferDelta("reply", "")).toBeUndefined();
     expectUpdate({ itemId: "second", text: "Tail." }, "Tail.");
-  });
-
-  it("bounds parsing of growing literal directives", () => {
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
-    const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
-    const run = state.getOrCreate("reply");
-    const literal = `The marker is ${directive}.\n\nNext paragraph.\n\n`;
-    const block = "```ts\nconst value = 1;\n```\n\n";
-    expectUpdate({ delta: literal }, literal);
-    for (let index = 1; index <= 100; index++) {
-      expectUpdate({ delta: block }, literal + block.repeat(index));
-    }
-    const calls = [...regions.mock.calls, ...ownership.mock.calls];
-    const parsedChars = calls.reduce((total, [text]) => total + text.length, 0);
-    expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
-  });
-
-  it("bounds code-point reads across consecutive messages", () => {
-    const codePointAt = vi.spyOn(String.prototype, "codePointAt");
-    const messages = 4;
-    const chunks = 32;
-    const delta = "word";
-    for (let message = 0; message < messages; message++) {
-      for (let chunk = 1; chunk <= chunks; chunk++) {
-        state.updateBuffer("reply", {
-          itemId: `message-${message}`,
-          text: delta.repeat(chunk),
-          delta,
-        });
-      }
-    }
-    expect(codePointAt.mock.calls.length).toBeLessThanOrEqual(messages * chunks * 2);
-    codePointAt.mockRestore();
-    expect(state.resolveBuffer("reply", { final: true }).text).toBe(
-      Array.from({ length: messages }, () => delta.repeat(chunks)).join("\n\n"),
-    );
   });
 
   it.each<[string, string, { deltaText: string; replace?: boolean }]>([

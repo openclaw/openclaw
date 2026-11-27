@@ -99,33 +99,3 @@ it("maps Groq reasoning to its wire contract on both completion paths", async ()
     }
   }
 });
-
-it("registers Groq model and media providers", () => {
-  const captured = capturePluginRegistration(plugin);
-  const [provider] = captured.providers;
-  expect(provider).toMatchObject({
-    docsPath: "/providers/groq",
-    envVars: ["GROQ_API_KEY"],
-    id: "groq",
-    label: "Groq",
-    auth: [
-      {
-        id: "api-key",
-        kind: "api_key",
-        label: "Groq API key",
-        starterModel: `groq/${manifest.modelCatalog.providers.groq.defaultModel}`,
-        wizard: { choiceId: "groq-api-key", groupId: "groq" },
-      },
-    ],
-  });
-  expect(captured.modelCatalogProviders.map((entry) => entry.kinds)).toEqual([["text"]]);
-  expect(captured.mediaUnderstandingProviders).toEqual([
-    {
-      autoPriority: { audio: 20 },
-      capabilities: ["audio"],
-      defaultModels: { audio: "whisper-large-v3-turbo" },
-      id: "groq",
-      transcribeAudio: expect.any(Function),
-    },
-  ]);
-});

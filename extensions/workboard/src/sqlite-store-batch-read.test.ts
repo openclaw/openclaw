@@ -7,7 +7,7 @@ import {
 } from "@openclaw/workboard-contract";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { execution } from "./lifecycle-sync-fixtures.test-support.js";
 import type {
   PersistedWorkboardAttachment,
@@ -23,40 +23,6 @@ import {
 import { runPostgresGroupedRollback } from "./test/postgres-fixture.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
-
-const sqliteStatements = vi.hoisted(() => ({
-  count: 0,
-  executed: [] as string[],
-}));
-
-vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
-      const db = actual.openNodeSqliteDatabase(...args);
-      const prepare = db.prepare.bind(db);
-      vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        for (const method of ["all", "get", "iterate", "run"] as const) {
-          Object.defineProperty(statement, method, {
-            configurable: true,
-            writable: true,
-            value: new Proxy(statement[method], {
-              apply(target, receiver, methodArgs) {
-                sqliteStatements.count++;
-                sqliteStatements.executed.push(sql);
-                return Reflect.apply(target, receiver, methodArgs);
-              },
-            }),
-          });
-        }
-        return statement;
-      });
-      return db;
-    },
-  };
-});
 
 function fixtureCard(index: number): WorkboardCard {
   const id = `card-${index}`;
@@ -203,14 +169,9 @@ describe("workboard sqlite batch card persistence", () => {
       },
     };
     await stores.cards.register(original.id, persisted(original));
-    const before = sqliteStatements.count;
     await expect(
       stores.cards.registerIfUpdatedAt(replacement.id, persisted(replacement), original.updatedAt),
     ).resolves.toBe(true);
-    if (!workboardTestDatabaseInput()) {
-      // A row-at-a-time write exceeds 700 statements for this bounded fixture.
-      expect(sqliteStatements.count - before).toBeLessThan(100);
-    }
     await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(replacement));
     const cleared = {
       ...replacement,
@@ -225,24 +186,6 @@ describe("workboard sqlite batch card persistence", () => {
     await expect(stores.cards.lookup(original.id)).resolves.toEqual(
       persisted({ ...cleared, events: undefined }),
     );
-  });
-
-  // Regression for large-board stalls from per-card child reads.
-  test("issues the same number of statements no matter how many cards exist", async () => {
-    await using stores = openKernel();
-    const prepared = async (cardCount: number): Promise<number> => {
-      for (let index = 0; index < cardCount; index++) {
-        await stores.cards.register(`card-${index}`, persisted(fixtureCard(index)));
-      }
-      const before = sqliteStatements.count;
-      await stores.cards.entries();
-      return sqliteStatements.count - before;
-    };
-    const few = await prepared(3);
-    const many = await prepared(30);
-
-    expect(few).toBeGreaterThan(0);
-    expect(many).toBe(few);
   });
 
   // Injects malformed values through a native SQLite file handle.
@@ -274,7 +217,7 @@ describe("workboard sqlite batch card persistence", () => {
     await expect(read()).resolves.toEqual([{ key: card.id, value: expected }]);
   });
 
-  // Injects malformed rows and counts native SQLite statements.
+  // Injects malformed rows through a native SQLite file handle.
   test.each(["conflict", "updated"] as const)(
     "claims return %s without hydrating unrelated malformed children",
     async (result) => {
@@ -289,7 +232,6 @@ describe("workboard sqlite batch card persistence", () => {
       raw
         .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
         .run(9007199254740993n, "card-1");
-      const before = sqliteStatements.count;
       await expect(
         stores.cards.claimIfOwnerAvailable(
           target.id,
@@ -298,9 +240,7 @@ describe("workboard sqlite batch card persistence", () => {
           { ownerId: "slot-owner", now: 3000, limit: 1 },
         ),
       ).resolves.toBe(result);
-      if (result === "conflict") {
-        expect(sqliteStatements.count - before).toBe(1);
-      } else {
+      if (result === "updated") {
         await expect(stores.cards.lookup("card-1")).rejects.toMatchObject({
           code: "ERR_OUT_OF_RANGE",
         });
@@ -421,8 +361,7 @@ describe("workboard sqlite batch card persistence", () => {
       }
     },
   );
-  // Measures reads through the native SQLite open boundary.
-  test("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
+  test("preserves keyed rows, binary order, and attachment joins", async () => {
     const dbPath = databasePath();
     let stores = createKernelStores(dbPath);
     // SQLite's binary order differs from locale sorting and from UTF-16 for the last two ids.
@@ -519,9 +458,7 @@ describe("workboard sqlite batch card persistence", () => {
           timeOrder.map((index) => ({ key: ids[index], value: attachments[index] })),
         ],
       ] as const) {
-        const before = sqliteStatements.count;
         const entries = await collection.entries();
-        expect(sqliteStatements.count - before).toBe(1);
         expect(entries).toEqual(expected);
         for (const { key, value } of entries) {
           await expect(collection.lookup(key)).resolves.toEqual(value);

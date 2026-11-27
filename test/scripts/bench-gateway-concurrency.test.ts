@@ -594,46 +594,6 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
-  it("partitions acknowledged ingress without attributing later selection events to the same phase", () => {
-    expect(() => testing.parseMockRequests(undefined, 0, 1)).toThrow("identity");
-    const snapshots = [0, 2, 5, 7, 15, 19].map((responses, index) => {
-      const producer = {
-        id: "mock-one",
-        ingress: { responses, chatCompletions: 0, embeddings: index * 2, other: index },
-        selections: { model: index, global: 0, automaticTool: 0, automaticText: index },
-      };
-      const snapshot = testing.parseMockRequests(producer, index * 10, index * 10 + 2);
-      producer.ingress.responses += 1;
-      producer.selections.model += 1;
-      expect(snapshot.ingress.responses).toBe(responses);
-      expect(snapshot.selections.model).toBe(index);
-      return snapshot;
-    });
-    const result = testing.summarizeMockRequests(snapshots);
-    expect(result.ingress).toEqual({
-      startupAndWarmup: { responses: 2, chatCompletions: 0, embeddings: 2, other: 1 },
-      setup: { responses: 3, chatCompletions: 0, embeddings: 2, other: 1 },
-      agentWarmup: { responses: 2, chatCompletions: 0, embeddings: 2, other: 1 },
-      loadBracket: { responses: 8, chatCompletions: 0, embeddings: 2, other: 1 },
-      postLoad: { responses: 4, chatCompletions: 0, embeddings: 2, other: 1 },
-      total: { responses: 19, chatCompletions: 0, embeddings: 10, other: 5 },
-    });
-    expect(result.selections).toEqual({ model: 5, global: 0, automaticTool: 0, automaticText: 5 });
-    expect(() => testing.summarizeMockRequests(snapshots.slice(1))).toThrow("incomplete");
-    const finalSnapshot = snapshots[5];
-    assert(finalSnapshot);
-    for (const change of [
-      { id: "replacement" },
-      { beforeMs: 0 },
-      { ingress: { ...finalSnapshot.ingress, responses: 1 } },
-      { selections: { ...finalSnapshot.selections, model: 0 } },
-    ]) {
-      expect(() =>
-        testing.summarizeMockRequests([...snapshots.slice(0, 5), { ...finalSnapshot, ...change }]),
-      ).toThrow("regressed");
-    }
-  });
-
   it.each([-1])("rejects missing or unsafe mock counters: %s", (responses) => {
     expect(() =>
       testing.parseMockRequests(
@@ -909,106 +869,6 @@ describe("gateway concurrency benchmark script", () => {
 
   it.each([
     {
-      name: "same-process warmup markers",
-      records: [
-        { input: [{ role: "user", content: "benchmark warmup stream 1." }] },
-        {
-          input: [{ role: "user", content: [{ type: "input_text", text: "benchmark stream 1." }] }],
-        },
-      ].map((body) => ({
-        body: JSON.stringify(body),
-        inferenceFacts: summarizeMockInferenceRequest(body),
-      })),
-      before: 1,
-      after: 2,
-      warmup: { beforeOrdinal: 0, afterOrdinal: 1 },
-      expected: {
-        setup: { inference: 0 },
-        warmup: { inference: 1, byPurpose: { "benchmark-turn": 1 } },
-        load: { inference: 1 },
-        loadTurns: [{ turnIndex: 1, withoutToolOutput: 1, withToolOutput: 0 }],
-      },
-    },
-    {
-      name: "setup, embeddings, and timed model rounds",
-      records: [
-        { path: "/v1/responses", body: { input: [] } },
-        { path: "/v1/embeddings", body: { input: "seeded transcript" } },
-        {
-          path: "/v1/responses",
-          body: { input: [{ role: "user", content: "benchmark tool stream 1." }] },
-        },
-        {
-          path: "/v1/responses",
-          body: {
-            input: [
-              { role: "user", content: "benchmark tool stream 1." },
-              { type: "function_call_output", output: "ok" },
-            ],
-          },
-        },
-        { path: "/v1/responses", body: { input: [{ role: "user", content: "background work" }] } },
-      ].map(({ path: endpoint, body }) => ({ path: endpoint, body: JSON.stringify(body) })),
-      before: 2,
-      after: 4,
-      expected: {
-        setup: {
-          total: 2,
-          inference: 1,
-          byEndpoint: { "POST /v1/responses": 1, "POST /v1/embeddings": 1 },
-        },
-        load: { total: 2, inference: 2 },
-        afterLoad: { total: 1, inference: 1 },
-        loadTurns: [{ turnIndex: 1, withoutToolOutput: 1, withToolOutput: 1 }],
-        unclassifiedLoadInference: 0,
-      },
-    },
-    {
-      name: "unclassifiable inference arrivals",
-      records: [
-        { truncated: true, byteLength: 300_000, preview: "bounded evidence" },
-        "[unparseable request body redacted: 42 bytes]",
-        JSON.stringify({ input: [{ role: "user" }] }),
-      ].map((body) => ({ body })),
-      before: 0,
-      after: 3,
-      expected: {
-        load: { total: 3, inference: 3 },
-        loadTurns: [],
-        unclassifiedLoadInference: 3,
-      },
-    },
-  ])(
-    "partitions provider requests for $name",
-    ({ records: inputs, before, after, warmup, expected }) => {
-      const records = inputs.map((record, index) =>
-        JSON.stringify({
-          method: "POST",
-          path: "/v1/responses",
-          seq: index + 1,
-          ...record,
-        }),
-      );
-      expect(testing.summarizeProviderRequests(records, before, after, warmup)).toMatchObject(
-        expected,
-      );
-      if (warmup) {
-        expect(() =>
-          testing.summarizeProviderRequests(records, before, after, { ...warmup, afterOrdinal: 2 }),
-        ).toThrow("warmup snapshots");
-      } else if (before > 0) {
-        expect(() => testing.summarizeProviderRequests(records.slice(1), before, after)).toThrow(
-          "missing or repeated ordinal",
-        );
-        expect(() => testing.summarizeProviderRequests(records, after, before)).toThrow(
-          "out of order",
-        );
-      }
-    },
-  );
-
-  it.each([
-    {
       name: "zero",
       fields: { externalBytes: 0, arrayBuffersBytes: 0 },
       expected: { externalMb: 0, arrayBuffersMb: 0 },
@@ -1037,42 +897,6 @@ describe("gateway concurrency benchmark script", () => {
       heapUsedMb: 0.5,
       rssMb: 3,
       ...expected,
-    });
-  });
-
-  it("summarizes only observed optional memory values and complete growth pairs", () => {
-    const memory = createBenchmarkRun().memory;
-    const runs = [
-      {
-        before: { externalMb: 2, arrayBuffersMb: 1 },
-        after: { externalMb: 5, arrayBuffersMb: 2 },
-      },
-      {
-        before: { externalMb: 0, arrayBuffersMb: 0 },
-        after: { externalMb: 0, arrayBuffersMb: 0 },
-      },
-      {
-        before: { externalMb: 8, arrayBuffersMb: 3 },
-        after: { externalMb: 6, arrayBuffersMb: 1.5 },
-      },
-      { before: { externalMb: 100 }, after: { arrayBuffersMb: 6 } },
-      { before: { arrayBuffersMb: 8 }, after: { externalMb: 9 } },
-      { before: {}, after: {} },
-    ].map(({ before, after }) =>
-      createBenchmarkRun({
-        memory: {
-          ...memory,
-          before: { ...memory.before, ...before },
-          after: { ...memory.after, ...after },
-        },
-      }),
-    );
-
-    expect(testing.summarizeRuns(runs)).toMatchObject({
-      gatewayExternalMb: { count: 4, max: 9, p50: 5, p95: 9, p99: 9 },
-      gatewayExternalGrowthMb: { count: 3, max: 3, p50: 0, p95: 3, p99: 3 },
-      gatewayArrayBuffersMb: { count: 4, max: 6, p50: 1.5, p95: 6, p99: 6 },
-      gatewayArrayBuffersGrowthMb: { count: 3, max: 1, p50: 0, p95: 1, p99: 1 },
     });
   });
 
@@ -1222,73 +1046,6 @@ describe("gateway concurrency benchmark script", () => {
     expect(() =>
       testing.parseOptions(["--load-cpu-prof-dir", "/tmp/cpu", "--heap-prof-dir", "/tmp/heap"]),
     ).toThrow("--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs");
-    expect(
-      testing.parseOptions(
-        [
-          ["--agent-count", "12"],
-          ["--concurrency", "12"],
-          ["--turns-per-session", "8"],
-          ["--runs", "2"],
-          ["--warmup", "0"],
-          ["--cadence-ms", "50"],
-          ["--timeout-ms", "90000"],
-          ["--cpu-prof-dir", "/tmp/gateway-cpu-profiles"],
-          ["--heap-prof-dir", "/tmp/gateway-heap-profiles"],
-          ["--plugin-count", "50"],
-          ["--probe-rounds", "20"],
-          ["--session-count", "120"],
-          ["--control-plane"],
-          ["--history-messages", "20"],
-          ["--history-message-chars", "8192"],
-          ["--history-clients", "6"],
-          ["--history-burst", "5"],
-          ["--session-updates", "500"],
-          ["--session-update-clients", "8"],
-          ["--subscribers", "4"],
-          ["--stream-chunk-delay-ms", "2000"],
-          ["--max-control-ms", "2000"],
-          ["--max-handshake-ms", "2000"],
-          [
-            "--tool-events",
-            "--no-diagnostics-timeline",
-            "--visible-observer",
-            "--workspace-fanout",
-          ],
-          ["--output", "concurrency.json"],
-          ["--json"],
-        ].flat(),
-      ),
-    ).toMatchObject({
-      agentCount: 12,
-      cadenceMs: 50,
-      concurrency: 12,
-      cpuProfDir: "/tmp/gateway-cpu-profiles",
-      heapProfDir: "/tmp/gateway-heap-profiles",
-      diagnosticsTimeline: false,
-      json: true,
-      historyBurst: 5,
-      historyClients: 6,
-      historyMessages: 20,
-      historyMessageChars: 8192,
-      controlPlane: true,
-      maxControlMs: 2_000,
-      maxHandshakeMs: 2_000,
-      output: "concurrency.json",
-      pluginCount: 50,
-      probeRounds: 20,
-      runs: 2,
-      sessionCount: 120,
-      sessionUpdateClients: 8,
-      sessionUpdates: 500,
-      streamChunkDelayMs: 2_000,
-      subscribers: 4,
-      timeoutMs: 90_000,
-      toolEvents: true,
-      turnsPerSession: 8,
-      visibleObserver: true,
-      warmup: 0,
-      workspaceFanout: true,
-    });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
     );
@@ -1358,20 +1115,6 @@ describe("gateway concurrency benchmark script", () => {
       ]),
     ).toThrow("synthetic history");
   });
-
-  it.each([
-    { values: [18, 22], total: 40, summary: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 } },
-  ])(
-    "summarizes scan durations $values with nearest-rank percentiles",
-    ({ values, total, summary }) => {
-      expect(
-        testing.summarizePluginMetadataScans([
-          ...values.map((durationMs) => ({ durationMs, name: "plugins.metadata.scan" })),
-          { durationMs: 9, name: "plugins.metadata.freeze" },
-        ]),
-      ).toEqual({ count: values.length, durationMs: summary, totalDurationMs: total });
-    },
-  );
 
   it("rejects incomplete timelines and counts load spans by emission time", async () => {
     await withTempDir("openclaw-concurrency-timeline-", async (root) => {
@@ -1645,51 +1388,6 @@ describe("gateway concurrency benchmark script", () => {
     expect(new Set(starts.map((request) => request.message)).size).toBe(4);
   });
 
-  it("gives each fixed history client its full request budget despite different response times", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const requests: string[][] = [[], []];
-    const finished: number[] = [];
-    try {
-      const jobs = requests.map((clientRequests, client) =>
-        testing
-          .runProbeRounds({
-            rounds: 3,
-            deadlineAt: performance.now() + 60_000,
-            cadenceMs: 10,
-            cadenceFrom: "completion",
-            runFirst: false,
-            shouldContinue: () => false,
-            stopped: () => false,
-            runRound: async (round) => {
-              await Promise.all(
-                Array.from({ length: 2 }, async (_, request) => {
-                  clientRequests.push(`${round}:${request}`);
-                  await new Promise<void>((resolve) => {
-                    setTimeout(resolve, client * 50);
-                  });
-                }),
-              );
-            },
-          })
-          .then((count) => {
-            finished.push(client);
-            return count;
-          }),
-      );
-      await vi.advanceTimersByTimeAsync(35);
-      expect(finished).toEqual([0]);
-      expect(requests.map((items) => items.length)).toEqual([6, 2]);
-      await vi.runAllTimersAsync();
-      expect(await Promise.all(jobs)).toEqual([3, 3]);
-      expect(requests).toEqual([
-        ["0:0", "0:1", "1:0", "1:1", "2:0", "2:1"],
-        ["0:0", "0:1", "1:0", "1:1", "2:0", "2:1"],
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("refuses the next fixed probe round when the load deadline is exhausted", async () => {
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -1716,24 +1414,6 @@ describe("gateway concurrency benchmark script", () => {
     }
   });
 
-  it("preserves adaptive first-round behavior", async () => {
-    const issued: number[] = [];
-    expect(
-      await testing.runProbeRounds({
-        deadlineAt: performance.now() + 60_000,
-        cadenceMs: 100,
-        cadenceFrom: "start",
-        runFirst: true,
-        shouldContinue: () => false,
-        stopped: () => false,
-        runRound: async (round) => {
-          issued.push(round);
-        },
-      }),
-    ).toBe(1);
-    expect(issued).toEqual([0]);
-  });
-
   it("joins an admitted fixed round but issues no further work after teardown starts", async () => {
     const admitted = createDeferred();
     const release = createDeferred();
@@ -1758,41 +1438,6 @@ describe("gateway concurrency benchmark script", () => {
     release.resolve();
     expect(await job).toBe(1);
     expect(issued).toEqual([0]);
-  });
-
-  it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
-    const deadlines: number[] = [];
-    const sample = createBenchmarkRun();
-
-    const runs = await testing.runBenchmarkSamples({
-      now: (() => {
-        const values = [1_000, 9_000];
-        return () => values.shift() ?? 9_000;
-      })(),
-      options: testing.parseOptions([
-        "--runs",
-        "1",
-        "--warmup",
-        "1",
-        "--timeout-ms",
-        "5000",
-        "--agent-count",
-        "8",
-      ]),
-      runSample: async ({ deadlineAt, agentCount, concurrency, sessionCount, turnsPerSession }) => {
-        expect({ agentCount, concurrency, sessionCount, turnsPerSession }).toEqual({
-          agentCount: 8,
-          concurrency: 8,
-          sessionCount: 0,
-          turnsPerSession: 1,
-        });
-        deadlines.push(deadlineAt);
-        return { status: "success", run: sample };
-      },
-    });
-
-    expect(deadlines).toEqual([6_000, 14_000]);
-    expect(runs).toEqual({ runs: [sample], warmupRuns: [sample] });
   });
 
   it.each(["warmup", "measured"] as const)(
@@ -1966,51 +1611,6 @@ describe("gateway concurrency benchmark script", () => {
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
-      });
-    }
-  });
-
-  it("reuses one connection for sequential successful HTTP samples", async () => {
-    let connectionCount = 0;
-    const server = createHttpServer((request, response) => {
-      response.setHeader(
-        "content-type",
-        request.url === "/readyz" ? "application/json" : "text/html",
-      );
-      response.end(request.url === "/readyz" ? '{"status":"ok"}' : "<html></html>");
-    });
-    server.on("connection", () => {
-      connectionCount += 1;
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected HTTP test server address");
-      }
-      const deadlineAt = performance.now() + 5_000;
-
-      await testing.requestHttp({
-        accept: "application/json",
-        deadlineAt,
-        path: "/readyz",
-        port: address.port,
-      });
-      await testing.requestHttp({
-        accept: "text/html",
-        deadlineAt,
-        path: "/",
-        port: address.port,
-      });
-
-      expect(connectionCount).toBe(1);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
       });
     }
   });

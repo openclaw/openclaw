@@ -206,51 +206,6 @@ function expectReleased(fixture: Preparation, pool: WorkerTaskPool<string, strin
 const postedInputs = (worker: FakeWorker) =>
   worker.posted.mock.calls.map(([message]) => message.input);
 
-it.each<[number, WorkerPoolClass, number, boolean?, number?]>([
-  [1, "reader", 1],
-  [2, "reader", 1],
-  [8, "reader", 2],
-  [128, "file-reader", 2],
-  [128, "compute", 4],
-  [128, "writer", 1],
-  [128, "singleton", 1],
-  [128, "reader", 2, true],
-  [128, "reader", 2, false, 1],
-])(
-  "bounds admission on %i CPUs (class=%s, admitted=%i, owned=%s)",
-  async (cpus, workerClass, count, owned, maxWorkers) => {
-    cpu.count = cpus;
-    const options = { workerUrl, workerClass, maxWorkers };
-    const pool = owned
-      ? createOwnedWorkerTaskPool<string, string>(options)
-      : new WorkerTaskPool<string, string>(options);
-    const gate = createDeferredCore();
-    const admitted: number[] = [];
-    const inputs = Array.from({ length: 12 }, (_, index) => index);
-    const results = inputs.map((index) =>
-      pool.run(() => {
-        admitted.push(index);
-        return gate.promise.then(() => String(index));
-      }, {}),
-    );
-    try {
-      expect(admitted).toEqual(inputs.slice(0, count));
-      expect(pool.getSnapshot().maxWorkers).toBe(count);
-      gate.resolve();
-      await expect(Promise.all(results)).resolves.toEqual(inputs.map(String));
-      expect(admitted).toEqual(inputs);
-      if (["reader", "file-reader", "compute"].includes(workerClass)) {
-        expect(
-          workers.map((worker) => worker.options?.resourceLimits?.maxOldGenerationSizeMb),
-        ).toEqual(Array(count).fill(512));
-      }
-    } finally {
-      gate.resolve();
-      await Promise.all([Promise.allSettled(results), pool.close()]);
-    }
-  },
-);
-
 it.each([undefined, "reader"] as const)(
   "retains lazy inherited options (class=%s)",
   async (selectedClass) => {

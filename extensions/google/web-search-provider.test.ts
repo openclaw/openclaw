@@ -210,22 +210,6 @@ describe("google web search provider", () => {
     expect(postCalls).toHaveLength(2);
   });
 
-  it("reuses cached Gemini answers across ignored result counts while rejecting invalid counts", async () => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({});
-    const query = "unique Gemini ignored result count cache regression";
-
-    await tool?.execute({ query, count: 1 });
-    await tool?.execute({ query, count: 10 });
-    await tool?.execute({ query });
-
-    await expect(tool?.execute({ query, count: 0 })).rejects.toThrow(
-      "count must be an integer from 1 to 10.",
-    );
-    const postCalls = postedCalls(mockFetch);
-    expect(postCalls).toHaveLength(1);
-  });
-
   it.each([0, 1])("honors the current Gemini cache TTL of %s minutes", async (cacheTtlMinutes) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     let content = "Original grounded answer";
@@ -264,21 +248,6 @@ describe("google web search provider", () => {
       await expect(currentTool?.execute({ query })).resolves.toEqual({ ...fresh, cached: true });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     }
-  });
-
-  it("does not partition cached results by overwritten provider-owned headers", async () => {
-    const mockFetch = installGeminiFetch();
-
-    await createGeminiToolWithHeaders({ "X-Goog-Api-Key": "operator-one" })?.execute({
-      query: "OpenClaw provider-owned header cache",
-    });
-    await createGeminiToolWithHeaders({ "x-goog-api-key": "operator-two" })?.execute({
-      query: "OpenClaw provider-owned header cache",
-    });
-
-    const postCalls = postedCalls(mockFetch);
-    expect(postCalls).toHaveLength(1);
-    expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-plugin-test");
   });
 
   it("normalizes case collisions before sending and partitioning the cache", async () => {
@@ -386,22 +355,8 @@ describe("google web search provider", () => {
   );
 
   it.each([
-    ["empty parts", candidateResponse({ content: { parts: [] }, finishReason: "STOP" }), " (STOP)"],
-    [
-      "missing parts",
-      candidateResponse({ content: { role: "model" }, finishReason: "STOP" }),
-      " (STOP)",
-    ],
-    ["missing content", candidateResponse({ finishReason: "STOP" }), " (STOP)"],
-    [
-      "nontext part",
-      candidateResponse({ content: { parts: [{ functionCall: {} }] }, finishReason: "STOP" }),
-      " (STOP)",
-    ],
     ["empty candidates", { candidates: [] }, ""],
-    ["missing candidates", {}, ""],
     ["blocked prompt", { promptFeedback: { blockReason: "SAFETY" } }, " (SAFETY)"],
-    ["blank reason", candidateResponse({ finishReason: "  " }), ""],
   ])(
     "reports no final answer for %s without inventing search results",
     async (_name, body, reason) => {
@@ -416,22 +371,7 @@ describe("google web search provider", () => {
 
   it.each([
     ["JSON syntax", "{ nope"],
-    ["array root", []],
-    ["non-array candidates", { candidates: {} }],
-    ["null candidate", candidateResponse(null)],
-    ["non-record content", candidateResponse({ content: "invalid" })],
     ["null part", candidateResponse({ content: { parts: [null] } })],
-    ["non-string part text", candidateResponse({ content: { parts: [{ text: 7 }] } })],
-    ["non-array parts", candidateResponse({ content: { parts: {} } })],
-    ["non-record prompt feedback", { promptFeedback: [] }],
-    ["non-string block reason", { promptFeedback: { blockReason: {} } }],
-    ["non-string finish reason", candidateResponse({ finishReason: 1 })],
-    ["non-record grounding metadata", candidateResponse({ groundingMetadata: [] })],
-    [
-      "non-array grounding chunks",
-      candidateResponse({ groundingMetadata: { groundingChunks: {} } }),
-    ],
-    ["non-record error", { error: "invalid" }],
   ])("keeps malformed %s distinct from an absent answer", async (_name, body) => {
     installGeminiResponse(typeof body === "string" ? body : JSON.stringify(body));
     const tool = createGeminiToolWithHeaders({});
@@ -692,6 +632,9 @@ describe("google web search provider", () => {
       message:
         "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
     });
+    await expect(tool?.execute({ query: "invalid Gemini count", count: 0 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });

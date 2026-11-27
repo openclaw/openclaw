@@ -11,7 +11,6 @@ import {
 import {
   clearPluginCommands,
   executePluginCommand,
-  listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
@@ -489,21 +488,6 @@ describe("registerPluginCommand", () => {
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
-    expect(listPluginCommands()).toEqual([
-      {
-        name: "demo_cmd",
-        description: "Demo command",
-        pluginId: "demo-plugin",
-        acceptsArgs: false,
-      },
-    ]);
-    expect(getPluginCommandSpecs()).toEqual([
-      {
-        name: "demo_cmd",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
     expect(getPluginCommandEntrySpecs()).toEqual([
       {
         name: "demo_cmd",

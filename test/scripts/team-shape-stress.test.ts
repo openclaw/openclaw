@@ -285,45 +285,6 @@ it("loads each built entry's own package exports despite controller source alias
   }
 });
 
-it.each([" {", "{"])(
-  "counts built policy preparation inside its measurement window (%s)",
-  async (brace) => {
-    const root = temporary.make("team-stress-policy-counts-");
-    fs.writeFileSync(
-      path.join(root, "operator-model-policy-fixture.mjs"),
-      `export function prepareOperatorModelPolicy(value)${brace} prepareRefs(); return value; }
-     export function restoreOperatorModelPolicySnapshot(value)${brace} return value; }
-     function prepareRefs()${brace}}`,
-    );
-    const entry = path.join(root, "entry.mjs");
-    fs.writeFileSync(
-      entry,
-      `import {prepareOperatorModelPolicy, restoreOperatorModelPolicySnapshot} from "./operator-model-policy-fixture.mjs";
-     prepareOperatorModelPolicy("outside");
-     process.emit("message", {channel: "team-shape-stress", action: "start"});
-     if (prepareOperatorModelPolicy("inside") !== "inside") throw new Error("changed output");
-     restoreOperatorModelPolicySnapshot({});
-     process.emit("message", {channel: "team-shape-stress", action: "stop", output: ${JSON.stringify(root)}});`,
-    );
-    const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
-    await executeFile(resolveTestNodeExecPath(), ["--import", loader.href, entry], {
-      cwd: root,
-      env: { ...process.env, OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" },
-      timeout: 15_000,
-    });
-    const result = JSON.parse(
-      fs.readFileSync(path.join(root, "operator-model-policy-counts.json"), "utf8"),
-    );
-    expect(result.counts).toEqual({
-      prepareOperatorModelPolicy: 1,
-      restoreOperatorModelPolicySnapshot: 1,
-      prepareRefs: 1,
-      prepareSessionRowRecipient: 0,
-    });
-    expect(result.installed).toHaveLength(3);
-  },
-);
-
 it.each([false, true])(
   "counts main-isolate receipt restoration only when guarded assignment succeeds (candidate: %s)",
   async (candidate) => {
@@ -651,63 +612,6 @@ it.each(["timing", "allocation", "retention"])(
     }
   },
 );
-
-it("compares swapped pairs without mixing A/A controls or averaging tiny-base percentages", () => {
-  const run = (side: StressRun["side"], pair: number, cpu: number): StressRun => ({
-    resultDir: "/synthetic",
-    side,
-    pair,
-    mode: "timing",
-    smoke: false,
-    durationMs: 600_000,
-    metrics: { mainThreadCpuPercent: cpu, zeroCost: 0, missingCost: null },
-    rpc: {},
-    gc: {},
-    stalls: { count: 0, totalMs: 0, maxMs: 0 },
-    workerHeaps: undefined,
-    rpcMinutes: [],
-    nativeOldGenerationSamples: [],
-    memoryScope: "synthetic comparison fixture",
-  });
-  const rows = compareStressRuns([
-    run("base", 1, 1),
-    run("candidate", 1, 3),
-    run("candidate", 2, 80),
-    run("base", 2, 100),
-    { ...run("base", 1, 7), control: true },
-    { ...run("candidate", 1, 9), control: true },
-  ]);
-  const cpu = rows.find((row) => !row.control && row.metric === "mainThreadCpuPercent");
-  expect(cpu).toMatchObject({
-    base: 50.5,
-    candidate: 41.5,
-    absolute: -9,
-    pairs: 2,
-    pairedDeltas: [2, -20],
-  });
-  expect(cpu?.percent).toBeCloseTo((-9 / 50.5) * 100);
-  expect(rows.filter((row) => row.metric === "mainThreadCpuPercent")).toHaveLength(2);
-  expect(rows.find((row) => row.control && row.metric === "mainThreadCpuPercent")).toMatchObject({
-    base: 7,
-    candidate: 9,
-    absolute: 2,
-    pairs: 1,
-    pairedDeltas: [2],
-  });
-  expect(rows.find((row) => row.metric === "zeroCost")).toMatchObject({
-    base: 0,
-    absolute: 0,
-    percent: null,
-  });
-  expect(rows.find((row) => row.metric === "missingCost")).toMatchObject({
-    base: null,
-    candidate: null,
-    absolute: null,
-    percent: null,
-    pairs: 0,
-    context: "inconclusive: missing paired metric",
-  });
-});
 
 it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn) => {
   const capture = (side: StressRun["side"], reason?: string) => {

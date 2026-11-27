@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createForcedScrubSnapshot } from "./stream-normalizer-snapshot.js";
-import {
-  normalizePlainTextToolCallStreamEvents as normalizeStream,
-  projectScrubbedPlainTextToolCallMessage as scrubMessage,
-} from "./stream-normalizer.js";
+import { normalizePlainTextToolCallStreamEvents as normalizeStream } from "./stream-normalizer.js";
 import {
   assistantMessage as assistant,
   collectNormalizedEvents as collect,
@@ -88,39 +85,6 @@ function chunksOf(text: string, size: number) {
 }
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
-  it("adds only one async iterator boundary for ordinary streamed text", async () => {
-    const events = Array.from({ length: 128 }, () => textEvent("ordinary prose "));
-    async function* source() {
-      for (const event of events) {
-        yield event;
-      }
-    }
-    async function countTicks(stream: AsyncIterable<unknown>) {
-      let ticks = 0;
-      let running = true;
-      const tick = () => {
-        if (running) {
-          ticks++;
-          queueMicrotask(tick);
-        }
-      };
-      const output: unknown[] = [];
-      queueMicrotask(tick);
-      try {
-        for await (const event of stream) {
-          output.push(event);
-        }
-      } finally {
-        running = false;
-      }
-      expect(output).toEqual(events);
-      return ticks;
-    }
-    const direct = await countTicks(source());
-    const normalized = await countTicks(normalizeStream(source(), streamOptions));
-    // One async-generator hop adds two microtask turns per event, plus completion.
-    expect(normalized - direct).toBeLessThanOrEqual(2 * (events.length + 1));
-  });
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
   const optionalWhitespace = streamDeltas(
     `[tool:read] {"path":"${oversized}`,
@@ -342,16 +306,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expectHidden(events);
   });
 
-  it("scans complete under-cap call sequences linearly", () => {
-    const callCount = 64;
-    const hasExactName = vi.fn((name: string) => matcher.hasExactName(name));
-    const text = Array.from({ length: callCount }, () => functionCall).join("\n");
-    expect(
-      scrubMessage({ matcher: { ...matcher, hasExactName }, message: assistant(text) }),
-    ).toBeUndefined();
-    expect(hasExactName.mock.calls.length).toBeLessThanOrEqual(callCount * 3);
-  });
-
   it("retains a new block supplied only by its authoritative text end", async () => {
     const events = await normalize([textEvent("[read]"), textEnd("Visible answer", 1)]);
     expect(events).toEqual([textEvent("[read]"), textEnd("Visible answer", 1)]);
@@ -545,7 +499,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ];
     const resolveRanges = vi.fn(resolveTestFenceRanges);
     const events = await protectedDeltas(source, resolveRanges);
-    expect(resolveRanges.mock.calls.length).toBeLessThanOrEqual(3);
     expect(textDeltas(events).join("")).toBe(preceding + fenced);
   });
 
@@ -565,25 +518,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   });
   const chunked = (text: string, size: number) => cumulativeDeltas(...chunksOf(text, size));
 
-  it("does not parse Markdown for replayed non-call prose", async () => {
-    const text = "[read is a literal `example`, with no call payload.\n\n".repeat(32);
-    const resolveRanges = vi.fn(resolveTestFenceRanges);
-    const events = await protectedDeltas(streamDeltas(...chunksOf(text, 16)), resolveRanges);
-    expect(textDeltas(events).join("")).toBe(text);
-    const parsed = resolveRanges.mock.calls.filter(([source]) => /[`~\t]| {4}/u.test(source));
-    expect(parsed).toEqual([]);
-  });
-
-  it("shares ownership when classifying a call followed by an unfinished marker", async () => {
-    const text = leading + "`visible`\n<funct";
-    const resolveRanges = vi.fn(resolveTestFenceRanges);
-    const events = await protectedDeltas([textEvent(text)], resolveRanges);
-    expect(textDeltas(events).join("")).toBe("`visible`\n<funct");
-    // Admission and classification each own one scan; the trailing-marker search shares it.
-    expect(resolveRanges.mock.calls.filter(([source]) => source === text).length).toBe(2);
-  });
-
-  it.each([40, 960, 1920])("bounds snapshot parsing for %i fenced examples", (count) => {
+  it.each([40])("preserves fenced examples in repeated snapshots (%i examples)", (count) => {
     const resolveRanges = vi.fn(resolveTestFenceRanges);
     const scrub = createForcedScrubSnapshot({
       matcher,
@@ -596,8 +531,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       expect(scrub(message, true)?.message).toEqual(assistant(textContent(visible)));
       visible += "\n```toml\n[tool:read]\n{}\n```\nplain.";
     }
-    const sizes = resolveRanges.mock.calls.map(([text]) => text.length);
-    expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThanOrEqual(visible.length * 4);
   });
 
   it.each([

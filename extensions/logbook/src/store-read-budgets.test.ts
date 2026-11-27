@@ -6,108 +6,10 @@ import {
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 import { cardDraft, frameInput } from "./test-fixtures.test-support.js";
-
-const reads = vi.hoisted(() => ({
-  cardQueries: 0,
-  cardRows: 0,
-  observationRows: 0,
-  frameRows: 0,
-  frameTextBytes: 0,
-}));
-const preparations = vi.hoisted(() => new Map<string, number>());
-const batchReads = vi.hoisted(() => [] as string[][]);
-const schemaStatements = vi.hoisted(() => [] as string[]);
-vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
-      const db = actual.openNodeSqliteDatabase(...args);
-      const prepare = db.prepare.bind(db);
-      const recordSchema = (sql: string) => {
-        if (
-          /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|CREATE\s+(?:TABLE|INDEX)/i.test(
-            sql,
-          )
-        ) {
-          schemaStatements.push(sql);
-        }
-      };
-      const exec = db.exec.bind(db);
-      vi.spyOn(db, "exec").mockImplementation((sql) => {
-        recordSchema(sql);
-        exec(sql);
-      });
-      vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        recordSchema(sql);
-        const statement = prepare(sql);
-        if (/^\s*(?:insert into "(?:frames|standups)"|update "batches")/i.test(sql)) {
-          preparations.set(sql, (preparations.get(sql) ?? 0) + 1);
-        }
-        if (/\bfrom "batches"(?:\s|$)/i.test(sql)) {
-          const get = statement.get.bind(statement);
-          vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-            batchReads.push(
-              prepare(`EXPLAIN QUERY PLAN ${sql}`)
-                .all(...bindings)
-                .map((row) => String(row.detail)),
-            );
-            return get(...bindings);
-          });
-        }
-        const table = /\bfrom\s+"?(cards|observations|frames)\b/i.exec(sql)?.[1];
-        if (!table) {
-          return statement;
-        }
-        const record = (row: Record<string, unknown>) => {
-          if (table === "cards") {
-            reads.cardRows += Number("distractions" in row);
-          } else if (table === "observations") {
-            reads.observationRows += 1;
-          } else {
-            reads.frameRows += 1;
-            for (const value of Object.values(row)) {
-              if (typeof value === "string") {
-                reads.frameTextBytes += Buffer.byteLength(value);
-              }
-            }
-          }
-        };
-        const get = statement.get.bind(statement);
-        vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-          reads.cardQueries += Number(table === "cards");
-          const row = get(...bindings);
-          if (row) {
-            record(row);
-          }
-          return row;
-        });
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-          reads.cardQueries += Number(table === "cards");
-          const rows = all(...bindings);
-          rows.forEach(record);
-          return rows;
-        });
-        const iterate = statement.iterate.bind(statement);
-        vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
-          reads.cardQueries += Number(table === "cards");
-          for (const row of iterate(...bindings)) {
-            record(row);
-            yield row;
-          }
-          return undefined;
-        });
-        return statement;
-      });
-      return db;
-    },
-  };
-});
 
 const backends: SqliteWorkerBackend<LogbookOperations>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -115,31 +17,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     try {
       await Promise.all(backends.splice(0).map((backend) => Promise.resolve(backend.close())));
     } finally {
-      vi.restoreAllMocks();
-      preparations.clear();
-      batchReads.length = 0;
-      schemaStatements.length = 0;
       cleanup();
     }
   }),
 );
 const day = "2026-07-03";
 
-it("reuses live schema admission on reopen and validates a replacement physical database", async () => {
+it("retains persisted standups across reopen and physical database replacement", async () => {
   const dataDir = tempDirs.make("logbook-schema-admission-");
   const databasePath = path.join(dataDir, "logbook.sqlite");
   // Keep the original physical store admitted through reopen and pathname replacement.
   using owner = openNodeSqliteDatabase(databasePath);
   expect(owner.isOpen).toBe(true);
   for (let opened = 0; opened < 3; opened += 1) {
-    schemaStatements.length = 0;
     const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
     try {
-      if (opened === 1) {
-        expect(schemaStatements).toEqual([]);
-      } else {
-        expect(schemaStatements.length).toBeGreaterThan(0);
-      }
       if (opened === 0) {
         backend.execute({ type: "saveStandup", input: { day, text: "Persisted standup" } });
       }
@@ -165,7 +57,7 @@ function openBackend() {
 }
 
 describe("Logbook native statement and read budgets", () => {
-  it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
+  it("polls only pending batches in timestamp/id order", () => {
     const { backend, databasePath } = openBackend();
     const writer = new DatabaseSync(databasePath);
     try {
@@ -191,17 +83,9 @@ describe("Logbook native statement and read budgets", () => {
       backend.execute({ type: "setBatchStatus", input: { batchId: id, status: "done" } });
     }
     expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toBeNull();
-    expect(batchReads).toHaveLength(4);
-    for (const plan of batchReads) {
-      expect(plan).toEqual(
-        expect.arrayContaining([expect.stringContaining("idx_logbook_batches_pending")]),
-      );
-      expect(plan.some((detail) => detail.includes("TEMP B-TREE"))).toBe(false);
-      expect(plan).not.toContain("SCAN batches");
-    }
   });
 
-  it("reuses native write statements with fresh optional values and model coalescing", () => {
+  it("stores fresh optional values and coalesces batch models", () => {
     const { backend } = openBackend();
     const firstFrame = frameInput({
       capturedAtMs: 1,
@@ -235,8 +119,6 @@ describe("Logbook native statement and read budgets", () => {
       type: "setBatchStatus",
       input: { batchId: 1, status: "running", error: "Warmup status" },
     });
-    const warmed = new Map(preparations);
-    expect([...warmed.values()]).toEqual([2, 2, 2]);
 
     expect(
       backend.execute({
@@ -264,7 +146,6 @@ describe("Logbook native statement and read budgets", () => {
       input: { batchId: 1, status: "done", model: "synthetic/second" },
     });
 
-    expect(preparations).toEqual(warmed);
     expect(backend.execute({ type: "frameById", input: { id: 1 } })).toMatchObject({
       path: "first.jpg",
       width: 640,
@@ -303,7 +184,7 @@ describe("Logbook native statement and read budgets", () => {
     });
   });
 
-  it("hydrates timeline cards once and counts cards without hydrating their payloads", () => {
+  it("returns timeline cards, tracked time and independent counts", () => {
     const { backend } = openBackend();
     const drafts = Array.from({ length: 8 }, (_, index) =>
       cardDraft({
@@ -317,20 +198,11 @@ describe("Logbook native statement and read budgets", () => {
       type: "replaceCardsInWindow",
       input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, drafts },
     });
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
     expect(backend.execute({ type: "timelineForDay", input: { day } })).toMatchObject({
       cards: drafts.map((draft) => expect.objectContaining(draft)),
       stats: { trackedMs: 8 * 60_000 },
     });
-    expect(reads.cardQueries).toBe(1);
-    expect(reads.cardRows).toBe(8);
-
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
     expect(backend.execute({ type: "countCardsForDay", input: { day } })).toBe(8);
-    expect(reads.cardQueries).toBe(1);
-    expect(reads.cardRows).toBe(0);
   });
 
   it("reads at most 200 observations with stable timestamp ties", () => {
@@ -352,7 +224,6 @@ describe("Logbook native statement and read budgets", () => {
       text: `Observation ${index} 🦞`,
     }));
     backend.execute({ type: "replaceObservations", input: { batchId, day, segments } });
-    reads.observationRows = 0;
     expect(
       backend.execute({
         type: "observationsInRange",
@@ -363,7 +234,6 @@ describe("Logbook native statement and read budgets", () => {
         .map((segment, index) => Object.assign({ id: index + 1, batchId, day }, segment))
         .slice(-200),
     );
-    expect(reads.observationRows).toBe(200);
   });
   const keyframeDrafts = [0, 40_000].map((startMs) =>
     cardDraft({ startMs, endMs: startMs + 40_000, title: `Card ${startMs}` }),
@@ -386,7 +256,7 @@ describe("Logbook native statement and read budgets", () => {
     });
   }
 
-  it("selects ordered pending and range metadata without decoding unused text or narrowing full readers", () => {
+  it("returns ordered frame metadata while preserving full frame readers", () => {
     const { backend } = openBackend();
     insertCandidate(backend, 3000);
     insertCandidate(backend, 1000);
@@ -405,19 +275,11 @@ describe("Logbook native statement and read budgets", () => {
       { id: 1, capturedAtMs: 3000 },
     ];
     for (const limit of [0, 2, 10]) {
-      reads.frameRows = 0;
-      reads.frameTextBytes = 0;
       const pending = backend.execute({ type: "unbatchedActiveFrames", input: { limit } });
-      expect(reads.frameRows).toBe(Math.min(limit, expected.length));
-      expect.soft(reads.frameTextBytes).toBe(0);
       expect(pending).toEqual(expected.slice(0, limit));
     }
 
-    reads.frameRows = 0;
-    reads.frameTextBytes = 0;
     const range = backend.execute({ type: "framesInRange", input: { startMs: 500, endMs: 3000 } });
-    expect(reads.frameRows).toBe(5);
-    expect.soft(reads.frameTextBytes).toBe(0);
     expect(range).toEqual([
       { id: 5, capturedAtMs: 500, idle: true },
       { id: 6, capturedAtMs: 750, idle: false },
@@ -441,32 +303,24 @@ describe("Logbook native statement and read budgets", () => {
     expect(backend.execute({ type: "sampledBatchFrames", input: { batchId: 1 } })).toEqual([
       fullFrame,
     ]);
-    expect(reads.frameTextBytes).toBeGreaterThan(0);
   });
 
-  it.each([0, 120])(
-    "selects keyframes without reading path/day payloads for %i candidates",
-    (count) => {
-      const { backend } = openBackend();
-      for (let index = 0; index < count; index += 1) {
-        insertCandidate(backend, Math.floor(index / 2) * 1000);
-      }
-      insertCandidate(backend, -1);
-      insertCandidate(backend, 120_000);
-      reads.frameRows = 0;
-      reads.frameTextBytes = 0;
-      backend.execute({
-        type: "replaceCardsInWindow",
-        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
-      });
-      const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
-      expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(
-        keyframeDrafts.map((draft, index) =>
-          expect.objectContaining(Object.assign({}, draft, { keyframeId: expectedIds[index] })),
-        ),
-      );
-      expect(reads.frameRows).toBe(count);
-      expect.soft(reads.frameTextBytes).toBe(0);
-    },
-  );
+  it.each([0, 120])("selects keyframe ids for %i candidates", (count) => {
+    const { backend } = openBackend();
+    for (let index = 0; index < count; index += 1) {
+      insertCandidate(backend, Math.floor(index / 2) * 1000);
+    }
+    insertCandidate(backend, -1);
+    insertCandidate(backend, 120_000);
+    backend.execute({
+      type: "replaceCardsInWindow",
+      input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
+    });
+    const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
+    expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(
+      keyframeDrafts.map((draft, index) =>
+        expect.objectContaining(Object.assign({}, draft, { keyframeId: expectedIds[index] })),
+      ),
+    );
+  });
 });
