@@ -46,6 +46,9 @@ it.each([
   ["invitedSend", "invitedSendExec", false],
   ["invitedSend", "invitedUncapped", false],
   ["invitedUncapped", "invitedRead", true],
+  // Without a ceiling a member's stored level is ignored; any ceiling applies it, so a member
+  // stored at read drops to read.
+  ["invitedUncapped", "invitedSend", true],
   ["viewer", "viewer", false],
   ["viewer", "none", true],
   ["invitedSend", "invitedRead", true],

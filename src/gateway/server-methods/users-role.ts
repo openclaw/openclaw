@@ -35,7 +35,9 @@ import {
 type RoleSessions = GatewayOperatorRoleDefinition["sessions"];
 
 const OTHERS_ORDER = ["none", "view", "suggest", "write"];
-const INVITED_ORDER = ["read", "suggest", "send"];
+// Without a ceiling a member's stored level is ignored; any ceiling applies it
+// (resolveSessionMemberAccess), so "uncapped" ranks above "send".
+const INVITED_ORDER = ["read", "suggest", "send", "uncapped"];
 
 /**
  * Session permissions only narrow along their order: none < view < suggest < write, and
@@ -48,10 +50,9 @@ function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
     return false;
   }
   if (before.others === "invited" && after.others === "invited") {
-    // No ceiling leaves each member's own level uncapped (resolveSessionMemberAccess).
     return (
-      INVITED_ORDER.indexOf(after.maxInvitedAccess ?? "send") <
-      INVITED_ORDER.indexOf(before.maxInvitedAccess ?? "send")
+      INVITED_ORDER.indexOf(after.maxInvitedAccess ?? "uncapped") <
+      INVITED_ORDER.indexOf(before.maxInvitedAccess ?? "uncapped")
     );
   }
   if (before.others === "invited" || after.others === "invited") {
