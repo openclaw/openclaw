@@ -21,6 +21,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
+import { syncWorkspaceSkills } from "../loading/workspace-skill-sync.runtime.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { completePassiveScan } from "./discovery.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
@@ -70,12 +71,14 @@ const descriptions = async (input = request(), watch = true) =>
   );
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
-async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
+async function waitForLiveWatch(skillDirectory: string, workspaceDir = workspace) {
   const version = getSkillsResourceVersion(workspaceDir);
-  const marker = path.join(directory, ".watch-ready");
+  const marker = path.join(skillDirectory, ".watch-ready");
   // Native registration can miss startup writes. Establish the live stream before
   // the single edit under test; missed events are covered by safety reconciliation.
-  const pulse = setInterval(() => writeFileSync(marker, "ready"), 100);
+  // Only changed synced bytes publish a resource revision, so each pulse differs.
+  let pulses = 0;
+  const pulse = setInterval(() => writeFileSync(marker, String(++pulses)), 100);
   try {
     await expect
       .poll(() => getSkillsResourceVersion(workspaceDir), { timeout: 10_000 })
@@ -203,8 +206,8 @@ it("discovers external edits without waiting for a periodic scan and shares one 
   await write("Other original", other);
   expect(await descriptions()).toEqual(["Original"]);
   expect(await descriptions(request(other))).toEqual(["Other original"]);
-  await waitForLiveWatch(path.join(workspace, "skills"));
-  await waitForLiveWatch(path.join(other, "skills"), other);
+  await waitForLiveWatch(path.join(workspace, "skills", "guide"));
+  await waitForLiveWatch(path.join(other, "skills", "guide"), other);
   expect(discoveryPools()).toEqual([expect.objectContaining({ workerCount: 1 })]);
   await write("First");
   await write("Final");
@@ -604,6 +607,37 @@ it("refreshes supporting resources without publishing an unchanged catalog", asy
   await descriptions();
   expect(getSkillsSnapshotVersion(workspace)).toBe(version);
   expect(getSkillsResourceVersion(workspace)).toBeGreaterThan(resources);
+});
+
+it("recopies sandbox skill files after a safety pass only when their bytes changed", async () => {
+  const target = temporary.make("skills-sandbox-");
+  const skill = path.join(workspace, "skills", "guide");
+  const synced = path.join(target, "skills", "guide");
+  await write("Guide");
+  await fs.writeFile(path.join(skill, "helper.txt"), "before");
+  // Without native events, only the 30-minute safety pass can observe these edits.
+  vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue({ close() {}, on() {} });
+  const sync = () =>
+    syncWorkspaceSkills({
+      sourceWorkspaceDir: workspace,
+      targetWorkspaceDir: target,
+      config: { plugins: { enabled: false } },
+      bundledSkillsDir: path.join(workspace, ".bundled"),
+      managedSkillsDir: path.join(workspace, ".managed"),
+    });
+  await sync();
+  // Reconciliation removes files the source lacks, so the marker survives only a reuse.
+  const marker = path.join(synced, "marker.txt");
+  await fs.writeFile(marker, "kept");
+
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(marker, "utf8")).toBe("kept");
+
+  await fs.writeFile(path.join(skill, "helper.txt"), "after!");
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(path.join(synced, "helper.txt"), "utf8")).toBe("after!");
 });
 
 it("invalidates an evicted workspace before accepting its next snapshot", async () => {
