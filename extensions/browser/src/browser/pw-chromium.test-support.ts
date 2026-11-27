@@ -18,6 +18,7 @@ export async function readTargetId(page: Page): Promise<string> {
 export async function launchChromium(
   rootDir: string,
   options: Pick<BrowserContextOptions, "viewport" | "deviceScaleFactor"> & {
+    chromiumSandbox?: boolean;
     ignoreDefaultArgs?: string[];
     /** "chromium" runs full Chromium headless instead of the headless shell, for chrome:// pages. */
     channel?: "chromium";

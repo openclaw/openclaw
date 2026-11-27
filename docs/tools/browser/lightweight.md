@@ -489,10 +489,12 @@ from the controller's own network. Linux Docker needs a reachable host address
 or a configured `host-gateway` mapping. The default fixture listener/hostname
 remain `127.0.0.1` when those flags are omitted.
 
-External mode reports engine startup and memory as `null`. Capture the pinned
-container/binary version separately with the report. A Windows Node controller
-can use the same external-engine interface, but Windows Docker runtime behavior
-has not been verified for this sample.
+External mode reports engine startup and memory as `null`. For Chromium HTTP
+and WebSocket endpoints, the benchmark records the CDP-reported browser version
+in `engineVersion` when available. Capture the pinned container or binary
+version separately for provenance. A Windows Node controller can use the same
+external-engine interface, but Windows Docker runtime behavior has not been
+verified for this sample.
 
 Compare the same deterministic tasks with a pinned Chromium baseline. Record
 task completion before reporting speed or memory improvements; unsupported or
