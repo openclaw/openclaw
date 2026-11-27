@@ -181,10 +181,11 @@ export async function dispatchCronDelivery(
         adoptChild(child.reply);
       }
     }
-    // Persistent executions keep their raw transcript audit-only. A disabled
-    // notification does not discard the settled reply in that same conversation.
+    // Scheduled execution output may be audit-only. A visible hook reply needs
+    // no mirror, but the result of a child handoff is a separate reply.
     if (
       params.job.sessionTarget.startsWith("session:") &&
+      (!params.executionReplyAlreadyVisible || params.spawnOnlyHandoff) &&
       params.undeliveredRunStatus === "ok" &&
       !params.skipDelivery &&
       !sentByTool &&

@@ -2,7 +2,7 @@ import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js";
 import type { McpOAuthAuthorizationFact } from "./mcp-oauth-authorization-facts.js";
-import { mcpOAuthSignInHint, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { McpOAuthDiagnosticError, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { recordMcpStartupAuthorizationRequired } from "./mcp-startup-backoff.js";
 
 type AuthorizationState = {
@@ -154,8 +154,9 @@ export function mcpOAuthAuthorizationRequiredError(
   admission: OpenClawStateDatabaseReadAdmission,
   additional = false,
 ): Error {
-  const error = new Error(
-    `MCP server "${identity.serverName}" requires ${additional ? "additional " : ""}OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
+  const error = new McpOAuthDiagnosticError(
+    identity,
+    `requires ${additional ? "additional " : ""}OAuth authorization.`,
   );
   recordMcpStartupAuthorizationRequired(error, () => {
     const owner = retainMcpOAuthAuthorizationState(admission, identity.storeKey);
