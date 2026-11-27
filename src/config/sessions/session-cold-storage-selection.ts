@@ -52,7 +52,20 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
             return archive ? [archive] : [];
           });
           let candidates: { session_id: string }[] = [];
-          if (externalizations.length < input.maxTranscripts) {
+          // A window has to be old by both clocks before protection can affect selection.
+          // Check the indexed window age before reading every logical session on an idle tick.
+          if (
+            externalizations.length < input.maxTranscripts &&
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("session_windows")
+                .select("session_id")
+                .where("updated_at", "<", input.beforeMs)
+                .where("transcript_updated_at", "<", input.beforeMs)
+                .limit(1),
+            ).rows.length > 0
+          ) {
             const excluded = readSessionColdStorageProtection(
               database,
               input.beforeMs,

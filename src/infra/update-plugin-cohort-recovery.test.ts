@@ -40,12 +40,12 @@ import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 import {
   beginPluginCohortRecovery,
   deletePluginCohortRecovery,
-  inspectPluginCohortRecoveriesAsync,
+  loadPluginCohortRecoveryAsync,
   loadPluginCohortRecovery,
   readPluginCohortRecoveryPairRows,
   writePluginCohortRecovery,
 } from "./update-run-recovery-store.js";
-import { assertNoPendingUpdateRecovery, loadUpdateRecovery } from "./update-run-recovery.js";
+import { loadUpdateRecovery } from "./update-run-recovery.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -117,7 +117,7 @@ it("preserves a released updater's SQLite capture before Doctor starts", async (
   );
 });
 
-it("reopens the paired intent, retains old-reader refusal and settles only its own rows", async () => {
+it("reopens the paired intent and settles only its own rows", async () => {
   const f = setup();
   writeConfigMachineState("unrelated", { keep: true }, f.options);
   const pair = beginPluginCohortRecovery(f.reservation, f.cohort, fence, f.options);
@@ -125,7 +125,6 @@ it("reopens the paired intent, retains old-reader refusal and settles only its o
   closeOpenClawStateDatabaseForTest();
   expect(loadPluginCohortRecovery(f.cohort.runId, f.options)).toEqual(pair);
   expect(loadUpdateRecovery(f.cohort.runId, f.options)).toEqual(f.reservation);
-  expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow("unfinished recovery");
   const next = writePluginCohortRecovery(
     pair,
     { ...pair.cohort, disposition: "rollback", settledPublications: 1 },
@@ -136,7 +135,7 @@ it("reopens the paired intent, retains old-reader refusal and settles only its o
   expect(f.rows().find((row) => row.state_key.startsWith("update.recovery."))).toEqual(
     originalReservation,
   );
-  await expect(inspectPluginCohortRecoveriesAsync(f.options)).resolves.toEqual([next]);
+  await expect(loadPluginCohortRecoveryAsync(f.cohort.runId, f.options)).resolves.toEqual(next);
   deletePluginCohortRecovery(next, fence, f.options);
   deletePluginCohortRecovery(next, fence, f.options);
   expect(loadPluginCohortRecovery(f.cohort.runId, f.options)).toBeUndefined();
@@ -197,7 +196,7 @@ it("refuses partial, mismatched and full-state pairs without changing retained e
     },
     f.options,
   );
-  await expect(inspectPluginCohortRecoveriesAsync(f.options)).rejects.toThrow(
+  await expect(loadPluginCohortRecoveryAsync(f.cohort.runId, f.options)).rejects.toThrow(
     "match its reservation",
   );
   writeConfigMachineState(

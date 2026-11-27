@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runStructuredHealthRepairs } from "./doctor-health-contribution-core.js";
+import {
+  checkStructuredHealthRepairsContributionPending,
+  runStructuredHealthRepairs,
+} from "./doctor-health-contribution-core.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
-import { clearHealthChecksForTest } from "./health-check-registry.js";
+import { clearHealthChecksForTest, registerHealthCheck } from "./health-check-registry.js";
 
 const registerBundledHealthChecks = vi.hoisted(() => vi.fn());
 vi.mock("./bundled-health-checks.js", () => ({ registerBundledHealthChecks }));
@@ -99,4 +102,44 @@ it("retains unavailable-plugin repair guidance in update warnings", async () => 
   await runStructuredHealthRepairs(ctx, async () => []);
 
   expect(ctx.updateWarnings).toEqual(["earlier warning", `${checkId}: ${message}`]);
+});
+
+it("has structured repair work only while a plugin check that can repair has a finding", async () => {
+  registerBundledHealthChecks.mockReturnValue([]);
+  const finding = (checkId: string) => ({ checkId, severity: "warning" as const, message: "fix" });
+  let repaired = false;
+  registerHealthCheck({
+    id: "example/repairable",
+    kind: "plugin",
+    source: "example",
+    description: "Synthetic repairable plugin state",
+    detect: async () => (repaired ? [] : [finding("example/repairable")]),
+    async repair() {
+      repaired = true;
+      return { changes: ["Repaired synthetic plugin state."] };
+    },
+  });
+  registerHealthCheck({
+    id: "example/report-only",
+    kind: "plugin",
+    source: "example",
+    description: "Synthetic diagnostic",
+    detect: async () => [finding("example/report-only")],
+  });
+  const root = tempDirs.make("openclaw-doctor-structured-pending-");
+  const ctx = createDoctorHealthFlowContext({
+    cfg: { agents: { defaults: { workspace: root } } },
+    configPath: `${root}/openclaw.json`,
+    env: { OPENCLAW_STATE_DIR: root },
+  });
+  const pending = () => checkStructuredHealthRepairsContributionPending(ctx);
+
+  await expect(pending()).resolves.toBe("none");
+  ctx.prompter.shouldRepair = true;
+  await expect(pending()).resolves.toBe("work");
+  expect(repaired).toBe(false);
+  await runStructuredHealthRepairs(ctx, async () => []);
+  expect(repaired).toBe(true);
+  // The diagnostic still reports, but nothing is left to repair.
+  await expect(pending()).resolves.toBe("none");
 });

@@ -7,19 +7,9 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathEntryExists } from "./path-existence.js";
-import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
-import {
-  decodeUpdateRecovery,
-  isUpdateRecoveryPending,
-  UpdateRecoveryRequiredError,
-} from "./update-run-recovery-schema.js";
-import {
-  assertUpdateRecoveryAdmissionFacts,
-  pluginCohortRecoveryMatchesSource,
-  type UpdateRecoveryAdmissionOptions,
-} from "./update-run-recovery.js";
+import type { UpdateRecoveryAdmissionOptions } from "./update-run-recovery.js";
 
-/** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
+/** Only interrupted physical publication refuses; saved updater history is not admission authority. */
 export async function assertUpdateRecoveryAdmission(
   options: UpdateRecoveryAdmissionOptions = {},
 ): Promise<void> {
@@ -27,14 +17,7 @@ export async function assertUpdateRecoveryAdmission(
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
-  const parentExists = await assertUpdateRecoveryDirectoryAdmission(databasePath);
-  options.pluginCohort?.fence.assertCurrent();
-  if (!parentExists) {
-    return;
-  }
-  const selected = { ...options, path: databasePath };
-  const facts = await readUpdateRecoveryAdmissionFactsAsync(selected);
-  assertUpdateRecoveryAdmissionFacts(facts, selected);
+  await assertUpdateRecoveryDirectoryAdmission(databasePath);
   options.pluginCohort?.fence.assertCurrent();
 }
 
@@ -48,36 +31,6 @@ export async function readUpdateRecoveryAdmissionFactsAsync(options: OpenClawSta
     ),
   );
   return reply?.facts;
-}
-
-/** Explicit repair may inspect one bounded pair before acquiring custody. No facts grant effects. */
-export async function inspectPluginCohortRecoveryAdmission(
-  options: OpenClawStateDatabaseOptions = {},
-  expectedRunId?: string,
-): Promise<PluginCohortRecoveryPair | undefined> {
-  const databasePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!(await assertUpdateRecoveryDirectoryAdmission(databasePath))) {
-    return undefined;
-  }
-  const selected = { ...options, path: databasePath };
-  const facts = await readUpdateRecoveryAdmissionFactsAsync(selected);
-  const pending = facts?.recoveries.filter((entry) => isUpdateRecoveryPending(entry.record)) ?? [];
-  const only = pending[0];
-  if (!only) {
-    return undefined;
-  }
-  const pair = facts?.cohorts.find(({ cohort }) => cohort.runId === only.record.runId);
-  if (
-    pending.length !== 1 ||
-    !pair ||
-    (expectedRunId !== undefined && pair.cohort.runId !== expectedRunId) ||
-    !pluginCohortRecoveryMatchesSource(pair, selected)
-  ) {
-    throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(only.raw, only.record.runId));
-  }
-  return pair;
 }
 
 /** A restore directory beside the state database: evidence, unlike a failed listing. */

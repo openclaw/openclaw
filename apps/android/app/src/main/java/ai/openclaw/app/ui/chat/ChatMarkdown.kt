@@ -92,7 +92,12 @@ private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
 internal const val CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH = 32
 private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
 
-private val markdownParser: Parser by lazy {
+private val markdownParser: Parser by lazy { createChatMarkdownParser(IncludeSourceSpans.NONE) }
+private val sourceMappedMarkdownParser: Parser by lazy {
+  createChatMarkdownParser(IncludeSourceSpans.BLOCKS_AND_INLINES)
+}
+
+private fun createChatMarkdownParser(sourceSpans: IncludeSourceSpans): Parser {
   val extensions: List<Extension> =
     listOf(
       AutolinkExtension.create(),
@@ -100,10 +105,10 @@ private val markdownParser: Parser by lazy {
       TablesExtension.create(),
       TaskListItemsExtension.create(),
     )
-  Parser
+  return Parser
     .builder()
     .extensions(extensions)
-    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
+    .includeSourceSpans(sourceSpans)
     .build()
 }
 
@@ -640,6 +645,9 @@ internal fun buildChatInlineMarkdown(
 }
 
 internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
+
+// Only math segmentation consumes source positions; ordinary rendering keeps no per-line map.
+internal fun parseChatMarkdownWithSourceSpans(text: String): Document = sourceMappedMarkdownParser.parse(text) as Document
 
 internal fun markdownSiblings(start: Node?): Sequence<Node> = generateSequence(start) { it.next }
 

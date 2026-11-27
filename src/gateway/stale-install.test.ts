@@ -147,11 +147,12 @@ describe("running installation replacement", () => {
     });
     await logGatewayReady({ getReadiness: readiness, log: { info: vi.fn() } });
     await owner.checkGatewayInstallationReplacement();
-    await expect.poll(() => trial.residentReady.mock.calls[0]).toEqual(["build-before"]);
+    expect(trial.residentReady).not.toHaveBeenCalled();
     expect(trial.ready).not.toHaveBeenCalled();
     pending = false;
     await owner.checkGatewayInstallationReplacement();
     expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root, undefined);
+    expect(trial.residentReady).toHaveBeenCalledExactlyOnceWith("build-before");
   });
 
   it("keeps periodic installation observations free of synchronous filesystem calls", async () => {

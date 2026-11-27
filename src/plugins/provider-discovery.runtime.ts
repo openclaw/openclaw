@@ -28,7 +28,7 @@ import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 

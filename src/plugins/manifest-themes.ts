@@ -152,7 +152,7 @@ function normalizeCritter(metadata: unknown, label: string) {
 export function normalizeManifestThemes(
   value: unknown,
   pluginId: string,
-  manifestSource?: string,
+  manifestBytes?: Buffer,
 ): { ok: true; themes?: PluginManifestTheme[] } | { ok: false; error: string } {
   if (value === undefined) {
     return { ok: true };
@@ -248,11 +248,11 @@ export function normalizeManifestThemes(
     ids.add(id);
   }
   if (
-    manifestSource &&
+    manifestBytes &&
     themes.some((theme) => theme.icons || theme.hats || theme.critters || theme.backgrounds)
   ) {
     try {
-      validateArtworkDuplicates(manifestSource);
+      validateArtworkDuplicates(manifestBytes.toString("utf8"));
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "invalid theme artwork" };
     }

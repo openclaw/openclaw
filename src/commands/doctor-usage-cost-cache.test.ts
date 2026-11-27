@@ -20,6 +20,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   changedStoreFiles,
+  listSqliteSidecars,
   snapshotStoreFiles,
 } from "../test-utils/store-snapshot.test-support.js";
 import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
@@ -302,6 +303,13 @@ describe("legacy runtime file pending check", () => {
     execArgv: [],
   })}\n`;
 
+  /** A plain connection that holds a store's WAL sidecars, as a serving Gateway does. */
+  const holdStore = (pathname: string) => {
+    const holder = new DatabaseSync(pathname);
+    holder.prepare("SELECT count(*) FROM sqlite_schema").get();
+    return holder;
+  };
+
   it.each([
     ["retired usage-cost rows", "rows"],
     ["a pre-redactor config audit entry", "logs/config-audit.jsonl"],
@@ -311,10 +319,16 @@ describe("legacy runtime file pending check", () => {
   ])("reports %s as work without writing, and none once repaired", async (_name, seeded) => {
     const root = tempDirs.make("openclaw-legacy-runtime-pending-");
     const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
-    seedCacheRows(openOpenClawAgentDatabase({ agentId: "worker", env }).db, true);
+    const agent = openOpenClawAgentDatabase({ agentId: "worker", env });
+    seedCacheRows(agent.db, true);
     await maybeRepairLegacyRuntimeFiles(true, env);
     await closeOpenClawAgentDatabasesAsync();
-    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    const cleanHolder = holdStore(agent.path);
+    try {
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      cleanHolder.close();
+    }
 
     if (seeded === "rows") {
       openOpenClawAgentDatabase({ agentId: "worker", env })
@@ -330,13 +344,53 @@ describe("legacy runtime file pending check", () => {
         seeded.endsWith(".jsonl") ? preRedactorAudit : "x",
       );
     }
-    const before = snapshotStoreFiles(root);
-    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
+    const holder = holdStore(agent.path);
+    try {
+      const before = snapshotStoreFiles(root);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
+      expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
+
+      await maybeRepairLegacyRuntimeFiles(true, env);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      holder.close();
+    }
+  });
+
+  it("leaves an agent database no connection holds unopened, and the cleanup still owns it", async () => {
+    const root = tempDirs.make("openclaw-legacy-runtime-unheld-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const agent = openOpenClawAgentDatabase({ agentId: "worker", env });
+    seedCacheRows(agent.db, true);
     await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    expect(listSqliteSidecars(root)).toEqual([]);
+    const before = snapshotStoreFiles(root);
+
+    // A read-only open would create the sidecars, so the check cannot decide.
+    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("undecidable");
     expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
 
+    // Registry discovery reads the state database; only the agent database is in question.
+    const agentSidecars = () =>
+      listSqliteSidecars(root).filter((file) => file.startsWith("agents/"));
     await maybeRepairLegacyRuntimeFiles(true, env);
-    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    await closeOpenClawAgentDatabasesAsync();
+    // The cleanup used its write connection, which removed the sidecars on close.
+    expect(agentSidecars()).toEqual([]);
+    {
+      // Writable, so its close removes the sidecars this inspection creates.
+      using database = new DatabaseSync(agent.path);
+      expect(cacheRows(database)).toEqual([
+        { scope: "other", key: "keep", value_json: "{}", blob: null },
+        ...retainedRows,
+      ]);
+    }
+    // A clean database: the cleanup leaves no sidecars behind either.
+    expect(agentSidecars()).toEqual([]);
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(agentSidecars()).toEqual([]);
   });
 
   it("leaves clean agent databases unopened for writing, so a held write lock is not waited on", async () => {

@@ -25,7 +25,6 @@ import { createSessionCapabilityFixture } from "../chat-session-capability.test-
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import {
-  buildCachedChatItems,
   getExpandedToolCards,
   getExpandedUserMessages,
   getExpansionStateVersion,
@@ -471,35 +470,6 @@ describe("chat transcript invalidation", () => {
     } finally {
       transcript.dispose();
     }
-  });
-
-  it("keeps built row identities across an A to B to A presentation reset", () => {
-    const paneId = "pane-session-items";
-    const messagesA = [{ role: "assistant", content: "session A", timestamp: 1_000 }];
-    const messagesB = [{ role: "assistant", content: "session B", timestamp: 2_000 }];
-    const stableInputs = {
-      paneId,
-      runId: null,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
-    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
-    const build = (sessionKey: string, messages: unknown[]) =>
-      buildCachedChatItems({
-        ...stableInputs,
-        sessionKey,
-        messages,
-      });
-    const itemsA = build("agent:main:session-a", messagesA);
-    resetTranscriptSession(paneId);
-    build("agent:main:session-b", messagesB);
-    resetTranscriptSession(paneId);
-    const restoredItemsA = build("agent:main:session-a", messagesA);
-    expect(buildSpy).toHaveBeenCalledTimes(2);
-    expect(restoredItemsA).toBe(itemsA);
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {

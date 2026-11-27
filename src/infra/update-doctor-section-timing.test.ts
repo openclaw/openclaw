@@ -39,6 +39,7 @@ describe("Doctor sections diagnostic", () => {
   ] as const;
   const pending = (step: string) => traceLine(`pending.${step}`, 0, " pending=work check=default");
   const stderr = [
+    "[gateway] startup trace: doctor.still-running starting total=0.1ms",
     traceLine("startup", 0),
     ...sections.flatMap(([name, ms]) => [pending(name), traceLine(name, ms)]),
     ...contributions.flatMap((id, index) => [
@@ -50,8 +51,9 @@ describe("Doctor sections diagnostic", () => {
   ].join("\n");
 
   it("reports timed sections without the pending decisions that precede them", async () => {
-    const { diagnostics } = await replayDoctorStderr(stderr);
-    expect(diagnostics).toEqual([
+    const result = await replayDoctorStderr(stderr);
+    expect(result.stderr).toBe("");
+    expect(result.diagnostics).toEqual([
       "Doctor sections: startup 0.0 s, retained-runtimes 0.2 s, maintenance.begin 0.4 s, " +
         "database-migrations 20.7 s, state-schema 0.2 s, config-flow 2.7 s, contributions 5.5 s, " +
         "external-config 0.0 s, maintenance-ready 0.5 s, sqlite-reclamation 0.2 s, " +

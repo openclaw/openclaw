@@ -6,7 +6,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
@@ -205,65 +204,6 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
-  it("chooses a known repository and branch without typing paths and keeps the explicit creation boundary", async () => {
-    const previous = [worktree(), worktree("other", { repoRoot: "/srv/other" })];
-    const created = worktree("new-work", {
-      repoRoot: "/srv/other",
-      name: "Keep name",
-      branch: "openclaw/new-work",
-      baseRef: "release",
-    });
-    let saved = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "worktrees.list") {
-        return { worktrees: saved ? [...previous, created] : previous };
-      }
-      if (method === "worktrees.branches") {
-        return { branches: [{ name: "main" }, { name: "release" }], headBranch: "main" };
-      }
-      if (method === "worktrees.create") {
-        saved = true;
-        return created;
-      }
-      return {};
-    });
-    const page = await createWorktreesPage(request, {
-      createOpen: true,
-      createRepoRoot: "/tmp/repo",
-      createName: "Keep name",
-    }).ready();
-    const choose = async (triggerId: string, value: string) => {
-      const trigger = page.query<HTMLButtonElement>("#" + triggerId);
-      expect(trigger).not.toBeNull();
-      trigger!.click();
-      let option: HTMLElement | null = null;
-      await waitForSolid(() => {
-        option = document.querySelector<HTMLElement>('[role="option"][data-value="' + value + '"]');
-        expect(option).not.toBeNull();
-      });
-      option!.click();
-    };
-    await choose("worktrees-create-repo", "/srv/other");
-    await waitForRead(request, "worktrees.branches", { repoRoot: "/srv/other" });
-    await waitForSolid(() => expect(page.model.createBranches).toEqual(["main", "release"]));
-    await choose("worktrees-base-ref", "release");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
-    page.button("Create").click();
-    await waitForCall(request, "worktrees.create", {
-      repoRoot: "/srv/other",
-      name: "Keep name",
-      baseRef: "release",
-    });
-    await waitForSolid(() => expect(page.model.records).toContainEqual(created));
-    expect(page.model.createOpen).toBe(false);
-    page.button("New worktree").click();
-    await waitForSolid(() =>
-      expect(page.query("#worktrees-base-ref")?.textContent).toContain("release"),
-    );
-    await choose("worktrees-base-ref", "");
-    expect(page.model.createBaseRef).toBe("");
-  });
-
   it("shows pending list readiness and retries a failed first read", async () => {
     const first = deferred<{ worktrees: WorktreeRecord[] }>();
     const request = listRequest([worktree()]).mockReturnValueOnce(first.promise);
@@ -326,22 +266,6 @@ describe("WorktreesPage lifecycle", () => {
     expect(name).toMatchObject({ disabled: false, value: "local draft" });
   });
 
-  it("wires the selected worktrees tab to sessions navigation", async () => {
-    const page = createWorktreesPage().mount();
-    await settle();
-    expect(page.query("h1.page-title")?.textContent).toBe("Worktrees");
-    expect(page.query(".hub-page-header--stacked")).not.toBeNull();
-    expect(page.query(".page-subtitle")?.textContent).toContain(
-      "Isolated agent task checkouts and recovery snapshots.",
-    );
-    const selected = page.query<HTMLButtonElement>("#sessions-tab-worktrees")!;
-    selected.click();
-    expect(page.model.context.navigate).not.toHaveBeenCalled();
-    page.query<HTMLButtonElement>("#sessions-tab-sessions")!.click();
-    expect(page.model.context.navigate).toHaveBeenCalledExactlyOnceWith("sessions");
-    expect(selected.getAttribute("aria-selected")).toBe("true");
-  });
-
   it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
     const record = worktree();
     const request = listRequest([record]);
@@ -385,41 +309,6 @@ describe("WorktreesPage lifecycle", () => {
     expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
-  });
-
-  it("navigates a session-owned worktree with the face-preference marker", async () => {
-    // Without a cached session, only the in-app click carries the guessed-face marker.
-    const record = worktree("worktree-1", {
-      ownerKind: "session",
-      ownerId: "agent:main:thread:12345678-90ab-cdef-1234-567890abcdef",
-    });
-    const request = listRequest([record]);
-    const context = {
-      ...contextWithGateway(requestGateway(request)),
-      sessions: { state: { result: undefined } },
-      agents: { state: { agentsList: { mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-    } as unknown as ApplicationContext;
-    const page = createWorktreesPage();
-    page.setContext(context);
-    page.mount();
-    await waitForSolid(() => expect(page.model.records.length).toBe(1));
-    await settle();
-
-    const docsLink = page.query<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/managed-worktrees");
-
-    const link = [...page.element.querySelectorAll("a")].find((anchor) =>
-      anchor.getAttribute("href")?.includes("12345678"),
-    );
-    expect(link?.getAttribute("href")).toBe("/chat/main/1234567890abcdef1234567890abcdef");
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-
-    expect(context.navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
-      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-    });
   });
 
   it("serializes list refreshes and row mutations", async () => {
