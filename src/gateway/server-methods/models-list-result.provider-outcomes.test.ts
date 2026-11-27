@@ -92,6 +92,7 @@ it("discloses failed acquisition scopes on retained configured models", async ()
     {},
     { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
     () => true,
+    () => {},
   );
   const snapshot = reporter.withRefreshStatus({
     entries: [openaiModel],
@@ -154,6 +155,7 @@ it("omits endpoint-shaped acquisition identifiers even from the all view", async
     {},
     { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
     () => true,
+    () => {},
   );
   reporter.failed(new Error("private error"), ["https://private.invalid/account"], "native");
   const context = createModelsListTestContext({
@@ -178,6 +180,7 @@ it.each([false, true])("preserves rejection on refresh failure=%s", async (unava
     {},
     { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
     () => true,
+    () => {},
   );
   const providerOutcomes = [
     rejected("openai:chatgpt"),

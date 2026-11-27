@@ -12,6 +12,7 @@ describe("catalog attempt status publication", () => {
       {},
       { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
       () => true,
+      () => {},
     );
     const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
     reporter.failed(new Error("provider failed"), ["fixture"]);
@@ -37,6 +38,7 @@ describe("catalog attempt status publication", () => {
         {},
         { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
         () => true,
+        () => {},
       );
       const rejected = { provider: "signed-out", status: "auth-rejected" } as const;
       const unavailable = { provider: "unreachable", status: "unavailable" } as const;
@@ -69,6 +71,7 @@ describe("catalog attempt status publication", () => {
       {},
       { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
       () => true,
+      () => {},
     );
     const catalog: ModelCatalogSnapshot = reporter.withRefreshStatus({
       entries: [],
@@ -119,7 +122,7 @@ it("keeps retained catalog status readable without retaining acquisition callbac
        const acquisition = new Acquisition();
        const reporter = createCatalogAttemptReporter({},
          { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
-         () => acquisition.active);
+         () => true, () => assert.ok(acquisition.active));
        reporter.setPending(["synthetic"]);
        reporter.failed(new Error("synthetic native failure"), ["native-provider"], "native");
        const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
