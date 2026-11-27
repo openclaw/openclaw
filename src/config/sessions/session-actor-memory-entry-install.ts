@@ -7,6 +7,7 @@ import {
   hasValidSessionEntryIdentity,
   normalizeSessionEntryTimestamp,
 } from "./session-entry-json.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -27,6 +28,7 @@ export function installSessionActorMemoryEntry(
     throw new Error("Refusing invalid memory session entry identity");
   }
   next = preserveCreationStamp(next, previous);
+  next = preserveSessionDelegatedOperatorSource(next, previous);
   next.createdAt ??= previous?.updatedAt ?? Date.now();
   const sameWindow = previous?.sessionId === next.sessionId;
   const sameLifecycle = sameWindow && previous?.lifecycleRevision === next.lifecycleRevision;
@@ -63,6 +65,7 @@ export function installSessionActorMemoryEntry(
   }
   // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;
+  delete next.pendingShellCalls;
   if (previous && !sameWindow) {
     if (options.preserveVisibility && previous.visibility !== undefined) {
       next.visibility = previous.visibility;

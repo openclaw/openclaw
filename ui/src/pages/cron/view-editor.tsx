@@ -2,7 +2,6 @@ import { createMemo, For, Show } from "solid-js";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
 import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -22,7 +21,7 @@ import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleNote,
+  ScheduleTimeZone,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
@@ -263,11 +262,11 @@ function AgentRow(props: CronProps & { disabled: boolean }) {
 }
 
 /**
- * The automation as one composer: name and prompt on the sheet, and when and how it runs on
- * the tray tucked under it.
+ * New automations are named from the prompt. Edits and copies can change the name.
  */
 function PromptBlock(
   props: CronProps & {
+    mode: CronPanelMode;
     payloadLocked: boolean;
     isAgentTurn: boolean;
     phoneLayout: boolean;
@@ -287,36 +286,30 @@ function PromptBlock(
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.systemEventHelp")
         : t("cron.form.agentTurnHelp");
-  const nameError = () => props.fieldErrors.name;
   const payloadError = () => props.fieldErrors.payloadText;
   return (
     <div class="cron-prompt cron-prompt--editing">
       <div class="cron-prompt__sheet">
-        <textarea
-          id={inputIdForField("name")}
-          class="cron-prompt__name"
-          rows="1"
-          value={props.form.name}
-          aria-label={t("cron.form.fieldName")}
-          aria-required="true"
-          aria-invalid={nameError() ? "true" : "false"}
-          aria-describedby={nameError() ? errorIdForField("name") : undefined}
-          placeholder={t("cron.form.namePlaceholder")}
-          onKeyDown={(event) => {
-            // The name is one line that wraps, as the single-line field it replaces.
-            if (event.key === "Enter" && !event.isComposing) {
-              event.preventDefault();
+        <Show when={props.mode === "job" || props.cloning}>
+          <textarea
+            id={inputIdForField("name")}
+            class="cron-prompt__name"
+            rows="1"
+            value={props.form.name}
+            aria-label={t("cron.form.fieldName")}
+            // An empty name keeps the saved one, so show it rather than an example.
+            placeholder={props.editingJob?.name ?? t("cron.form.namePlaceholder")}
+            onKeyDown={(event) => {
+              // The name is one line that wraps, as the single-line field it replaces.
+              if (event.key === "Enter" && !event.isComposing) {
+                event.preventDefault();
+              }
+            }}
+            onInput={(event) =>
+              props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
             }
-          }}
-          onInput={(event) =>
-            props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
-          }
-        />
-        {nameError() ? (
-          <div id={errorIdForField("name")} class="cron-help cron-error" role="alert">
-            {t(nameError() ?? "")}
-          </div>
-        ) : undefined}
+          />
+        </Show>
         {props.payloadLocked ? (
           <>
             <pre
@@ -374,12 +367,9 @@ function PromptBlock(
       </div>
       <div class="cron-prompt__tray">
         <div class="cron-prompt__controls">
-          <span class="cron-prompt__clock" aria-hidden="true">
-            <Icon name="clock" />
-          </span>
           <div class="cron-editor-schedule">
             <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
-            <ScheduleNote {...props} />
+            <ScheduleTimeZone {...props} />
           </div>
           {props.isAgentTurn ? (
             <span class="cron-prompt__run-controls" data-picker-below>
@@ -387,12 +377,12 @@ function PromptBlock(
             </span>
           ) : undefined}
         </div>
-        <div class="cron-editor-tray-errors">
-          <TrayErrors
-            fieldErrors={props.fieldErrors}
-            fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
-          />
-        </div>
+      </div>
+      <div class="cron-editor-tray-errors">
+        <TrayErrors
+          fieldErrors={props.fieldErrors}
+          fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
+        />
       </div>
     </div>
   );

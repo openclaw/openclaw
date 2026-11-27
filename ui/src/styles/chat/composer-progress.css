@@ -693,3 +693,30 @@
     transition: none;
   }
 }
+
+/* Plugin composer tasks reuse the status band at one height, so every state swaps in place. */
+.agent-chat__composer-task {
+  block-size: 96px;
+}
+
+/* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
+.agent-chat__composer-task-meta {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__composer-task > :last-child {
+  margin: 0 14px;
+}
+
+/* Two rows of steps, newest first; long labels clip at the card edge. */
+.agent-chat__composer-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-block-size: 40px;
+  font-size: 12px;
+  white-space: nowrap;
+}

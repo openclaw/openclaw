@@ -45,12 +45,11 @@ export async function buildTalkTranscriptionCatalog(
   agentId: string,
   onReadinessError: (error: unknown) => false,
 ) {
-  const transcriptionConfig = await buildTalkTranscriptionConfig(
-    config,
-    undefined,
-    undefined,
-    agentId,
-  );
+  const fileTranscription = resolveTalkFileTranscriptionConfig(config, agentId);
+  const [transcriptionConfig, mediaConfig] = await settleTalkCatalogTasks([
+    buildTalkTranscriptionConfig(config, undefined, undefined, agentId, fileTranscription),
+    fileTranscription,
+  ]);
   const transcriptionSelection = transcriptionConfig.file
     ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
     : await resolveCatalogProviderSelection(
@@ -66,12 +65,9 @@ export async function buildTalkTranscriptionCatalog(
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   // Voice notes keep using the media-understanding models when Talk does not,
   // so report their readiness for the picked model's warning.
-  const mediaConfig = transcriptionConfig.file
-    ? undefined
-    : await resolveTalkFileTranscriptionConfig(config, agentId);
   return {
     source: transcriptionConfig.source,
-    ...(mediaConfig
+    ...(!transcriptionConfig.file && mediaConfig
       ? {
           mediaProviders: mediaConfig.providers.map(({ id, models, configured }) => ({
             id,

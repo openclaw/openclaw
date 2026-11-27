@@ -77,6 +77,7 @@ import {
   unusedEnvironments,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
+import { settledTurn } from "./worker-turn-settled.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -210,6 +211,28 @@ describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(resetGlobalHookRunner);
+
+  it("offers neither the sessions_yield tool nor yield guidance to a worker turn", async () => {
+    await seedActivePlacement();
+    const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+    const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+      throw new WorkerRunnerCapacityError();
+    });
+    const provider = credentialedProvider(unusedTunnel({ launchTurn }));
+    const input = turn("worker-yield-withheld");
+    try {
+      await expect(execute(provider, input)).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+      const authorized = authorize.mock.calls[0]?.[1];
+      expect(authorized).toContain("sessions_spawn");
+      expect(authorized).not.toContain("sessions_yield");
+      const launch = launchTurn.mock.calls[0]?.[0];
+      assert(launch);
+      expect(launch.plan.assignment.systemPrompt).not.toContain("sessions_yield");
+    } finally {
+      authorize.mockRestore();
+      input.preparedRunAdmission.close();
+    }
+  });
 
   it.each([
     { throws: false, revokeAtCommit: false },
@@ -898,8 +921,7 @@ describe("worker turn execution", () => {
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
       await waitForSessionRunEnd(SESSION_ID, null);
-      expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
-      expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
+      expect(await settledTurn(committedRows.length)).toEqual([committed, committedRows]);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       expect(runLocal).not.toHaveBeenCalled();

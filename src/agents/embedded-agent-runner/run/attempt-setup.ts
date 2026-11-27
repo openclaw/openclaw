@@ -1,7 +1,7 @@
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -302,10 +302,11 @@ export function installEmbeddedAttemptContextGuards(input: {
   const previousCacheTtlTransform = activeSession.agent.transformContext;
   const cacheTouch = createCacheTouchRecorder(
     cacheTtlSettings
-      ? readLastCacheTtlTimestamp(input.sessionManager, {
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-        })
+      ? readLastCacheTtlTimestamp(
+          input.sessionManager,
+          { provider: attempt.provider, modelId: attempt.modelId },
+          attempt.promptCacheKeepWarm,
+        )
       : null,
   );
   if (cacheTtlSettings) {
@@ -365,6 +366,11 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      getCurrentUserIdempotencyKey: () =>
+        (
+          attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          attempt.userTurnTranscriptRecorder?.message
+        )?.idempotencyKey,
       // Only the outer accepted-turn owner may advance an admitted engine.
       deferredTurn: attempt.onContextEngineTurnCandidate
         ? {
@@ -390,10 +396,11 @@ export function installEmbeddedAttemptContextGuards(input: {
               messagesSnapshot: messages,
               prePromptMessageCount,
               retention: input.getPromptCacheRetention(),
-              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(input.sessionManager, {
-                provider: attempt.provider,
-                modelId: attempt.modelId,
-              }),
+              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(
+                input.sessionManager,
+                { provider: attempt.provider, modelId: attempt.modelId },
+                attempt.promptCacheKeepWarm,
+              ),
             }),
         }),
       runtimeSettings,

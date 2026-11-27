@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   hasUtilityModelSeparationMigrationMarker,
+  LEGACY_IMPLICIT_PRIMARY_MODEL_REF,
   materializeUtilityModelSeparation,
   resolveUtilityModelSeparationError,
 } from "./utility-model-separation-migration.js";
@@ -64,7 +64,7 @@ describe("utility model separation migration", () => {
     const { config, changes } = materializeUtilityModelSeparation(next, previous);
     expect(resolveUtilityModelSeparationError(config)).toBeUndefined();
     const primary = builtin
-      ? `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`
+      ? LEGACY_IMPLICIT_PRIMARY_MODEL_REF
       : `local-fixture/${kind.startsWith("small@") ? kind : "small"}`;
     expect(config.agents?.defaults?.model).toEqual(
       builtin ? { primary } : { primary, fallbacks: ["backup/model@backup:account"] },
@@ -122,7 +122,7 @@ describe("utility model separation migration", () => {
     const disabled =
       kind === "entries" ? migrated.agents?.entries?.disabled : migrated.agents?.list?.[1];
     expect(worker?.model).toEqual({
-      primary: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+      primary: LEGACY_IMPLICIT_PRIMARY_MODEL_REF,
       fallbacks: ["backup/model"],
     });
     expect(disabled).toEqual(

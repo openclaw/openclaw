@@ -54,6 +54,7 @@ import {
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js";
+import { refreshMcpCatalog } from "./agent-bundle-mcp-recovery.test-support.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { startRequesterScopedMcpProofServer } from "./agent-bundle-mcp-requester.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
@@ -895,24 +896,20 @@ describe("session MCP runtime", () => {
   });
 
   it("retires sessions that exit during catalog refresh", async ({ signal }) => {
-    const {
-      runtime,
-      logPath,
-      file: fixtureFile,
-    } = await stdioRuntime("child", ({ file }) => ({
+    const { runtime, logPath, file } = await stdioRuntime("child", ({ file: pathFor }) => ({
       capabilities: { tools: { listChanged: true } },
       notifyListChangedAfterFirstList: true,
-      notifyListChangedReleasePath: file("notify.release"),
+      notifyListChangedReleasePath: pathFor("notify.release"),
       exitOnListCall: 2,
     }));
     expect((await runtime.getCatalog()).tools).toHaveLength(1);
-    await fs.writeFile(fixtureFile("notify.release"), "release", "utf8");
+    await fs.writeFile(file("notify.release"), "release", "utf8");
     await withinTest(receipts.waitFor(logPath, "notify tools/list_changed"), signal);
+    await fs.rm(file("notify.release"));
     await waitForInvalidation(runtime, signal);
-    const refreshedCatalog = await runtime.getCatalog();
+    const refreshedCatalog = await refreshMcpCatalog(runtime, signal);
     expectToolNames(refreshedCatalog, ["slow_tool"]);
     expect(refreshedCatalog.diagnostics ?? []).toEqual([]);
-    // Refresh exposes only the replacement generation, never stale failure diagnostics.
     await expectHealthyCall(runtime, "child");
   });
 

@@ -506,7 +506,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
       expect(result.cfg.plugins?.installs?.["bundled-chat"]?.acceptedSurface).toBeDefined();
       expect(runtime.error).not.toHaveBeenCalled();
     } else {
-      expect(result).toEqual({ cfg, installed: false, pluginId: "bundled-chat", status: "failed" });
+      expect(result).toEqual({
+        cfg,
+        installed: false,
+        pluginId: "bundled-chat",
+        status: "failed",
+        error,
+      });
       expect(confirm).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(`Plugin install failed: ${error}`);
     }

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import {
   bindReplyInputChannel,
   bindWorkerToolPreparation,
@@ -29,7 +29,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import {
+  prepareGatewayOperatorRunAuthority,
+  type PreparedGatewayOperatorRunAuthority,
+} from "../gateway/operator-run-authority.js";
 import type { GatewayClient } from "../gateway/server-methods/client-types.js";
 import {
   dispatchProfile,
@@ -55,15 +58,9 @@ import { createReplyTurnParticipants } from "./session-controller.tool-authority
 afterEach(() => testing.resetSessionControllerForTest());
 
 it("copies private turn participants and freezes only their shared command target", () => {
-  let current = true;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "participant",
     scopes: ["operator.read"],
-    assertCurrent() {
-      if (!current) {
-        throw new Error("revoked");
-      }
-    },
   });
   const freeze = vi.spyOn(Object, "freeze");
   const participants = createReplyTurnParticipants({
@@ -80,8 +77,8 @@ it("copies private turn participants and freezes only their shared command targe
       senderId: "original",
       gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
     });
-    current = false;
-    expect(() => exposed.assertCurrent()).toThrow("access changed");
+    participants.close();
+    expect(() => exposed.assertCurrent()).toThrow("This turn has ended");
   } finally {
     freeze.mockRestore();
     participants.close();
@@ -99,13 +96,11 @@ type JoinCase = {
   after?:
     | "settings"
     | "activity"
-    | "revoke"
-    | "caller-revoke"
+    | "stop"
     | "backend"
     | "delivery"
     | "link-revoke"
     | "identity-disconnect"
-    | "owner-revoke"
     | "shared-revoke";
   crossSurface?: "incoming" | "outgoing" | "different" | "shared" | "delegated" | "initiator";
   linkedBot?: "incoming" | "incumbent";
@@ -121,7 +116,7 @@ type JoinCase = {
   };
   sessionOnly?: true;
 };
-type Outcome = "accepted" | "deferred" | "rejected" | "revoked" | "failed";
+type Outcome = "accepted" | "deferred" | "rejected" | "stopped" | "failed";
 const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
 
 it.each<[string, Outcome, JoinCase?]>([
@@ -152,8 +147,7 @@ it.each<[string, Outcome, JoinCase?]>([
   ["workspace", "deferred", { mismatch: "workspace" }],
   ["saved working directory", "deferred", { mismatch: "cwd" }],
   ["narrowed scopes", "accepted", { mismatch: "scopes" }],
-  ["revoked after preparation", "revoked", { after: "revoke" }],
-  ["incoming authority revoked independently", "rejected", { after: "caller-revoke" }],
+  ["stopped after preparation", "stopped", { after: "stop" }],
   ["replaced backend", "rejected", { after: "backend" }],
   ["saved settings after preparation", "rejected", { after: "settings" }],
   ["activity after preparation", "accepted", { after: "activity" }],
@@ -249,13 +243,8 @@ it.each<[string, Outcome, JoinCase?]>([
     { sharedOwner: { direction: "incoming", differentSession: true } },
   ],
   [
-    "channel ownership revoked before submission",
-    "failed",
-    { sharedOwner: { direction: "incoming" }, after: "owner-revoke" },
-  ],
-  [
-    "shared WebUI authority revoked before submission",
-    "failed",
+    "admitted shared WebUI continuation survives source revocation",
+    "accepted",
     { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
   ],
 ])(
@@ -307,15 +296,14 @@ it.each<[string, Outcome, JoinCase?]>([
       const original = structuredClone([run.run.clientCaps, run.run.gatewayUiCommandTarget]);
       const sourceRevocation = new AbortController();
       const assertSource = () => sourceRevocation.signal.throwIfAborted();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "join-owner",
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
         modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
-        assertCurrent: assertSource,
       });
       const sharedRevocation = new AbortController();
-      let sharedCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let sharedCapture: PreparedGatewayOperatorRunAuthority | undefined;
       if (c.sharedOwner && !c.sharedOwner.webSource) {
         ensureGatewayOwnerProfile(null);
         const client: GatewayClient = {
@@ -331,7 +319,7 @@ it.each<[string, Outcome, JoinCase?]>([
           authPolicy: captureGatewayAuthPolicy(cfg, { role: "operator", authMethod: "token" }),
           internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
         };
-        sharedCapture = await captureGatewayOperatorRunAuthority({
+        sharedCapture = await prepareGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => cfg },
           sourceAuthority: {
@@ -348,7 +336,7 @@ it.each<[string, Outcome, JoinCase?]>([
       const webAuthority =
         sharedCapture?.authority ??
         (c.sharedOwner?.webSource === "forged"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               ...operatorAuthority,
               profileId: "gateway-owner",
               recoverySnapshot: operatorRecoverySnapshotFixture("gateway-owner", "forged-grant", {
@@ -357,7 +345,7 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             })
           : operatorAuthority);
-      let channelOwnerCurrent = true;
+      const channelOwnerCurrent = true;
       run.operatorAuthority = operatorAuthority;
       let originalIdentityCurrent = true;
       let incomingIdentityCurrent = true;
@@ -377,7 +365,7 @@ it.each<[string, Outcome, JoinCase?]>([
           run.originatingChannel = "telegram";
           run.run.messageProvider = "telegram";
         } else if (c.crossSurface === "shared") {
-          run.operatorAuthority = createAdmittedRunOperatorAuthority({
+          run.operatorAuthority = createTestOperatorAuthority({
             ...operatorAuthority,
             profileId: "gateway-owner",
           });
@@ -488,14 +476,6 @@ it.each<[string, Outcome, JoinCase?]>([
             incoming.run.sessionKey = "agent:main:another-session";
           }
         }
-        const incomingRevocation = new AbortController();
-        if (c.after === "caller-revoke") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
-            ...operatorAuthority,
-            source: {},
-            assertCurrent: () => incomingRevocation.signal.throwIfAborted(),
-          });
-        }
         if (c.caps) {
           incoming.run.clientCaps = c.caps === "narrow" ? [] : ["ui-commands", "usage-refreshing"];
         }
@@ -526,7 +506,7 @@ it.each<[string, Outcome, JoinCase?]>([
           incoming.run.workspaceDir = `${state.workspaceDir}/other`;
         }
         if (c.mismatch === "profile" || c.mismatch === "scopes") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
+          incoming.operatorAuthority = createTestOperatorAuthority({
             ...operatorAuthority,
             ...(c.mismatch === "profile"
               ? { profileId: "another-owner" }
@@ -671,17 +651,14 @@ it.each<[string, Outcome, JoinCase?]>([
         if (c.sharedOwner) {
           expect(joined.allowPendingUserInputAnswer).toBe(false);
         }
-        if (c.after === "revoke") {
-          sourceRevocation.abort(new Error("Caller revoked"));
+        if (c.after === "stop") {
+          sourceRevocation.abort(new Error("Caller stopped"));
         }
         if (c.after === "link-revoke") {
           incomingIdentityCurrent = false;
         }
         if (c.after === "identity-disconnect") {
           originalIdentityCurrent = false;
-        }
-        if (c.after === "owner-revoke") {
-          channelOwnerCurrent = false;
         }
         if (c.after === "shared-revoke") {
           sharedRevocation.abort(new Error("Shared browser authority revoked"));
@@ -704,23 +681,14 @@ it.each<[string, Outcome, JoinCase?]>([
           operation.attachBackend({ ...backend, queueMessage: replacement });
         }
         try {
-          if (c.after === "caller-revoke") {
-            incomingRevocation.abort(new Error("Incoming caller revoked"));
-            assertSource();
-            operatorAuthority.assertCurrent();
-            await expect(joined.prepareCurrent()).rejects.toThrow("Incoming caller revoked");
-            expect(delivered).not.toHaveBeenCalled();
-            assertFrozen();
-            return;
-          }
-          if (outcome === "revoked") {
+          if (outcome === "stopped") {
             const refused = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
               assertCurrent: assertSource,
             });
             expect(await refused.acceptance).toBe(false);
             expect(await refused.outcome).toMatchObject({
               status: "failed",
-              error: expect.objectContaining({ message: "Caller revoked" }),
+              error: expect.objectContaining({ message: "Caller stopped" }),
             });
             expect(delivered).not.toHaveBeenCalled();
             expect(replacement).not.toHaveBeenCalled();
@@ -756,13 +724,6 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             ),
           });
-          if (c.after === "shared-revoke") {
-            await expect(admission).rejects.toThrow("Shared browser authority revoked");
-            expect(delivered).not.toHaveBeenCalled();
-            expect(replacement).not.toHaveBeenCalled();
-            assertFrozen();
-            return;
-          }
           const attempt = await admission;
           expect((await attempt.outcome).status).toBe(outcome);
           expect(delivered).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);

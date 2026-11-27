@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ImageContent } from "../../llm/types.js";
 import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -11,6 +13,7 @@ export type CliModelRequestPayload = {
   prompt: string;
   prependContext?: string;
   appendContext?: string;
+  images?: Array<ImageContent & { displayName?: string }>;
 };
 
 /** Final gate before OpenClaw hands text to a CLI backend. Throws to stop the dispatch. */
@@ -46,20 +49,23 @@ export function readCliPromptContext(
 }
 
 /** Plugins may rewrite text only; any other shape stops the dispatch. */
-function readCliModelRequestPayload(value: unknown): CliModelRequestPayload {
+function readCliModelRequestPayload(value: unknown, allowImages: boolean): CliModelRequestPayload {
   const invalid = () =>
     new Error(
-      "before_model_request must keep the CLI payload as { prompt, prependContext?, appendContext? } strings",
+      allowImages
+        ? "before_model_request must keep text fields as strings and images as inline image blocks"
+        : "before_model_request must keep the CLI payload as { prompt, prependContext?, appendContext? } strings",
     );
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw invalid();
   }
-  // SAFETY: the guard above proved value is a non-null, non-array object; every field is read as unknown and validated below.
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !PAYLOAD_KEYS.has(key))) {
+  const record = value;
+  if (
+    Object.keys(record).some((key) => !PAYLOAD_KEYS.has(key) && !(allowImages && key === "images"))
+  ) {
     throw invalid();
   }
-  const { prompt, prependContext, appendContext } = record;
+  const { prompt, prependContext, appendContext, images } = record;
   if (
     typeof prompt !== "string" ||
     (prependContext !== undefined && typeof prependContext !== "string") ||
@@ -67,10 +73,42 @@ function readCliModelRequestPayload(value: unknown): CliModelRequestPayload {
   ) {
     throw invalid();
   }
+  const requestImages: CliModelRequestPayload["images"] = [];
+  if (images !== undefined) {
+    if (!allowImages || !Array.isArray(images)) {
+      throw invalid();
+    }
+    const values: unknown[] = images;
+    for (const image of values) {
+      if (!isRecord(image)) {
+        throw invalid();
+      }
+      const imageRecord = image;
+      const { type, data, mimeType, displayName } = imageRecord;
+      if (
+        type !== "image" ||
+        typeof data !== "string" ||
+        typeof mimeType !== "string" ||
+        (displayName !== undefined && typeof displayName !== "string") ||
+        Object.keys(imageRecord).some(
+          (key) => !["type", "data", "mimeType", "displayName"].includes(key),
+        )
+      ) {
+        throw invalid();
+      }
+      requestImages.push({
+        type,
+        data,
+        mimeType,
+        ...(displayName !== undefined ? { displayName } : {}),
+      });
+    }
+  }
   return {
     prompt,
     ...(prependContext ? { prependContext } : {}),
     ...(appendContext ? { appendContext } : {}),
+    ...(images !== undefined ? { images: requestImages } : {}),
   };
 }
 
@@ -108,7 +146,10 @@ export function createCliModelRequestGate(params: {
       },
       params.hookContext,
     );
-    return readCliModelRequestPayload(result ? result.payload : requestPayload);
+    return readCliModelRequestPayload(
+      result ? result.payload : requestPayload,
+      payload.images !== undefined,
+    );
   };
 }
 

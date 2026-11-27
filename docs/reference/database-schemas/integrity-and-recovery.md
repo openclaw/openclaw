@@ -136,11 +136,19 @@ Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
 after the final accepted writer settles, a `TRUNCATE` checkpoint completes, and
 the native database closes successfully. Failed or unfinished cleanup cannot
-publish a seal. The seal contains the admitted schema and integrity facts, a
+publish a seal. The Gateway owner-lease release seals only when no read still
+borrows the shared handle; a restart whose startup outlived its stop budget
+keeps that handle open, releases its lease, and the next startup validates
+instead. The seal contains the admitted schema and integrity facts, a
 schema identity, the time and kind of the accepted verification, and the final
 physical file metadata. A recovery-quick receipt remains distinct from a full
 verification. The seal is reconstructible verification metadata, not database state
 or a backup.
+
+Shutdown publishes seals during database close, before process exit. A slow close
+step's diagnostic grace does not skip later retirement: shutdown awaits its actual
+settlement, bounded by the process watchdog. A watchdog report of no pending steps
+does not establish successful close; a rejected step can leave later steps unrun.
 
 During shutdown, idle session-reader pools retire without their normal warm-cache
 delay. Accepted reads and writes settle through their existing owners before the
@@ -306,6 +314,14 @@ an interrupted check must restart from the beginning. Low process priority is no
 an I/O bandwidth limit; the bounded concurrency and inspection deadline do not
 provide page-level pacing or resumability.
 
+Background verification releases its own reader when a checkpoint is blocked and
+the WAL exceeds both twice the main database size and 64 MiB. The checkpoint
+owner publishes this byte-pressure fact; repeated blocked warnings alone do not
+cancel verification. Cancellation joins the native child and leaves verification
+inconclusive, without a seal or a corruption refusal. Foreground reads and writes
+continue. This reclaims a maintenance reader; it is not a WAL size cap and does
+not end user or external readers.
+
 This policy accepts the interval between bounded admission and a background
 corruption finding: previously untouched damaged pages can exist while ordinary
 requests run. SQLite still detects malformed pages it accesses, and existing
@@ -374,25 +390,29 @@ owner and grant for the normal lease duration. A fence lasting longer than that
 duration produces a Doctor warning; a replaced owner still refuses settlement.
 Rollback releases the fence and restores ordinary expiry handling.
 
-| When                                                                                             | Check                                                                                                                                                                                                                                                             |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup with a matching, recent clean-close seal                                                 | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                                                      |
-| Gateway agent startup with an exact read-ready schema and no reusable seal                       | Native WAL recovery, exact schema/owner and bounded header sanity before admission; full integrity and foreign-key checks in the background, with immediate refusal on proven corruption                                                                          |
-| Shared-state startup, agent startup requiring schema/index repair, migration, or update canary   | Retain foreground validation and required integrity checks                                                                                                                                                                                                        |
-| Ordinary current-schema agent open/refresh without reusable proof; only non-unique index repairs | Bounded schema/owner and header admission; record pending verification, publish no seal, and defer full verification to the Gateway's background check. Explicit FULL policy retains its scan in the integrity child                                              |
-| Same-process reopen or new worker                                                                | Reuse live file-bound admission, including bounded admission after `checkpoint-incomplete`; retain current ownership and durable quarantine-row checks. A changed identity or foreign writer prevents local proof reuse; current-schema admission remains bounded |
-| Another live process already admitted the same file                                              | On Linux, macOS, and Windows, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal              |
-| Shared-state fast path while a live Gateway holds the file                                       | On Linux, macOS, and Windows, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal                            |
-| Before a migration or other same-version repair                                                  | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                                                        |
-| After a migration or repair                                                                      | Verify changes and publish committed facts through the existing owner                                                                                                                                                                                             |
-| Explicit verification, Doctor recovery, and compaction                                           | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                                                          |
+| When                                                                                             | Check                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup with a matching, recent clean-close seal                                                 | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                                                                      |
+| Gateway agent startup with an exact read-ready schema and no reusable seal                       | Native WAL recovery, exact schema/owner and bounded header sanity before admission; full integrity and foreign-key checks in the background, with immediate refusal on proven corruption                                                                                          |
+| Shared-state startup, agent startup requiring schema/index repair, migration, or update canary   | Retain foreground validation and required integrity checks                                                                                                                                                                                                                        |
+| Ordinary current-schema agent open/refresh without reusable proof; only non-unique index repairs | Bounded schema/owner and header admission; record pending verification, publish no seal, and defer full verification to the Gateway's background check. Explicit FULL policy retains its scan in the integrity child                                                              |
+| Same-process reopen or new worker                                                                | Reuse live file-bound admission, including bounded admission after `checkpoint-incomplete`; retain current ownership and durable quarantine-row checks. A changed identity or foreign writer prevents local proof reuse; current-schema admission remains bounded                 |
+| Another live process already admitted the same file                                              | On Linux, macOS, and Windows, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal                              |
+| Shared-state fast path while a live Gateway holds the file                                       | On Linux, macOS, and Windows, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal                                            |
+| Before a migration or other same-version repair                                                  | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; an agent database version step checks only the schema catalog and its declared tables; `--full-integrity-check` requests full database integrity |
+| After a migration or repair                                                                      | Verify changes and publish committed facts through the existing owner                                                                                                                                                                                                             |
+| Explicit verification, Doctor recovery, and compaction                                           | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                                                                          |
 
 The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
 `--full-integrity-check` to be detected. Structural corruption still refuses
-migration through the whole-database quick check, and a quick result never
-publishes full-verification facts. Recorded corruption still requires full
-verification before its quarantine is cleared. See
+migration through the whole-database quick check, except in an agent database
+version step: it reads only the schema catalog and the tables the step declares,
+and corruption there refuses the step. Damage confined to an untouched agent table
+does not hold a large store offline for a whole-file scan; a quick result never
+publishes full-verification facts, so the next Gateway start runs the whole-database
+check in the background. Recorded corruption still requires full verification
+before its quarantine is cleared. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
 
 Within the same exclusive Doctor maintenance operation, a recovery-free raw
@@ -696,7 +716,10 @@ still use private snapshots. Neither optimization changes schemas, stored record
 retention, or update migrations.
 
 Live snapshots use SQLite's online-backup owner and a read transaction to pin
-committed pages while writers continue. Native readers may update existing SHM
+committed pages only during acquisition while writers continue. Integrity and
+caller validation inspect the raw private image before journal normalization,
+transforms, or compaction, so verification does not prolong the live read pin.
+The final published image is checked separately. Native readers may update existing SHM
 read marks, so artifact-preserving planning and Doctor scopes use raw copies
 instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
 both within the same pinned WAL generation. Appended frames are allowed; resets,
@@ -715,8 +738,8 @@ Verified snapshot publication retains the original image digest through an owned
 same-file transfer and verifies the final published bytes. Distinct physical copies
 also receive their own byte comparison before publication. Moving a verified
 snapshot into the original capture's payload directory preserves its digest without
-rehashing the rename. Source and output integrity checks, durable backup publication,
-and recovery ownership remain unchanged.
+rehashing the rename. Raw-image and output integrity checks, durable backup publication,
+and recovery ownership remain intact.
 Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
 expanding compressed events outside user and assistant messages. A detected repair
 still reads the complete exact transcript and revalidates it before writing;

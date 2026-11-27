@@ -13,6 +13,7 @@ import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import { listUnverifiedDataAtRisk, readRecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
@@ -49,7 +50,9 @@ export async function recoverInterruptedManagedUpdate(params: {
   if (!run || run.status !== "running") {
     throw new Error("Interrupted updater has no current running record");
   }
-  assertRestartSafe(run);
+  // Only this run's own mark blocks entry: post-core repair below verifies earlier marks
+  // and records their receipts before the history-wide check after it.
+  assertRunRestartSafe(readRecordedDataAtRisk(run));
   assertCurrent();
   const anchor = resolvePackageActivationAnchor(root);
   let publication;
@@ -155,8 +158,27 @@ export async function recoverInterruptedManagedUpdate(params: {
 }
 
 function assertRestartSafe(run: UpdateRunRecord | undefined) {
-  const recovery = run?.verification.recovery;
-  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
-    throw new Error(`keep the gateway stopped: data at risk (${recovery.dataAtRisk})`);
+  // Post-core repair records a receipt on its own run when it verified a mark, and it
+  // refuses for a mark on any recent run, so any unverified mark keeps the Gateway down.
+  // Repair may have advanced the schema past this helper's reader; then only this run's
+  // own record can be judged, and its mark still stands.
+  let history: UpdateRunRecord[] | undefined;
+  try {
+    history = withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
+      allowNativeRead: true,
+    });
+  } catch {
+    history = undefined;
+  }
+  assertRunRestartSafe(
+    history ? listUnverifiedDataAtRisk(history)[0]?.mark : readRecordedDataAtRisk(run),
+  );
+}
+
+function assertRunRestartSafe(dataAtRisk: string | undefined) {
+  if (dataAtRisk) {
+    throw new Error(
+      `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,
+    );
   }
 }

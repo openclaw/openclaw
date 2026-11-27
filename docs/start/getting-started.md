@@ -164,6 +164,18 @@ openclaw dashboard
 
 </Accordion>
 
+## Pair your iPhone or iPad
+
+If you opened this guide from the iOS app, complete [Quick setup](#quick-setup)
+on your computer first. Then:
+
+1. [Set up secure access for your phone](/platforms/ios#quick-start-pair-+-connect).
+   A default Gateway listens only on its own computer, so it cannot create a
+   mobile setup code until your phone has a route to it.
+2. Once the Gateway is running and the Dashboard is connected, open **Nodes**.
+   On the **Devices** page, choose **Connect a device**, then **Create setup code**.
+3. Return to the OpenClaw app on your iPhone or iPad and tap **Scan QR**.
+
 ## If setup does not work
 
 One command turns the current state of your install into a diagnosis you can act on:

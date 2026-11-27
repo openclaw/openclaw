@@ -24,6 +24,7 @@ import type {
   BufferedCommandResult,
   CommandOptions,
 } from "../process/exec.js";
+import { idleIoPriorityArgv } from "../process/idle-io-priority.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -150,7 +151,7 @@ export function gitCommandArgv(cwd: string, args: string[], config: string[] = [
 function gitExecutionArgv(
   cwd: string,
   args: string[],
-  options: { killProcessTree?: boolean; lowerPriority?: boolean },
+  options: { killProcessTree?: boolean; lowerPriority?: boolean; idleIoPriority?: boolean },
 ): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
   const argv = gitCommandArgv(
@@ -158,9 +159,10 @@ function gitExecutionArgv(
     args,
     options.killProcessTree ? ["maintenance.autoDetach=false", "gc.autoDetach=false"] : [],
   );
-  return options.lowerPriority && process.platform !== "win32"
-    ? ["nice", "-n", "10", ...argv]
-    : argv;
+  return idleIoPriorityArgv(
+    options.lowerPriority && process.platform !== "win32" ? ["nice", "-n", "10", ...argv] : argv,
+    options.idleIoPriority,
+  );
 }
 
 export type GitCommandOptions = Pick<
@@ -181,6 +183,7 @@ export type GitCommandOptions = Pick<
   refMutationDirectory?: string;
   /** Yield CPU to foreground Gateway work for content-heavy background reads. */
   lowerPriority?: boolean;
+  idleIoPriority?: boolean;
   /** Drain a bounded file inventory's patches, keeping this many bytes plus an overflow marker per file. */
   maxPatchBytes?: number;
   operation?: GitProcessOperation;
@@ -351,6 +354,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
   refMutationDirectory?: string;
   lowerPriority?: boolean;
+  idleIoPriority?: boolean;
   beforeRun?: SessionSourceAssertion;
   stateOwnerPath?: SandboxStateOwnerPath;
   startRun?: GitOperationStarter;

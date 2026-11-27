@@ -164,11 +164,12 @@ async function validateCatalogSchemaValue(
 async function assertCatalogInputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   value: unknown,
+  recoverySurface?: ToolSearchExactCallOptions["recoverySurface"],
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
     throw markToolContractFailure(
-      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value, recoverySurface)),
       "input_contract",
     );
   }
@@ -318,6 +319,10 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
+    // Looking up an on-demand tool loads it, so the model can call it by name next.
+    if (entry.onDemand) {
+      this.ctx.catalogRef?.loadOnDemandTool?.(entry.name);
+    }
     return describeToolSearchCatalogEntry(entry);
   };
 
@@ -387,30 +392,39 @@ export class ToolSearchRuntime {
     options?: ToolSearchCallOptions,
     fullValue = false,
     match: "id-or-name" | "exact-id" = "id-or-name",
-  ) =>
-    runScheduledToolSearchCall({
+  ) => {
+    const entry = findEntry(
+      resolveCatalog(this.ctx),
+      id,
+      { ...options, codeModeSkills: this.ctx.codeModeSkills },
+      match,
+    );
+    // Bridges serialize results and cannot carry a turn handoff; the direct call can.
+    if (entry.onDemand) {
+      const loader = this.ctx.catalogRef?.loadOnDemandTool;
+      loader?.(entry.name);
+      throw new ToolInputError(
+        loader
+          ? `${entry.name} is now loaded as a top-level tool for this session. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec.`
+          : `${entry.name} runs only as its own top-level tool call. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec.`,
+      );
+    }
+    return runScheduledToolSearchCall({
       ctx: this.ctx,
-      entry: findEntry(
-        resolveCatalog(this.ctx),
-        id,
-        { ...options, codeModeSkills: this.ctx.codeModeSkills },
-        match,
-      ),
+      entry,
       signal: options?.signal,
       execute: (currentEntry, signal) =>
         runWithToolResultDelivery(fullValue, () =>
           this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
         ),
     });
+  };
 
   private readonly executeEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: Pick<
-      ToolSearchCallOptions,
-      "parentToolCallId" | "signal" | "onUpdate" | "mcpNamespaceGuest"
-    >,
+    options?: ToolSearchExactCallOptions,
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
@@ -563,7 +577,7 @@ export class ToolSearchRuntime {
             toolCallId,
             async (finalInput) => {
               if (validateInput) {
-                await assertCatalogInputMatchesSchema(entry, finalInput);
+                await assertCatalogInputMatchesSchema(entry, finalInput, options?.recoverySurface);
               }
               executedInput = asOptionalRecord(structuredClone(finalInput));
               if (outputVariants) {
@@ -687,7 +701,7 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
   }
   // An explicit error can explain itself only in model-facing text; keep that reason.
   if (result.isError !== true || hasErrorMessage(details)) {
-    return details;
+    return withTextGuidance(details, result.content);
   }
   const message = collectTextContentBlocks(result.content)
     .map((text) => text.trim())
@@ -700,6 +714,23 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
     return { message };
   }
   return isRecord(details) ? { ...details, message } : details;
+}
+
+/** Text may add `next` guidance beside a tool's details payload; a Code Mode value keeps it. */
+function withTextGuidance(details: unknown, content: AgentToolResult<unknown>["content"]): unknown {
+  const [block] = content;
+  if (!isRecord(details) || details.next !== undefined || content.length !== 1) {
+    return details;
+  }
+  if (block?.type !== "text" || !block.text.includes('"next":')) {
+    return details;
+  }
+  try {
+    const next = asOptionalRecord(JSON.parse(block.text))?.next;
+    return typeof next === "string" ? { ...details, next } : details;
+  } catch {
+    return details;
+  }
 }
 
 function hasErrorMessage(details: unknown): boolean {

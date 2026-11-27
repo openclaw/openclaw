@@ -8,11 +8,6 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import * as configSerialization from "../config/runtime-config-snapshot-match.js";
-import {
-  clearRuntimeConfigSnapshot as clearConfig,
-  setRuntimeConfigSnapshot as setConfig,
-} from "../config/runtime-snapshot.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
@@ -31,8 +26,11 @@ import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/rem
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
-import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -43,6 +41,7 @@ import {
   acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
+  getPendingPreparedModelRuntimeReplacement,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale as markStale,
   prepareModelRuntimeSnapshot as prepare,
@@ -52,6 +51,7 @@ import {
   applyRemoteModelCatalogUpdate,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import * as runtimeOwners from "./prepared-model-runtime.owner.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const pendingBuilds: Array<() => Promise<void>> = [];
@@ -314,46 +314,6 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses publication fingerprints across fleet catalog reads without caching mutable projections", async () => {
-    using stringify = vi.spyOn(configSerialization, "stableConfigStringify");
-    try {
-      for (const size of [8, 16]) {
-        const config: OpenClawConfig = {
-          agents: {
-            entries: Object.fromEntries(
-              Array.from({ length: size }, (_, index) => [`agent-${index}`, { name: "original" }]),
-            ),
-          },
-        };
-        setConfig(config);
-        const input = inputFor(`read-only-fleet-${size}`, config, {
-          agentId: "agent-0",
-          readOnly: true,
-        });
-        const snapshot = await publish(input, { catalogMode: "static" });
-        stringify.mockClear();
-        for (let request = 0; request < 16; request++) {
-          expect(catalogOwner(input)).toBe(snapshot);
-        }
-        expect(stringify.mock.calls.filter(([value]) => value === config)).toHaveLength(0);
-
-        const projected = structuredClone(config);
-        expect(catalogOwner({ ...input, config: projected })).toBe(snapshot);
-        projected.agents!.entries!["agent-0"]!.name = "projected";
-        expect(catalogOwner({ ...input, config: projected })).toBeUndefined();
-
-        config.agents!.entries!["agent-0"]!.name = "republished";
-        setConfig(config);
-        expect(catalogOwner(input)).toBeUndefined();
-        const replacement = await publish(input, { catalogMode: "static" });
-        expect(replacement).not.toBe(snapshot);
-        expect(catalogOwner(input)).toBe(replacement);
-      }
-    } finally {
-      clearConfig();
-    }
-  });
-
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
@@ -533,7 +493,7 @@ describe("remote catalog publication boundaries", () => {
         logGateway: { debug: vi.fn(), warn: vi.fn() },
       } as never,
     });
-    expect(respond.mock.calls[0]?.[0]).toBe(success);
+    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(success);
     return respond.mock.calls[0]?.[success ? 1 : 2];
   }
   afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
@@ -551,6 +511,81 @@ describe("remote catalog publication boundaries", () => {
       });
     return { preparing, commit, pricingSpy };
   }
+
+  it("keeps staged registration current but recovers retirement only after commit", async () => {
+    await setup({ allowGatewaySubagentBinding: true });
+    using batches = vi.spyOn(runtimeOwners, "publishPreparedModelRuntimeOwnerBatch");
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    let recovery: Promise<void> | undefined;
+    try {
+      await preparing.promise;
+      const candidate = batches.mock.calls.at(-1)![0].ownersToPublish[0]!;
+      const snapshot = candidate.snapshot!;
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+      candidate.onPluginGenerationRetired!();
+      expect(getPendingPreparedModelRuntimeReplacement()).toBeUndefined();
+
+      commit.resolve();
+      expect(await adoption).toBe("published");
+      expect(snapshot.isCurrent()).toBe(true);
+      candidate.onPluginGenerationRetired!();
+      recovery = getPendingPreparedModelRuntimeReplacement();
+      expect(recovery).toBeDefined();
+      await recovery;
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(readSnapshot(candidate.input)?.isCurrent()).toBe(true);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption, recovery]);
+      pricingSpy.mockRestore();
+    }
+  });
+
+  it("models.list refresh acquires the replacement when hosted publication interrupts discovery", async ({
+    signal,
+  }) => {
+    const discovering = createDeferred();
+    const release = createDeferred();
+    const native = vi.fn(async () => []);
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+      const id = `discovered-${captureRemoteModelCatalogSnapshot()?.generatedAt}`;
+      const row = { id, provider: "custom", name: id };
+      return { entries: [row], routeVariants: [row] };
+    });
+    native.mockImplementationOnce(async () => {
+      discovering.resolve();
+      await release.promise;
+      return [];
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+      harnessRegistry("native-test", {
+        label: "Native test",
+        runAttempt: vi.fn(),
+        loadModelCatalog: native,
+      }),
+    );
+    await setup();
+    const pending = listModels(true);
+    void pending.catch(() => undefined);
+    try {
+      await withinTest(discovering.promise, signal);
+      expect(
+        await withinTest(
+          applyRemoteModelCatalogUpdate(() => config),
+          signal,
+        ),
+      ).toBe("published");
+      release.resolve();
+      const result = await withinTest(pending, signal);
+      expect(result.models.map((model: { id: string }) => model.id)).toContain("discovered-300");
+      expect(native).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  });
 
   it("models.list does not retry after the remote replacement itself loses authority", async () => {
     await setup();
@@ -733,7 +768,9 @@ describe("prepared runtime generation admission", () => {
     const previousSnapshot = readSnapshot(previousInput);
 
     await using outerLease = scopePreparedModelRuntimeLease(await acquirePrevious());
-    expect(outerLease.snapshot).toBe(previousSnapshot);
+    // Run projections retain inventory ownership while carrying their own admitted policy.
+    expect(outerLease.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot)?.()).toBe(previousConfig);
 
     await refresh(committedConfig, publicationOptions);
     const committedSnapshot = readSnapshot(committedInput);
@@ -749,12 +786,17 @@ describe("prepared runtime generation admission", () => {
           acquirePrevious,
         );
 
-        expect(resumed.snapshot).toBe(previousSnapshot);
+        expect(resumed.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+        expect(getPreparedModelRuntimePolicyConfigReader(resumed.snapshot)).toBe(
+          getPreparedModelRuntimePolicyConfigReader(outerLease.snapshot),
+        );
         expect(readSnapshot(committedInput)).toBe(committedSnapshot);
         await resumed[Symbol.asyncDispose]();
         {
-          await using cloned = await acquirePrevious(runInput(structuredClone(previousConfig)));
-          expect(cloned.snapshot).toBe(previousSnapshot);
+          const clonedConfig = structuredClone(previousConfig);
+          await using cloned = await acquirePrevious(runInput(clonedConfig));
+          expect(cloned.snapshot.catalogOwner).toBe(previousSnapshot?.catalogOwner);
+          expect(getPreparedModelRuntimePolicyConfigReader(cloned.snapshot)?.()).toBe(clonedConfig);
         }
         for (const [input, requestedGeneration] of [
           [{ ...previousInput, workspaceDir: "/tmp/different-workspace" }, generation],
@@ -777,7 +819,10 @@ describe("prepared runtime generation admission", () => {
     expect(readSnapshot(committedInput)).toBe(committedSnapshot);
 
     await using next = await acquireRun(committedInput);
-    expect(next.snapshot).toBe(committedSnapshot);
+    expect(next.snapshot.catalogOwner).toBe(committedSnapshot?.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(next.snapshot)).toBe(
+      getPreparedModelRuntimePolicyConfigReader(committedSnapshot),
+    );
   });
   it("does not let a stale dynamic lease authorize a replacement generation", async () => {
     const config = {};

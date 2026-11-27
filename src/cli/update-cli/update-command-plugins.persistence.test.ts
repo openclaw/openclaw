@@ -20,6 +20,7 @@ import { UpdateRequesterRevokedError } from "../../infra/update-requester-author
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
+import { hashStableJson } from "../../plugins/installed-plugin-index-hash.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
@@ -48,6 +49,22 @@ afterEach(() => vi.restoreAllMocks());
 
 function convergenceResult(config: OpenClawConfig) {
   return { ...postCoreConvergenceResult(), config };
+}
+
+function beginTestPluginCohort(
+  state: OpenClawTestState,
+  runId: string,
+  fence: Parameters<typeof beginUpdatePluginCohort>[0]["fence"],
+) {
+  const runtime = { root: state.root, nodePath: process.execPath, buildId: "fixture" };
+  return beginUpdatePluginCohort({
+    runId,
+    installKey: state.root,
+    from: { ...runtime, version: "2026.10.9" },
+    to: { ...runtime, version: "2026.10.10" },
+    env: state.env,
+    fence,
+  });
 }
 
 it.each([
@@ -87,20 +104,7 @@ it.each([
       await withUpdateCommandExecutor(runId, async (executor) => {
         const fence = await executor.enter(state.root);
         if (scenario.retained) {
-          const runtime = {
-            root: state.root,
-            nodePath: process.execPath,
-            version: "2026.10.9",
-            buildId: "fixture",
-          };
-          await beginUpdatePluginCohort({
-            runId,
-            installKey: state.root,
-            from: runtime,
-            to: { ...runtime, version: "2026.10.10" },
-            env: state.env,
-            fence,
-          });
+          await beginTestPluginCohort(state, runId, fence);
         }
         const beforeCalls = mocks.convergence.mock.calls.length;
         const convergence = convergePostCoreUpdatePlugins({
@@ -180,20 +184,7 @@ it("retains published artifacts when install commit cleanup fails", async () => 
     const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
     const fence = { assertCurrent() {} };
     const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
-    const runtime = {
-      root: state.root,
-      nodePath: process.execPath,
-      version: "2026.10.9",
-      buildId: "fixture",
-    };
-    await beginUpdatePluginCohort({
-      runId,
-      installKey: state.root,
-      from: runtime,
-      to: { ...runtime, version: "2026.10.10" },
-      env: state.env,
-      fence,
-    });
+    await beginTestPluginCohort(state, runId, fence);
     const files = [state.path("published-first"), state.path("published-second")];
     await Promise.all(files.map((file) => fs.writeFile(file, "published")));
     const failure = new Error("first package commit cleanup failed");
@@ -271,21 +262,8 @@ it.each([
       const originalConfig = await fs.readFile(state.configPath, "utf8");
       const fence = { assertCurrent() {} };
       const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
-      const runtime = {
-        root: state.root,
-        nodePath: process.execPath,
-        version: "2026.10.9",
-        buildId: "fixture",
-      };
       if (cohort) {
-        await beginUpdatePluginCohort({
-          runId,
-          installKey: state.root,
-          from: runtime,
-          to: { ...runtime, version: "2026.10.10" },
-          env: state.env,
-          fence,
-        });
+        await beginTestPluginCohort(state, runId, fence);
       }
       const plugin = { stateDir: state.stateDir, packageName: "@example/owed", pluginId: "owed" };
       const installPath = writeManagedNpmPlugin({ ...plugin, version: "1.0.0" });
@@ -422,15 +400,7 @@ it.each([
       const runId = cohort ? createUpdateRun({ trigger: "cli" }, { env: state.env }).runId : "";
       const fence = { assertCurrent() {} };
       if (cohort) {
-        const runtime = { root: state.root, nodePath: process.execPath, buildId: "fixture" };
-        await beginUpdatePluginCohort({
-          runId,
-          installKey: state.root,
-          from: { ...runtime, version: "2026.10.9" },
-          to: { ...runtime, version: "2026.10.10" },
-          env: state.env,
-          fence,
-        });
+        await beginTestPluginCohort(state, runId, fence);
       }
       // The cohort ledger tracks managed npm records, so the fixture is one.
       const installPath = writeManagedNpmPlugin({
@@ -759,6 +729,57 @@ it.each([1, 5])("bounds publication retries after %s late writes", async (writes
     },
   );
 });
+
+it.each(["records only", "records and config", "unchanged"] as const)(
+  "runs the original-state copy before plugin records publish, never without a change (%s)",
+  async (shape) => {
+    await withOpenClawTestState({ label: "updater-plugin-copy-first" }, async (state) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const prepared = await prepareUpdate(state, config);
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      const records = { next: { source: "archive" as const } };
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        ...(shape === "unchanged"
+          ? {}
+          : { changes: ["Installed fixture next."], installRecords: records }),
+        // A config delta takes the combined writer, which commits the index first.
+        ...(shape === "records and config"
+          ? {
+              config: { ...cfg, plugins: { ...cfg.plugins, entries: { next: { enabled: true } } } },
+              configChanges: ["Enabled fixture next."],
+            }
+          : {}),
+      }));
+      // What a copy taken at this moment would hold: the index as it was before publication.
+      const indexAtCopy: unknown[] = [];
+      const result = await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configChanged: false,
+        configWriteOptions: preparedWrite.writeOptions,
+        beforeRecordPublication: async () => {
+          indexAtCopy.push(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          );
+        },
+      });
+      expect(indexAtCopy.slice(0, 1)).toEqual(shape === "unchanged" ? [] : [{}]);
+      const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({
+        env: state.env,
+      });
+      expect(persisted).toEqual(shape === "unchanged" ? {} : records);
+      expect(result.reloadTargets).toEqual(
+        shape === "unchanged"
+          ? undefined
+          : [{ pluginId: "next", installHash: hashStableJson(persisted?.next) }],
+      );
+      if (shape === "records and config") {
+        const saved = (await readConfigFileSnapshot()).sourceConfig;
+        expect(saved.plugins?.entries?.next?.enabled).toBe(true);
+      }
+    });
+  },
+);
 
 it("prints each skipped plugin and its reason after the update counts", async () => {
   await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {

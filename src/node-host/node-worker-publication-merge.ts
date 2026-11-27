@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,
@@ -17,10 +16,10 @@ import {
   NodeWorkerPublicationConflictError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
+import { withNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 
-/** The editing checkout supplies objects only; all indexes, fetches and merges stay private. */
+/** Accepted blobs/history and explicit repository fetches are the only object sources. */
 async function mergeNodeRepositoryPublication(params: {
-  workspaceDir: string;
   inputRoot: string;
   inputDigest: string;
   outputRoot: string;
@@ -28,6 +27,7 @@ async function mergeNodeRepositoryPublication(params: {
   targetUrl: string;
   targetCommit: string;
   token: string;
+  baseEnv?: NodeJS.ProcessEnv;
   gitHistory?: WorkerWorkspaceGitHistory;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -36,10 +36,10 @@ async function mergeNodeRepositoryPublication(params: {
     params.inputRoot,
     params.inputDigest,
   );
-  await withTempWorkspace(
+  await withNodeWorkerTempWorkspace(
     { rootDir: path.dirname(params.outputRoot), prefix: "publication-git-" },
     async ({ dir }) => {
-      const env: NodeJS.ProcessEnv = { ...process.env };
+      const env: NodeJS.ProcessEnv = { ...(params.baseEnv ?? process.env) };
       for (const key of Object.keys(env)) {
         if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/iu.test(key)) {
           delete env[key];
@@ -130,16 +130,6 @@ async function mergeNodeRepositoryPublication(params: {
       const text = async (args: string[], input?: string | Buffer) =>
         (await git(args, input)).toString("utf8").trim();
       await git(["init", "--bare", "--quiet", "--template=", "--object-format=sha1"]);
-      const objects = (
-        await git(
-          ["rev-parse", "--path-format=absolute", "--git-path", "objects"],
-          undefined,
-          params.workspaceDir,
-        )
-      )
-        .toString("utf8")
-        .trim();
-      await fs.writeFile(path.join(dir, "objects", "info", "alternates"), `${objects}\n`);
       for (const [role, url, commit] of [
         ["source-base", params.sourceUrl, snapshot.baseCommit],
         ["target-base", params.targetUrl, params.targetCommit],
@@ -278,7 +268,7 @@ export async function transferNodeRepositoryPublication(
   },
 ): Promise<string> {
   const transfer = params.transfer;
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
       prefix: "publication-merge-",
@@ -300,7 +290,6 @@ export async function transferNodeRepositoryPublication(
         },
       });
       await mergeNodeRepositoryPublication({
-        workspaceDir: params.workspaceDir,
         inputRoot,
         outputRoot,
         inputDigest: transfer.inputDigest,
@@ -308,6 +297,7 @@ export async function transferNodeRepositoryPublication(
         targetUrl: transfer.targetUrl,
         targetCommit: transfer.targetCommit,
         token: transfer.gitToken,
+        baseEnv: params.baseEnv,
         gitHistory: transfer.checkpointGitHistory,
         signal: params.signal,
         assertCurrent: params.assertCurrent,

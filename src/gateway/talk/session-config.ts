@@ -189,6 +189,7 @@ export async function buildTalkTranscriptionConfig(
   requestedProvider?: string,
   requestedModel?: string,
   agentId?: string,
+  fileTranscription?: ReturnType<typeof resolveTalkFileTranscriptionConfig>,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -206,7 +207,7 @@ export async function buildTalkTranscriptionConfig(
     !voiceModelDefault &&
     !normalizeOptionalString(requestedModel) &&
     Object.keys(providerConfigs).length === 0
-      ? await resolveTalkFileTranscriptionConfig(config, agentId)
+      ? await (fileTranscription ?? resolveTalkFileTranscriptionConfig(config, agentId))
       : undefined;
   // A voice-note model nobody can run must not take Talk from a streaming
   // provider that can; it keeps the path only to report what is missing.

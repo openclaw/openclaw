@@ -12,20 +12,22 @@ it("keeps the edited input and focus while its form and validation update", asyn
     setProps((previous) => ({
       ...previous,
       form: { ...previous.form, ...patch },
-      fieldErrors: { name: "cron.errors.nameRequired" },
+      fieldErrors: { payloadText: "cron.errors.agentMessageRequired" },
     }));
   const view = mountSolid(() => <CronView {...props()} />);
   await vi.dynamicImportSettled();
-  await waitForSolid(() => expect(view.container.querySelector("#cron-name")).not.toBeNull());
-  const input = getElement(view.container, "#cron-name", HTMLTextAreaElement);
+  await waitForSolid(() =>
+    expect(view.container.querySelector("#cron-payload-text")).not.toBeNull(),
+  );
+  const input = getElement(view.container, "#cron-payload-text", HTMLTextAreaElement);
   input.focus();
   input.value = "Daily check";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  expect(view.container.querySelector("#cron-name")).toBe(input);
+  expect(view.container.querySelector("#cron-payload-text")).toBe(input);
   expect(document.activeElement).toBe(input);
   expect(input.value).toBe("Daily check");
-  expect(view.container.querySelector("#cron-error-name")?.textContent).toBeTruthy();
+  expect(view.container.querySelector("#cron-error-payloadText")?.textContent).toBeTruthy();
 });
 
 it("publishes refreshed runtime facts from the mutable selected job", async () => {

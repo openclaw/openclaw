@@ -27,6 +27,7 @@ import {
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
 import type { CodexAgentsMdSnapshot, CodexNativeModelContext } from "./client-workspace-state.js";
+import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -75,16 +76,10 @@ export async function readMirroredSessionHistoryMessages(
   params: CodexMirroredSessionHistoryTarget & {
     admission?: TranscriptTurnAdmission;
     signal?: AbortSignal;
-    contextTokenBudget?: number;
   },
 ): Promise<AgentMessage[] | undefined> {
-  const { admission, signal, contextTokenBudget, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(
-    target,
-    admission,
-    signal,
-    contextTokenBudget,
-  );
+  const { admission, signal, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(target, admission, signal);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -447,11 +442,7 @@ export async function prepareCodexWatchedSessionsContext(params: {
   });
 }
 
-/**
- * Skill Library pins live in the Gateway state directory, which a remote app-server's
- * own file tools cannot open; copies already delivered under its workspace root stay.
- * The catalog arrives rendered (with compacted paths), so entries are matched by name.
- */
+/** The catalog arrives rendered (with compacted paths), so entries are matched by name. */
 function withoutGatewayOnlySkillLocations(
   prompt: string,
   skills: readonly { name: string; source: string; filePath: string }[],
@@ -466,13 +457,9 @@ function withoutGatewayOnlySkillLocations(
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&apos;");
   const names = new Set(
-    skills
-      .filter(
-        (skill) =>
-          skill.source === "openclaw-library" &&
-          !skill.filePath.startsWith(`${remoteRoot.replace(/\/+$/u, "")}/`),
-      )
-      .map((skill) => `    <name>${escape(skill.name)}</name>`),
+    [...resolveGatewayOnlySkillDirs(skills, remoteRoot).keys()].map(
+      (name) => `    <name>${escape(name)}</name>`,
+    ),
   );
   const note = readable
     ? "Stored on the Gateway: read it with skills_read by name."

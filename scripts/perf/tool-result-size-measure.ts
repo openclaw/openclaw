@@ -28,6 +28,7 @@ import { parseArgs } from "node:util";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -185,12 +186,7 @@ const observer = new PerformanceObserver((list) => {
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const hostLoad = loadavg();
 const cpuStart = process.cpuUsage();

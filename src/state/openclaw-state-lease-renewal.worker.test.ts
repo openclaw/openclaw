@@ -27,7 +27,7 @@ function fixture(rows: Record<string, number>, filename = ":memory:") {
   for (const [key, expiry] of Object.entries(rows)) {
     insert.run(key, expiry);
   }
-  return { db, scheduler: createStateLeaseRenewalScheduler(db) };
+  return { db, scheduler: createStateLeaseRenewalScheduler(() => db) };
 }
 
 function renewal(key: string, complete: Renewal["complete"], leaseMs = 300_000): Renewal {

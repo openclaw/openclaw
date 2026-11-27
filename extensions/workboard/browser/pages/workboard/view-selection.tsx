@@ -471,9 +471,12 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
     if (current?.labelMode === "replace") {
       return current.labels.length > 12;
     }
-    return (
-      current?.labelMode === "add" &&
-      current.observedCards.some((card) => new Set([...card.labels, ...current.labels]).size > 12)
+    if (current?.labelMode !== "add") {
+      return false;
+    }
+    const remainingIds = new Set(current.cardIds);
+    return current.observedCards.some(
+      (card) => remainingIds.has(card.id) && new Set([...card.labels, ...current.labels]).size > 12,
     );
   };
   const close = () => {

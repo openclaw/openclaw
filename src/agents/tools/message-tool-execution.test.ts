@@ -42,8 +42,8 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
+import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/terminal-resolution.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -338,6 +338,35 @@ describe("registered message action source completion", () => {
       }
     },
   );
+});
+
+it("preserves literal folder names and their order in a poll", async ({ onTestFinished }) => {
+  onTestFinished(resetPluginRuntimeStateForTest);
+  const received: unknown[] = [];
+  registerMessageChannel({
+    ...workspaceTestPlugin,
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      handleAction: async ({ params }) => {
+        received.push({ question: params.pollQuestion, options: params.pollOption });
+        return jsonResult({ ok: true });
+      },
+    },
+  });
+  setRuntimeConfigSnapshot(workspaceConfig);
+  const tool = createMessageTool({ config: workspaceConfig });
+  const folder = String.raw`C:\notes`;
+  const question = `Choose a folder under ${folder}`;
+  const prefix = String.raw`Reasoning:\n_Comparing folders_\n`;
+  const options = [String.raw`C:\nest`, String.raw`C:\rest`, String.raw`C:\nest`];
+  await tool.execute("poll-folders", {
+    action: "poll",
+    channel: "workspace",
+    target: "C123",
+    pollQuestion: prefix + question + "\n",
+    pollOption: [...options, prefix + folder + String.raw`\n`],
+  });
+  expect(received).toEqual([{ question, options: [...options, folder] }]);
 });
 
 function createFailingMessageTool(error: Error) {

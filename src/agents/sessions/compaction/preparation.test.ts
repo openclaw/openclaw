@@ -3,7 +3,7 @@ import { getMessageFromEntryForCompaction } from "../../../../packages/agent-cor
 import { collectCompactionPreparationEntryFact } from "../../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { projectSessionContextMessage } from "../../../../packages/agent-core/src/harness/session/session.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   collectMessageTokenPressureFact,

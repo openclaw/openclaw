@@ -204,6 +204,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelId: params.modelId,
       runtimeId: params.harnessRuntime ?? params.harnessId ?? "openclaw",
       route: auth.modelRoute,
+      advertised: params.cyberAccessPrograms,
     });
     return cyber === undefined ? extraParams : { ...extraParams, accessPrograms: { cyber } };
   };

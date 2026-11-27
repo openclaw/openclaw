@@ -245,7 +245,6 @@ it.each(routes)("preserves Android build JVM options for $name", (route) => {
       BOAT_TEST_RUNNER: String(
         evaluateWorkflowExpression(step.env.BOAT_TEST_RUNNER ?? "${{ false }}", context),
       ),
-      CI_RUNNER_BACKEND: String(evaluateWorkflowExpression(step.env.CI_RUNNER_BACKEND, context)),
       JAVA_TOOL_OPTIONS: "-Dfixture=true",
       TASK: "test-third-party",
       RUN_LINT: "false",

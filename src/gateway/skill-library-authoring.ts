@@ -1,8 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -26,12 +26,8 @@ import {
   saveSkillLibrary,
   mutateSkillLibrary,
 } from "../skills/library/service.js";
-import { resolveSkillLibraryActorFromProfile } from "../skills/library/store.js";
 import { SkillLibraryError } from "../skills/skill-library-error.js";
-import {
-  captureResidentUserProfileAccess,
-  readResidentUserProfileId,
-} from "../state/user-profile-list.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -40,7 +36,7 @@ import {
 
 const active = new Map<string, Set<{ profileId: string; revoke: () => void }>>();
 const SKILL_LIBRARY_TURN_REFUSAL =
-  "Personal skill library authoring runs only when the person sends the request in this conversation. This turn has no human requester, so the call was not run.";
+  "Personal skill library authoring requires this turn's admitted grant. This turn has no human requester or authoring grant, so the call was not run.";
 
 function listingsMatch(
   left: SkillLibraryPromptListing | undefined,
@@ -132,10 +128,10 @@ export function invalidateSkillAuthoringForOtherRequester(
   }
 }
 
-function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn: boolean) {
+function grantsSkillAuthoring(options: SkillLibraryRequestOwner, grant: TurnGrant | undefined) {
   const client = options.client;
   return Boolean(
-    isHumanTurn &&
+    grant?.skillAuthoring &&
     client?.authenticatedUserProfile &&
     !client.internal?.syntheticClient &&
     !client.internal?.agentRuntimeIdentity &&
@@ -148,33 +144,18 @@ function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn
 
 async function prepareGatewaySkillLibrarySession(
   options: SkillLibraryRequestOwner,
-  isHumanTurn: boolean,
+  grant: TurnGrant | undefined,
 ): Promise<PreparedSkillLibrarySession | undefined> {
-  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
+  if (!grantsSkillAuthoring(options, grant)) {
     return undefined;
   }
-  const client = options.client;
-  const authority = libraryAuthority(options);
-  const scopes = [...authority.scopes];
-  return prepareSkillLibrarySession({
-    ...authority,
-    assertCurrent() {
-      authority.assertCurrent();
-      if (
-        options.client !== client ||
-        client?.authenticatedUserProfile?.profileId !== authority.profileId ||
-        !isDeepStrictEqual(client?.connect.scopes ?? [], scopes)
-      ) {
-        throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library requester changed. Retry.");
-      }
-    },
-  });
+  return prepareSkillLibrarySession(libraryAuthority(options));
 }
 
 export async function prepareGatewaySkillLibraryTurn(
   request: {
     owner: SkillLibraryRequestOwner;
-    isHumanTurn: boolean;
+    grant: TurnGrant | undefined;
     sessionKey: string;
     storedListing?: unknown;
     sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
@@ -183,9 +164,7 @@ export async function prepareGatewaySkillLibraryTurn(
   prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
   onAuthoring: () => void,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const prepared = request.isHumanTurn
-    ? await prepareGatewaySkillLibrarySession(request.owner, true)
-    : undefined;
+  const prepared = await prepareGatewaySkillLibrarySession(request.owner, request.grant);
   await prepareSessionCreation(prepared);
   onAuthoring();
   return resolveGatewaySkillLibraryPromptGrant({ ...request, prepared });
@@ -193,13 +172,13 @@ export async function prepareGatewaySkillLibraryTurn(
 
 /**
  * Keep `skill_library` in the session prompt whenever this conversation has a
- * recorded listing. A turn without a human requester keeps that definition and
- * is refused at execution. Only an eligible human turn refreshes the listing.
+ * recorded listing. A turn without an admitted authoring grant keeps that
+ * definition and is refused at execution. An eligible turn refreshes it.
  */
 export async function resolveGatewaySkillLibraryPromptGrant(params: {
   owner: SkillLibraryRequestOwner;
   sessionKey: string;
-  isHumanTurn: boolean;
+  grant: TurnGrant | undefined;
   prepared?: PreparedSkillLibrarySession;
   storedListing?: unknown;
   sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
@@ -208,16 +187,16 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   const storedListing = await readCommittedPromptListing(params);
   let next = storedListing;
   let live: SkillLibraryAuthoringCapability | undefined;
-  if (params.isHumanTurn) {
+  if (grantsSkillAuthoring(params.owner, params.grant)) {
     live = await prepareGatewaySkillAuthoring(
       params.owner,
       params.sessionKey,
-      true,
+      params.grant,
       params.prepared,
     );
     if (live) {
       next = { multipleProfiles: live.multipleProfiles, defaultTarget: live.defaultTarget };
-    } else if (canPrepareSkillAuthoring(params.owner, true)) {
+    } else {
       next = undefined;
     }
   }
@@ -240,14 +219,14 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   return listingForTurn ? createRefusedSkillLibraryAuthoring(listingForTurn) : undefined;
 }
 
-/** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
+/** The turn's admitted grant mints the namespace; actions remain normal tool policy. */
 export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
-  isHumanTurn: boolean,
+  grant: TurnGrant | undefined,
   prepared?: PreparedSkillLibrarySession,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
+  if (!grant || !grantsSkillAuthoring(options, grant)) {
     return undefined;
   }
   const authority = libraryAuthority(options);
@@ -271,14 +250,14 @@ export async function prepareGatewaySkillAuthoring(
       !owner ||
       getAdmittedRunDelegatedAuthority(bound) !== owner ||
       caller?.operationalRunInstance !== bound.operationalRunInstance ||
-      !caller.receiptAuthority ||
-      caller.receiptAuthority() === false
+      !caller.receiptAuthority
     ) {
       throw new SkillLibraryError(
         "AUTHORITY_EXPIRED",
         "Personal authoring authority expired or this turn has mixed requesters. Send a fresh attributed message requesting the change.",
       );
     }
+    caller.receiptAuthority();
   };
   const currentAuthority = { ...authority, assertCurrent, namespace: "personal" as const };
   return {
@@ -303,21 +282,21 @@ export async function prepareGatewaySkillAuthoring(
           "Personal authoring run was not admitted.",
         );
       }
-      const grant = {
+      const binding = {
         profileId,
         revoke: () => {
           revoked = true;
         },
       };
       const grants = active.get(sessionKey) ?? new Set();
-      grants.add(grant);
+      grants.add(binding);
       active.set(sessionKey, grants);
       const stop = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
         if (closed !== owner) {
           return;
         }
         revoked = true;
-        grants.delete(grant);
+        grants.delete(binding);
         if (!grants.size) {
           active.delete(sessionKey);
         }
@@ -326,17 +305,11 @@ export async function prepareGatewaySkillAuthoring(
     },
     assertWorkspaceCurrent() {
       assertCurrent();
-      const profile = captureResidentUserProfileAccess(profileId).readCurrentFacts();
-      if (
-        !resolveSkillLibraryActorFromProfile(authority, authority.getConfig(), {
-          id: profile.profileId,
-          role: profile.assignedRole,
-          githubLogin: profile.githubLogin,
-        }).admin
-      ) {
+      // Decided once at admission; a role change applies to the next turn.
+      if (!grant.owner) {
         throw new SkillLibraryError(
           "FORBIDDEN",
-          "Workspace authoring requires current administrator authority.",
+          "Workspace authoring requires administrator authority.",
         );
       }
     },

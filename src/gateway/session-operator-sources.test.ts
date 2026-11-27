@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { emitResetCommandHooks } from "../auto-reply/reply/commands-reset-hooks.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -8,10 +9,18 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   pairedOperator,
   persistDevices,
@@ -46,19 +55,73 @@ async function recordedFixture(stateDir: string, scopes: string[]) {
 it("admits an untiered person's session work only through their recorded, current source", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const { admit, record } = await recordedFixture(stateDir, ["operator.write"]);
-    await expect(admit()).rejects.toThrow("no current run authority");
+    await expect(admit()).rejects.toThrow("Your role on this Gateway does not allow it");
 
     await record();
     const admitted = await admit();
     try {
       // The original connection's scopes, never an administrator substitute.
       expect(admitted.authority.scopes).toEqual(["operator.write"]);
-      expect(admitted.authority.assertCurrent).not.toThrow();
     } finally {
       admitted.release();
     }
 
     persistDevices(stateDir, [], "both");
+    await expect(admit()).rejects.toThrow();
+  }));
+
+it("admits a restart wake for a Tailscale Control UI person whose browser key was never paired", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({});
+    const profile = ensureProfileForEmail("tailscale-principal@example.test");
+    const fixture = await recoveryFixture(stateDir, profile.id, {
+      device: pairedOperator(),
+      tokenlessDevice: true,
+    });
+    // Tailscale Serve skips Control UI pairing: the browser presents its key, unpaired.
+    const config: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "fixture-token", allowTailscale: true } },
+    };
+    fixture.setConfig(config);
+    fixture.client.authPolicy = captureGatewayAuthPolicy(config, {
+      role: "operator",
+      authMethod: "tailscale",
+      verifiedIdentity: "tailscale-principal@example.test",
+    });
+    persistDevices(stateDir, [], "both");
+    const admit = () =>
+      prepareSessionPrincipalRunAuthority({
+        context: fixture.context,
+        profileId: profile.id,
+        ...fixture.target,
+        sessionPrincipal: true,
+      });
+    await expect(admit()).rejects.toThrow("Your role on this Gateway does not allow it");
+
+    // A new message from this person is admitted and records its source.
+    const message = expectDefined(
+      await prepareGatewayOperatorRunAuthority({
+        client: captureAgentTurnPrincipal(fixture.client),
+        context: fixture.context,
+        sourceAuthority: null,
+      }),
+      "new message admission",
+    );
+    try {
+      await recordSessionOperatorSource({ ...fixture.target, authority: message.authority, log });
+    } finally {
+      message.release();
+    }
+    const wake = await admit();
+    try {
+      expect(wake.authority.scopes).toEqual(["operator.admin"]);
+    } finally {
+      wake.release();
+    }
+
+    fixture.setConfig({
+      gateway: { auth: { mode: "token", token: "fixture-token", allowTailscale: false } },
+    });
     await expect(admit()).rejects.toThrow();
   }));
 
@@ -185,6 +248,7 @@ it.each([
       };
       const config: OpenClawConfig = {
         gateway: {
+          openclawId: { enabled: true },
           roles: {
             ...(enforced ? { default: "reader" } : {}),
             definitions: {
@@ -198,6 +262,12 @@ it.each([
           },
         },
       };
+      setUserProfileRole(profile.id, "limited");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
       setRuntimeConfigSnapshot(config);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
@@ -234,6 +304,7 @@ it.each([
         }
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     }),
 );

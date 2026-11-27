@@ -77,6 +77,12 @@ export function useSessionMessageCutFixtures() {
     const entry: InternalSessionEntry = {
       agentHarnessId: "embedded",
       claudeCliSessionId: "claude-conversation",
+      cliHistoryBoundary: {
+        version: 1,
+        sessionId,
+        state: "known",
+        authFingerprint: "a".repeat(64),
+      },
       cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
       cliSessionIds: { "claude-cli": "claude-conversation" },
       compactionCount: 2,

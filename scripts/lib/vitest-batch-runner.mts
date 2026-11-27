@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { relayChildStream } from "./ci-test-output.mts";
 import { signalExitCode } from "./managed-child-process.mts";
 import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
@@ -26,6 +27,7 @@ export type VitestBatchRunParams = {
   targets: string[];
   workerRun?: VitestWorkerRun;
   onComplete?: (outcome: VitestReportOutcome) => void;
+  evidenceLabel?: string;
 };
 
 const scriptFile = fileURLToPath(import.meta.url);
@@ -89,22 +91,44 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       options: {
         cwd: repoRoot,
         env: testCommand.envOverrides ? { ...env, ...testCommand.envOverrides } : env,
-        stdio: workers ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
+        stdio: params.evidenceLabel
+          ? workers
+            ? ["inherit", "pipe", "pipe", "ipc"]
+            : ["inherit", "pipe", "pipe"]
+          : workers
+            ? ["inherit", "inherit", "inherit", "ipc"]
+            : "inherit",
       },
     });
+    const flushers = params.evidenceLabel
+      ? [child.stdout!, child.stderr!].map((stream) =>
+          relayChildStream(stream, params.evidenceLabel!, () => {}),
+        )
+      : [];
+    if (params.evidenceLabel) {
+      console.log(`[shard:${params.evidenceLabel}] [test] starting ${params.config}`);
+    }
     const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
     });
     try {
-      const { code, signal } = await (workers ? workers.borrow(child, completion) : completion);
+      const { code, signal, groupJoined } = await (workers
+        ? workers.borrow(child, completion)
+        : completion);
+      if (params.evidenceLabel && !groupJoined) {
+        throw new Error("Batch test descendant completion is unverified");
+      }
       interrupted ??= cleanup.getForwardedSignal() ?? signal ?? undefined;
       outcome = {
         code: interrupted ? signalExitCode(interrupted) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE),
         signal: interrupted ?? null,
       };
     } finally {
+      for (const flush of flushers) {
+        flush();
+      }
       cleanup.teardown();
     }
   } catch (error) {
@@ -127,6 +151,13 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     }
   }
   outcome.signal = interrupted ?? outcome.signal;
+  if (params.evidenceLabel && !outcome.signal && (outcome.code === 0 || outcome.code === 1)) {
+    const label = `[shard:${params.evidenceLabel}]`;
+    console.log(`${label} [test] ${outcome.code === 0 ? "passed" : "failed"} 1 Vitest shard`);
+    if (outcome.code === 1) {
+      console.log(`${label} [test] FAILED (exit 1)`);
+    }
+  }
   params.onComplete?.(outcome);
   return outcome.code;
 }

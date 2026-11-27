@@ -25,6 +25,8 @@ export function synchronizeChatPanePublication(params: {
   if (
     !isScopeCurrent ||
     !row ||
+    // A removed workspace has nothing to publish until the restore prompt brings it back.
+    (row.worktreeState ?? "ready") !== "ready" ||
     isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") !== true ||
     !canCallGatewayMethod(gatewaySnapshot, "sessions.github.options", "operator.read")
   ) {

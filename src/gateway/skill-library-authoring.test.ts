@@ -30,7 +30,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { decideTurnGrant } from "./operator-admission.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
   libraryAuthority,
@@ -98,10 +98,12 @@ async function setup() {
   });
   return { alice, bob, request };
 }
+const grantFor = (owner: SkillLibraryRequestOwner) =>
+  decideTurnGrant(owner.client?.connect.scopes ?? []);
 const authoring = async (owner: SkillLibraryRequestOwner) =>
-  (await prepareGatewaySkillAuthoring(owner, sessionKey, true))!;
+  (await prepareGatewaySkillAuthoring(owner, sessionKey, grantFor(owner)))!;
 const prepareTurn = (owner: SkillLibraryRequestOwner, prepare = async () => {}) =>
-  prepareGatewaySkillLibraryTurn({ owner, sessionKey, isHumanTurn: true }, prepare, () => {});
+  prepareGatewaySkillLibraryTurn({ owner, sessionKey, grant: grantFor(owner) }, prepare, () => {});
 async function admitted(
   capability: NonNullable<Awaited<ReturnType<typeof prepareGatewaySkillAuthoring>>>,
   runId = "ordinary-turn",
@@ -132,23 +134,22 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
-  it("checks workspace authority from committed profile facts without a main-thread read", async () => {
+  it("decides workspace authority once, from the turn grant", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
     owner.context.getRuntimeConfig = () => roles("administrator", "operator.admin");
     const run = await admitted(await authoring(owner));
-    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
+    const writer = await admitted(await authoring(request(alice.id)), "writer-turn");
     try {
-      db.setAuthorizer(() => constants.SQLITE_DENY);
       await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();
-      db.setAuthorizer(null);
+      // A role change applies to the next turn; this admitted turn finishes.
       setUserProfileRole(alice.id, "reader");
-      db.setAuthorizer(() => constants.SQLITE_DENY);
-      await expect(run.assertWorkspaceCurrent()).rejects.toThrow("current administrator authority");
+      await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();
+      await expect(writer.assertWorkspaceCurrent()).rejects.toThrow("administrator authority");
     } finally {
-      db.setAuthorizer(null);
       run.close();
+      writer.close();
     }
   });
 
@@ -225,12 +226,18 @@ describe("human personal namespace authority", () => {
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
     const { alice, bob, request } = await setup();
     const owner = request(alice.id);
-    expect(await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
+    expect(
+      await prepareGatewaySkillAuthoring(
+        owner,
+        "agent:main:shared",
+        decideTurnGrant(["operator.read"]),
+      ),
+    ).toBeUndefined();
     expect(
       await prepareGatewaySkillAuthoring(
         { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },
         "agent:main:shared",
-        true,
+        grantFor(owner),
       ),
     ).toBeUndefined();
     const capability = await authoring(owner);
@@ -248,36 +255,10 @@ describe("human personal namespace authority", () => {
     );
     expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
   });
-  it.each(["profile", "scopes"] as const)(
-    "refuses a prepared session after replacing requester %s",
-    async (change) => {
-      const { alice, bob, request } = await setup();
-      const owner = request(alice.id);
-      await expect(
-        prepareTurn(owner, async () => {
-          if (change === "profile") {
-            owner.client!.authenticatedUserProfile = {
-              profileId: bob.id,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
-            };
-          } else {
-            owner.client!.connect.scopes = ["operator.read"];
-          }
-        }),
-      ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
-    },
-  );
-  it("enforces current roles after session preparation and at publication after staging", async () => {
+  it("enforces current roles at publication after staging", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.context.getRuntimeConfig = () => roles("writer", "operator.write");
-    await expect(
-      prepareTurn(owner, async () => {
-        setUserProfileRole(alice.id, "reader");
-      }),
-    ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
     setUserProfileRole(alice.id, "writer");
     using run = await admitted(await authoring(owner));
     const saving = run.invoke({ action: "create", slug: "revoked", content });
@@ -482,7 +463,7 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
     (await resolveGatewaySkillLibraryPromptGrant({
       owner,
       sessionKey: settleSessionKey,
-      isHumanTurn,
+      grant: isHumanTurn ? grantFor(owner) : undefined,
       listingStore,
     }))!;
   const human = await grant(true);
@@ -537,7 +518,7 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
     await resolveGatewaySkillLibraryPromptGrant({
       owner,
       sessionKey: "agent:main:skill-library-settle-unlisted",
-      isHumanTurn: false,
+      grant: undefined,
     }),
   ).toBeUndefined();
   const synthetic = await resolveGatewaySkillLibraryPromptGrant({
@@ -546,7 +527,7 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
       client: { ...owner.client!, internal: { syntheticClient: true } },
     },
     sessionKey: settleSessionKey,
-    isHumanTurn: true,
+    grant: grantFor(owner),
     sessionEntry: Object.freeze({ skillLibraryPromptListing: undefined }),
     listingStore,
   });
@@ -571,7 +552,7 @@ it("commits the first chat listing with session creation and reloads it after re
   };
   try {
     const live = (await prepareGatewaySkillLibraryTurn(
-      { owner, sessionKey: firstSessionKey, isHumanTurn: true, listingStore },
+      { owner, sessionKey: firstSessionKey, grant: grantFor(owner), listingStore },
       async (prepared) => {
         creation = await prepareSkillLibrarySessionCreation(owner.client, cfg, creation, prepared);
       },
@@ -599,7 +580,7 @@ it("commits the first chat listing with session creation and reloads it after re
     const reopened = (await resolveGatewaySkillLibraryPromptGrant({
       owner,
       sessionKey: firstSessionKey,
-      isHumanTurn: false,
+      grant: undefined,
       listingStore,
     }))!;
     expect(createSkillLibraryTool(reopened).description).toBe(
@@ -627,7 +608,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   const live = await resolveGatewaySkillLibraryPromptGrant({
     owner,
     sessionKey: listingSessionKey,
-    isHumanTurn: true,
+    grant: grantFor(owner),
     listingStore: { agentId: "main", storePath },
   });
   const saved = loadSessionEntry({ agentId: "main", sessionKey: listingSessionKey, storePath });
@@ -638,7 +619,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   const restarted = await resolveGatewaySkillLibraryPromptGrant({
     owner,
     sessionKey: "agent:main:skill-library-listing-restart",
-    isHumanTurn: false,
+    grant: undefined,
     storedListing: saved?.skillLibraryPromptListing,
   });
   expect(createSkillLibraryTool(restarted!).description).toBe(
@@ -649,7 +630,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   const frozenGrant = await resolveGatewaySkillLibraryPromptGrant({
     owner,
     sessionKey: "agent:main:skill-library-frozen",
-    isHumanTurn: true,
+    grant: grantFor(owner),
     sessionEntry: frozen,
   });
   expect(createSkillLibraryTool(frozenGrant!).description).toBe(
@@ -665,7 +646,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   const borrowedGrant = await resolveGatewaySkillLibraryPromptGrant({
     owner,
     sessionKey: borrowedKey,
-    isHumanTurn: true,
+    grant: grantFor(owner),
     sessionEntry: borrowed,
     listingStore: { agentId: "main", storePath },
   });
@@ -687,7 +668,7 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     await resolveGatewaySkillLibraryPromptGrant({
       owner,
       sessionKey: otherKey,
-      isHumanTurn: false,
+      grant: undefined,
       listingStore: { agentId: "main", storePath: otherPath },
     }),
   ).toBeUndefined();

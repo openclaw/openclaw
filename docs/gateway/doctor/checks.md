@@ -31,6 +31,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness, with explicit commands for native-bootstrap inspection and repair.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
+    - Deprecated model warnings: a configured model ref whose catalog row is `deprecated` with a `statusReason` gets one warning with the reason and the config paths. Doctor never rewrites the ref.
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.

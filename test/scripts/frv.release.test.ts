@@ -8,6 +8,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildReleaseStateArtifact,
+  composeReleaseAttemptJobs,
   readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -464,7 +465,22 @@ async function runPublicationCli(
     });
     fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
   }
-  const responses: Record<string, unknown> = {};
+  const waiverSource = JSON.stringify({
+    schema: "openclaw.release-validation-waivers/v1",
+    waivers: [],
+  });
+  const responses: Record<string, unknown> = {
+    ["repos/" + REPOSITORY + "/contents/scripts/lib/release-validation-waivers.json?ref=" + SHA]: {
+      type: "file",
+      path: "scripts/lib/release-validation-waivers.json",
+      encoding: "base64",
+      size: Buffer.byteLength(waiverSource),
+      content: Buffer.from(waiverSource).toString("base64"),
+      sha: createHash("sha1")
+        .update("blob " + Buffer.byteLength(waiverSource) + "\0" + waiverSource)
+        .digest("hex"),
+    },
+  };
   const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
   const artifactLists = new Map<number, unknown[]>();
   async function artifact(
@@ -645,7 +661,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
   fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
-if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0"))) reject();
+if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0") && !args.some(arg => arg === "repos/${REPOSITORY}/contents/scripts/lib/release-validation-waivers.json?ref=${SHA}"))) reject();
 if (!legacy && (args.includes("--include") || args.includes("--paginate"))) reject();
 let path = args.find(a => a.startsWith("repos/"));
 if (legacy && path.endsWith("/jobs?per_page=100")) path += "&page=1";
@@ -701,6 +717,123 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
+  it.each([false, true])(
+    "keeps verified qualification separate from publication inputs without changing JSON (json=%s)",
+    async (json) => {
+      const result = await runPublicationCli(publicationFixture(), [
+        "verify",
+        "--run",
+        "77",
+        ...(json ? ["--json"] : []),
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toEqual({ valid: true });
+      } else {
+        expect(result.stdout).toContain("VERIFIED: Full Release Validation run 77");
+        expect(result.stdout).toContain(`Qualification tooling (Q): ${SHA}`);
+        expect(result.stdout.split("\n").find((line) => line.startsWith("Candidate inputs:"))).toBe(
+          `Candidate inputs: --target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --release-profile beta --skip-dispatch`,
+        );
+        expect(result.stdout).toContain(
+          "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>",
+        );
+      }
+    },
+  );
+
+  it.each(["current grant", "removed grant", "missing ledger", "forbidden"])(
+    "joins publication status with authenticated Q policy: %s",
+    async (mode) => {
+      const fixture = publicationFixture();
+      const failed = mode === "current grant" || mode === "removed grant";
+      const failedJob = {
+        ...job("synthetic joined failure", "failure"),
+        id: 1010,
+        run_id: 101,
+        run_attempt: 1,
+      };
+      if (failed) {
+        const composite = composeReleaseAttemptJobs([{ runAttempt: 1, jobs: [failedJob] }], {
+          plannedRunAttempt: 1,
+          effectiveRunAttempt: 1,
+        });
+        Object.assign(fixture.manifest, {
+          validationInputs: { targetVersion: "2099.1.1" },
+          childEvidence: {
+            normalCi: {
+              runId: "101",
+              plannedRunAttempt: 1,
+              effectiveRunAttempt: 1,
+              observedRunAttempts: [1],
+              jobs: composite.jobs,
+              compositeJobsSha256: composite.sha256,
+              dispatchActor: "github-actions[bot]",
+              triggeringActor: "github-actions[bot]",
+              repository: REPOSITORY,
+            },
+          },
+        });
+        fixture.executionPlan.targetVersion = "2099.1.1";
+        fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+        fixture.manifest.executionPlanSha256 = fixture.executionPlan.sha256;
+      }
+      const result = await runPublicationCli(fixture, undefined, (responses) => {
+        const sourcePath = "scripts/lib/release-validation-waivers.json";
+        const prefix = "repos/" + REPOSITORY + "/";
+        const contents = (path: string, source: string) => ({
+          type: "file",
+          path,
+          encoding: "base64",
+          size: Buffer.byteLength(source),
+          content: Buffer.from(source).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(source) + "\0" + source)
+            .digest("hex"),
+        });
+        responses[prefix + "contents/" + sourcePath + "?ref=" + SHA] = failed
+          ? contents(
+              sourcePath,
+              JSON.stringify({
+                schema: "openclaw.release-validation-waivers/v1",
+                waivers:
+                  mode === "current grant"
+                    ? [
+                        {
+                          targetVersion: "2099.1.1",
+                          childRole: "normalCi",
+                          jobName: failedJob.name,
+                          reason: "Synthetic joined status grant",
+                        },
+                      ]
+                    : [],
+              }),
+            )
+          : {
+              failure:
+                mode === "forbidden" ? "gh: Forbidden (HTTP 403)" : "gh: Not Found (HTTP 404)",
+            };
+        if (failed) {
+          Object.assign(responses[prefix + "actions/runs/101"] as object, {
+            conclusion: "failure",
+          });
+          responses[prefix + "actions/runs/101/attempts/1/jobs?per_page=100&page=1"] = {
+            total_count: 1,
+            jobs: [failedJob],
+          };
+        }
+      });
+      const value = JSON.parse(result.stdout);
+      const accepted = mode === "current grant";
+      expect(result.status, result.stderr + result.stdout).toBe(accepted ? 0 : 1);
+      expect(value.publication.collection.complete).toBe(accepted);
+      if (accepted) {
+        expect(value.publication.relationship.status).toBe("verified");
+      }
+      expect(result.calls.flat()).not.toContain("POST");
+    },
+  );
+
   it.each([
     "failed publisher",
     "truncated packages",
@@ -1818,6 +1951,7 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("qualification: blocked; evidence: pending");
       expect(result.stdout).toContain("drain: in_progress");
       expect(result.stdout).toContain("actual test blocker");
+      expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
       expect(result.stdout).toContain("Diagnostic Drain is still collecting");
       expect(result.stdout).toContain(
         'blocker: parent job "Prepare release npm artifacts" failure (attempt 2)',
@@ -1825,6 +1959,30 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("next: pnpm frv watch --run 77");
     },
   );
+
+  it("keeps an early Decision snapshot separate from a terminal Drain", async () => {
+    const fixture = publicationFixture();
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77"],
+      (responses) => {
+        responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+          jobs: [{ ...job("Diagnostic Drain"), run_attempt: 2 }],
+        };
+      },
+      false,
+      0,
+      "accepted",
+      "blocked_diagnostics_running",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("qualification: blocked; evidence: not-accepted");
+    expect(result.stdout).toContain("drain: completed success; active children: none");
+    expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
+    expect(result.stdout).toContain("actual test blocker");
+    expect(result.stdout).not.toContain("still collecting");
+  });
 
   it("stops the shipped watcher on a current artifact blocker without mutating GitHub", async () => {
     const fixture = publicationFixture();
@@ -1864,6 +2022,67 @@ describe("publication status real CLI", () => {
     ]);
     expect(result.stderr).toContain("stopped on blocker");
     expect(result.stderr).toContain("continue --failed --dry-run --run 77");
+    expect(result.calls.flat()).not.toContain("POST");
+  });
+
+  it.each([
+    ["current grant", true, false],
+    ["removed grant", false, false],
+    ["unrelated failure", true, true],
+  ])("status reports current-Q blockers with %s", async (_label, granted, unrelated) => {
+    const fixture = publicationFixture();
+    fixture.executionPlan.targetVersion = "2099.1.1";
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77", "--json"],
+      (responses) => {
+        const prefix = "repos/" + REPOSITORY + "/";
+        const source = JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: granted
+            ? [
+                {
+                  targetVersion: "2099.1.1",
+                  childRole: "normalCi",
+                  jobName: "synthetic failure",
+                  reason: "Synthetic Q status grant",
+                },
+              ]
+            : [],
+        });
+        responses[prefix + "contents/scripts/lib/release-validation-waivers.json?ref=" + SHA] = {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: Buffer.byteLength(source),
+          content: Buffer.from(source).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(source) + "\0" + source)
+            .digest("hex"),
+        };
+        Object.assign(responses[prefix + "actions/runs/101"] as object, { conclusion: "failure" });
+        responses[prefix + "actions/runs/101/attempts/1/jobs?per_page=100&page=1"] = {
+          jobs: [
+            job("synthetic failure", "failure"),
+            ...(unrelated ? [job("unrelated failure", "failure")] : []),
+          ],
+        };
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const status = JSON.parse(result.stdout);
+    expect(
+      status.children.find((entry: { key: string }) => entry.key === "normalCi"),
+    ).toMatchObject({
+      conclusion: "failure",
+      status: granted && !unrelated ? "passed" : "failed",
+    });
+    expect(
+      status.blockers
+        .filter((entry: { owner: string }) => entry.owner === "normalCi")
+        .map((entry: { job: string }) => entry.job),
+    ).toEqual(unrelated ? ["unrelated failure"] : granted ? [] : ["synthetic failure"]);
     expect(result.calls.flat()).not.toContain("POST");
   });
 

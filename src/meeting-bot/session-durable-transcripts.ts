@@ -1,12 +1,12 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
-  TranscriptSourceLocator,
   TranscriptStartRequest,
   TranscriptsStartResult,
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
+import type { TranscriptSourceLocator } from "../transcripts/types.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
 import type {

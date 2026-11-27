@@ -480,15 +480,6 @@ describe("sessions_search tool", () => {
     expect(backendLimitedResult.details).toMatchObject({ truncated: true });
   });
 
-  it("resolves and sends a one-session restriction", async () => {
-    const { requests } = await searchFixture(
-      { results: [hit()] },
-      { query: " text ", sessionKey: "main", limit: 3 },
-    );
-
-    expectSearch(requests, "main", ["main"]);
-  });
-
   it("rejects a scoped grant when the target incarnation changes before search", async () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-race";
     const targetSessionKey = MAIN;

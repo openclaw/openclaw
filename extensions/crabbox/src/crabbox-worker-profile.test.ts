@@ -1,3 +1,4 @@
+import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it } from "vitest";
 import {
   buildCrabboxAllocationArgs,
@@ -21,6 +22,55 @@ it("explicitly requests Linux when the profile uses the default target", () => {
     "--target",
     "linux",
   ]);
+});
+
+it("preserves stored Azure class profiles and their existing warm-image identity", () => {
+  const settings = JSON.parse(
+    '{"provider":"azure-sandbox","class":"small","ttl":"24h","idleTimeout":"60m"}',
+  );
+  const { profile } = resolveCrabboxProvisionProfile(settings, undefined);
+  const args = buildCrabboxAllocationArgs(profile, "cbx_stored", "stored-worker");
+  expect(profile).toMatchObject({ class: "small", warmImage: true });
+  expect(args.slice(args.indexOf("--class"), args.indexOf("--class") + 2)).toEqual([
+    "--class",
+    "small",
+  ]);
+  expect(args).not.toContain("--type");
+  // Pre-change identity: upgrading must not invalidate existing generic-class images.
+  expect(resolveCrabboxWarmImageProfileKey(profile)).toBe(
+    "9614b34a617963158c2e0f0c5a218a860347347dad00caf82448b77a67b72d1a",
+  );
+});
+
+it("uses native Azure aliases for both configured and placement-selected sizes", () => {
+  const settings = { provider: "azure-sandbox", ttl: "24h", idleTimeout: "60m" };
+  for (const [profile, machineClass] of [
+    [{ ...settings, type: " xL " }, undefined],
+    [settings, "XL"],
+  ] as const) {
+    const resolved = resolveCrabboxProvisionProfile(profile, machineClass).profile;
+    const args = buildCrabboxAllocationArgs(resolved, "cbx_native", "native-worker");
+    expect(args.slice(args.indexOf("--type"), args.indexOf("--type") + 2)).toEqual([
+      "--type",
+      "4cpu-8gib",
+    ]);
+    expect(args).not.toContain("--class");
+    expect(resolveCrabboxPreparationTarget(profile, machineClass)).toMatchObject({
+      machineClass: "4cpu-8gib",
+      platform: "linux",
+    });
+  }
+});
+
+it.each<WorkerProfile>([
+  { provider: "azure-sandbox", type: null },
+  { provider: "azure-sandbox", type: "not-a-size" },
+  { provider: "aws", type: "XL" },
+  { provider: "azure-sandbox", type: "XL", class: "small" },
+])("rejects invalid native size settings before allocation %j", (settings) => {
+  expect(() =>
+    resolveCrabboxProvisionProfile({ ttl: "24h", idleTimeout: "60m", ...settings }, undefined),
+  ).toThrow(/type requires|type or class/u);
 });
 
 it("keys snapshots by resolved disk inputs while ignoring allocation policy", () => {

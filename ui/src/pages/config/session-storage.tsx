@@ -289,6 +289,7 @@ export function SessionStorageSettings(props: SettingsProps) {
         />
         <SettingsRow
           title={t("configView.sessionStorage.archives")}
+          stackedOnNarrow
           control={<SettingsValue value={storageSize(totals().archives)} />}
         />
         <SettingsRow
