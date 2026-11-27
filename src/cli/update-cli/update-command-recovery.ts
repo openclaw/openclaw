@@ -18,7 +18,6 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { openDoctorStateSchemaReadAdmission } from "../../state/openclaw-state-db-doctor-schema.js";
-import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
@@ -44,15 +43,16 @@ export function assertUpdateCommandRecoveryState(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  const current =
-    opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env, allowNativeRead: true });
+  const run = opts.run;
+  const pair =
+    run &&
+    loadPluginCohortRecovery(run.runId, {
+      env: run.env,
+      allowNativeRead: true,
+    });
+  const current = run && loadUpdateRecovery(run.runId, { env: run.env, allowNativeRead: true });
   if (current) {
-    const run = opts.run;
     if (run?.executorFence) {
-      const pair = loadPluginCohortRecovery(run.runId, {
-        env: run.env,
-        allowNativeRead: true,
-      });
       if (pair) {
         assertPluginCohortRecoveryContinuation(
           pair,
@@ -137,22 +137,11 @@ export async function assertUpdateCommandPackageFinalization(
     await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
     assertCurrent();
     if (run) {
-      await executeExistingOpenClawStateRead(
-        { env },
-        { type: "updateRuns.get", runId: run.runId },
-        { current: true, preferIndependentWarmRead: true },
-      );
-      assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env } });
     }
     if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
       const historyEnv = cloneEnvWithPlatformSemantics(run.env ?? process.env);
       await assertUpdateRecoveryAdmission({ env: historyEnv, pluginCohort });
-      await executeExistingOpenClawStateRead(
-        { env: historyEnv },
-        { type: "updateRuns.get", runId: run.runId },
-        { current: true, preferIndependentWarmRead: true },
-      );
       assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env: historyEnv } });
     }

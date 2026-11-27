@@ -178,12 +178,10 @@ describe("owned completed update publication", () => {
     const before = fs.readFileSync(f.databasePath);
     f.release();
     const cleanupOwners: Array<string | undefined> = [];
-    const cleanupAttempt = vi
-      .spyOn(cleanup, "cleanupCompletedUpdateRecovery")
-      .mockImplementation(() => {
-        cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-        return Promise.reject(new Error("synthetic cleanup failure"));
-      });
+    vi.spyOn(cleanup, "cleanupCompletedUpdateRecovery").mockImplementation(() => {
+      cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+      return Promise.reject(new Error("synthetic cleanup failure"));
+    });
     const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const settled = await f.settle(f.result, captured);
     const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
