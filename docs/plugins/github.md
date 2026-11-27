@@ -122,6 +122,9 @@ custom sandbox allowlist, include `github_read` to permit it. Disabling `github`
 removes the tool as well as the UI reader. The tool reads known references; it
 does not search, post, edit or merge GitHub content.
 
+A GitHub read or search does not by itself prevent [model fallback](/concepts/model-failover).
+If the primary model reports a billing error after the lookup, a configured fallback can still answer.
+
 The same limits below apply. Inspect `partial`, `bodyTruncated`,
 `commentsTruncated`, `filesTruncated`, and individual comment/patch/check markers;
 a bounded result does not establish that the full discussion or diff was read.
