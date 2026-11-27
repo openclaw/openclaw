@@ -56,6 +56,7 @@ import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/ru
 import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { parseModelCatalogJson } from "./model-catalog-json.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
@@ -452,10 +453,12 @@ async function runCatalogRequest(
     }
     // Saved catalogs seed the template registry. Every provider this plan saves publishes its
     // live rows, so an accepted empty listing withdraws the saved ones.
-    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
-      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
-      Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
-    );
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) => {
+      // A merge with no discoveries reuses the stored catalog, including accepted JSONC.
+      // SAFETY: provider keys are read from the same catalog input as the model registry.
+      const catalog = parseModelCatalogJson(contents, true) as { providers?: object };
+      return Object.keys(catalog.providers ?? {});
+    });
     for (const provider of [
       ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
       ...plannedProviders,
