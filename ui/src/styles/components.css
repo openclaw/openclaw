@@ -3559,16 +3559,6 @@ select.data-table-pagination__size {
   animation: none;
 }
 
-.session-glyph__ring--background,
-.session-glyph__trace--background {
-  opacity: 0.6;
-}
-
-.session-glyph__ring--background,
-.session-glyph__trace--background .session-glyph__trace-run {
-  animation-duration: 3.2s;
-}
-
 /* Forced colors would repaint the background these masks show through. */
 @media (forced-colors: active) {
   .session-run-spinner,

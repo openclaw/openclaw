@@ -152,7 +152,7 @@ class ChatControllerHistoryCursorTest {
       )
       assertEquals("physical", controller.sessionId.value)
       assertEquals("test/model", controller.defaultModelRef.value)
-      assertEquals("still working", controller.streamingAssistantText.value)
+      assertEquals("still working", controller.streamingAssistant.value?.text)
       assertTrue(controller.historyPaging.value.hasOlder)
       response = delta(listOf(event(row("a", "updated")), event(row("b"))).joinToString(","), "d3")
       controller.invalidate()
