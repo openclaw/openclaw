@@ -67,7 +67,7 @@ function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.
   }
   const { link, guard } = shellEarlyReleaseLink(stateDir, env);
   // The previous service may start through this link, so a failure after its removal restores it.
-  const saved = "OPENCLAW_EARLY_RELEASE_LINK";
+  const saved = "early_release_link";
   const steps = [
     ...(guard ? [guard] : []),
     `${saved}=`,

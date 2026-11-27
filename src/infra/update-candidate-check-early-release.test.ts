@@ -14,7 +14,7 @@ afterEach(() => cleanupTempDirs(roots));
 
 const rebuild = (link: string) => {
   const quoted = `"${link}/git-install/lib/node_modules/openclaw"`;
-  return `OPENCLAW_EARLY_RELEASE_LINK= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && OPENCLAW_EARLY_RELEASE_LINK=$(readlink ${quoted} || true) && rm -f ${quoted} && openclaw gateway install --force || { [ -z "$OPENCLAW_EARLY_RELEASE_LINK" ] || [ -L ${quoted} ] || ln -s "$OPENCLAW_EARLY_RELEASE_LINK" ${quoted}; openclaw gateway start; false; }`;
+  return `early_release_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && early_release_link=$(readlink ${quoted} || true) && rm -f ${quoted} && openclaw gateway install --force || { [ -z "$early_release_link" ] || [ -L ${quoted} ] || ln -s "$early_release_link" ${quoted}; openclaw gateway start; false; }`;
 };
 
 function sqlite(file: string, version: number, setup = "") {
