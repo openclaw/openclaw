@@ -54,6 +54,9 @@ export function selectChatInputDisplay(
       (input) =>
         (!input.queued || input.steerNow) && asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: unseenInputs.filter((input) => input.queued && !input.steerNow),
+    queuedInputs: unseenInputs.filter(
+      (input) =>
+        input.queued && !input.steerNow && asNullableRecord(input.message)?.display !== false,
+    ),
   };
 }

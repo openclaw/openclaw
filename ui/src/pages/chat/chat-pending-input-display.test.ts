@@ -45,9 +45,9 @@ it("keeps completion receipts and hidden inputs out of the composer queue withou
     { id: "pending-input:attachment", text: "example.png" },
   ];
   expect(buildPendingInputQueueItems(inputs)).toMatchObject(expected);
-  expect(
-    buildPendingInputQueueItems(selectChatInputDisplay([], [], inputs).queuedInputs),
-  ).toMatchObject(expected);
+  const selected = selectChatInputDisplay([], [], inputs);
+  expect(selected.queuedInputs.map(({ id }) => id)).toEqual(["text", "completion", "attachment"]);
+  expect(buildPendingInputQueueItems(selected.queuedInputs)).toMatchObject(expected);
 });
 
 it("retains completion receipts for transcript presentation outside the composer queue", () => {
