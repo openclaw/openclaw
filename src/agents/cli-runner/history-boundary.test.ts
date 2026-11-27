@@ -1,21 +1,21 @@
 // Proves saved history reaches a fresh CLI session unless a different account already ran it.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { admitCliHistoryAccount } from "./history-boundary.js";
 import { loadCliSessionPromptContext } from "./session-history.js";
 
-const sessionDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-history-");
 
 async function createSession(sessionId = "history") {
   setRuntimeConfigSnapshot({});
-  const dir = sessionDirs.make("openclaw-cli-history-");
+  const dir = sessionDirs.make();
   const target = {
     agentId: "main",
     sessionId,

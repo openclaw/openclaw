@@ -1,8 +1,8 @@
 import { For, Show, createMemo, type Element } from "solid-js";
+import { buildContextBudgetCategories } from "../../../../../src/shared/context-budget-categories.js";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
-import { buildChatContextCategories } from "./chat-context-breakdown-model.ts";
 import {
   ChatContextReport,
   contextLabelKeys,
@@ -47,7 +47,7 @@ export function ChatContextBreakdown(
             >
               {(report) => {
                 const categories = createMemo(() =>
-                  buildChatContextCategories(report(), props.used),
+                  buildContextBudgetCategories(report(), props.used),
                 );
                 return (
                   <>

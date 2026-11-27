@@ -320,19 +320,36 @@ export function overlayPluginNativeAdmissions(
   if (!state || state.receipts.size === 0) {
     return index;
   }
+  // A filtered registry can share a wider cache. Only materialize receipts for its roots.
+  const receiptsByRoot = new Map<
+    string,
+    Record<string, PluginSourceAdmissionReceipt> | undefined
+  >();
+  const roots = index.plugins.map((record) => {
+    const root = path.resolve(record.rootDir);
+    receiptsByRoot.set(root, undefined);
+    return root;
+  });
+  for (const [key, receipt] of state.receipts) {
+    // The producer keeps the entry suffix opaque, including any further separators.
+    const separator = key.indexOf("\0");
+    if (separator < 0) {
+      continue;
+    }
+    const root = key.slice(0, separator);
+    const group = receiptsByRoot.get(root);
+    if (group) {
+      group[key] = receipt;
+    } else if (receiptsByRoot.has(root)) {
+      receiptsByRoot.set(root, { [key]: receipt });
+    }
+  }
   return {
     ...index,
-    plugins: index.plugins.map((record) => {
-      const prefix = `${path.resolve(record.rootDir)}\0`;
-      const receipts = [...state.receipts].filter(([key]) => key.startsWith(prefix));
-      return receipts.length
-        ? {
-            ...record,
-            sourceAdmissions: {
-              ...record.sourceAdmissions,
-              ...Object.fromEntries(receipts),
-            },
-          }
+    plugins: index.plugins.map((record, position) => {
+      const receipts = receiptsByRoot.get(roots[position]!);
+      return receipts
+        ? { ...record, sourceAdmissions: { ...record.sourceAdmissions, ...receipts } }
         : record;
     }),
   };
@@ -347,6 +364,7 @@ export function preparePluginNativeAdmissions(
   if (state.preparedIndexes.has(index)) {
     return;
   }
+  const immutable = isDeeplyFrozenPlainData(index);
   for (const record of index.plugins) {
     const root = path.resolve(record.rootDir);
     if (state.owners.has(root)) {
@@ -389,14 +407,15 @@ export function preparePluginNativeAdmissions(
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
       state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
-        state.namespaces.set(id, structuredClone(namespace));
+        // Retain published membership until a native admission needs writable identities.
+        state.namespaces.set(id, immutable ? { ...namespace } : structuredClone(namespace));
       }
       for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
         state.files.set(source, { ...fact });
       }
     }
   }
-  if (isDeeplyFrozenPlainData(index)) {
+  if (immutable) {
     state.preparedIndexes.add(index);
   }
 }

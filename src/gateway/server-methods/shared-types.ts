@@ -343,7 +343,7 @@ type GatewayTransportContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
-  isConnectionActive?: (connId: string) => boolean;
+  isConnectionActive?: (connId: string, expectedClient?: GatewayClient) => boolean;
   /** Server-stamped activity from an accepted request on the exact live person connection. */
   recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
@@ -629,20 +629,22 @@ export type GatewayRequestHandler = ((
 
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
 
-export type SessionEventProjection = {
-  payload: unknown;
+export type SessionEventProjection = (
+  | { payload: unknown; serializePayload?: never }
+  /** Producer-owned payload fragments preserve shared message and session byte identity. */
+  | { payload?: never; serializePayload: () => readonly Buffer[] }
+) & {
   /** Delivery-owned UTF-8 session field, including the closing payload brace. */
   serializeSession?: () => Buffer;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  /** Producer-owned payload fragments preserve shared message and session byte identity. */
-  serializePayload?: () => readonly Buffer[];
   delivered?: (client: GatewayClient) => void;
 };
 
 type SessionEventProjectionScope = {
   sessionKeys: readonly string[];
   agentId?: string;
+  singleRecipient?: boolean;
 };
 
 /** Connection-owned receipts and run display facts, consumed within one publication. */
@@ -685,6 +687,8 @@ export type GatewayBroadcastOpts = {
   sessionSubscriptionVerified?: boolean;
   /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
   questionRecipient?: (client: GatewayClient) => boolean;
+  /** Host-only exact live exec binding; does not replace session disclosure checks. */
+  participationApprovalRecipient?: (client: GatewayClient) => boolean;
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {

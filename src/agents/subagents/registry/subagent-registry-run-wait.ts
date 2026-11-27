@@ -28,6 +28,7 @@ import {
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -388,7 +389,7 @@ export abstract class SubagentWaitManager {
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&
-        current.pauseReason !== "sessions_yield"
+        !isSubagentPausedByYield(current)
       ) {
         const resume = await mutateSubagentRuns(
           [runId],
@@ -400,7 +401,7 @@ export abstract class SubagentWaitManager {
             if (
               typeof latest.execution.endedAt !== "number" ||
               latest.cleanupCompletedAt ||
-              latest.pauseReason === "sessions_yield"
+              isSubagentPausedByYield(latest)
             ) {
               return { value: false };
             }

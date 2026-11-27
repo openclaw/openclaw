@@ -98,25 +98,11 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
   );
 }
 
-export async function resolveScheduledTaskOwnedGatewayPids(
-  env: GatewayServiceEnv,
-  context?: { port: number | null; probeHosts?: readonly string[] },
-  installedCommand?: GatewayServiceCommandConfig | null,
-): Promise<number[]> {
-  const ownership = await resolveScheduledTaskGatewayOwnership(env, context, installedCommand);
-  return ownership?.pids ?? [];
-}
-
 async function resolveScheduledTaskGatewayOwnership(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts?: readonly string[] },
-  installedCommand?: GatewayServiceCommandConfig | null,
-  captureExisting = false,
 ) {
-  const command =
-    installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch(() => null)
-      : installedCommand;
+  const command = await readScheduledTaskCommand(env).catch(() => null);
   const port = context ? context.port : resolveScheduledTaskCommandPort(env, command);
   if (!port) {
     return null;
@@ -144,7 +130,7 @@ async function resolveScheduledTaskGatewayOwnership(
   if (stalled) {
     pids.splice(0, pids.length, stalled.pid);
   }
-  if (captureExisting && owner && pids.length > 0) {
+  if (owner && pids.length > 0) {
     pids.push(
       ...(
         await resolveLegacyScheduledTaskOwnedGatewayPids(env, command, port, context?.probeHosts)
@@ -461,7 +447,7 @@ export async function terminateScheduledTaskGatewayListeners(
 ): Promise<number[] | null> {
   const windows = process.platform === "win32";
   const ownership = shouldManageGatewayListenerPort(env)
-    ? await resolveScheduledTaskGatewayOwnership(env, context, undefined, true)
+    ? await resolveScheduledTaskGatewayOwnership(env, context)
     : null;
   if (!ownership) {
     if (stop && windows && shouldManageGatewayListenerPort(env)) {

@@ -15,7 +15,6 @@ import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-a
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
 import { hasCredentialBearingObjectValue, hasSecretRefCandidate } from "./runtime-secret-scan.js";
 import type { SecretDefaults } from "./runtime-shared.js";
@@ -210,7 +209,6 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       env: runtimeEnv,
       explicitAgentDirs: null,
       includeAuthStoreRefs: true,
-      loadablePluginOrigins: new Map<string, PluginOrigin>(),
       ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
     },
   };

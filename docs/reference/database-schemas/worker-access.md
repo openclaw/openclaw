@@ -108,7 +108,11 @@ projection and decodes its fingerprint bytes once for receipt and acknowledgemen
 Checkpoint bytes, rollback journals, and persistence timing are unchanged.
 
 Idle session reclamation workers retain their admitted connection, not completed
-deletion plans or the caller's async context. Retirement callbacks capture only
+deletion plans or the caller's async context. The process retains at most four
+ordinary reclamation workers, reusing recently visited databases. Before admitting
+another database, it joins the least recently used worker's native cleanup;
+failed cleanup retains ownership and its capacity slot for retry.
+Retirement callbacks capture only
 the worker's registry key. Request handlers release completed replies before
 waiting for the next message, including buffered admission replies. Lazy plugin
 capture imports reuse the shared detached maintenance context rather than

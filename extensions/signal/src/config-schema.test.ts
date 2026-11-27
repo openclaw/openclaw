@@ -6,6 +6,11 @@ function expectValidSignalConfig(config: unknown) {
 }
 const container = { kind: "container", url: "http://signal-container:8080" };
 
+it("accepts Signal history image opt-in under named groups at channel and account scope", () => {
+  const groups = { g1: { requireMention: true, includeOtherMembersHistoryImages: true } };
+  expectValidSignalConfig({ groups, accounts: { work: { groups } } });
+});
+
 function expectInvalidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
   expect(res.success).toBe(false);
@@ -39,6 +44,13 @@ it("accepts a default-account number stored beside a root container transport", 
   expectValidSignalConfig({
     transport: container,
     accounts: { Default: { account: "+15555550123" } },
+  });
+});
+
+it("accepts explicit quote activation for the default and named accounts", () => {
+  expectValidSignalConfig({
+    implicitMentions: { quotedBot: true },
+    accounts: { work: { implicitMentions: { quotedBot: false } } },
   });
 });
 

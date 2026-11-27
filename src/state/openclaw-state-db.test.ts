@@ -53,6 +53,7 @@ import {
   createDanglingSkillWorkshopReviewIndex,
   readDanglingSkillWorkshopReviewIndex,
 } from "./openclaw-state-db-corruption.test-support.js";
+import * as stateRepair from "./openclaw-state-db-doctor-repair.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
   downgradeWorkerPlacementsToV7,
@@ -64,7 +65,6 @@ import {
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
-import * as stateRepair from "./openclaw-state-db-repair.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {

@@ -65,6 +65,7 @@ export default definePluginEntry({
       handler: createBeamV2Handler({
         limits,
         readPublication: store.readPublication,
+        getScreenshot: store.getScreenshot,
         putSnapshot: store.putSnapshot,
         releasePublication: store.releasePublication,
         continuation: createBeamContinuation(api.runtime, store),

@@ -277,6 +277,9 @@ describe("candidate-owned publish consumer chain", () => {
     "beta promotion waived descendant",
     "beta promotion execution-plan descendant",
     "same qualification",
+    "preflight-first current same qualification",
+    "preflight-first root same qualification",
+    "beta promotion preflight-first descendant",
     "candidate-bound same qualification",
     "candidate-bound changelog descendant",
     "candidate-bound execution-plan descendant",
@@ -297,6 +300,7 @@ describe("candidate-owned publish consumer chain", () => {
       : [`CHANGELOG/${version.split("-")[0]}.md`, `CHANGELOG/records/${version.split("-")[0]}.md`];
     const root = candidatePublicationFixture({
       candidateVersion: version,
+      preflightFirst: scenario.includes("preflight-first root"),
       ...(promotion ? { releaseProfile: "stable", reuseEvidence: false } : {}),
       ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
     });
@@ -368,6 +372,11 @@ describe("candidate-owned publish consumer chain", () => {
     }
     assert(inputs.trusted_workflow_json);
     const envelope = JSON.parse(inputs.trusted_workflow_json);
+    if (scenario.includes("preflight-first root")) {
+      delete envelope.laneInputs.preflight_first;
+    } else if (scenario.includes("preflight-first")) {
+      envelope.laneInputs.preflight_first = "true";
+    }
     envelope.trustedWorkflow = {
       ref: workflowRef,
       fullRef: "refs/heads/" + workflowRef,
@@ -585,6 +594,58 @@ describe("candidate-owned publish consumer chain", () => {
         root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
         current: { conclusion: "success" },
       });
+    },
+  );
+
+  // Fast-tracked betas publish from build-only or failed FRV evidence. Stable promotion
+  // must still find a passing stable-profile FRV for the beta it reuses.
+  it.each(["build-only", "failed", "beta-profile"] as const)(
+    "refuses beta-to-stable promotion from %s beta evidence",
+    async (fault) => {
+      const root = candidatePublicationFixture({
+        candidateVersion: "2026.8.28-beta.1",
+        releaseProfile: fault === "beta-profile" ? "beta" : "stable",
+        reuseEvidence: false,
+        ...(fault === "build-only" ? { rerunGroup: "build-only" as const } : {}),
+      });
+      const client =
+        fault === "failed"
+          ? {
+              ...root.client,
+              getRun: async (id: string) => ({
+                ...(await root.client.getRun(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+              getRunView: async (id: string) => ({
+                ...(await root.client.getRunView(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+            }
+          : root.client;
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            ...verifier(root),
+            reuseRequest: {
+              targetSha: "d".repeat(40),
+              releaseProfile: "stable",
+              runReleaseSoak: "true",
+              validationInputs: {
+                ...root.manifest.validationInputs,
+                targetVersion: "2026.8.28",
+                coveragePolicy: "npm-stable-v1",
+              },
+            },
+          },
+          client,
+        ),
+      ).rejects.toThrow(
+        fault === "build-only"
+          ? "Build-only artifacts require a fast-track request"
+          : fault === "failed"
+            ? "parent run is not completed/success"
+            : "ineligible reuse candidate",
+      );
     },
   );
 

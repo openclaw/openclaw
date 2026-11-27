@@ -116,8 +116,8 @@ export async function handleSendChat(
   if (
     isInitialChatHistoryUnavailable(host) &&
     (opts?.intent ||
-      opts?.resumeQueuedMessageEditId ||
-      !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage))
+      (!opts?.resumeQueuedMessageEditId &&
+        !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage)))
   ) {
     return undefined;
   }
@@ -515,6 +515,7 @@ export async function handleSendChat(
   const mentionOffset = quotedMessage.length - userMessage.length;
   const effectiveMentions = submitted.mentions?.map((mention) => ({
     profileId: mention.profileId,
+    access: mention.access,
     start: mention.start + mentionOffset,
     end: mention.end + mentionOffset,
   }));
@@ -532,7 +533,7 @@ export async function handleSendChat(
   const submitMessage = async (guard: ChatSubmitGuard) => {
     if (host.chatLoading && (intent || rawParsedCommand || isInlineEditSubmission)) {
       // Commands and row edits retain their draft until history resolves.
-      if (!(await loadChatHistory(host))) {
+      if (!(await loadChatHistory(host, { startup: isInitialChatHistoryUnavailable(host) }))) {
         return;
       }
       expectedLeafEntryId = resolveDisplayedLeafEntryId(host);

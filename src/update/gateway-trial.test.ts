@@ -15,9 +15,9 @@ import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
@@ -34,6 +34,7 @@ import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
 import {
   acquireUpdateLock,
+  createTrialPending,
   readTrial,
   readUpdateLock,
   resolvePrefix,
@@ -203,6 +204,7 @@ it.each(["succeeded", "rolled-back"] as const)(
     await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
     const work = new AsyncWorkScope();
     await work.run(() => announceReady(null));
+    await Promise.all(backgroundWork);
     await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
@@ -469,21 +471,18 @@ it.each(["warning", "error"] as const)(
       });
     }
     if (finding === "error") {
-      const { lines } = renderUpdateRunReport(inspected!);
-      expect(lines).toContainEqual(
-        expect.stringContaining("Doctor inspections did not run after the update"),
+      expect(inspected?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "warning:post-activation doctor inspections",
+          detail: expect.stringContaining("openclaw doctor --lint --all"),
+        }),
       );
-      expect(lines).toContainEqual(expect.stringContaining("openclaw doctor --lint --all"));
     }
-    // The update stays successful; a warning finding or skipped inspections need attention.
-    expect(renderUpdateRunReport(inspected!).headline).toMatch(
-      /^✅ OpenClaw updated.*; 1 warning needs attention\.$/u,
-    );
   },
 );
 
 it.each([undefined, true, false])(
-  "finishes core before plugin maintenance, preserving late failures (consent=%s)",
+  "settles the aggregate once after plugins without delaying the committed core (consent=%s)",
   async (acceptCapabilities) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-plugins-"));
     directories.push(state);
@@ -491,6 +490,7 @@ it.each([undefined, true, false])(
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
     const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
+    await recordUpdateRunStepAsync(run.runId, { step: "notice:ack", status: "completed" });
     const entered = Promise.withResolvers<void>();
     const command = Promise.withResolvers<SpawnResult>();
     const targets = [
@@ -501,6 +501,8 @@ it.each([undefined, true, false])(
       operationId: "plugin-maintenance-reload",
       generation: 2,
       pluginIds: ["updated", "restored"],
+      restartRequired: false,
+      warnings: ["Plugin replacement waited for retained work to finish."],
     }));
     vi.mocked(resolvePluginBatchReload).mockResolvedValueOnce(reload);
     if (acceptCapabilities === false) {
@@ -516,6 +518,7 @@ it.each([undefined, true, false])(
       v: 2,
       runId: run.runId,
       phase: "committed",
+      reported: acceptCapabilities === undefined,
       target: "releases/new/openclaw",
       previous: "releases/old/openclaw",
       version: VERSION,
@@ -555,23 +558,36 @@ it.each([undefined, true, false])(
       integrityDrifts: [],
       reloadTargets: targets,
     };
+    await writeTrial(trial);
     const work = new AsyncWorkScope();
-    let finishedAtMs: number | null | undefined;
     try {
       await work.run(() => settleRunFromTrial(trial));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
-      expect(committed).toMatchObject({ status: "succeeded", phase: "finished" });
-      finishedAtMs = committed?.finishedAtMs;
-      expect(finishedAtMs).toEqual(expect.any(Number));
-      expect(committed?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
-      expect(await readTrial()).toMatchObject({ reported: true });
+      expect(committed).toMatchObject({
+        status: "running",
+        phase: "verifying",
+        finishedAtMs: null,
+        verification: { coreReady: true, serviceRunning: true, versionMatch: true },
+      });
+      expect(committed?.steps).toContainEqual(
+        expect.objectContaining({ step: "plugins", status: "in_progress" }),
+      );
+      expect(await readTrial()).toMatchObject({ phase: "committed" });
+      expect((await readTrial())?.reported).toBe(true);
+      expect(notices).toEqual([]);
       expect(runPostActivationInspections).not.toHaveBeenCalled();
       expect(reload).not.toHaveBeenCalled();
       const [argv, commandOptions] = vi.mocked(runCommandWithTimeout).mock.calls[0]!;
       expect(argv).toEqual(expect.arrayContaining(["update", "plugins", "--json"]));
       expect(argv.includes("--accept-capabilities")).toBe(acceptCapabilities === true);
       expect(commandOptions).toMatchObject({ timeoutMs: 10 * 60_000, killProcessTree: true });
+      await createTrialPending({
+        runId: "next-run",
+        target: "releases/next/openclaw",
+        previous: trial.target,
+        version: VERSION,
+      });
     } finally {
       command.resolve({
         stdout: `Plugin maintenance finished.\n${JSON.stringify(result)}`,
@@ -588,7 +604,7 @@ it.each([undefined, true, false])(
     expect(maintained).toMatchObject({
       status: "succeeded",
       phase: "finished",
-      finishedAtMs,
+      finishedAtMs: expect.any(Number),
     });
     expect(maintained?.steps).toContainEqual(
       expect.objectContaining({
@@ -598,21 +614,27 @@ it.each([undefined, true, false])(
     );
     expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
     expect(runPostActivationInspections).toHaveBeenCalledOnce();
-    const report = renderUpdateRunReport(maintained!);
+    expect(notices).toEqual([{ runId: run.runId, kind: "finished", status: "succeeded" }]);
+    expect(await readTrial()).toMatchObject({ runId: "next-run", phase: "pending" });
+    const summary = renderUpdateRunSummary(maintained!);
     if (failed) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("broken: package download failed");
       expect(pluginStep?.detail).toContain("openclaw plugins update broken");
-      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
-      expect(report.lines.join("\n")).toContain("broken: package download failed");
-      expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
+      expect(summary).toContain("Failed step: plugins.");
+      expect(summary).toContain("openclaw plugins update broken");
     } else if (!acceptCapabilities) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("changed after the installation batch");
       expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
-      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+      expect(summary).toContain("openclaw plugins reload updated restored");
     } else {
-      expect(report.headline).not.toContain("needs attention");
+      expect(summary).not.toContain("Failed step:");
+      expect(maintained?.steps.find(({ step }) => step === "plugins")?.detail).toContain(
+        "Plugin replacement waited for retained work to finish.",
+      );
+      expect(maintained?.origin.nextAction).toBeUndefined();
+      expect(summary).not.toContain("openclaw plugins reload");
     }
   },
 );
@@ -686,8 +708,10 @@ process.stdout.write("maintenance-ready\\n");`,
     expect((await stopped.promise).termination).toBe("signal");
     expect(runPostActivationInspections).not.toHaveBeenCalled();
     const finished = await getUpdateRunAsync(run.runId);
-    expect(finished?.status).toBe("succeeded");
-    expect(finished?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
+    expect(finished?.status).toBe("running");
+    expect(finished?.steps).toContainEqual(
+      expect.objectContaining({ step: "plugins", status: "in_progress" }),
+    );
   } finally {
     if (childPid && !commandFinished) {
       killProcessTree(childPid, { detached: true, force: true });

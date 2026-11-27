@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -143,6 +144,30 @@ export function firstIncompleteReleaseStep(steps) {
     : undefined;
 }
 
+function hasUnmatchableLegacySelectors(waiver) {
+  return (
+    waiver.aggregates !== undefined &&
+    (waiver.aggregates.length > 0 ||
+      waiver.cancelledStep !== undefined ||
+      waiver.evidence !== undefined ||
+      waiver.testFailures !== undefined)
+  );
+}
+
+export function validateAuthoredReleaseWaivers(previous, proposed) {
+  // Frozen rows retain their original meaning. Check only entries introduced by this edit.
+  const historical = previous.filter(hasUnmatchableLegacySelectors);
+  for (const waiver of proposed.filter(hasUnmatchableLegacySelectors)) {
+    const index = historical.findIndex((entry) => isDeepStrictEqual(entry, waiver));
+    if (index === -1) {
+      throw new Error(
+        `Release waiver for ${waiver.childRole} / ${waiver.jobName} uses historical selectors that cannot match. Check the approved scope and use a supported job or step selector.`,
+      );
+    }
+    historical.splice(index, 1);
+  }
+}
+
 // Omitting the queried job asks whether the whole child is waived.
 export function isWaived(
   { targetVersion, targetSha, childRole, jobName, job },
@@ -157,13 +182,9 @@ export function isWaived(
       (waiver.jobName === undefined || waiver.jobName === jobName) &&
       // Frozen v1 rows keep their original failure-only scope. Do not convert
       // evidence-bound or aggregate exceptions into unconditional grants.
+      !hasUnmatchableLegacySelectors(waiver) &&
       (waiver.aggregates === undefined ||
-        (waiver.aggregates.length === 0 &&
-          waiver.cancelledStep === undefined &&
-          waiver.evidence === undefined &&
-          waiver.testFailures === undefined &&
-          job?.status === "completed" &&
-          job.conclusion === "failure")) &&
+        (job?.status === "completed" && job.conclusion === "failure")) &&
       (waiver.step === undefined ||
         (job?.status === "completed" &&
           job.conclusion !== "success" &&
@@ -287,4 +308,22 @@ export function evaluateReleaseChildPolicy({
         !isReleaseAdvisoryJob(child.key, job),
     ),
   };
+}
+
+if (import.meta.main) {
+  try {
+    if (process.argv.length !== 3 || process.argv[2] !== "--check-staged") {
+      throw new Error("Usage: node scripts/lib/release-validation-waivers.mjs --check-staged");
+    }
+    const read = (revision) =>
+      readReleaseValidationWaivers((path) =>
+        execFileSync("git", ["show", `${revision}:${path}`], { encoding: "utf8" }),
+      );
+    validateAuthoredReleaseWaivers(read("HEAD"), read(""));
+    console.log("Staged release waiver selectors are supported.");
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error("[release-waivers] FAILED (exit 1)");
+    process.exitCode = 1;
+  }
 }

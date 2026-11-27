@@ -279,21 +279,18 @@ export function handleCronCliError(err: unknown) {
   }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
+  if (missingJob) {
+    exitForCronLookupMiss(missingJob.jobId);
+  }
   const diagnostic = err instanceof CronCliError ? (err.originalError ?? err) : err;
   const matches = err instanceof CronCliError ? err.matches : undefined;
   if (isJsonOutputModeActive(process.argv)) {
-    if (
-      !missingJob &&
-      !(err instanceof CronCliError) &&
-      !(err instanceof GatewayClientRequestError)
-    ) {
+    if (!(err instanceof CronCliError) && !(err instanceof GatewayClientRequestError)) {
       throw err;
     }
     // Both machine-mode streams share the canonical debug gate. Unexpected
     // exceptions keep their identity and reach the root crash renderer.
-    const message = missingJob
-      ? formatCronLookupMiss(missingJob.jobId)
-      : formatCliOperatorError(diagnostic);
+    const message = formatCliOperatorError(diagnostic);
     throw new ExpectedCliError({
       message,
       humanOutput: danger(message),
@@ -301,9 +298,7 @@ export function handleCronCliError(err: unknown) {
       matches,
     });
   }
-  const message = missingJob
-    ? formatCronLookupMiss(missingJob.jobId)
-    : formatErrorMessage(diagnostic);
+  const message = formatErrorMessage(diagnostic);
   defaultRuntime.error(danger(matches ? `${message}\n${formatCronJobMatches(matches)}` : message));
   exitCliAfterOutput(defaultRuntime, 1);
 }
@@ -338,8 +333,22 @@ function formatCronJobMatches(matches: readonly CronCliJobMatch[]): string {
   ].join("\n");
 }
 
-export const formatCronLookupMiss = (jobId: string) =>
-  `Automation not found: ${sanitizeTerminalText(jobId)}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
+export function exitForCronLookupMiss(jobId: string): never {
+  const id = sanitizeTerminalText(jobId);
+  const listCommand = formatCliCommand("openclaw cron list --all");
+  const humanOutput = danger(
+    formatErrorMessage(
+      `OpenClaw couldn’t find the automation “${id}”. Run \`${listCommand}\` to see IDs for enabled and disabled automations.`,
+    ),
+  );
+  if (isJsonOutputModeActive(process.argv)) {
+    // Preserve the existing stdout message for machine consumers.
+    const message = `Automation not found: ${id}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
+    throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+  }
+  defaultRuntime.error(humanOutput);
+  exitCliAfterOutput(defaultRuntime, 1);
+}
 
 // A blank id usually comes from an empty shell variable; reject it here instead of
 // letting the Gateway answer with a raw params-schema error.

@@ -45,17 +45,20 @@ export type WorkshopChange = {
   createdAtMs: number;
 };
 
-type ChangesDatabase = Pick<DB, "skill_workshop_changes">;
+type ChangesDatabase = Pick<DB, "skill_workshop_changes" | "skill_workshop_activity">;
 
 const MAX_CHANGES_PER_AGENT = 500;
 
 const ensureWorkshopChangesSchema = createSqliteSchemaEnsurer(
   () =>
-    getOpenClawStateFeatureSchemaSql("skill_workshop_changes", {
-      endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
-    }),
+    [
+      getOpenClawStateFeatureSchemaSql("skill_workshop_changes", {
+        endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
+      }),
+      getOpenClawStateFeatureSchemaSql("skill_workshop_activity"),
+    ].join("\n"),
   {
-    tables: ["skill_workshop_changes"],
+    tables: ["skill_workshop_changes", "skill_workshop_activity"],
     indexes: ["skill_workshop_changes_cursor_id_idx", "idx_skill_workshop_changes_agent_time"],
   },
 );
@@ -75,6 +78,7 @@ export function recordWorkshopChangeInDatabase(
   const { db } = database;
   if (isPostgresSqlConnection(db)) {
     ensureStatePostgresFragment(db, "skill_workshop_changes");
+    ensureStatePostgresFragment(db, "skill_workshop_activity");
   } else {
     ensureWorkshopChangesSchema(db);
   }
@@ -101,6 +105,33 @@ export function recordWorkshopChangeInDatabase(
       created_at_ms: change.createdAtMs,
     })),
   );
+  // Keep one activity time per live skill in the same transaction as the public change.
+  if (change.action === "archive") {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("skill_workshop_activity")
+        .where("agent_id", "=", change.agentId)
+        .where("skill_name", "=", change.skillName),
+    );
+  } else {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("skill_workshop_activity")
+        .values({
+          agent_id: change.agentId,
+          skill_name: change.skillName,
+          changed_at_ms: change.createdAtMs,
+        })
+        .onConflict((conflict) =>
+          conflict
+            .columns(["agent_id", "skill_name"])
+            .doUpdateSet({ changed_at_ms: change.createdAtMs })
+            .where("skill_workshop_activity.changed_at_ms", "<", change.createdAtMs),
+        ),
+    );
+  }
   executeSqliteQuerySync(
     db,
     kysely
@@ -118,6 +149,26 @@ export function recordWorkshopChangeInDatabase(
           .limit(MAX_CHANGES_PER_AGENT),
       ),
   );
+}
+
+export function readWorkshopActivityInDatabase(
+  db: EngineConnection,
+  agentId: string,
+  skillName: string,
+): number | null {
+  if (!tableExists(db, "skill_workshop_activity")) {
+    return null;
+  }
+  const kysely = getNodeSqliteKysely<ChangesDatabase>(db);
+  const { rows } = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_activity")
+      .select("changed_at_ms")
+      .where("agent_id", "=", agentId)
+      .where("skill_name", "=", skillName),
+  );
+  return rows[0]?.changed_at_ms ?? null;
 }
 
 /** Newest first; a database that never recorded a change has no table yet. */

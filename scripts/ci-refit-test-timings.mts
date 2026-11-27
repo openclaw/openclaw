@@ -452,13 +452,10 @@ async function main() {
   } catch {
     // A missing or invalid baseline has no measurements worth preserving.
   }
-  const { timings, changes, runIds, contributingRunIds, rejectedWorkerKeys } = refitTestTimings(
-    runs,
-    previous,
-    {
+  const { timings, changes, runIds, contributingRunIds, rejectedWorkerKeys, parentSamples } =
+    refitTestTimings(runs, previous, {
       seedTooling,
-    },
-  );
+    });
   const { blacksmith, github, boat, toolingBlacksmith, toolingGithub, toolingBoat } =
     contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
@@ -489,6 +486,24 @@ async function main() {
   console.log(
     `Sampled CI and release-check runs with successful timing jobs: ${runIds.join(", ")}\n`,
   );
+  const changedKeys = new Set(changes.map((change) => change.key));
+  const changedParents = parentSamples.filter((sample) =>
+    changedKeys.has(`compactGroupSeconds.${sample.profile}.${sample.parent}`),
+  );
+  if (changedParents.length > 0) {
+    console.log(
+      "Run-level parent samples collapse retries before cross-run filtering; incomplete generations do not contribute.\n",
+    );
+    console.log(
+      "| Run | Profile | Generation | Observed/expected parts | Summed seconds | Run parent seconds |\n| ---: | --- | --- | ---: | ---: | ---: |",
+    );
+    for (const sample of changedParents) {
+      console.log(
+        `| ${sample.runId} | ${sample.profile} | ${sample.generationKey} | ${sample.observedParts}/${sample.expectedParts} | ${sample.summedSeconds} | ${sample.runParentSeconds ?? "—"} |`,
+      );
+    }
+    console.log("");
+  }
   console.log("| Key | Old seconds | New seconds | Delta |\n| --- | ---: | ---: | ---: |");
   for (const change of changes) {
     const delta =

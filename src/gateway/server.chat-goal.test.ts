@@ -517,7 +517,9 @@ describe("Goal chat admission and continuation", () => {
       });
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(respond.mock.calls[0]?.[2]?.message).toMatch(
-        change === "creation revoked" ? /cannot create sessions/ : /creation policy changed/,
+        change === "creation revoked"
+          ? /Your role on this Gateway does not include this agent/
+          : /creation policy changed/,
       );
       expect(loadSessionEntry(scope())).toBeUndefined();
       await expectNoDispatch();

@@ -7,6 +7,7 @@ import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-time
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
@@ -70,6 +71,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return {
       agentDir: "/tmp/agent",
       attempt: {
+        admittedRunContext: createTestAdmittedRunContext("run"),
         config: {},
         model: {},
         modelId: "model",

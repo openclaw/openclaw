@@ -207,7 +207,7 @@ export function resolveStartupRestartMarker(
         selected.status === "interrupted" &&
         selected.updatedAt <= performance.timeOrigin &&
         selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
-        ? createRestartResumeMarker({})
+        ? createRestartResumeMarker(orphanedRun ? { sourceRunId: orphanedRun } : {})
         : undefined));
   return { orphanedRun, stale, marker };
 }

@@ -964,7 +964,7 @@ describe("scripts/changed-lanes", () => {
         "check-changed-cancellation",
         "check-changed-delegation",
         "ci-run-node-test-shard",
-        "ci-node-test-plan",
+        "ci-node-test-plan.selection-capacity",
         "test-projects",
         "run-vitest",
         "test-extension",

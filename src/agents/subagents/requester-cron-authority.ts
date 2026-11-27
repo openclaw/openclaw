@@ -12,11 +12,13 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureActiveCronManagementAuthority } from "../cron-creator-authority-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
+import { isSubagentDeliveryWithheld } from "./registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   sameRequesterSettleBatch,
   resolveCurrentRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./registry/subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -28,7 +30,6 @@ import {
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -129,9 +130,7 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
       entry &&
       isSameSubagentRunOwner(entry, binding.entry) &&
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
-      !entry.suppressCompletionDelivery &&
-      !entry.killIntent?.suppressTaskDelivery &&
-      !entry.killReconciliation?.suppressTaskDelivery,
+      !isSubagentDeliveryWithheld(entry),
     );
   }
   let session: PreparedSessionMutationFacts["target"];
@@ -271,7 +270,6 @@ export function prepareRequesterCronAuthority(params: {
         requesterAgentId,
         requesterSessionId: capture.sessionId,
         managementEntitlement: capture.managementEntitlement,
-        requesterOwner: capture.requesterOwner,
         lifecycleGeneration: capture.lifecycleGeneration,
         sessionLifecycleRevision: session.entry.lifecycleRevision,
         sessionFacts,
@@ -403,7 +401,7 @@ export function revokeRequesterCronAuthorityBatch(
     if (authority?.kind === "yield" && authority.rearmGeneration === rearmGeneration) {
       if (
         isSameSubagentRunOwner(authority.runs.get(entry.runId), entry) &&
-        entry.pauseReason === "sessions_yield" &&
+        isSubagentPausedByYield(entry) &&
         entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
         isCurrent(authority)
       ) {
@@ -447,7 +445,7 @@ async function withRequesterCronAuthority<T>(
   const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
   const pause: RequesterCronAuthorityDispatch["pause"] =
-    child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
+    isSubagentPausedByYield(child) && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
       : undefined;
   if (
@@ -473,7 +471,7 @@ async function withRequesterCronAuthority<T>(
           (pause.scope
             ? pause.scope.active && !pause.scope.signal.aborted
             : isSameSubagentRunOwner(pausedEntry, pause.entry) &&
-              pausedEntry?.pauseReason === "sessions_yield" &&
+              isSubagentPausedByYield(pausedEntry) &&
               Boolean(pausedEntry.requesterSettleWake?.pauseNotice) &&
               params.isCurrent())
         : authority.runScopeBound === true || params.isCurrent())
@@ -562,13 +560,16 @@ export function captureRequesterFollowupAuthority(params: {
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,
   });
-  if (!capture?.requesterOwner || capture.sessionId !== params.requesterSessionId) {
+  // A channel owner's followup returns its automation management to the exact requester.
+  if (
+    capture?.managementEntitlement.source !== "channel-owner" ||
+    capture.sessionId !== params.requesterSessionId
+  ) {
     return undefined;
   }
   const authority: RequesterCronAuthority = {
     kind: "followup",
     ...params,
-    requesterOwner: capture.requesterOwner,
     managementEntitlement: capture.managementEntitlement,
     lifecycleGeneration: capture.lifecycleGeneration,
     isFollowupCurrent: params.isCurrent,
@@ -608,7 +609,7 @@ export function captureRequesterFollowupAuthority(params: {
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
       // The followup owner retains caller restrictions separately. This scope
-      // supplies only the captured channel identity to the returning parent.
+      // supplies only the captured automation management to the returning parent.
       return await runRequesterFollowupAuthority(authority, runId, run);
     },
   };
@@ -635,7 +636,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
       runId: string;
       callerOrigin: { kind: "unknown" };
       managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
       isCurrent: () => boolean;
       bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
       release?: () => void;
@@ -662,7 +662,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
-    requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
     ...(dispatch.pause
       ? {
@@ -681,7 +680,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
         scope.managementEntitlement !== dispatch.authority.managementEntitlement ||
-        scope.requesterOwner !== dispatch.authority.requesterOwner ||
         scope.callerOrigin.kind !== "unknown" ||
         !scope.active ||
         scope.signal.aborted

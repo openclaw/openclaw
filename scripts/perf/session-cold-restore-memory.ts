@@ -52,6 +52,7 @@ import type { SessionColdMutationResult } from "../../src/config/sessions/sessio
 import { isPostgresSqlConnection, type SqlConnection } from "../../src/infra/sql-connection.js";
 import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const MiB = 1024 * 1024;
 const { values } = parseArgs({
@@ -525,12 +526,7 @@ async function measureWorker() {
   observer.observe({ entryTypes: ["gc"] });
   const inspector = new Session();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   parentPort!.postMessage({ type: "ready" }, []);
   await new Promise<void>((resolve) => {

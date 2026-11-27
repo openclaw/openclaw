@@ -125,7 +125,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
           >
             <Show
               when={name()}
-              fallback={<Icon name={shown()?.compaction ? "layers" : "listTree"} />}
+              fallback={<Icon name={shown()?.compaction ? "layers" : "listCollapse"} />}
             >
               {(tool) => (
                 <ChatToolIcon

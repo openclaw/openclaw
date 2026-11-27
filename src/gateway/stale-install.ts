@@ -23,12 +23,15 @@ import {
 import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getGatewaySuspendAdmissionPhase,
   onGatewaySuspendAdmissionChange,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { LegacyTrial } from "../update/legacy-trial-record.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import { isGatewayTransportError } from "./transport-error.js";
 
 export const GATEWAY_STALE_INSTALL_CLOSE_REASON =
@@ -77,7 +80,12 @@ type InstallationObserver = {
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
+  readiness?: PreparedReadinessChecker;
   trialSettled?: boolean;
+  legacyTrial?: LegacyTrial;
+  legacyTrialChecked?: boolean;
+  legacyTrialCheck?: Promise<void>;
+  recoverTrialHistory?: () => Promise<boolean>;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -180,10 +188,84 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
   }
 }
 
-/** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
-export function checkGatewayInstallationReplacement(): Promise<void> {
+export async function captureGatewayInstallationTrial(): Promise<void> {
   const observer = installationState.observer;
-  // The maintenance owner starts only after the Gateway listener is serving.
+  if (!observer) {
+    return;
+  }
+  try {
+    const { captureLegacyTrial } = await import("../update/legacy-trial.js");
+    observer.legacyTrial = await captureLegacyTrial(observer.root, observer.running.buildId);
+  } catch (error) {
+    createSubsystemLogger("gateway/update-run").warn(
+      `Could not capture the update trial before readiness: ${coerceErrorMessage(error)}`,
+    );
+  }
+}
+
+export async function announceGatewayInstallationReady(
+  readiness: PreparedReadinessChecker,
+): Promise<void> {
+  const observer = installationState.observer;
+  if (!observer) {
+    return;
+  }
+  observer.readiness = readiness;
+  try {
+    await disarmInstallationLegacyTrial(observer);
+  } catch (error) {
+    createSubsystemLogger("gateway/update-run").warn(
+      `Could not settle the update trial; maintenance will retry: ${coerceErrorMessage(error)}`,
+    );
+  }
+  const recover = observer.recoverTrialHistory;
+  if (recover) {
+    observer.recoverTrialHistory = undefined;
+    void recover().then(
+      (completed) => {
+        if (!completed) {
+          observer.recoverTrialHistory = recover;
+        }
+      },
+      (error: unknown) => {
+        observer.recoverTrialHistory = recover;
+        createSubsystemLogger("gateway/update-run").warn(
+          `Update readiness history was not recorded; maintenance will retry: ${coerceErrorMessage(error)}`,
+        );
+      },
+    );
+  }
+}
+
+function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<void> {
+  const readiness = observer.readiness;
+  if (observer.legacyTrialChecked || !readiness) {
+    return Promise.resolve();
+  }
+  observer.legacyTrialCheck ??= readiness
+    .prepare()
+    .then(async (prepared) => {
+      if (!prepared.publish().coreReady) {
+        return;
+      }
+      const { observeLegacyTrialReadiness } = await import("../update/gateway-trial.js");
+      observer.recoverTrialHistory = await observeLegacyTrialReadiness(
+        observer.running.buildId,
+        observer.root,
+        observer.legacyTrial,
+      );
+      observer.legacyTrialChecked = true;
+    })
+    .finally(() => {
+      observer.legacyTrialCheck = undefined;
+    });
+  return observer.legacyTrialCheck;
+}
+
+/** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
+export async function checkGatewayInstallationReplacement(): Promise<void> {
+  const observer = installationState.observer;
+  // Resident launchers acknowledge the serving listener through the existing maintenance owner.
   if (observer && !observer.trialSettled) {
     observer.trialSettled = true;
     void import("../update/gateway-trial.js")
@@ -191,6 +273,9 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       .catch(() => {
         observer.trialSettled = false;
       });
+  }
+  if (observer?.readiness) {
+    await announceGatewayInstallationReady(observer.readiness);
   }
   const root = observer?.installationRoot;
   if (
@@ -200,7 +285,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
     observer.replacement ||
     getGatewaySuspendAdmissionPhase() !== "accepting"
   ) {
-    return Promise.resolve();
+    return;
   }
   if (observer.check) {
     return observer.check;

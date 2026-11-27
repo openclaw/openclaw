@@ -258,6 +258,25 @@ struct ChatTranscriptExporterTests {
             messages: [message]) == "# Media chat\n")
     }
 
+    @MainActor
+    @Test func `exports the selected session title for the main alias`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        defer { model.detachTransport() }
+        model.messages = [self.message(role: "user", text: "Keep this line.", timestamp: 0)]
+        let body = "\n\n### User — 1970-01-01T00:00:00Z\n\nKeep this line.\n"
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:main:main", displayName: "A")]
+        #expect(model.exportTranscriptMarkdown() == "# A" + body)
+
+        model.sessions.append(OpenClawChatSessionEntry(key: "main", displayName: "Review / Friday"))
+        #expect(model.exportTranscriptMarkdown() == "# Review / Friday" + body)
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:other:other", displayName: "Unrelated")]
+        #expect(model.exportTranscriptMarkdown() == "# main" + body)
+    }
+
     @Test func `sanitizes filename`() {
         #expect(
             ChatTranscriptExporter.filename(

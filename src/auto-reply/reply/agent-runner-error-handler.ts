@@ -8,17 +8,12 @@ import { findCliTimeoutError, isFailoverError } from "../../agents/failover-erro
 import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  renderControlUiAgentFailureCopy,
-  renderFailoverCodeUserCopy,
-} from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
+import { OperatorRefusalError, operatorRefusalText } from "../../gateway/operator-refusal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
@@ -92,15 +87,25 @@ export async function handleAgentExecutionError(params: {
     params.state.pendingLifecycleTerminal = undefined;
     return terminal;
   };
-  const settleFailure = async (
-    payload: ReplyPayload & { text: string },
+  const settleFailure = async ({
     isGenericRunnerFailure = false,
-  ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
+    summaryAsTitle,
+    ...payload
+  }: ReplyPayload & {
+    text: string;
+    isGenericRunnerFailure?: boolean;
+    summaryAsTitle?: true;
+  }): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
     // History can persist this terminal before the rendered reply is delivered.
     takePendingLifecycleTerminal().emit(
       "error",
       err,
-      isGenericRunnerFailure ? undefined : { errorNotice: payload.text },
+      isGenericRunnerFailure
+        ? undefined
+        : {
+            errorNotice: payload.text,
+            ...(summaryAsTitle ? { summaryAsTitle: true } : {}),
+          },
     );
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
@@ -186,7 +191,7 @@ export async function handleAgentExecutionError(params: {
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
   }
-  if (err instanceof GatewayOperatorRecoveryAuthorizationError) {
+  if (err instanceof OperatorRefusalError) {
     return settleFailure({ text: err.message });
   }
   if (isChannelRunAuthorizationError(err)) {
@@ -196,8 +201,7 @@ export async function handleAgentExecutionError(params: {
       });
     }
     takePendingLifecycleTerminal().emit("error", err, {
-      errorNotice:
-        "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.",
+      errorNotice: operatorRefusalText("channel-access-ended", "start this request"),
     });
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
@@ -238,17 +242,15 @@ export async function handleAgentExecutionError(params: {
   // The exhausted preflight is deliberate, even if its diagnostic cause looks
   // like HTTP/overload. Settle delivery and normal diagnostic policy without replay.
   if (isAgentHarnessPreflightError(err)) {
-    const externalReply = buildExternalRunFailureReply(
-      { message, error: err },
-      {
-        includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-      },
+    return await settleFailure(
+      buildExternalRunFailureReply(
+        { message, error: err },
+        {
+          includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+          shouldSurfaceToControlUi: params.shouldSurfaceToControlUi,
+        },
+      ),
     );
-    const text =
-      params.shouldSurfaceToControlUi && err.userMessage === undefined
-        ? renderControlUiAgentFailureCopy()
-        : externalReply.text;
-    return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message, params.runtimeConfig);
   const failureSummary = resolveReplyFailureSummary({
@@ -292,54 +294,27 @@ export async function handleAgentExecutionError(params: {
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
-    return await settleFailure({
-      // Recorded retry exhaustion is more specific than generic quota guidance.
-      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
-      text:
-        failureSummary?.kind === "rate_limit" &&
-        ((isFailoverError(err) && err.rateLimitRetriesExhausted !== undefined) ||
-          failoverFacts.rateLimitResetAt !== undefined)
-          ? failureSummary.text
-          : providerRequestError.userMessage,
-    });
+    return await settleFailure(
+      buildExternalRunFailureReply({ message, error: err }, { failoverFacts, failureSummary }),
+    );
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-  const externalRunFailureCandidate =
-    !failureSummary && !isContextOverflow
-      ? buildExternalRunFailureReply(
-          { message, error: err },
-          {
-            includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
-            includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-            replayPrevented,
-            failoverFacts,
-          },
-        )
-      : undefined;
-  const externalRunFailureReply =
-    !params.shouldSurfaceToControlUi ||
-    externalRunFailureCandidate?.isGenericRunnerFailure === false ||
-    externalRunFailureCandidate?.presentation ||
-    renderFailoverCodeUserCopy(failoverFacts.code)
-      ? externalRunFailureCandidate
-      : undefined;
-  const fallbackText =
-    failureSummary?.text ??
-    (isContextOverflow
-      ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-      : (externalRunFailureReply?.text ??
-        (params.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy()
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+  if (isContextOverflow) {
+    return await settleFailure({
+      text: "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
+    });
+  }
   return await settleFailure(
-    {
-      text: fallbackText,
-      ...(externalRunFailureReply?.presentation
-        ? { presentation: externalRunFailureReply.presentation }
-        : {}),
-    },
-    !failureSummary &&
-      !isContextOverflow &&
-      (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
+    buildExternalRunFailureReply(
+      { message, error: err },
+      {
+        includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
+        includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+        replayPrevented,
+        failoverFacts,
+        failureSummary,
+        shouldSurfaceToControlUi: params.shouldSurfaceToControlUi,
+      },
+    ),
   );
 }

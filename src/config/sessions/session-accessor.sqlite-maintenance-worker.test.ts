@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as mcpCleanup from "../../agents/agent-bundle-mcp-manager-cleanup.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
@@ -19,6 +20,7 @@ import {
 } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -33,6 +35,7 @@ import {
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import * as deletion from "./session-accessor.sqlite-deletion.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type {
   SessionEntryMaintenancePlan,
@@ -42,6 +45,7 @@ import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-m
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import { registerSessionMaintenancePreparationTests } from "./session-accessor.sqlite-maintenance-preparation.test-support.js";
 import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
+import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import {
   maintenanceFixture,
   maintenancePolicy,
@@ -608,6 +612,56 @@ it("publishes only committed removal keys after Worker finalization", async () =
       unsubscribeIdentities();
       unsubscribe();
     }
+  });
+});
+
+it("retires the committed MCP generation after a deletion companion rejects", async () => {
+  await withMaintenanceFixture(async ({ seed, databaseOptions }) => {
+    const removed = seed("agent:main:postcommit-mcp", "postcommit-mcp", 1);
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const source = readOpenClawAgentDatabaseIdentity(database);
+    let companionReleased = false;
+    let drainedAfterCompanion = false;
+    const retire = vi.fn(async () => {
+      drainedAfterCompanion = companionReleased;
+    });
+    vi.spyOn(mcpCleanup, "captureSessionMaintenanceMcpRuntimes").mockReturnValue({
+      sessionIds: ["postcommit-mcp"],
+      retire,
+    });
+    const original = deletion.withSqliteSessionDeletions;
+    const companion = vi
+      .spyOn(deletion, "withSqliteSessionDeletions")
+      .mockImplementation(async (...args) => {
+        await original(...args);
+        companionReleased = true;
+        throw new Error("companion failed after committed deletion");
+      });
+    await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+      { ...databaseOptions, path: database.path },
+      [
+        {
+          archived: 0,
+          capArchived: 0,
+          capped: 0,
+          pruned: 0,
+          modelRunPruned: 0,
+          archivedEntries: [],
+          stateDeletePlans: [],
+          entryRemovals: [
+            { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
+          ],
+        },
+      ],
+    );
+    expect(companion).toHaveBeenCalledOnce();
+    expect(drainedAfterCompanion).toBe(true);
+    expect(retire).toHaveBeenCalledExactlyOnceWith(["postcommit-mcp"], {
+      agentId: "main",
+      databaseIdentity: source.identity,
+      databaseBirthtime: source.birthtime,
+    });
+    expect(loadSessionEntry(removed)).toBeUndefined();
   });
 });
 

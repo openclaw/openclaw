@@ -3,7 +3,6 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
-import { getDiscordRuntime } from "../runtime.js";
 import { formatMention, parseDiscordTarget } from "../target-parsing.js";
 import { DiscordAudioTransport } from "./audio-transport.js";
 import { stopVoiceCaptureState } from "./capture-state.js";
@@ -188,12 +187,12 @@ export class DiscordVoiceSessions {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
 
-    const audioInputBudget = await getDiscordRuntime().mediaUnderstanding.resolveAudioInputBudget({
-      cfg: this.params.readConfig(),
-    });
+    const { createAudioInputBudgetReader } =
+      await import("openclaw/plugin-sdk/media-understanding-runtime");
     if (authority && !authority.isCurrent()) {
       return failedJoinResult("Discord voice join was cancelled.");
     }
+    const readAudioInputBudget = createAudioInputBudgetReader(this.params.readConfig);
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = voiceConfig?.daveEncryption;
     const decryptionFailureTolerance = voiceConfig?.decryptionFailureTolerance;
@@ -360,7 +359,7 @@ export class DiscordVoiceSessions {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       conversations: new DiscordVoiceConversationQueue(),
-      audioInputBudget,
+      readAudioInputBudget,
       ttsStreamFallbackWarned: false,
       capture: new Map(),
       get transcripts(): VoiceSessionEntry["transcripts"] {

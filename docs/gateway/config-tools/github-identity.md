@@ -19,6 +19,15 @@ their own conversation in a public project without a worktree, a PR, or GitHub
 credentials in the sandbox. Success returns the issue URL. If the result is
 unconfirmed, check the project’s issues before trying again.
 
+To leave a top-level comment in that project's repository, call `github_publish`
+with `action: "create_comment"`, `issueNumber`, and a Markdown `body`. The Gateway
+posts comments on the session's working PR without a separate approval. The target
+must match its selected PR association or current publication, including the
+GitHub host and repository. Comments on other issues or PRs in that repository
+still require approval of the exact target, account, and text. The tool cannot
+select another repository. Success returns the comment URL; check the thread
+before retrying an unconfirmed result.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with

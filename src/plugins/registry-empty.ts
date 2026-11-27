@@ -24,7 +24,6 @@ export const pluginArrays = [
   "webFetchProviders",
   "webSearchProviders",
   "migrationProviders",
-  "agentToolResultMiddlewareOwners",
   "agentToolResultMiddlewares",
   "agentHarnesses",
   "legacyInternalHooks",

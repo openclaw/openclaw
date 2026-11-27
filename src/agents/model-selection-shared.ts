@@ -28,7 +28,11 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { configuredModelCatalogEntry } from "./model-catalog-entry.js";
-import { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
+import {
+  createCapturedModelLookup,
+  findModelCatalogEntry,
+  findModelInCatalog,
+} from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
@@ -37,7 +41,9 @@ import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-sh
 import {
   createModelAliasScope,
   type EffectiveModelAlias,
+  findIndexedModelAlias,
   findModelAliasCandidate,
+  type ModelAliasIndex,
   preferLiteralPrimary,
   providerAliasKey,
 } from "./model-selection-alias-scope.js";
@@ -70,12 +76,7 @@ type ModelSelectionParams = NonNullable<Parameters<typeof normalizeModelRef>[2]>
 type ConfiguredModelSelectionParams = ModelSelectionParams & { cfg: OpenClawConfig };
 type ParseModelRefParams = ModelSelectionParams & { raw: string };
 
-export type ModelAliasIndex = {
-  byAlias: Map<string, { alias: string; ref: ModelRef }>;
-  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
-  byKey: Map<string, string[]>;
-  disabledKeys?: Set<string>;
-};
+export type { ModelAliasIndex } from "./model-selection-alias-scope.js";
 
 type ModelManifestPluginContext = {
   peek: () => ModelManifestPlugins;
@@ -543,25 +544,28 @@ function applyModelCatalogMetadata(params: {
 export function resolveModelRefFromString(
   params: ParseModelRefParams & { aliasIndex?: ModelAliasIndex },
 ): { ref: ModelRef; alias?: string } | null {
+  return resolveModelRefWithAliasIndex(params);
+}
+
+/** Exact provider rows take precedence even when a caller requests configured alias lookup. */
+export function resolveModelRefWithConfiguredAliases(
+  params: ConfiguredModelSelectionParams & { raw: string },
+): { ref: ModelRef; alias?: string } | null {
+  return resolveModelRefWithAliasIndex(params, () => buildModelAliasIndex(params));
+}
+
+function resolveModelRefWithAliasIndex(
+  params: ParseModelRefParams & { aliasIndex?: ModelAliasIndex },
+  buildAliasIndex?: () => ModelAliasIndex,
+): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
     return null;
   }
-  const slash = model.indexOf("/");
   const aliasIndex = hasExactConfiguredProviderModelRef(params.cfg, model)
     ? undefined
-    : params.aliasIndex;
-  const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch =
-    aliasIndex?.byAlias.get(aliasKey) ??
-    (slash > 0
-      ? (aliasIndex?.byProviderAlias?.get(
-          providerAliasKey(model.slice(0, slash), params.raw.trim().slice(slash + 1)),
-        ) ??
-        aliasIndex?.byProviderAlias?.get(
-          providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
-        ))
-      : undefined);
+    : (params.aliasIndex ?? buildAliasIndex?.());
+  const aliasMatch = aliasIndex && findIndexedModelAlias(aliasIndex, params.raw, model);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
@@ -1130,7 +1134,8 @@ function resolveConfiguredModelManifestPlugins(params: {
 /** Build catalog entries from configured provider model rows. */
 export function buildConfiguredModelCatalog(params: {
   cfg: OpenClawConfig;
-  catalog?: readonly ModelCatalogEntry[];
+  /** A prepared catalog uses the first row for each createModelCatalogIdentityKeyResolver key. */
+  catalog?: readonly ModelCatalogEntry[] | ReadonlyMap<string, ModelCatalogEntry>;
   workspaceDir?: string;
   manifestPlugins?: ModelManifestPlugins;
 }): ModelCatalogEntry[] {
@@ -1141,10 +1146,7 @@ export function buildConfiguredModelCatalog(params: {
 
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
-  const resolveModelCatalogIdentityKey = createModelCatalogIdentityKeyResolver();
-  const capturedByIdentity = params.catalog?.length
-    ? indexFirstByKey(params.catalog, resolveModelCatalogIdentityKey)
-    : undefined;
+  const findCaptured = createCapturedModelLookup(params.catalog);
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1158,9 +1160,7 @@ export function buildConfiguredModelCatalog(params: {
         continue;
       }
       // Provider defaults are fallbacks; only a model-level pin overrides its captured route.
-      const accepted = capturedByIdentity?.get(
-        resolveModelCatalogIdentityKey({ provider: providerId, id }),
-      );
+      const accepted = findCaptured?.(providerId, id);
       catalog.push(
         configuredModelCatalogEntry({
           provider: providerId,
