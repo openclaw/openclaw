@@ -270,11 +270,15 @@ function formatToolSearchCatalogDirectory(
     });
   const total = deferredEntries.filter((entry) => entry.source === "openclaw").length;
   const hasOnDemand = deferredEntries.some((entry) => entry.onDemand);
+  // On-demand tools run only as their own top-level call; dispatch_action refuses them.
+  const onDemand = hasOnDemand
+    ? `Tools marked ${ON_DEMAND_ROW_MARK} become top-level after tool_describe; call them only by name. `
+    : "";
   const call =
     mode === "tools"
-      ? "Not directly callable: call dispatch_action with the name in id and all parameters in args, even when other guidance names the tool directly."
-      : "Call a unique name directly, or dispatch_action with its id and args.";
-  const guidance = `${hasOnDemand ? `${ON_DEMAND_ROW_MARK}: tool_describe makes it a top-level tool; then call it only by name. ` : ""}${call} tool_search gives input signatures and finds MCP/client tools; tool_describe gives full schemas.`;
+      ? `${hasOnDemand ? "Other names are" : "Names are"} not directly callable: call dispatch_action with the name in id and all parameters in args, even when other guidance names the tool directly.`
+      : `Call a unique ${hasOnDemand ? "other " : ""}name directly, or dispatch_action with its id and args.`;
+  const guidance = `${onDemand}${call} tool_search gives input signatures and finds MCP/client tools; tool_describe gives full schemas.`;
   const footerForCount = (included: number) =>
     total > included ? `${total - included} more found by tool_search. ${guidance}` : guidance;
   const heading = "Deferred tools:";

@@ -141,12 +141,11 @@ export function buildMemoryPromptSection({
   }
 
   // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
-  // Corpus selection details live in the memory_search description.
   const guidance = hasMemorySearch
     ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn, run memory_search without corpus${
         hasMemoryGet ? "; memory_get only the needed lines of file hits" : ""
-      }. Skip it when supplied context answers. If unsure after searching, say you checked.`
-    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn and points to a memory file, memory_get only the needed lines. Skip it when supplied context answers. If unsure after reading, say you checked.";
+      }. Skip it when supplied context fully answers. Use corpus=all only when compiled wiki supplements are needed. If unsure after searching, say you checked.`
+    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn and points to a memory file, memory_get only the needed lines. Skip it when supplied context fully answers. If unsure after reading, say you checked.";
   const sessionGuidance = !hasMemorySearch
     ? []
     : [
@@ -162,7 +161,7 @@ export function buildMemoryPromptSection({
         "Search line numbers are not history offsets; never read raw transcript files.",
       ];
   const outcomeGuidance =
-    "Report recall as partial, unavailable, or stale on a top-level warning or action guidance, disabled=true, or stale=true; an optional corpus outcome of not-registered is informational.";
+    "Report recall as partial, unavailable, or stale on a top-level warning or action guidance, disabled=true, or stale=true; in a multi-corpus result without one, an optional corpus outcome of not-registered is informational.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."

@@ -395,7 +395,7 @@ it("prepares deferred discovery guidance with the model tool projection", async 
   ]);
   const guidance = projection.toolSchemaDirectoryPrompt;
   expect(guidance?.split("\n")[0]).toBe("Deferred tools: web_fetch");
-  expect(guidance).toContain("Not directly callable: call dispatch_action");
+  expect(guidance).toContain("not directly callable: call dispatch_action");
   expect(guidance).not.toContain("Call a unique name directly");
 });
 

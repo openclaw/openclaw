@@ -78,7 +78,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     const executionBias = prompt.split("## Execution Bias\n")[1]?.split("\n## ")[0];
     expect(executionBias).toContain("Act on actionable requests");
     for (const authority of [
-      "Skill gates",
+      "Explicit skill gates",
       "user instructions",
       "prior authorization",
       "safety",
@@ -162,7 +162,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
       if (surface === "create") {
         expect(prompt).toContain("`message` starts work; omit for idle");
-        expect(prompt).toContain("independent visible session, not a supervised child");
+        expect(prompt).toContain("independent persistent visible session, not a supervised child");
         expect(prompt).toContain("no completion event or yield");
       }
       expect(prompt).not.toContain("## Delegation");

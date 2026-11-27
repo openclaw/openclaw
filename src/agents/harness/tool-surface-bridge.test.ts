@@ -212,7 +212,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(policy.toolSchemaDirectoryPrompt).toContain(
           mode === "directory" && supportsDeferredToolCalls
             ? "Call a unique name directly"
-            : "Not directly callable: call dispatch_action",
+            : "not directly callable: call dispatch_action",
         );
       }
       expect(config.tools?.toolSearch).toEqual(configuredSearch);

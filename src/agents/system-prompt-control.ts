@@ -42,7 +42,7 @@ export function buildOpenClawControlSection({
       hasGateway
         ? "On explicit owner/scheduled maintenance, `gateway` update.run only for built-in-updater installs (supervised restart); also `restart`, `update.cleanup` (`dryRun` previews; deletes rollback copies, so require an explicit request). Report accepted/deferred accurately; scheduling != completion."
         : "",
-      "Missing chat ownership: Control UI owner setup or Gateway operator. Keep a working restart path; if runtime admission refuses, report it and never bypass via `exec`.",
+      "Missing chat ownership: Control UI owner setup or Gateway operator. Keep a working restart path before stopping; if runtime admission refuses, report it and never bypass via `exec`.",
     ]
       .filter(Boolean)
       .join(" "),

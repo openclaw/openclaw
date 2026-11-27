@@ -1169,7 +1169,7 @@ describe("Tool Search", () => {
     expect(directory).toContain(`${catalogTools.length - names.length} more found by tool_search.`);
     expect(directory).toContain("tool_search gives input signatures");
     expect(directory).toContain("Call a unique name directly, or dispatch_action");
-    expect(directory).not.toContain("Not directly callable");
+    expect(directory).not.toContain("not directly callable");
     expect(await runtime.search("fake_directory_tool_199", { limit: 1 })).toMatchObject([
       { name: "fake_directory_tool_199" },
     ]);

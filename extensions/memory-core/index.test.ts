@@ -181,7 +181,7 @@ describe("buildPromptSection", () => {
     const result = buildMemoryPromptSection({ availableTools: new Set(tools), citationsMode });
     expect(result[1]).toContain(tools[0]);
     expect(result[1]).toContain("not in this turn");
-    expect(result[1]).toContain("Skip it when supplied context answers");
+    expect(result[1]).toContain("Skip it when supplied context fully answers");
     expect(result[1]).toContain("say you checked");
     expect(result[1]?.includes("; memory_get only the needed lines of file hits")).toBe(
       tools.length === 2,

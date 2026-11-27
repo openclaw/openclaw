@@ -92,10 +92,10 @@ export function buildSkillsSection(params: {
           ]),
       ...(installedSkillSearch
         ? [
-            `For specialized, unfamiliar, or reusable workflows, search ${searchCall} by goal first; it matches skill descriptions (skip for simple local file work or self-contained answers).`,
+            `For specialized, unfamiliar, or reusable workflows, ${hasListedSkills ? "use a clearly matching listed name or search" : "search"} ${searchCall} by goal/terms (it matches descriptions of installed skills only; skip for simple local file work or self-contained answers).`,
           ]
         : []),
-      "Pick at most one (most specific); read none if irrelevant; never invent names or paths. Batch external writes safely and honor 429/Retry-After.",
+      "Pick at most one (most specific) up front; read none if irrelevant; never invent names or paths. Batch external writes safely and honor 429/Retry-After.",
       ...(renderedSkillsPrompt ? [renderedSkillsPrompt] : []),
       "",
     ],

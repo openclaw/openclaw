@@ -1472,7 +1472,7 @@ describe("runCopilotAttempt", () => {
         expect(content).toContain("Deferred tools: fixture_allowed");
         expect(content).not.toContain("Allowed catalog capability.");
         expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
-        expect(content).toContain("Not directly callable: call dispatch_action");
+        expect(content).toContain("not directly callable: call dispatch_action");
         expect(content).not.toContain("Call a unique name directly");
         expect(content).not.toContain("fixture_denied");
       }

@@ -242,7 +242,9 @@ describe("buildDeveloperInstructions delegation guidance", () => {
       const instructions = renderCreation(true);
 
       expect(instructions).toContain("`openclaw.sessions_create`");
-      expect(instructions).toContain("independent visible session, not a supervised child");
+      expect(instructions).toContain(
+        "independent persistent visible session, not a supervised child",
+      );
       expect(instructions).toContain("no completion event or yield");
       const helperRoute = instructions
         .split("\n")

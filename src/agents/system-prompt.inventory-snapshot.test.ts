@@ -58,7 +58,7 @@ const deferredTools = [
 ];
 const directory = [
   `Deferred tools: ${deferredTools.join(", ")}`,
-  "Not directly callable: call dispatch_action with the name in id and all parameters in args, even when other guidance names the tool directly. tool_search gives input signatures and finds MCP/client tools; tool_describe gives full schemas.",
+  "Names are not directly callable: call dispatch_action with the name in id and all parameters in args, even when other guidance names the tool directly. tool_search gives input signatures and finds MCP/client tools; tool_describe gives full schemas.",
 ].join("\n");
 const skillsPrompt = [
   "<available_skills>",
