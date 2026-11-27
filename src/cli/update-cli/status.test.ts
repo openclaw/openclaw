@@ -27,7 +27,6 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import * as reportHealth from "../../infra/update-run-report-health.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -221,35 +220,21 @@ it.each([
   }
 });
 
-it.each([
-  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
-  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
-  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
-  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
-] as const)(
-  "projects failed history: %s",
-  async (_name, installed, version, recorded, historical) => {
+it.each([undefined, "2026.9.4"])(
+  "shows recorded failure diagnostics without probing a saved endpoint (identity=%s)",
+  async (recorded) => {
     const run = createUpdateRun({
       trigger: "chat",
       target: { kind: "git", channel: "dev" },
-      before: { version: installed },
+      before: { version: "2026.10.1" },
       origin: { nextAction: "Run openclaw update." },
     });
     if (recorded) {
       recordUpdateRunVerification(run.runId, { serviceRunning: true, runningVersion: recorded });
     }
     finishUpdateRun(run.runId, { status: "failed", reason: "preflight-no-good-commit" });
-    vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
-      kind: "responding",
-      version,
-    });
     await updateStatus({});
-    if (historical) {
-      expectOutput("Last update run failed (preflight-no-good-commit)");
-      expect(outputText()).not.toContain("Run openclaw update.");
-    } else {
-      expectOutput("OpenClaw couldn't finish updating", "Run openclaw update.");
-    }
+    expectOutput("OpenClaw couldn't finish updating", "Run openclaw update.");
   },
 );
 

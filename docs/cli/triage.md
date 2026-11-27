@@ -55,11 +55,11 @@ Before an automatic interactive launch, OpenClaw shows what it will run. It show
 
 The prompt preserves the original error, before and after versions, and recorded recovery state ahead of current Doctor findings. It includes up to three failed or interrupted steps, excluding advisory Doctor results, with bounded excerpts from both stderr and stdout. It also retains bounded plugin failures and the terminal Doctor warning. The failure record is limited to 4 KiB and the whole prompt to 8 KiB. A healthy Doctor check does not erase the failed attempt, and an absent restart-safety verdict remains unknown.
 
-When stderr contains `SQLite contention call site:`, saved failure JSON (linked from the update report) and repair prompts also retain the error line and first 12 stack frames in the optional `sqliteContentionCallSite` field, capped at 1 KiB of JSON-encoded UTF-8 with the same secret and path redaction. The ordinary stderr head/tail excerpt keeps its 384-byte limit, and the overall failure-record limits still apply.
+When stderr contains `SQLite contention call site:`, repair prompts retain the error line and first 12 stack frames in the optional `sqliteContentionCallSite` field, capped at 1 KiB of JSON-encoded UTF-8 with the same secret and path redaction. The ordinary stderr head/tail excerpt keeps its 384-byte limit, and the overall failure-record limits still apply.
 
-Updates using `--yes`, JSON output, or a session without a TTY never start a repair agent. They save triage diagnostics and print the explicit opt-in command `openclaw triage --run --update-result <path>`. Managed handoff updates and foreground `gateway run` startup failures also collect diagnostics only. Initial argument, ownership, and installation refusals retain their existing output. Standalone diagnostics preserve a pending failed-update notification as context. Embedded validation selects current ledger history through the resolution owner. These reads do not consume the notification or create a state database. Delivery routes and continuation instructions are excluded.
+Updates using `--yes`, JSON output, or a session without a TTY never start a repair agent. They collect triage diagnostics and print the explicit opt-in command `openclaw triage --run`. Managed handoff updates and foreground `gateway run` startup failures also collect diagnostics only. Initial argument, ownership, and installation refusals retain their existing output. Standalone diagnostics preserve a pending failed-update notification as context. Embedded validation selects current ledger history through the resolution owner. These reads do not consume the notification or create a state database. Delivery routes and continuation instructions are excluded.
 
-Use `--update-result <path>` to include an updater's saved failure artifact. Triage requires a regular file (or a symlink to one), rejects FIFOs without waiting for a writer, and reads at most 8 KiB of valid UTF-8 JSON before validating the failure record. Its printed embedded handoff command uses a sanitized support export, so it remains usable after a temporary updater input is deleted. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
+Use `--update-result <path>` to include a failure artifact from an older updater or an explicit export. Triage requires a regular file (or a symlink to one), rejects FIFOs without waiting for a writer, and reads at most 8 KiB of valid UTF-8 JSON before validating the failure record. Printed embedded handoff commands use recorded update history, not a separate failure-file export. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
 
 The repair prompt directs the agent to preserve migrated state, investigate before rolling back or restarting, and verify the intended installation plus Gateway health and RPC connectivity after repair. A successful agent exit does not change the original updater failure into a successful update.
 
@@ -122,7 +122,7 @@ env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCL
 env OPENCLAW_STATE_DIR='<state-dir>' OPENCLAW_CONFIG_PATH='<config-path>' OPENCLAW_WORKSPACE_DIR='<default-workspace-dir>' openclaw triage --run
 ```
 
-A captured update failure adds `--update-result <saved-failure-path>` to the embedded command. The external commands use their agent's native tool policy, including Kimi Code's automatic permissions. Antigravity's saved command starts an interactive session. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
+The external commands use their agent's native tool policy, including Kimi Code's automatic permissions. Antigravity's saved command starts an interactive session. Triage adds no permission overrides. Use `openclaw triage --agent <name>` to start a session; Kimi Code remains a single prompt run.
 
 Printed Windows commands target PowerShell, including Windows PowerShell 5.1. They read saved prompts as UTF-8, preserve literal paths, and restore your installation selectors after the command completes. WSL uses POSIX shell commands.
 
@@ -134,15 +134,15 @@ JSON output also includes `detectedAgents`, listing the external agents found on
 
 Unattended updates, managed update handoffs, and recorded foreground Gateway startup failures save diagnostics without starting an agent. Update settlement and service recovery run first. After package replacement, the installed CLI collects diagnostics with `--non-interactive` or `--json`. The failure output and original exit status remain unchanged. Diagnostics go to stderr when the update uses JSON output.
 
-The output names the saved failure artifact and the explicit opt-in command:
+The output prints the explicit opt-in command:
 
 ```bash
-openclaw triage --run --update-result <path>
+openclaw triage --run
 ```
 
 Run that command in an interactive terminal on the Gateway host, preserving the printed installation selectors. It uses your configured inference and the existing embedded repair behavior. Interactive updates still offer **Diagnose update failure** and require an affirmative Yes before starting the agent.
 
-A missing or incompatible installed CLI leaves the saved failure artifact and manual guidance. Existing ownership, schema, startup cleanup, and cancellation refusals retain their behavior. A native recovery handoff admitted by an older version keeps its authority and cleanup checks across an upgrade, but the new CLI collects diagnostics only. Live or uncertain claims are left for their lifecycle owner; do not delete them while prior work may still be running.
+A missing or incompatible installed CLI leaves manual guidance. Existing ownership, schema, startup cleanup, and cancellation refusals retain their behavior. A native recovery handoff admitted by an older version keeps its authority and cleanup checks across an upgrade, but the new CLI collects diagnostics only. Live or uncertain claims are left for their lifecycle owner; do not delete them while prior work may still be running.
 
 ## Output and exit codes
 
@@ -163,7 +163,7 @@ Embedded repair exits with 0 when its validation proves resolution, 2 when a tim
 | `--agent <name>`         | Select `agy`, `claude`, `codex`, `cursor`, `grok`, `kimi`, `muse`, `opencode`, `pi`, or `qwen` instead of automatic detection. |
 | `--run`                  | Run one bounded embedded repair turn with installation or update-resolution validation.                                        |
 | `--non-interactive`      | Prepare diagnostics without prompting or starting an agent, including on a terminal.                                           |
-| `--update-result <path>` | Include the bounded update-failure JSON diagnostics artifact written by the updater.                                           |
+| `--update-result <path>` | Include a bounded update-failure JSON artifact from an older updater or explicit export.                                       |
 
 `--run` cannot be combined with `--json`, `--non-interactive`, or `--agent`.
 

@@ -2,15 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as configureShared from "../../commands/configure.shared.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as updateFailureReport from "../../infra/update-failure-report.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { expectMessages, expectMissing, expectNoCalls } from "./update-boundary.test-support.js";
 import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -44,7 +40,7 @@ const failedUpdate = resultFixture(undefined, {
 async function createInstalledTriage(rejectRepair = false) {
   const root = await fs.realpath(tempDirs.make("openclaw-update-triage-"));
   await fs.mkdir(path.join(root, "dist"));
-  // The real child consumes the failure export and environment after the caller unwinds.
+  // The real child consumes the target environment after the caller unwinds.
   await fs.writeFile(
     path.join(root, "dist", "index.js"),
     `
@@ -52,10 +48,9 @@ async function createInstalledTriage(rejectRepair = false) {
     const path = require("node:path");
     ${rejectRepair ? 'if (process.connected) throw new Error("Unattended update admitted a repair agent");' : ""}
     const args = process.argv.slice(2);
-    const input = args[args.indexOf("--update-result") + 1];
+    if (fs.existsSync(process.env.OPENCLAW_STATE_DIR) && !fs.statSync(process.env.OPENCLAW_STATE_DIR).isDirectory()) throw new Error("State directory unavailable");
     fs.writeFileSync(path.join(${JSON.stringify(root)}, "receipt.json"), JSON.stringify({
       args,
-      failure: JSON.parse(fs.readFileSync(input, "utf8")),
       stateDir: process.env.OPENCLAW_STATE_DIR,
       configPath: process.env.OPENCLAW_CONFIG_PATH,
       updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,
@@ -94,7 +89,6 @@ function failUpdate(
 async function readReceipt(target: { root: string }) {
   return JSON.parse(await fs.readFile(path.join(target.root, "receipt.json"), "utf8")) as {
     args: string[];
-    failure: unknown;
     stateDir: string;
     configPath: string;
     updateInProgress?: string;
@@ -110,19 +104,8 @@ async function expectNoTriage(target: { root: string }) {
 
 async function createManagedTriageTarget() {
   const target = await createInstalledTriage();
-  const handoffDir = path.join(target.root, "handoff");
-  await fs.mkdir(handoffDir, { mode: 0o700 });
-  const contextPath = path.join(handoffDir, "update-failure.json");
-  const metaPath = path.join(handoffDir, "sentinel-meta.json");
-  await writeFixtureJson(metaPath, {
-    version: 1,
-    meta: { handoffId: "fixture-handoff", triageContextPath: contextPath },
-  });
-  Object.assign(target.env, {
-    OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-    [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-  });
-  return { target, contextPath };
+  Object.assign(target.env, { OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
+  return target;
 }
 
 beforeEach(() => {
@@ -160,14 +143,12 @@ it.each([
     const receipt = await readReceipt(target);
     expect(receipt).toMatchObject({
       released: true,
-      args: ["triage", "--update-result", expect.any(String), flag],
+      args: ["triage", flag],
       stateDir: target.env.OPENCLAW_STATE_DIR,
       configPath: target.env.OPENCLAW_CONFIG_PATH,
-      failure: { result: { mode: "npm", reason: result.reason, before: { version: "2026.8.1" } } },
     });
     expect(receipt.updateInProgress).toBeUndefined();
     expect(receipt.serviceMarker).toBeUndefined();
-    expect(JSON.stringify(receipt.failure)).toContain("ENOSPC");
     expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
     if ("json" in opts) {
       expectNoCalls(defaultRuntime.log);
@@ -179,7 +160,7 @@ it.each([
     ]
       .flat()
       .join("\n");
-    expect(output).toContain("openclaw triage --run --update-result");
+    expect(output).toContain("openclaw triage --run");
     expect(output).toContain("Triage diagnostics saved; no repair agent was started.");
     expectNoCalls(defaultRuntime.exit, triageAfterFailure, reportActionSelect);
   },
@@ -199,67 +180,29 @@ it("preserves non-interactive updater failures", async () => {
 
   const receipt = await readReceipt(target);
   expect(receipt.args).toContain("--non-interactive");
-  expect(receipt.failure).toMatchObject({
-    error: failure.message,
-    result: { recovery: { serviceRestartSafe: false } },
-  });
   expectNoCalls(defaultRuntime.exit, reportActionSelect);
 });
 
-it("exports the final managed failure after cleanup without launching triage", async () => {
-  const { target, contextPath } = await createManagedTriageTarget();
-  const result: ReturnType<typeof resultFixture> = {
-    ...failedUpdate,
-    after: { version: "2026.9.1" },
-    recovery: { serviceRestartSafe: true, version: "2026.9.1" },
-  };
-  const targetWithResult: UpdateTriageTarget = { ...target, failureResult: result };
-  await writeFixtureJson(contextPath, { error: "Stale pre-recovery result" });
-  const secret = "sk-test-managed-triage-secret-1234567890";
-  const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
-  const failure = new UpdateCommandFailure(result, 1, detail);
-  const completion = withUpdateFailureTriage({ json: true }, targetWithResult, async () => {
-    try {
-      throw failure;
-    } finally {
-      failure.result.recovery = {
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
-      };
-      await fs.writeFile(path.join(target.root, "released"), "done");
-    }
-  });
-  await expect(completion).rejects.toMatchObject({ code: 1 });
-  const raw = await fs.readFile(contextPath, "utf8");
-  expect(JSON.parse(raw)).toMatchObject({
-    error: expect.stringContaining("original Doctor diagnostic"),
-    result: {
-      before: { version: "2026.8.1" },
-      after: { version: "2026.9.1" },
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      steps: [{ stderrTail: "ENOSPC" }],
-    },
-  });
-  expectMessages(defaultRuntime.error, "openclaw triage --run --update-result");
-  expect(raw).not.toContain(secret);
-  expect(raw).not.toContain("Stale pre-recovery result");
-  expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(4 * 1024 + 1);
-  if (process.platform !== "win32") {
-    expect((await fs.stat(contextPath)).mode & 0o777).toBe(0o600);
-  }
+it("leaves triage to the owner after managed failure cleanup", async () => {
+  const target = await createManagedTriageTarget();
+  await expect(
+    withUpdateFailureTriage({ json: true }, target, async () => {
+      try {
+        throw new UpdateCommandFailure(failedUpdate);
+      } finally {
+        await fs.writeFile(path.join(target.root, "released"), "done");
+      }
+    }),
+  ).rejects.toMatchObject({ code: 1 });
+  expectMessages(defaultRuntime.error, "openclaw triage --run");
   await expectNoTriage(target);
   expectNoCalls(defaultRuntime.writeJson, defaultRuntime.log, reportActionSelect);
 });
 
-it("leaves the outer managed export untouched in a post-core child", async () => {
-  const { target, contextPath } = await createManagedTriageTarget();
+it("does not start triage in a post-core child", async () => {
+  const target = await createManagedTriageTarget();
   Object.assign(target.env, { [POST_CORE_UPDATE_ENV]: "1" });
-  const original = JSON.stringify({ error: "Outer updater owns final recovery" });
-  await fs.writeFile(contextPath, original);
-
   await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
-
-  await expect(fs.readFile(contextPath, "utf8")).resolves.toBe(original);
   await expectNoTriage(target);
 });
 
@@ -271,25 +214,6 @@ it("leaves triage to the owner for a managed helper child", async () => {
   ).rejects.toMatchObject({ code: 80 });
   await expectNoTriage(target);
   await expectMissing(target.env.OPENCLAW_STATE_DIR);
-});
-
-it("uses a new report identity for each distinct CLI update execution", async () => {
-  const target = await createInstalledTriage();
-  reportActionSelect.mockResolvedValue("dismiss");
-  vi.spyOn(configureShared, "confirm").mockResolvedValue(false);
-  const prepare = vi.spyOn(updateFailureReport, "prepareUpdateFailureReport");
-
-  await withTriageTerminal(true, async () => {
-    for (let index = 0; index < 2; index += 1) {
-      reportActionSelect.mockResolvedValueOnce("report");
-      await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
-    }
-  });
-
-  const attemptIds = prepare.mock.calls.map(([params]) => params.attemptId);
-  expect(attemptIds).toHaveLength(2);
-  expect(attemptIds).toEqual(Array(2).fill(expect.stringMatching(/^[0-9a-f-]{36}$/u)));
-  expect(attemptIds[0]).not.toBe(attemptIds[1]);
 });
 
 it("does not start triage when the report action menu throws", async () => {

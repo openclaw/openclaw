@@ -93,7 +93,6 @@ export function registerManagedTerminalResultTests(
         updaterExitCode: 0,
         updaterResult,
         updaterNotification,
-        recordedFailure: { error: "A diagnostic export cannot override direct success." },
       });
       expect(
         commands.some((command) =>
@@ -136,14 +135,6 @@ export function registerManagedTerminalResultTests(
           durationMs: 100,
           recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
         } satisfies UpdateRunResult,
-        recordedFailure: {
-          result: {
-            status: "error",
-            mode: "git",
-            steps: [],
-            recovery: { serviceRestartSafe: true },
-          },
-        },
       });
       expect(
         commands.some((command) =>
@@ -237,18 +228,6 @@ export function registerManagedRecoveryOutcomeTests(
         helperExitCode: proof === "ledger-only" ? 1 : 79,
         ledger: proof === "ledger-only",
         rollbackRestoration: proof === "ledger-only",
-        recordedFailure:
-          proof === "stdout-only"
-            ? {
-                error: "Diagnostic restart safety must not override the direct updater outcome",
-                result: {
-                  status: "error",
-                  mode: "npm",
-                  recovery: { serviceRestartSafe: true },
-                  steps: [],
-                },
-              }
-            : undefined,
         updaterResult:
           proof === "stdout-only"
             ? {

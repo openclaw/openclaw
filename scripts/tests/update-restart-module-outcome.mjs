@@ -334,7 +334,6 @@ async function fixture({
     "../../shared/state-lease-loss-format",
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
-    "../../infra/update-run-report",
     "../../infra/update-run-notice",
     "../quote-cli-arg",
     "../../infra/update-run-record",

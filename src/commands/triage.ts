@@ -23,7 +23,6 @@ import {
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { createProcessSignalBridge } from "../infra/process-signal-bridge.js";
 import { acceptTriageContinuation } from "../infra/triage-continuation.js";
-import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRepairValidation } from "../infra/update-repair-protocol.js";
 import {
   redactSupportString,
@@ -299,14 +298,8 @@ async function runTriage(
   const canStartAgent = allowAgent && (runEmbedded || handoff !== undefined);
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
   const outputDir = path.join(target.stateDir, "logs", "support");
-  let updateResultPath: string | undefined;
   let promptArtifact: Result<string, string>;
   try {
-    // Private handoff inputs can be deleted by their caller. Saved commands use a
-    // sanitized support export that remains readable after the updater completes.
-    updateResultPath = updateFailure
-      ? await writeTriageUpdateFailure(updateFailure, { env: targetEnv })
-      : undefined;
     if (!isCurrent()) {
       return;
     }
@@ -361,16 +354,10 @@ async function runTriage(
     pi: format(["pi", "--print", ...(promptPath ? [] : [prompt])], promptPath),
     qwen: format(["qwen", ...(promptPath ? [] : [prompt])], promptPath),
   };
-  const failureArgs = updateResultPath ? ["--update-result", updateResultPath] : [];
   const handoffCommands = {
     external,
-    embedded: format(["openclaw", "triage", "--run", ...failureArgs]),
-    retry: format([
-      "openclaw",
-      "triage",
-      ...(handoffAgent ? ["--agent", handoffAgent] : []),
-      ...failureArgs,
-    ]),
+    embedded: format(["openclaw", "triage", "--run"]),
+    retry: format(["openclaw", "triage", ...(handoffAgent ? ["--agent", handoffAgent] : [])]),
   };
   const suggestedCommands = [
     ...TRIAGE_EXTERNAL_AGENTS.map((agent) => handoffCommands.external[agent]),
@@ -430,7 +417,7 @@ async function runTriage(
   }
   if (declined || !allowAgent || runEmbedded || !handoff) {
     const useEmbeddedCommand =
-      runEmbedded || (!allowAgent && updateResultPath !== undefined && !options.agent);
+      runEmbedded || (!allowAgent && updateFailure !== undefined && !options.agent);
     if (declined || !allowAgent) {
       runtime.log("No repair agent was started.");
     }

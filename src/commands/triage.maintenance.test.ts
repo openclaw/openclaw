@@ -86,6 +86,6 @@ it.each(["preserve", "verify-running"] as const)(
     expect(mocks.turn).not.toHaveBeenCalled();
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("No repair agent was started.");
-    expect(output).toContain("openclaw triage --run --update-result");
+    expect(output).toContain("openclaw triage --run");
   },
 );

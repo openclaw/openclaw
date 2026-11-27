@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
-import { resolveStateDir } from "../../config/paths.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
-import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
-import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
@@ -128,31 +124,13 @@ export async function prepareUpdateCommandFailureTriage(
             error: formatErrorMessage(error),
           };
       if (target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
-        try {
-          const meta = await readControlPlaneUpdateSentinelMeta(target.env);
-          if (!meta?.triageContextPath) {
-            throw new Error("Managed update triage context path is unavailable.", { cause: error });
-          }
-          const updateResultPath = await writeTriageUpdateFailure(failure, {
-            env: target.env,
-            ...(meta?.triageContextPath ? { outputPath: meta.triageContextPath } : {}),
-          });
-          defaultRuntime.error(
-            `To start a repair agent, run ${formatInstallationTargetCommand(
-              ["openclaw", "triage", "--run", "--update-result", updateResultPath],
-              resolveInstallationTarget(target.env),
-              { env: target.env },
-            )}`,
-          );
-        } catch (exportError) {
-          const diagnostic = sanitizeTriageUpdateFailure(
-            { error: formatErrorMessage(exportError) },
-            { env: target.env, stateDir: resolveStateDir(target.env) },
-          );
-          defaultRuntime.error(
-            `Managed update failure diagnostics could not be saved: ${diagnostic.error}`,
-          );
-        }
+        defaultRuntime.error(
+          `To start a repair agent, run ${formatInstallationTargetCommand(
+            ["openclaw", "triage", "--run"],
+            resolveInstallationTarget(target.env),
+            { env: target.env },
+          )}`,
+        );
       } else {
         let nextAction: "triage" | "handled" = "triage";
         if (mode === "interactive") {
@@ -160,8 +138,6 @@ export async function prepareUpdateCommandFailureTriage(
             nextAction = await runInteractiveUpdateFailureAction({
               attemptId: updateAttemptId,
               env: opts.run?.env ?? target.env,
-              ...(failure.error ? { error: failure.error } : {}),
-              ...(failure.result ? { result: failure.result } : {}),
               ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,
             });

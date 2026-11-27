@@ -4,16 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   readTriageUpdateFailure,
   sanitizeTriageUpdateFailure,
   updateFailureSchema,
+  type TriageUpdateFailure,
 } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type Failure = Parameters<typeof writeTriageUpdateFailure>[0];
+type Failure = TriageUpdateFailure;
 type Result = Extract<Failure, { result: unknown }>["result"];
 type Plugins = NonNullable<NonNullable<Result["postUpdate"]>["plugins"]>;
 
@@ -26,22 +26,19 @@ describe("update failure triage diagnostics", () => {
     stateDir = path.join(home, ".openclaw");
     env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
   });
-  const write = async (result: Partial<Result>, error?: string) => {
-    const outputPath = await writeTriageUpdateFailure(
+  const sanitize = (result: Partial<Result>, error?: string) => {
+    const failure = sanitizeTriageUpdateFailure(
       { result: { status: "error", mode: "npm", steps: [], ...result }, error },
-      { env },
+      { env, stateDir },
+      "artifact",
     );
-    return {
-      outputPath,
-      raw: await fs.readFile(outputPath, "utf8"),
-      failure: await readTriageUpdateFailure(outputPath, { env, stateDir }),
-    };
+    return { raw: JSON.stringify(failure), failure };
   };
-  const writePlugins = (plugins: Plugins) =>
-    write({ reason: "post-update-plugins", postUpdate: { plugins } });
+  const sanitizePlugins = (plugins: Plugins) =>
+    sanitize({ reason: "post-update-plugins", postUpdate: { plugins } });
 
   it("omits whole words when bounding the swap cause and recovery advice", async () => {
-    const { raw, failure } = await write({
+    const { raw, failure } = sanitize({
       steps: [
         {
           name: "global install swap",
@@ -93,7 +90,7 @@ describe("update failure triage diagnostics", () => {
     },
   );
 
-  it("writes bounded sanitized failure evidence without changing the result", async () => {
+  it("bounds and sanitizes failure evidence without changing the result", () => {
     const secret = "sk-test-update-triage-secret-1234567890";
     const result: UpdateRunResult = {
       runId: "10000000-0000-4000-8000-000000000001",
@@ -132,9 +129,7 @@ describe("update failure triage diagnostics", () => {
       })),
     };
 
-    const { outputPath, raw, failure } = await write(result);
-
-    expect(outputPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
+    const { raw, failure } = sanitize(result);
     expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
     for (const excluded of [secret, home, "unredacted-command", "\uFFFD", "step-4"]) {
       expect(raw).not.toContain(excluded);
@@ -161,9 +156,6 @@ describe("update failure triage diagnostics", () => {
     }
     expect(result.steps).toHaveLength(5);
     expect(result.steps[0]?.command).toContain(secret);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
-    }
   });
 
   const failedStep = (name: string, details: Partial<Result["steps"][number]> = {}) => ({
@@ -194,7 +186,7 @@ describe("update failure triage diagnostics", () => {
       "Unrelated trailing diagnostics.\n".repeat(100),
       "Installation recovery is unverified; preserve backups.",
     ].join("\n");
-    const { raw, failure } = await write({
+    const { raw, failure } = sanitize({
       steps: [failedStep("openclaw doctor", { stderrTail, termination: "exit" })],
     });
     const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
@@ -239,7 +231,7 @@ describe("update failure triage diagnostics", () => {
       `    at checkpoint (${home}/${'🦞 "context" '.repeat(1000)}/state.mjs:51:10)`,
       "    at laterFrame (state.mjs:53:128)",
     ].join("\n");
-    const { raw, failure } = await write({
+    const { raw, failure } = sanitize({
       steps: [failedStep("openclaw doctor", { stderrTail })],
     });
     const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
@@ -258,7 +250,7 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("keeps the failure that started recovery when recovery steps also fail", async () => {
-    const { failure } = await write({
+    const { failure } = sanitize({
       reason: "state-migrated-no-rollback",
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [
@@ -362,7 +354,7 @@ describe("update failure triage diagnostics", () => {
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [],
     };
-    const { failure: recorded } = await write(
+    const { failure: recorded } = sanitize(
       result,
       `Gateway activation failed ${"intermediate context ".repeat(100)}terminal recovery cause`,
     );
@@ -372,7 +364,7 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
-    const { raw, failure } = await writePlugins({
+    const { raw, failure } = sanitizePlugins({
       status: "error",
       sync: { errors: ["Plugin sync failed"] },
       npm: {
@@ -391,7 +383,7 @@ describe("update failure triage diagnostics", () => {
 
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {
     const errors = ["Earlier failure one", "Earlier failure two", "Earlier failure three"];
-    const { failure: recorded } = await writePlugins({
+    const { failure: recorded } = sanitizePlugins({
       status: "error",
       sync: { errors },
       warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],

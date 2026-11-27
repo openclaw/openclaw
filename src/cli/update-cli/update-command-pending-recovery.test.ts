@@ -15,7 +15,6 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -200,7 +199,6 @@ function pendingPackageInvocation(
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
-      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
