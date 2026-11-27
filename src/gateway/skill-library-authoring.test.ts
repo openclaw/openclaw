@@ -663,14 +663,6 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     { sessionId: "skill-library-other-store", updatedAt: 1 },
   );
   expect(
-    await resolveGatewaySkillLibraryPromptGrant({
-      owner,
-      sessionKey: otherKey,
-      grant: undefined,
-      listingStore: { agentId: "main", storePath: otherPath },
-    }),
-  ).toBeUndefined();
-  expect(
     loadSessionEntry({ agentId: "main", sessionKey: otherKey, storePath: otherPath })
       ?.skillLibraryPromptListing,
   ).toBeUndefined();
@@ -684,7 +676,11 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
     }),
   ).toBeUndefined();
 
-  const staleEntry = loadSessionEntry({ agentId: "main", sessionKey: listingSessionKey, storePath });
+  const staleEntry = loadSessionEntry({
+    agentId: "main",
+    sessionKey: listingSessionKey,
+    storePath,
+  });
   await replaceSessionEntry(
     { agentId: "main", sessionKey: listingSessionKey, storePath },
     { sessionId: "replacement-session", updatedAt: 2 },

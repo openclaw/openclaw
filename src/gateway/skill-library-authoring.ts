@@ -5,12 +5,16 @@ import {
 import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { isSessionDeliveryGenerationRevokedError } from "../config/sessions/session-delivery-generation.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { acquireTranscriptLease } from "../config/sessions/transcript-lease.js";
 import {
   readSkillLibraryPromptListing,
   type SkillLibraryPromptListing,
 } from "../config/sessions/skill-library-prompt-listing.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
@@ -49,64 +53,57 @@ function listingsMatch(
   );
 }
 
-async function readCommittedPromptListing(params: {
-  sessionKey: string;
-  storedListing?: unknown;
-  sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
-  listingStore?: { agentId?: string; storePath?: string };
-}): Promise<{ listing?: SkillLibraryPromptListing; sessionId?: string }> {
+async function readCommittedPromptListing(
+  params: {
+    sessionKey: string;
+    storedListing?: unknown;
+    sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+    listingStore?: { agentId: string; storePath: string };
+  },
+  assertCurrent: () => void,
+): Promise<{ listing?: SkillLibraryPromptListing; hasRow: boolean }> {
   const passed = readSkillLibraryPromptListing(
     params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing,
   );
   const store = params.listingStore;
-  if (!store || (!store.agentId && !store.storePath)) {
-    return { listing: passed };
+  if (!store) {
+    return { listing: passed, hasRow: false };
   }
   // The captured store is the physical owner. The session worker serves its
   // published row, including a retained fact, so this turn does not open the
   // agent database on the Gateway thread. A missing row has nothing published yet.
-  const owned = await readSessionEntryReadOnlyInWorker({
-    sessionKey: params.sessionKey,
-    ...(store.agentId ? { agentId: store.agentId } : {}),
-    ...(store.storePath ? { storePath: store.storePath } : {}),
-  });
-  if (params.sessionEntry?.sessionId && owned?.sessionId !== params.sessionEntry.sessionId) {
-    throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library session changed. Retry.");
-  }
+  const owned = await readSessionEntryReadOnlyInWorker(
+    { ...store, sessionKey: params.sessionKey },
+    assertCurrent,
+  );
   // An explicitly selected store with no row cannot inherit a caller's old listing.
   return {
     listing: readSkillLibraryPromptListing(owned?.skillLibraryPromptListing),
-    sessionId: owned?.sessionId,
+    hasRow: owned !== undefined,
   };
 }
 
 async function commitSkillLibraryPromptListing(
   sessionKey: string,
-  store: { agentId?: string; storePath?: string },
-  expectedSessionId: string,
+  store: { agentId: string; storePath: string },
   listing: SkillLibraryPromptListing | undefined,
   assertCurrent: () => void,
+  assertSourceCurrent: SessionSourceAssertion,
 ) {
-  if (!store.agentId && !store.storePath) {
-    return null;
-  }
   return await patchSessionEntryCore(
     {
       sessionKey,
-      ...(store.agentId ? { agentId: store.agentId } : {}),
-      ...(store.storePath ? { storePath: store.storePath } : {}),
+      agentId: store.agentId,
+      storePath: store.storePath,
     },
     (entry) => {
-      if (entry.sessionId !== expectedSessionId) {
-        throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library session changed. Retry.");
-      }
       const current = readSkillLibraryPromptListing(entry.skillLibraryPromptListing);
       if (listingsMatch(current, listing)) {
         return null;
       }
       return { skillLibraryPromptListing: listing };
     },
-    { assertCommitAllowed: assertCurrent },
+    { assertCommitAllowed: assertCurrent, workerGuard: { source: assertSourceCurrent } },
   );
 }
 
@@ -171,8 +168,12 @@ export async function prepareGatewaySkillLibraryTurn(
     grant: TurnGrant | undefined;
     sessionKey: string;
     storedListing?: unknown;
-    sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
-    listingStore?: { agentId?: string; storePath?: string };
+    sessionEntry?: {
+      sessionId?: string;
+      lifecycleRevision?: string;
+      skillLibraryPromptListing?: SkillLibraryPromptListing;
+    };
+    listingStore?: { agentId: string; storePath: string };
   },
   prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
   onAuthoring: () => void,
@@ -194,45 +195,80 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   grant: TurnGrant | undefined;
   prepared?: PreparedSkillLibrarySession;
   storedListing?: unknown;
-  sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
-  listingStore?: { agentId?: string; storePath?: string };
+  sessionEntry?: {
+    sessionId?: string;
+    lifecycleRevision?: string;
+    skillLibraryPromptListing?: SkillLibraryPromptListing;
+  };
+  listingStore?: { agentId: string; storePath: string };
 }): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const stored = await readCommittedPromptListing(params);
-  const storedListing = stored.listing;
-  let next = storedListing;
-  let live: SkillLibraryAuthoringCapability | undefined;
-  if (grantsSkillAuthoring(params.owner, params.grant)) {
-    live = await prepareGatewaySkillAuthoring(
-      params.owner,
-      params.sessionKey,
-      params.grant,
-      params.prepared,
-    );
+  const store = params.listingStore;
+  let lease: Awaited<ReturnType<typeof acquireTranscriptLease>> | undefined;
+  try {
+    // A captured row pins its own transcript. Otherwise observe the selected
+    // physical store, then let acquisition revalidate that row or its absence.
+    const observed =
+      store && !params.sessionEntry?.sessionId
+        ? await readSessionEntryReadOnlyInWorker({ ...store, sessionKey: params.sessionKey })
+        : undefined;
+    const pin = params.sessionEntry?.sessionId ? params.sessionEntry : observed;
+    lease = store
+      ? await acquireTranscriptLease(
+          chatRef({ ...store, sessionKey: params.sessionKey }),
+          { sessionId: pin?.sessionId ?? null, lifecycleRevision: pin?.lifecycleRevision },
+        )
+      : undefined;
+    const stored = await readCommittedPromptListing(params, lease?.assertCurrent ?? (() => {}));
+    const storedListing = stored.listing;
+    let next = storedListing;
+    let live: SkillLibraryAuthoringCapability | undefined;
+    if (grantsSkillAuthoring(params.owner, params.grant)) {
+      live = await prepareGatewaySkillAuthoring(
+        params.owner,
+        params.sessionKey,
+        params.grant,
+        params.prepared,
+      );
+      if (live) {
+        next = { multipleProfiles: live.multipleProfiles, defaultTarget: live.defaultTarget };
+      } else {
+        next = undefined;
+      }
+    }
+    // The caller's entry is an immutable snapshot. Persistence returns the owner's
+    // committed row, and this turn reads the listing from that result.
+    let listingForTurn = next;
+    if (store && stored.hasRow && !listingsMatch(storedListing, next)) {
+      const saved = await commitSkillLibraryPromptListing(
+        params.sessionKey,
+        store,
+        next,
+        libraryAuthority(params.owner).assertCurrent,
+        lease!.assertCurrent,
+      );
+      if (saved) {
+        listingForTurn = readSkillLibraryPromptListing(saved.skillLibraryPromptListing);
+      }
+    }
     if (live) {
-      next = { multipleProfiles: live.multipleProfiles, defaultTarget: live.defaultTarget };
-    } else {
-      next = undefined;
+      lease?.assertCurrent();
+      return live;
     }
-  }
-  // The caller's entry is an immutable snapshot. Persistence returns the owner's
-  // committed row, and this turn reads the listing from that result.
-  let listingForTurn = next;
-  if (params.listingStore && stored.sessionId && !listingsMatch(storedListing, next)) {
-    const saved = await commitSkillLibraryPromptListing(
-      params.sessionKey,
-      params.listingStore,
-      stored.sessionId,
-      next,
-      libraryAuthority(params.owner).assertCurrent,
-    );
-    if (saved) {
-      listingForTurn = readSkillLibraryPromptListing(saved.skillLibraryPromptListing);
+    lease?.assertCurrent();
+    return listingForTurn ? createRefusedSkillLibraryAuthoring(listingForTurn) : undefined;
+  } catch (error) {
+    if (isSessionDeliveryGenerationRevokedError(error)) {
+      throw new SkillLibraryError(
+        "AUTHORITY_EXPIRED",
+        "This turn's session authority expired. Retry the request.",
+        undefined,
+        { cause: error },
+      );
     }
+    throw error;
+  } finally {
+    lease?.release();
   }
-  if (live) {
-    return live;
-  }
-  return listingForTurn ? createRefusedSkillLibraryAuthoring(listingForTurn) : undefined;
 }
 
 /** The turn's admitted grant mints the namespace; actions remain normal tool policy. */
