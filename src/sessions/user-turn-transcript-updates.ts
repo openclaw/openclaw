@@ -142,6 +142,8 @@ type ModelPromptProjectionParams = {
   text: string;
   assertCurrent: () => void;
   assertWritable: () => void;
+  /** The turn already reached a provider: with no projection, its transcript text is frozen. */
+  dispatched: boolean;
   onCommitted: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -153,6 +155,9 @@ export function preparePersistedModelPromptProjection(
 ): PreparedModelPromptProjection | undefined {
   if (readModelPromptProjection(params.message) !== undefined) {
     prepareModelPromptProjection(params.message, params.text);
+    return undefined;
+  }
+  if (params.dispatched) {
     return undefined;
   }
   params.assertWritable();
