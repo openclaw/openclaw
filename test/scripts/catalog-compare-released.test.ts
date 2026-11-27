@@ -260,6 +260,30 @@ exit 0
   // search found no refresh there and failed every publish from 2026-11-19.
   const V3_READER = "function validateAndSanitizeRemoteModelCatalogBundleV3(e){return e}";
   const MINIFIED_CHUNK = `const t=1;${V3_READER}async function refreshRemoteModelCatalog(e){return{status:\`updated\`,models:1}}function captureRuntimeConfigAsyncReader(){return async()=>({})}export{refreshRemoteModelCatalog as n,captureRuntimeConfigAsyncReader as r,t};`;
+  const CONFIG_ENTRY = "export function captureRuntimeConfigAsyncReader(){return async()=>({})}";
+  // Plugin loading dials the release's native resource broker at /tmp/oc-br-*/resource.sock;
+  // redirected to the fake upstream, it read HTTP bytes as a frame length and no plugin loaded.
+  const BROKER_SOCKET_REFRESH = `import fs from "node:fs"; import net from "node:net";
+export async function refreshRemoteModelCatalog() {
+  const dir = fs.mkdtempSync("/tmp/oc-br-");
+  const endpoint = dir + "/resource.sock";
+  const broker = net.createServer((socket) => socket.on("data", (data) => socket.end("echo " + data)));
+  await new Promise((resolve) => broker.listen(endpoint, resolve));
+  const reply = await new Promise((resolve, reject) => {
+    let text = "";
+    net.connect(endpoint).on("data", (chunk) => (text += chunk)).on("end", () => resolve(text)).on("error", reject).end("ping");
+  });
+  broker.close();
+  fs.rmSync(dir, { recursive: true });
+  if (reply !== "echo ping") throw new Error("broker socket reply: " + reply);
+  return { status: "updated", models: 1 };
+}`;
+  // A released PluginLoadFailureError carries its plugin registry; Node's dump of it filled
+  // the reported log tail and hid the message.
+  const REGISTRY_ERROR_REFRESH = `export async function refreshRemoteModelCatalog() {
+  const plugins = Array.from({ length: 40 }, (_, index) => ({ id: "plugin-" + index, status: "error", error: "AggregateError: Native resource creation cleanup failed" }));
+  throw Object.assign(new Error("plugin load failed", { cause: new Error("first real error") }), { registry: { plugins } });
+}`;
   it.each([
     ["runs a whitespace-minified release's refresh", { "chunk-a1.mjs": MINIFIED_CHUNK }, undefined],
     [
@@ -268,10 +292,27 @@ exit 0
         "chunk-a1.mjs": V3_READER,
         "model-catalog/remote-refresh.js":
           "export async function refreshRemoteModelCatalog(){return{status:'updated',models:1}}",
-        "config/config.js":
-          "export function captureRuntimeConfigAsyncReader(){return async()=>({})}",
+        "config/config.js": CONFIG_ENTRY,
       },
       undefined,
+    ],
+    [
+      "lets the release reach its own native resource broker socket",
+      {
+        "chunk-a1.mjs": V3_READER,
+        "model-catalog/remote-refresh.js": BROKER_SOCKET_REFRESH,
+        "config/config.js": CONFIG_ENTRY,
+      },
+      undefined,
+    ],
+    [
+      "reports a reader failure by its message and causes, not its properties",
+      {
+        "chunk-a1.mjs": V3_READER,
+        "model-catalog/remote-refresh.js": REGISTRY_ERROR_REFRESH,
+        "config/config.js": CONFIG_ENTRY,
+      },
+      /Error: plugin load failed\n[\s\S]*\[cause\] Error: first real error/,
     ],
     [
       "fails a v3 reader whose stable entry lost the refresh",
@@ -329,7 +370,7 @@ exit 0
       );
       if (expectedError) {
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(expectedError);
+        expect(result.stderr).toMatch(expectedError);
       } else {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe("v3 on openclaw@2099.1.1: updated, 1/1 rows");

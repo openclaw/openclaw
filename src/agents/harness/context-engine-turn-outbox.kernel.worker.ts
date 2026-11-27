@@ -77,7 +77,7 @@ function writeContextEngineTurnOutboxPayload(
       ? params.payload.admission
       : params.payload.boundary.admission;
   const advancementKey = admission.logicalTurnId;
-  const payloadJson = JSON.stringify(params.payload);
+  let payloadJson = JSON.stringify(params.payload);
   const existing = executeSqliteQueryTakeFirstSync(
     params.database.db,
     db
@@ -98,6 +98,13 @@ function writeContextEngineTurnOutboxPayload(
         existingPayload.boundary.admission.entryId === admission.entryId &&
         existingPayload.boundary.terminal.entryId === params.payload.boundary.terminal.entryId);
     if (transitionMatches) {
+      if (params.payload.state === "ready" && existingPayload.state === "accepted") {
+        // Publication cannot replace or erase the source committed at acceptance.
+        payloadJson = JSON.stringify({
+          ...params.payload,
+          operatorSource: existingPayload.operatorSource,
+        });
+      }
       executeSqliteQuerySync(
         params.database.db,
         db
@@ -154,6 +161,7 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
       boundary: params.boundary,
       state: "accepted",
       runtimeContext: params.runtimeContext,
+      operatorSource: params.operatorSource,
     },
   });
 }
@@ -246,6 +254,7 @@ function advanceAcceptedContextEngineTurn(
       boundary: payload.boundary,
       messages: closedTurn.messages,
       runtimeContext: payload.runtimeContext,
+      operatorSource: payload.operatorSource,
     },
   });
   return closedTurn.kind;

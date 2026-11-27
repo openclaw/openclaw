@@ -58,8 +58,6 @@ type SubscribeEmbeddedAgentSessionFn =
   typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession;
 type GuardSessionManagerFn =
   typeof import("../../session-tool-result-guard-wrapper.js").guardSessionManager;
-type ShouldPreemptivelyCompactBeforePromptFn =
-  typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 type CreateCodingToolsFn = (
   ...args: Parameters<typeof import("../../agent-tools.js").createOpenClawCodingToolsInternal>
 ) => unknown;
@@ -160,10 +158,6 @@ const hoisted = vi.hoisted(() => {
     limitHistoryTurnsMock: vi.fn<<T>(messages: T, limit: number | undefined) => T>(
       (messages) => messages,
     ),
-    preemptiveCompactionCalls: Array<Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0]>(),
-    compactionReserveTokens: 0,
-    systemPromptTexts: Array<string>(),
-    embeddedSystemPromptInputs: Array<unknown>(),
     trajectoryEvents: Array<CapturedTrajectoryEvent>(),
     sessionManager,
   };
@@ -340,7 +334,7 @@ vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
     getCompactionEnabled: () => true,
-    getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
+    getCompactionReserveTokens: () => 0,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultThinkingLevel: () => undefined,
     getBlockImages: () => false,
@@ -389,10 +383,7 @@ vi.mock("./images.js", () => ({
 
 vi.mock("../../system-prompt-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-prompt-config.js")>()),
-  buildConfiguredAgentSystemPrompt: (params: unknown) => {
-    hoisted.embeddedSystemPromptInputs.push(params);
-    return "system prompt";
-  },
+  buildConfiguredAgentSystemPrompt: () => "system prompt",
 }));
 
 vi.mock("../extra-params.js", async () => {
@@ -503,19 +494,6 @@ vi.mock("../cache-ttl.js", () => ({
 vi.mock("../compaction-runtime-context.js", () => ({
   buildEmbeddedCompactionRuntimeContext: () => ({}),
 }));
-
-vi.mock("./preemptive-compaction.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./preemptive-compaction.js")>();
-  return {
-    ...actual,
-    shouldPreemptivelyCompactBeforePrompt: (
-      params: Parameters<typeof actual.shouldPreemptivelyCompactBeforePrompt>[0],
-    ) => {
-      hoisted.preemptiveCompactionCalls.push(params);
-      return actual.shouldPreemptivelyCompactBeforePrompt(params);
-    },
-  };
-});
 
 vi.mock("../compaction-safety-timeout.js", () => ({
   resolveCompactionTimeoutMs: () => undefined,
@@ -688,10 +666,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
-  hoisted.preemptiveCompactionCalls.length = 0;
-  hoisted.compactionReserveTokens = 0;
-  hoisted.systemPromptTexts.length = 0;
-  hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
 }
@@ -790,7 +764,6 @@ export function createDefaultEmbeddedSession(params?: {
       activeToolNames = [...toolNames];
     },
     setBaseSystemPrompt: (systemPrompt) => {
-      hoisted.systemPromptTexts.push(systemPrompt);
       session.agent.state.systemPrompt = systemPrompt;
     },
     prompt: async (prompt, options) => {
@@ -912,7 +885,6 @@ export async function createContextEngineAttemptRunner(params: {
         prompt: params.sessionPrompt,
       });
     session.agent.state.systemPrompt = options.systemPrompt;
-    hoisted.systemPromptTexts.push(options.systemPrompt);
     session.agent.state.tools = (options.customTools ?? [])
       .filter((tool) => options.tools.includes(tool.name))
       .map((tool) => wrapToolDefinition(tool));

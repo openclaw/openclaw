@@ -218,8 +218,8 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
     ? JSON.parse(env.PREPARED_PUBLICATION_INPUT)
     : {};
   const corePluginDeferrals = preparedInput.corePluginDeferrals;
-  const fastTrackDigest = env.FAST_TRACK_APPROVAL_JSON
-    ? fastTrackPacketDigest(env.FAST_TRACK_APPROVAL_JSON)
+  const fastTrackDigest = env.FAST_TRACK_REQUEST_JSON
+    ? fastTrackPacketDigest(env.FAST_TRACK_REQUEST_JSON)
     : undefined;
   if (
     corePluginDeferrals !== undefined &&
@@ -243,10 +243,10 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
   if (approvals.length === 0) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
-  if (env.FAST_TRACK_APPROVAL_JSON) {
+  if (env.FAST_TRACK_REQUEST_JSON) {
     // Environment approval may wait past the preflight's expiry check. Minting
     // this receipt starts publication; only an existing receipt can replay it.
-    const packet = JSON.parse(env.FAST_TRACK_APPROVAL_JSON);
+    const packet = JSON.parse(env.FAST_TRACK_REQUEST_JSON);
     const expiresAt = packet?.request?.expiresAt;
     if (
       typeof expiresAt !== "string" ||
@@ -254,7 +254,7 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
       Date.parse(expiresAt) <= Date.now()
     ) {
       throw new Error(
-        "Fast-track request expired before publication admission. Obtain fresh explicit approval.",
+        "Fast-track request expired before publication admission. Prepare a fresh request for npm-release approval.",
       );
     }
   }
@@ -297,8 +297,8 @@ export function verifyReleaseApprovalReceipt({
   artifact,
 }) {
   validateReleaseApprovalReceipt(receipt);
-  const expectedFastTrackDigest = expected.fastTrackApproval
-    ? fastTrackPacketDigest(expected.fastTrackApproval)
+  const expectedFastTrackDigest = expected.fastTrackRequest
+    ? fastTrackPacketDigest(expected.fastTrackRequest)
     : undefined;
   if (receipt.fastTrackDigest !== expectedFastTrackDigest) {
     throw new Error("Release approval receipt fast-track packet does not match this publication.");
@@ -392,8 +392,8 @@ async function readReleaseApprovalReceipt({
   // Programmatic consumers share the workflow input boundary with the CLI.
   const expected = {
     ...inputExpected,
-    fastTrackApproval:
-      inputExpected.fastTrackApproval ?? (process.env.FAST_TRACK_APPROVAL_JSON || undefined),
+    fastTrackRequest:
+      inputExpected.fastTrackRequest ?? (process.env.FAST_TRACK_REQUEST_JSON || undefined),
   };
   const name = releaseApprovalArtifactName(expected);
   const runPath = `actions/runs/${expected.parentRunId}/attempts/${expected.parentRunAttempt}`;
@@ -574,7 +574,7 @@ async function main() {
         ...(env.RELEASE_TARGET_SHA ? { targetSha: env.RELEASE_TARGET_SHA } : {}),
         ...(env.RELEASE_NPM_DIST_TAG ? { npmDistTag: env.RELEASE_NPM_DIST_TAG } : {}),
         parentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY || "active",
-        fastTrackApproval: env.FAST_TRACK_APPROVAL_JSON || undefined,
+        fastTrackRequest: env.FAST_TRACK_REQUEST_JSON || undefined,
       },
       token: env.GH_TOKEN,
     });

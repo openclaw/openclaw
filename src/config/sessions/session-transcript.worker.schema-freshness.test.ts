@@ -121,8 +121,16 @@ it("borrows canonical writer proof without a native reader and still fences fore
     const { sessionKey } = scope;
     const retained = getOpenClawAgentDatabaseValidationForTransfer(database);
     assert(retained);
-    const { agentId, identity, birthtime, receiptId, valid, canonicalReady } = retained;
-    const validation = { agentId, identity, birthtime, receiptId, valid, canonicalReady };
+    const { agentId, identity, birthtime, receiptId, valid, revokedBy, canonicalReady } = retained;
+    const validation = {
+      agentId,
+      identity,
+      birthtime,
+      receiptId,
+      valid,
+      revokedBy,
+      canonicalReady,
+    };
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
     // A reader worker starts without the writer's process-local validation metadata.
     releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);

@@ -12,8 +12,12 @@ import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
-import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
-import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
+import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import {
+  createPresenceBroadcast,
+  type PreparePresenceProjection,
+  type PresenceDelivery,
+} from "./presence-delivery.js";
 import { SerializedGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
@@ -32,6 +36,7 @@ import {
 } from "./server-broadcast-scopes.js";
 import type {
   SessionEventProjection,
+  PrepareSessionEventProjection,
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -162,16 +167,11 @@ function frameWithSequence(
 
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
-  // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
-  preparePresenceProjection?: (
-    presence: SystemPresence[],
-  ) => (client: GatewayWsClient) => SystemPresence[];
+  preparePresenceProjection?: PreparePresenceProjection;
   prepareSessionEventProjection?: (
     event: string,
     payload: unknown,
-    scope: {
-      sessionKeys: readonly string[];
-      agentId?: string;
+    scope: Parameters<PrepareSessionEventProjection>[2] & {
       prepareSessionProjection?: GatewayBroadcastOpts["prepareSessionProjection"];
     },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
@@ -288,8 +288,7 @@ export function createGatewayBroadcaster(params: {
             sessionKeys.every((key) => key.trim().length > 0)) ||
           metadataInvalidation != null ||
           isSessionReadInvalidation(event, payload, isTargeted)));
-    let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
-    let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
+    let projectPresence: ReturnType<typeof createPresenceBroadcast> | undefined;
     let sessionFragments: Map<unknown, string | EncodedSessionPayload> | undefined;
     let projectSession: ReturnType<NonNullable<typeof params.prepareSessionEventProjection>>;
     let skipSourcePayload = false;
@@ -342,10 +341,14 @@ export function createGatewayBroadcaster(params: {
         event === "question.requested" || event === "question.resolved"
           ? opts?.questionRecipient
           : undefined;
-      const ownRunQuestion =
-        questionRecipient !== undefined &&
-        !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
-      if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion, hasSessionReadContext)) {
+      const approvalRecipient = isTargeted ? opts?.participationApprovalRecipient : undefined;
+      if (
+        !hasEventScope(c, event, explicitPluginScope, {
+          ownRunQuestion: questionRecipient !== undefined,
+          hasSessionReadContext,
+          participationApprovalRecipient: approvalRecipient,
+        })
+      ) {
         continue;
       }
       if (
@@ -558,7 +561,7 @@ export function createGatewayBroadcaster(params: {
               : (frames.snapshot ??= frameBaseFor(payload));
       let frame: SerializedGatewayFrame | undefined;
       let delivered: SessionEventProjection["delivered"];
-      let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
+      let presenceDelivery: PresenceDelivery | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -573,6 +576,8 @@ export function createGatewayBroadcaster(params: {
           projectSession = params.prepareSessionEventProjection?.(event, payload, {
             sessionKeys,
             agentId,
+            singleRecipient:
+              (Array.isArray(recipients) ? recipients.length : recipients.size) === 1,
             ...(opts?.prepareSessionProjection
               ? { prepareSessionProjection: opts.prepareSessionProjection }
               : {}),
@@ -585,31 +590,17 @@ export function createGatewayBroadcaster(params: {
           ? ""
           : getDeliveryFrameBase().payloadFragment;
         if (presencePayload) {
-          // Presence contains session references. Only the connection owner's
-          // recipient projection may cross this boundary; never send the raw roster.
-          if (!params.preparePresenceProjection) {
-            throw new Error("presence recipient projection unavailable");
-          }
-          projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
-          // Preserve source reads before checking the recipient's current authority.
-          const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
-          if (acceptsPresenceDeltas(c) && opts?.stateVersion?.presence !== undefined) {
-            presenceDelivery = preparePresenceDelivery(
-              c,
-              presencePayload.presence,
-              projectedPayload.presence,
-              opts.stateVersion.presence,
-            );
-            payloadFragment = presenceDelivery.fragment;
+          projectPresence ??= createPresenceBroadcast(
+            presencePayload,
+            params.preparePresenceProjection,
+            serializeFrameField,
+          );
+          const prepared = projectPresence(c, opts?.stateVersion);
+          if (typeof prepared === "string" || Buffer.isBuffer(prepared)) {
+            payloadFragment = prepared;
           } else {
-            const reusable =
-              Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
-            const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
-            payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
-            if (reusable && typeof payloadFragment === "string") {
-              payloadFragment = Buffer.from(payloadFragment);
-              (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
-            }
+            presenceDelivery = prepared;
+            payloadFragment = prepared.fragment;
           }
         }
         if (projectSession) {
@@ -618,8 +609,9 @@ export function createGatewayBroadcaster(params: {
             continue;
           }
           const fragments = projected.serializeSession && (sessionFragments ??= new Map());
+          const fragmentKey = projected.serializePayload ?? projected.payload;
           payloadFragment =
-            fragments?.get(projected.payload) ||
+            fragments?.get(fragmentKey) ||
             projected.serializePayload?.() ||
             serializeFrameField(
               "payload",
@@ -627,7 +619,7 @@ export function createGatewayBroadcaster(params: {
               projected.serializeSession,
               projected.serializeMessage,
             );
-          fragments?.set(projected.payload, payloadFragment);
+          fragments?.set(fragmentKey, payloadFragment);
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
@@ -670,6 +662,9 @@ export function createGatewayBroadcaster(params: {
           code: 4001,
           message: "gateway policy changed",
         });
+        continue;
+      }
+      if (approvalRecipient && !isCurrent(() => approvalRecipient(c))) {
         continue;
       }
       clientSeq.set(c, nextSeq);

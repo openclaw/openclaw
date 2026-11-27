@@ -17,6 +17,7 @@ import { worktreeRegistryPublication } from "../../src/agents/worktrees/registry
 import type { PendingWorkspaceResultOrphanCleanup } from "../../src/gateway/worker-environments/placement-dispatch-orphan-cleanup.js";
 import { sessionChanges } from "../../src/sessions/session-row-changes.js";
 import { openTrackedStateDatabase } from "../../src/state/openclaw-state-db-handle.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 assert(global.gc, "requires --expose-gc");
 const source =
@@ -98,12 +99,7 @@ try {
     const used = process.threadCpuUsage(cpu);
     global.gc();
     const inspector = new Session();
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
     publish();
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     inspector.disconnect();

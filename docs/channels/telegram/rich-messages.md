@@ -157,8 +157,10 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     - `react` (`chatId`, `messageId`, `emoji`)
     - `emoji-list` (optional `chatId`, `limit`)
     - `deleteMessage` (`chatId`, `messageId`)
-    - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
+    - `editMessage` (`chatId`, `messageId`, plus `content`, `caption`, or a button `presentation`)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
+
+    `editMessage` has no copy of the previous keyboard. To keep a known keyboard when editing text, send the new `content` with the complete `presentation`, including every button and its action. To update only the keyboard, send `chatId`, `messageId`, and the button `presentation`.
 
     Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
 

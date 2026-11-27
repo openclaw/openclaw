@@ -509,7 +509,8 @@ it("grants skill authoring to the first message typed after a Control UI reconne
       await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
       const owned = observe.mock.calls.at(-1)?.[0];
       if (owned) {
-        await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
+        await owned.admission.sourceRef.input.settlement.promise;
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         owned.admission.cleanupAdmittedRun();
         clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
       }

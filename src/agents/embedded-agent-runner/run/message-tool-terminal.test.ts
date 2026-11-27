@@ -54,6 +54,22 @@ function settledResult(sourceReplyDelivered?: boolean): AfterToolCallContext["re
   };
 }
 
+// Invoke within the hook's current accepted input, as the agent runtime does.
+function scoped(f: ReturnType<typeof fixture>) {
+  const completion = getInternalToolTurnCompletion(f.agent);
+  if (!completion) {
+    throw new Error("Message completion owner was not installed");
+  }
+  return {
+    completion,
+    invoke: (input: CallInput) => {
+      const context = createAfterToolCallContext(input);
+      captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
+      return f.agent.afterToolCall?.(context);
+    },
+  };
+}
+
 describe("message-tool-only source replies", () => {
   it.each<[string, CallInput, boolean, HookResult?, Route["sourceReplyDeliveryMode"]?]>([
     ["implicit successful send", {}, true],
@@ -318,6 +334,26 @@ describe("message-tool-only source replies", () => {
       ).toBe(!newInput);
     },
   );
+
+  it("ends the run only once the input before a steer has its own final reply", async () => {
+    const { completion, invoke } = scoped(fixture());
+    const completesTurn = () =>
+      completion({
+        message: createAfterToolCallContext().assistantMessage,
+        toolResults: [],
+        terminalToolCallIds: new Set(),
+        inputScope: getInternalToolTurnInputScope(completion),
+      });
+    await invoke({ toolName: "exec", args: { command: "sleep 25" } });
+    commitInternalToolTurnInput(completion);
+    // The steered input's answer is delivered, but the earlier input is still open.
+    await expect(invoke({ args: { action: "send", message: "4" } })).resolves.toBeUndefined();
+    expect(completesTurn()).toBe(false);
+    await expect(invoke({ args: { action: "send", message: "file content" } })).resolves.toEqual({
+      terminate: true,
+    });
+    expect(completesTurn()).toBe(true);
+  });
 });
 
 describe("already-pending yield after a delivered reply", () => {
@@ -335,21 +371,6 @@ describe("already-pending yield after a delivered reply", () => {
     args: { action: "send", message: "progress reply", final: false },
     result: settledResult(true),
   };
-  // Invoke within the hook's current accepted input, as the agent runtime does.
-  function scoped(f: ReturnType<typeof fixture>) {
-    const completion = getInternalToolTurnCompletion(f.agent);
-    if (!completion) {
-      throw new Error("Message completion owner was not installed");
-    }
-    return {
-      completion,
-      invoke: (input: CallInput) => {
-        const context = createAfterToolCallContext(input);
-        captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
-        return f.agent.afterToolCall?.(context);
-      },
-    };
-  }
 
   it.each([true, false])("ends the turn only after a delivered reply (sent %s)", async (sent) => {
     const { invoke } = scoped(fixture());

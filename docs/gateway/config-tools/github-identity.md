@@ -19,6 +19,11 @@ their own conversation in a public project without a worktree, a PR, or GitHub
 credentials in the sandbox. Success returns the issue URL. If the result is
 unconfirmed, check the project’s issues before trying again.
 
+To leave a top-level comment in that project's repository, call `github_publish`
+with `action: "create_comment"`, `issueNumber`, and a Markdown `body`. The Gateway
+requires approval and returns the comment URL. Check the thread before retrying
+an unconfirmed result.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with

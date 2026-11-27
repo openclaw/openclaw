@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
@@ -11,6 +10,7 @@ import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease as withLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { getOpenClawAgentMigrationSchema as migrationSchema } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema as ensureDatabase } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V27_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitness } from "./openclaw-migration-witness.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
@@ -23,15 +23,10 @@ import {
 } from "./schema-migration.test-support.js";
 
 // Frozen v27 plus the three published v28 DDL changes; independent of candidate transforms.
-const schemaV28 = fs
-  .readFileSync(
-    new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-    "utf8",
-  )
-  .replace(
-    "ON session_windows(primary_conversation_id, updated_at DESC, session_id)",
-    "ON session_windows(primary_conversation_id)",
-  )
+const schemaV28 = OPENCLAW_AGENT_SCHEMA_V27_SQL.replace(
+  "ON session_windows(primary_conversation_id, updated_at DESC, session_id)",
+  "ON session_windows(primary_conversation_id)",
+)
   .replace(
     `CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
   ON transcript_event_identities(session_id, parent_id)
@@ -82,7 +77,10 @@ function indexDefinitions(database: DatabaseSync) {
 
 function retained(database: DatabaseSync) {
   return {
-    nodes: rows(database, "SELECT * FROM session_nodes ORDER BY session_key"),
+    // v45 adds the nullable Archive Undo marker after this step; compare the retained columns.
+    nodes: rows(database, "SELECT * FROM session_nodes ORDER BY session_key").map(
+      ({ archive_undo_marker: _archiveUndoMarker, ...node }) => node,
+    ),
     reactions: rows(database, "SELECT * FROM session_reactions ORDER BY identity_id"),
   };
 }

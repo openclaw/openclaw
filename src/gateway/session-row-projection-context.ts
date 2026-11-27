@@ -278,20 +278,23 @@ export function createSessionRowProjectionContext(
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        const childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const previous = row.materialized;
+        const links = readChildLinks(row);
         const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
-        const swarmChanged = !isDeepStrictEqual(row.materialized.row.swarm, swarm);
-        const childrenChanged = !isDeepStrictEqual(row.materialized.source.childLinks, childLinks);
+        const swarmChanged = !isDeepStrictEqual(previous.row.swarm, swarm);
+        const childrenChanged = links !== previous.source.childLinks;
         if (swarmChanged || childrenChanged) {
           row.materialized = replaceSessionRowFacts(
-            row.materialized,
+            previous,
             swarmChanged ? { swarm } : undefined,
-            childrenChanged ? { childLinks } : undefined,
+            childrenChanged
+              ? { childLinks: projectSessionRowChildLinks(links, previous.source.childLinks) }
+              : undefined,
           );
         }
         row.subagentRevision = subagentRevision;

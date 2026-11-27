@@ -49,6 +49,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -66,11 +67,14 @@ const loadToolAvailabilityRuntime = createLazyRuntimeModule(
   () => import("../../agents/tool-availability-explanation.js"),
 );
 const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
-  const [command, identity] = await Promise.all([
+  const [command, identity, readIngressSenderAdmission] = await Promise.all([
     import("../../agents/agent-command.js"),
     import("../../agents/agent-command-execution-identity.js"),
+    import("../../gateway/operator-admission.js").then(
+      (admission) => admission.readIngressSenderAdmission,
+    ),
   ]);
-  return { command, identity };
+  return { command, identity, readIngressSenderAdmission };
 });
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
@@ -288,19 +292,32 @@ export function createRuntimeAgent(
   defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
     createLazyRuntimeMethod(
       loadAgentCommandRuntime,
-      ({ command, identity }) =>
+      ({ command, identity, readIngressSenderAdmission }) =>
         async (
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
-        ) =>
-          await command.agentCommandFromGatewayIngress(
+        ) => {
+          if (opts.senderIsOwner === true) {
+            warnPluginSdkDeprecation({
+              family: "ingress-owner-claim",
+              method: "runCommandFromIngress({ senderIsOwner })",
+              replacement: "runContext.senderId",
+              pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+              compatibility: "The host ignores the claim and decides owner from the sender.",
+            });
+          }
+          return await command.agentCommandFromGatewayIngress(
             {
               ...identity.sanitizePublicAgentCommandIngressOpts(opts),
-              senderIsOwner: opts.senderIsOwner === true,
+              senderIsOwner: readIngressSenderAdmission(config.current({ clone: true }), {
+                ...opts,
+                senderId: opts.runContext?.senderId,
+              }).grant.owner,
             },
             runtime,
             undefined,
-          ),
+          );
+        },
     ),
   );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>

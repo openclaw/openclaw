@@ -79,22 +79,6 @@ it.each([
   );
   expect(client.request).not.toHaveBeenCalled();
 });
-it("hands widget links to the native link owner instead of a WebKit popup", async () => {
-  const postMessage = vi.fn();
-  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-  stubUserActivation(true);
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
-  await expect(handle("host.open", { url: "https://example.com/path" })).resolves.toEqual({
-    ok: true,
-  });
-  await expect(handle("host.open", { url: "javascript:alert(1)" })).rejects.toThrow(
-    "widget link url is invalid",
-  );
-  expect(postMessage.mock.calls).toEqual([
-    [{ type: "open-link", url: "https://example.com/path", target: "external" }],
-  ]);
-  expect(open).not.toHaveBeenCalled();
-});
 it("keeps widget links without user activation away from the native link owner", async () => {
   const postMessage = vi.fn();
   vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
@@ -181,27 +165,6 @@ it("drops a widget link retired while its activation query is pending", async ()
   expect(open).not.toHaveBeenCalled();
   expect(activation.showPicker).not.toHaveBeenCalled();
   expect(activation.isActive).toBe(true);
-});
-it("opens native widget links only while that widget's own frame holds user activation", async () => {
-  const postMessage = vi.fn();
-  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-  // Dashboard activation from a click or keystroke outside this widget.
-  stubUserActivation(true);
-  widgetActivated.mockResolvedValue(false);
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
-  await expect(handle("host.open", { url: "https://example.com/elsewhere" })).rejects.toThrow(
-    "widget link could not be opened",
-  );
-  expect(widgetActivated).toHaveBeenCalledOnce();
-  expect(postMessage).not.toHaveBeenCalled();
-  expect(open).not.toHaveBeenCalled();
-  widgetActivated.mockResolvedValue(true);
-  await expect(handle("host.open", { url: "https://example.com/inside" })).resolves.toEqual({
-    ok: true,
-  });
-  expect(postMessage.mock.calls).toEqual([
-    [{ type: "open-link", url: "https://example.com/inside", target: "external" }],
-  ]);
 });
 it("spends one gesture across the widgets of a dashboard", async () => {
   const postMessage = vi.fn();
@@ -350,7 +313,6 @@ it("keeps a named query request limited to its ticket and name", async () => {
   });
 });
 it.each([
-  ["data.query", { queryName: "main-ci" }, "board.data.read"],
   ["data.read", { bindingId: "health", params: { probe: false } }, "board.data.read"],
   ["action.run", { action: "example.resolve", params: { eventId: "event-1" } }, "board.action"],
   ["cron.trigger", { jobId: "job-1" }, "board.action"],

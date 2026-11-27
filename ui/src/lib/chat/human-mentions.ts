@@ -7,6 +7,26 @@ export { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/hu
 /** Carries recipient spans beside plain text; "@Name" alone never binds a person. */
 export const HUMAN_MENTION_CLIPBOARD_TYPE = "application/x-openclaw-mentions";
 
+/** Existing members are mentions, not new invitation requests. */
+export function withoutMemberInvitations(
+  mentions: readonly HumanMention[] | undefined,
+  members: readonly { identityId: string }[] | undefined,
+): readonly HumanMention[] | undefined {
+  if (!members || !mentions) {
+    return mentions;
+  }
+  let changed = false;
+  const ordinary = mentions.map((mention) => {
+    if (!mention.access || !members.some((member) => member.identityId === mention.profileId)) {
+      return mention;
+    }
+    changed = true;
+    const { access: _access, ...recipient } = mention;
+    return recipient;
+  });
+  return changed ? ordinary : mentions;
+}
+
 export type HumanMentionInput = {
   value: string;
   start: number;
@@ -19,6 +39,10 @@ export type HumanMentionInput = {
 function isHumanMention(text: string, entry: unknown, previousEnd: number): entry is HumanMention {
   if (
     !isRecord(entry) ||
+    (entry.access !== undefined &&
+      entry.access !== "read" &&
+      entry.access !== "suggest" &&
+      entry.access !== "send") ||
     typeof entry.profileId !== "string" ||
     !entry.profileId.trim() ||
     entry.profileId.length > 256 ||
@@ -57,7 +81,12 @@ export function readHumanMentions(
     if (!isHumanMention(text, entry, previousEnd)) {
       return undefined;
     }
-    mentions.push({ profileId: entry.profileId, start: entry.start, end: entry.end });
+    mentions.push({
+      profileId: entry.profileId,
+      start: entry.start,
+      end: entry.end,
+      ...(entry.access ? { access: entry.access } : {}),
+    });
     previousEnd = entry.end;
   }
   return mentions;

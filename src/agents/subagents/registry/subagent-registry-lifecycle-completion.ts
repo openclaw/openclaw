@@ -44,6 +44,7 @@ import {
 import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterTurnYielded } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
@@ -565,7 +566,7 @@ function planTerminalCompletion(
     executionOutcome.status === "ok" &&
     terminalReply?.disposition === "empty" &&
     terminalReply.code !== "message-tool-not-called" &&
-    entry.requesterTurnYielded !== true &&
+    !hasRequesterTurnYielded(entry) &&
     entry.requesterSettleWake === undefined;
   if (closesAsIntentionalNonDelivery) {
     // Producer-owned empty success is a terminal fact, not a failed send.

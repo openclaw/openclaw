@@ -144,7 +144,7 @@ export function createAgentDatabaseNativeGeneration(
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
-      invalidateOpenClawAgentDatabaseValidation(validationSource);
+      invalidateOpenClawAgentDatabaseValidation(validationSource, "execution retirement");
     }
     // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
     if (preparationPublished) {
@@ -382,7 +382,10 @@ export function createAgentDatabaseNativeGeneration(
               if (!lease && getOpenClawAgentDatabaseValidationForTransfer(validationSource)) {
                 // Absence ends retained proof even if Linux reuses the inode. Later open
                 // checkpoints must preserve the publication captured by the lease handoff.
-                invalidateOpenClawAgentDatabaseValidation(validationSource);
+                invalidateOpenClawAgentDatabaseValidation(
+                  validationSource,
+                  "a missing database file",
+                );
               }
               registration.begin();
             }

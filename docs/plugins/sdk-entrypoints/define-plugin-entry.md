@@ -76,6 +76,12 @@ export default definePluginEntry({
   and agent. Preserve its exact host, thread and optional source home on every page.
   Passing that locator as `source` to the reader's list method requests an exact
   match. Providers receive `exportSource` and use their native membership checks.
+  To list another page, pass a host's opaque `nextCursor` as
+  `catalog.list({ cursors: { [host.hostId]: host.nextCursor } })`. Omit hosts
+  that should start at their first page. A fresh catalog handle can resume from
+  a saved cursor for the same catalog and host. Each list checks current access
+  before granting reads on the returned rows. Use a separate call for an exact `source` lookup.
+  Finish reading rows from the current page before requesting the next one.
   The reader returns catalog times as Unix epoch milliseconds.
   Listing again, reloading config, or stopping the service retires original grants.
 

@@ -337,6 +337,11 @@ suite.define(() => {
               .locator(size === "wide" ? ".lr-external-label" : ".lr-external-provider")
               .isVisible(),
           ).toBe(true);
+          // The full check list, with its escape link, opens on request.
+          const checksToggle = active.locator(".lr-checks-summary");
+          if ((await checksToggle.getAttribute("aria-expanded")) === "false") {
+            await checksToggle.click();
+          }
           const checksSource = named(
             panel.locator(".lr-note"),
             "link",
@@ -432,10 +437,10 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await named(page, "link", "pull request").click();
       const panel = page.locator("openclaw-link-reader-panel");
-      const disclosure = panel.locator("details.lr-checks");
-      const summary = disclosure.locator("summary");
+      const disclosure = panel.locator(".lr-checks");
+      const summary = disclosure.locator(".lr-checks-summary");
       await waitText(summary, "Checks unavailable");
-      expect(await disclosure.getAttribute("open")).toBeNull();
+      expect(await summary.getAttribute("aria-expanded")).toBe("false");
       const icon = await summary.locator(".lr-checks-icon svg").boundingBox();
       expect(icon).not.toBeNull();
       expect(Math.max(icon!.width, icon!.height)).toBeLessThanOrEqual(24);

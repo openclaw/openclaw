@@ -13,13 +13,16 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
 } from "./config-normalization-shared.js";
-import { resolveEffectivePluginActivationState, withContextEngineOwner } from "./config-state.js";
+import {
+  resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginIdFromConfig,
+  withContextEngineOwner,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { canStartGatewayStartupPlugin } from "./gateway-startup-plugin-activation.js";
 import {
   resolveAuthorizedGatewayStartupDreamingPluginIds,
-  resolveContextEngineSlotStartupPluginId,
   resolveMemorySlotStartupPluginId,
   shouldConsiderForGatewayStartup,
 } from "./gateway-startup-plugin-config.js";
@@ -80,13 +83,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const normalizePluginId =
     params.normalizePluginId ??
     createPluginRegistryIdNormalizer(params.index, { manifestRegistry: params.manifestRegistry });
-  const contextEngineOwners = params.index.plugins.map((plugin) => ({
-    id: plugin.pluginId,
-    contextEngineIds: plugin.contextEngineIds,
-  }));
   const pluginsConfig = withContextEngineOwner(
     normalizePluginsConfigWithResolverCore(params.config.plugins, normalizePluginId),
-    contextEngineOwners,
+    params.index.plugins,
     normalizePluginId,
   );
   // Startup must classify allowlist exceptions against the raw config snapshot,
@@ -94,7 +93,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   // misclassified as explicit enablement.
   const activationSourcePlugins = withContextEngineOwner(
     normalizePluginsConfigWithResolverCore(activationSourceConfig.plugins, normalizePluginId),
-    contextEngineOwners,
+    params.index.plugins,
     normalizePluginId,
   );
   const activationSource = {
@@ -166,15 +165,12 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     index: params.index,
     platform: params.platform,
   });
-  const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
-    records: params.index.plugins.map((plugin) => ({
-      id: plugin.pluginId,
-      contextEngineIds: plugin.contextEngineIds,
-    })),
-    activationSourceConfig,
+  const contextEngineSlotStartupPluginId = resolveSelectedContextEnginePluginIdFromConfig(
     activationSourcePlugins,
+    activationSourcePlugins.slots.contextEngine,
+    params.index.plugins,
     normalizePluginId,
-  });
+  );
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const policyId = normalizePluginPolicyId(plugin.pluginId);

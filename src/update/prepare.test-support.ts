@@ -124,5 +124,5 @@ const result = cp.spawnSync(pkg.scripts[args[0]], {shell:true, stdio:'inherit'})
 process.exit(result.status ?? 1);
 `,
   );
-  return { checkout, sha };
+  return { checkout, runningRoot: checkout, sha, source };
 }

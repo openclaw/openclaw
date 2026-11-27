@@ -11,8 +11,8 @@ on:
         description: Exact admission attempt, not the current Docker retry attempt
         required: false
         type: string
-      fast_track_approval:
-        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
         required: false
         type: string
       runner_group:
@@ -105,7 +105,7 @@ permissions:
 env:
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
-  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:

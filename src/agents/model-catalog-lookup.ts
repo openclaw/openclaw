@@ -14,6 +14,7 @@ import {
   resolveProviderModelCatalogId,
   resolveProviderModelPolicySurface,
 } from "../plugins/provider-model-routes.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -156,6 +157,23 @@ export function modelSupportsInput(
   input: ModelInputType,
 ): boolean {
   return entry?.input?.includes(input) ?? false;
+}
+
+/** Reuse the publication's first-wins index when the caller has already projected the captured rows. */
+export function createCapturedModelLookup(
+  source?: readonly ModelCatalogEntry[] | ReadonlyMap<string, ModelCatalogEntry>,
+) {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const byIdentity =
+    source && "get" in source
+      ? source
+      : source?.length
+        ? indexFirstByKey(source, keyOf)
+        : undefined;
+  if (!byIdentity?.size) {
+    return undefined;
+  }
+  return (provider: string, id: string) => byIdentity.get(keyOf({ provider, id }));
 }
 
 /** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */

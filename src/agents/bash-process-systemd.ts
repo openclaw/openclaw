@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { getHostExecMemoryBudget } from "../process/child-memory.js";
+import { describeLiveProcesses } from "../process/supervisor/service-child-group-ownership.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import {
   runDurableControlCommand,
@@ -20,6 +23,19 @@ const EXIT_REASONS: Record<string, TerminationReason> = {
   "oom-kill": "memory-limit",
 };
 let version: Promise<number> | undefined;
+// systemd stops (and so kills) a unit whose main process fails. Every exit counts as
+// success so what the command left running survives; ExecMainCode/Status keep the real result.
+// Accepted edge case: a root killed by a real-time signal still fails the unit.
+const SUCCESS_EXIT_STATUS = [
+  ...Array.from({ length: 255 }, (_, index) => index + 1),
+  ...[
+    "HUP INT QUIT ILL TRAP ABRT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT",
+    "CHLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO PWR SYS",
+  ]
+    .join(" ")
+    .split(" ")
+    .map((name) => `SIG${name}`),
+].join(" ");
 const failure = () =>
   new Error(
     "Durable process control was not confirmed; inspect process status and the systemd user manager before retrying.",
@@ -77,8 +93,10 @@ async function launchDurableProcess(params: DurableLaunchOptions): Promise<{ uni
   const budget = getHostExecMemoryBudget();
   const properties = {
     Type: "exec",
-    ExitType: "cgroup",
+    // The unit ends with the command's own exit; RemainAfterExit retains the result and
+    // whatever the command left running until cleanup finds it gone.
     RemainAfterExit: "yes",
+    SuccessExitStatus: SUCCESS_EXIT_STATUS,
     KillMode: "control-group",
     TimeoutStopSec: "10s",
     LimitCORE: 0,
@@ -137,15 +155,15 @@ async function readDurableProcess(unit: string): Promise<DurableProcessObservati
   if (reply.exitCode !== 0 || fields.loadstate !== "loaded") {
     throw failure();
   }
+  const group = fields.controlgroup;
+  const cgroupDirectory =
+    group?.startsWith("/") && !group.split("/").includes("..")
+      ? path.join("/sys/fs/cgroup", group)
+      : undefined;
   if (
     ["activating", "deactivating", "reloading"].includes(fields.activestate ?? "") ||
     (fields.activestate === "active" && fields.substate !== "exited")
   ) {
-    const group = fields.controlgroup;
-    const cgroupDirectory =
-      group?.startsWith("/") && !group.split("/").includes("..")
-        ? path.join("/sys/fs/cgroup", group)
-        : undefined;
     return {
       state: "running",
       pid: Number(fields.mainpid) || undefined,
@@ -158,12 +176,23 @@ async function readDurableProcess(unit: string): Promise<DurableProcessObservati
   const reason =
     EXIT_REASONS[fields.result ?? ""] ??
     (signaled ? "signal" : code === 1 ? "exit" : "spawn-error");
+  // An active/exited unit still holds what the command left running.
+  const procs = cgroupDirectory
+    ? await readFile(path.join(cgroupDirectory, "cgroup.procs"), "utf8").catch((error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        return "";
+      })
+    : "";
+  const pids = new Set(procs.split("\n").filter(Boolean).map(Number));
   return {
     state: "exited",
     exitCode: code === 1 ? status : null,
     exitSignal: signaled ? status : null,
     reason,
     result: fields.result ?? "unknown",
+    survivors: pids.size === 0 ? [] : describeLiveProcesses((row) => pids.has(row.pid)),
   };
 }
 
@@ -175,6 +204,11 @@ async function stopDurableProcess(unit: string, options?: StopOptions): Promise<
 
 /** The registry records the real result before releasing systemd's retained unit. */
 async function cleanupDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+  const observed = await readDurableProcess(unit);
+  // Stopping the unit would kill what the command left running; a later cleanup releases it.
+  if (observed.state === "exited" && observed.survivors?.length !== 0) {
+    return;
+  }
   for (const action of ["stop", "reset-failed"]) {
     if (
       (await control([action], unit, options)).exitCode !== 0 &&

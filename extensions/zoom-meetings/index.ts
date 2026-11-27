@@ -81,7 +81,6 @@ export const zoomMeetingsPlugin = MeetingPlatformAdapter.defineBrowserMeetingPlu
           ? "Ended pending Zoom session after receiving a corrected meeting credential."
           : "Ended stale Zoom session before opening a replacement.",
       );
-      context.deleteRequesterSessionKey(session.id);
       return {
         keepBrowserTab:
           !replacePendingJoin && health?.meetingEnded !== true && health?.bridgeClosed !== true,

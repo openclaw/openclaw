@@ -15,6 +15,7 @@ import {
   registerRpcSource,
   requestRpcSourceCancellation,
   retireRpcSource,
+  updateRpcSourceSessionId,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
@@ -746,3 +747,22 @@ it.for(["current", "caller", "relay", "controller"] as const)(
     }
   },
 );
+
+it("keeps the real relay registration current only for its retained committed successor", async () => {
+  const { target, chat } = await createRegistrationFixture();
+  const registration = await registerRun(target);
+  try {
+    expect(registration.isCurrent()).toBe(true);
+    updateRpcSourceSessionId(chat.source, "committed-successor");
+    expect(registration.isCurrent("completion")).toBe(false);
+    registration.onSessionIdChanged?.("committed-successor");
+    expect(registration.isCurrent("completion")).toBe(true);
+    expect(() => registration.onSessionIdChanged?.("uncommitted-session")).toThrow();
+    expect(registration.isCurrent("completion")).toBe(true);
+    requestRpcSourceCancellation(chat.source);
+    expect(registration.isCurrent("completion")).toBe(false);
+  } finally {
+    registration.release();
+    await chat.cleanup();
+  }
+});

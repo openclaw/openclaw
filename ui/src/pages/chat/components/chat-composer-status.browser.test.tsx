@@ -5,14 +5,15 @@ import { cdp } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../components/tooltip.ts";
-import { buildCompactionDividerItem } from "../chat-progress.ts";
+import { buildCompactionActivityItem } from "../chat-progress.ts";
+import { ChatCompactionActivity } from "./chat-compaction-activity.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import { ChatDivider } from "./chat-divider.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
 import chatComposerStyles from "../../../styles/chat/composer.css?inline";
 import groupedStyles from "../../../styles/chat/grouped.css?inline";
 import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
+import toolCardStyles from "../../../styles/chat/tool-cards.css?inline";
 import componentStyles from "../../../styles/components.css?inline";
 
 function mountCompaction(container: HTMLElement) {
@@ -21,7 +22,7 @@ function mountCompaction(container: HTMLElement) {
     () => {
       const [phase, updatePhase] = createSignal<"active" | "complete">("active");
       setPhase = updatePhase;
-      return <ChatDivider item={buildCompactionDividerItem({}, 1_000, 0, phase())} />;
+      return <ChatCompactionActivity item={buildCompactionActivityItem({}, 1_000, 0, phase())} />;
     },
     { container },
   );
@@ -31,7 +32,7 @@ function mountCompaction(container: HTMLElement) {
   };
 }
 
-describe("inline compaction motion", () => {
+describe("inline compaction status", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let session: CDPSession;
@@ -49,6 +50,7 @@ describe("inline compaction motion", () => {
       chatLayoutStyles,
       chatComposerStyles,
       composerStatusStyles,
+      toolCardStyles,
     ].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
@@ -62,75 +64,35 @@ describe("inline compaction motion", () => {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   });
 
-  it("folds lines inline without a floating scrim, then reveals the completion check", async () => {
-    const setPhase = mountCompaction(container);
-    const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
-    const lines = Array.from(container.querySelectorAll(".chat-compaction__line"));
-    const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
-    expect(lines.length).toBeGreaterThan(0);
-    expect(getComputedStyle(indicator).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(indicator).boxShadow).toBe("none");
-    expect(getComputedStyle(indicator).borderTopWidth).toBe("0px");
-    expect(getComputedStyle(indicator).animationName).toBe("none");
-    expect(getComputedStyle(check).opacity).toBe("0");
-    for (const line of lines) {
-      expect(getComputedStyle(line).animationName).not.toBe("none");
-      expect(getComputedStyle(line).animationIterationCount).toBe("infinite");
-    }
-    for (const element of container.querySelectorAll("*")) {
-      expect(getComputedStyle(element).animationName).not.toContain("spin");
-    }
-
-    setPhase("complete");
-    for (const line of lines) {
-      expect(getComputedStyle(line).visibility).toBe("hidden");
-      expect(getComputedStyle(line).animationName).toBe("none");
-    }
-    await expect.poll(() => getComputedStyle(check).opacity).toBe("1");
-    await expect
-      .poll(() =>
-        indicator
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.playState === "running"),
-      )
-      .toBe(false);
-  });
-
-  it("keeps active and complete states readable without reduced-motion animations", async () => {
-    await session.send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
-    });
-    expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
-    const setPhase = mountCompaction(container);
-    for (const phase of ["active", "complete"] as const) {
-      setPhase(phase);
-      const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
-      const label = container.querySelector<HTMLElement>(".chat-divider__title")!;
-      const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
-      expect(label.textContent?.trim()).not.toBe("");
-      expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
-      expect(getComputedStyle(label).backgroundImage).toBe("none");
-      await expect
-        .poll(() => getComputedStyle(check).opacity)
-        .toBe(phase === "complete" ? "1" : "0");
-      for (const element of container.querySelectorAll("*")) {
-        expect(getComputedStyle(element).animationName).toBe("none");
+  it.each(["no-preference", "reduce"])(
+    "keeps Layers and phase text with motion preference %s",
+    async (motion) => {
+      await session.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: motion }],
+      });
+      const setPhase = mountCompaction(container);
+      const icon = container.querySelector<SVGElement>(".chat-tool-msg-summary__icon svg")!;
+      const label = container.querySelector<HTMLElement>(".chat-tool-row__title")!;
+      expect(icon.querySelector("path")?.getAttribute("d")).toBe("m12 3 10 5-10 5L2 8Z");
+      expect(icon.getBoundingClientRect()).toMatchObject({ width: 16, height: 16 });
+      expect(label.textContent).toBe("Compacting");
+      expect(label.classList.contains("text-shimmer")).toBe(true);
+      if (motion === "reduce") {
+        expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
       }
-      await expect
-        .poll(() =>
-          indicator
-            .getAnimations({ subtree: true })
-            .some((animation) => animation.playState === "running"),
-        )
-        .toBe(false);
-    }
-  });
+      setPhase("complete");
+      expect(container.querySelector(".chat-tool-msg-summary__icon svg")).toBe(icon);
+      expect(label.textContent).toBe("Compacted context");
+      expect(label.classList.contains("text-shimmer")).toBe(false);
+    },
+  );
 
-  it("stacks compaction savings in a narrow pane without splitting either line", () => {
+  it("keeps the expanded compaction savings readable in a narrow pane", async () => {
+    container.style.width = "260px";
     mountSolid(
       () => (
-        <ChatDivider
-          item={buildCompactionDividerItem(
+        <ChatCompactionActivity
+          item={buildCompactionActivityItem(
             { tokensBefore: 101_000, tokensAfter: 52_100 },
             1_000,
             0,
@@ -139,26 +101,17 @@ describe("inline compaction motion", () => {
       ),
       { container },
     );
-    const textRects = (selector: string) => {
-      const range = document.createRange();
-      range.selectNodeContents(container.querySelector(selector)!);
-      return [...range.getClientRects()];
-    };
-    const title = () => textRects(".chat-divider__title");
-    const metric = () => textRects(".chat-divider__metric");
-    const separator = () => textRects(".chat-divider__separator");
-
-    container.style.width = "260px";
-    expect(title()).toHaveLength(1);
-    expect(metric()).toHaveLength(1);
-    expect(metric()[0]!.top).toBeGreaterThanOrEqual(title()[0]!.bottom);
-    expect(separator()).toHaveLength(0);
-
-    container.style.width = "560px";
-    expect(title()).toHaveLength(1);
-    expect(metric()).toHaveLength(1);
-    expect(metric()[0]!.top).toBeCloseTo(title()[0]!.top);
-    expect(separator()).toHaveLength(1);
+    const row = container.querySelector<HTMLDetailsElement>(".chat-compaction-activity")!;
+    row.open = true;
+    await expect.poll(() => row.textContent).toContain("saved 48.9k tokens (48.4%)");
+    const title = row.querySelector(".chat-tool-row__title")!.getBoundingClientRect();
+    const metric = row.querySelector(".chat-tool-kv > div")!;
+    const range = document.createRange();
+    range.selectNodeContents(metric);
+    const rects = [...range.getClientRects()];
+    expect(rects).toHaveLength(1);
+    expect(rects[0]!.top).toBeGreaterThanOrEqual(title.bottom);
+    expect(rects[0]!.right).toBeLessThanOrEqual(container.getBoundingClientRect().right);
   });
 
   it.each(["active", "cleared"] as const)("preserves the %s fallback pill", async (phase) => {

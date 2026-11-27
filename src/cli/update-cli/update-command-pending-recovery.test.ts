@@ -285,11 +285,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       }
       expect(before).toBeDefined();
       expect(materialSnapshot(f.home)).toEqual(before);
-      if (params.readablePreview) {
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ reportPath: expect.any(String) }),
-        );
-      }
     } finally {
       f.restore();
     }

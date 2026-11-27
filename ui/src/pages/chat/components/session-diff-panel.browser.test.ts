@@ -20,6 +20,68 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review layout", () => {
+  it.each([true, false])(
+    "shows a long filename in the diff heading with mobile=%s",
+    async (mobile) => {
+      const { userEvent } = await import("vitest/browser");
+      const name =
+        "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
+      const mounted = mountSolid(() =>
+        createComponent(SessionDiffPanel, {
+          mobile,
+          desktop: !mobile,
+          owner: null,
+          execNode: null,
+          loadFileText: null,
+          openFile: null,
+          revealFile: null,
+          loader: async () => ({
+            sessionKey: "main",
+            additions: 1,
+            deletions: 0,
+            files: [
+              { path: "src/" + name, status: "added", additions: 1, deletions: 0 },
+              { path: "src/chat.ts", status: "modified", additions: 1, deletions: 0 },
+              { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
+            ],
+          }),
+        }),
+      );
+      const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+      panel.style.cssText = "display:flex;position:fixed;top:0;left:0;width:390px;height:500px";
+      await waitForSolid(() =>
+        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe(name),
+      );
+      const label = panel.querySelector<HTMLElement>(".session-diff__filename")!;
+      expect(label.title).toBe(name);
+      const stem = label.querySelector(".session-diff__basename bdi")!.firstChild!;
+      const range = document.createRange();
+      range.selectNodeContents(stem);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(stem, stem.textContent!.lastIndexOf("-") + 1);
+      const suffix = range.getBoundingClientRect();
+      const bounds = label.getBoundingClientRect();
+      expect(suffix.width).toBeGreaterThan(0);
+      expect(suffix.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(suffix.right).toBeLessThanOrEqual(bounds.right + 1);
+      for (const short of ["chat.ts", "map.png"]) {
+        const extension = panel.querySelector<HTMLElement>(
+          `.session-diff__filename[title="${short}"] .session-diff__extension`,
+        )!;
+        range.selectNodeContents(extension);
+        expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
+          extension.getBoundingClientRect().right + 1,
+        );
+      }
+      const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+      const initial = toggle.getAttribute("aria-expanded");
+      await userEvent.click(toggle);
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).not.toBe(initial));
+      await userEvent.keyboard("{Enter}");
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe(initial));
+    },
+  );
+
   it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);

@@ -502,6 +502,7 @@ export function materializeSessionRow(
     }).mode,
     ...definedSessionRowField("modelProvider", input.rowModelIdentity.provider),
     ...definedSessionRowField("model", input.rowModelIdentity.model),
+    ...definedSessionRowField("modelDisplayName", input.thinkingProjection.catalogEntry?.name),
     ...definedSessionRowField(
       "modelOverrideSource",
       input.selectedModel?.storedOverrideSource === "parent"
@@ -566,7 +567,9 @@ export function materializeSessionRow(
       childLinks:
         input.childLinks === previous?.source.childLinks
           ? previous?.source.childLinks
-          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
+          : freezeTrustedJsonSnapshot(
+              projectSessionRowChildLinks(input.childLinks, previous?.source.childLinks),
+            ),
     }),
   });
 }
