@@ -39,10 +39,14 @@ vi.mock("../process/exec.js", async (importOriginal) => {
 });
 // mock-isolation: the shared sandbox contribution also repairs images; a role requiring a
 // sandbox would otherwise inspect and build the real host's Docker image during this suite.
+// Its pending check inspects the same images, so it is held to "none" here; the image
+// check itself is covered with a synthetic engine in doctor-sandbox.warns-*.test.ts.
 const maybeRepairSandboxImages = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const checkSandboxImageRepairPending = vi.hoisted(() => vi.fn(async () => "none" as const));
 vi.mock("./doctor-sandbox.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-sandbox.js")>()),
   maybeRepairSandboxImages,
+  checkSandboxImageRepairPending,
 }));
 const it = stateTest("doctor-member-roles");
 beforeEach(() => {
