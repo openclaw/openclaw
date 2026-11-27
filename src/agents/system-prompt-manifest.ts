@@ -152,9 +152,9 @@ export const SYSTEM_PROMPT_SECTIONS = [
   },
   {
     id: "tool_guidance",
-    owner: "plugin tool promptGuidance (tool-prompt-guidance.ts)",
+    owner: "tool-prompt-guidance.ts",
     region: "dynamic",
-    includedWhen: "the plugin's tool is callable",
+    includedWhen: "a session recall tool or a plugin's guided tool is callable",
     budgetBytes: 8_192,
   },
   {

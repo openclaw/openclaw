@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 function registerGuidedTools(order: readonly string[]) {
@@ -29,6 +30,22 @@ afterEach(() => {
 });
 
 describe("tool-gated prompt guidance", () => {
+  it("identifies recalled blockers as historical even when recall tools are deferred", () => {
+    const guidance = /other conversations are references[^\n]*blocker/i;
+    const prompt = (capabilityToolNames: string[]) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/w",
+        toolNames: ["exec"],
+        capabilityToolNames,
+        codeModeActive: true,
+      });
+    for (const tool of ["sessions_history", "sessions_search"]) {
+      expect(prompt([tool])).toMatch(guidance);
+      expect(buildAgentHarnessBasePrompt({ toolNames: [tool] })).toMatch(guidance);
+    }
+    expect(prompt(["sessions_list", "sessions_send"])).not.toMatch(guidance);
+  });
+
   it("shows a plugin tool's guidance only while that tool is callable", () => {
     registerGuidedTools(["alpha"]);
     const prompt = (params: { toolNames?: string[]; capabilityToolNames?: string[] }) =>
