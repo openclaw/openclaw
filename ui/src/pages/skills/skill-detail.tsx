@@ -18,7 +18,7 @@ import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { computeSkillReasons, isSkillAvailable } from "../../lib/skills-shared.ts";
+import { computeSkillReasons } from "../../lib/skills-shared.ts";
 import {
   skillApiKeyReplaceable,
   storedSkillApiKeySource,
@@ -35,7 +35,13 @@ import {
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
 import { SkillPageShell } from "./skill-page-shell.tsx";
-import { SkillTile, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import {
+  classifySkillInventoryStatus,
+  SKILL_INVENTORY_STATUS,
+  SkillTile,
+  verdictForSkill,
+  verdictStatus,
+} from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 type BinRow = { kind: "bin"; names: string[]; missing: boolean; install: boolean };
@@ -152,7 +158,9 @@ export function InstalledSkillPage(props: {
   const rows = createMemo(() => requirementRows(props.skill, installOption()?.bins ?? []));
   const reasons = createMemo(() => computeSkillReasons(props.skill));
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
-  const available = () => isSkillAvailable(props.skill);
+  const inventoryStatus = createMemo(
+    () => SKILL_INVENTORY_STATUS[classifySkillInventoryStatus(props.skill)],
+  );
   const linkedOwner = () => {
     const link = props.skill.clawhub;
     return link?.status === "linked" && link.ownerHandle ? `@${link.ownerHandle}` : null;
@@ -199,10 +207,7 @@ export function InstalledSkillPage(props: {
         <>
           <span>{linkedOwner() ?? props.skill.source}</span>
           <Show when={!props.skill.disabled}>
-            <SettingsStatus
-              kind={available() ? "ok" : "warn"}
-              label={t(available() ? "skillsPage.tabs.ready" : "skillsPage.tabs.needsSetup")}
-            />
+            <SettingsStatus kind={inventoryStatus().tone} label={t(inventoryStatus().labelKey)} />
           </Show>
         </>
       }

@@ -8,6 +8,7 @@ const catalog = {
       all: "All",
       ready: "Ready",
       needsSetup: "Needs setup",
+      excluded: "Excluded",
       disabled: "Disabled",
     },
     defaultAgent: "{name} (default)",

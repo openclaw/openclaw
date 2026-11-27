@@ -31,10 +31,16 @@ import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
-import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { SkillPageBoundary } from "./skill-page-boundary.tsx";
-import { SkillTile, SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import {
+  classifySkillInventoryStatus,
+  SKILL_INVENTORY_STATUS,
+  SkillStateStatus,
+  SkillTile,
+  verdictForSkill,
+  verdictStatus,
+} from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -52,14 +58,11 @@ const SkillPageAbsent = lazy(() => import("./skill-page-shell.tsx"), {
 
 const STATUS_TABS: Array<{ id: SkillsStatusFilter; labelKey: string }> = [
   { id: "all", labelKey: "skillsPage.tabs.all" },
-  { id: "ready", labelKey: "skillsPage.tabs.ready" },
-  { id: "needs-setup", labelKey: "skillsPage.tabs.needsSetup" },
-  { id: "disabled", labelKey: "skillsPage.tabs.disabled" },
+  { id: "ready", labelKey: SKILL_INVENTORY_STATUS.ready.labelKey },
+  { id: "needs-setup", labelKey: SKILL_INVENTORY_STATUS["needs-setup"].labelKey },
+  { id: "excluded", labelKey: SKILL_INVENTORY_STATUS.excluded.labelKey },
+  { id: "disabled", labelKey: SKILL_INVENTORY_STATUS.disabled.labelKey },
 ];
-
-function skillStatus(skill: SkillStatusEntry): Exclude<SkillsStatusFilter, "all"> {
-  return skill.disabled ? "disabled" : isSkillAvailable(skill) ? "ready" : "needs-setup";
-}
 
 function skillControlsLocked(view: SkillsProps): boolean {
   return view.saving || view.loading || view.state.skillOperation !== null;
@@ -100,10 +103,11 @@ export function Skills(props: SkillsProps) {
       all: skills().length,
       ready: 0,
       "needs-setup": 0,
+      excluded: 0,
       disabled: 0,
     };
     for (const skill of skills()) {
-      counts[skillStatus(skill)]++;
+      counts[classifySkillInventoryStatus(skill)]++;
     }
     return counts;
   });
@@ -111,7 +115,9 @@ export function Skills(props: SkillsProps) {
     const afterStatus =
       props.state.skillsStatusFilter === "all"
         ? items
-        : items.filter((skill) => skillStatus(skill) === props.state.skillsStatusFilter);
+        : items.filter(
+            (skill) => classifySkillInventoryStatus(skill) === props.state.skillsStatusFilter,
+          );
     const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter).normalize("NFC");
     return filter
       ? afterStatus.filter((skill) =>
