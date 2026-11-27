@@ -533,14 +533,15 @@ it.each(["alternatives", "base-only", "matching-base"] as const)(
 );
 
 it.each([
-  ["openai", "codex", "codex", "ready"],
-  ["openai", "agentsapi", undefined, "ready"],
-  ["openai", "codex", undefined, "missing"],
-  ["openai", "codex", undefined, "throws"],
-  ["picker-fixture", "codex", undefined, "ready"],
+  ["openai", "codex", "codex", "ready", true],
+  ["openai", "codex", "codex", "ready", false],
+  ["openai", "agentsapi", undefined, "ready", true],
+  ["openai", "codex", undefined, "missing", true],
+  ["openai", "codex", undefined, "throws", true],
+  ["picker-fixture", "codex", undefined, "ready", true],
 ] as const)(
-  "keeps %s/%s capabilities with session runtime %s and readiness %s",
-  async (provider, runtime, runtimeOverride, initialReadiness) => {
+  "keeps %s/%s capabilities with session runtime %s, readiness %s, user-home login %s",
+  async (provider, runtime, runtimeOverride, initialReadiness, nativeLogin) => {
     await withModelsListState(
       async (state) => {
         const model = "gpt-5.6-sol";
@@ -584,6 +585,9 @@ it.each([
         });
         const { params, loadGatewayModelCatalogSnapshot } = preparePicker(cfg, snapshot, {
           pluginRegistry,
+          preparedRuntimeAuthModes: nativeLogin
+            ? { codex: { source: "native", mode: "oauth" } }
+            : {},
           ...(runtimeOverride ? { runtimeOverride, profileProvider: provider } : {}),
         });
         const prepared = await prepareModelsListResult(params);
@@ -600,6 +604,12 @@ it.each([
           "missing-runtime",
         ]);
         const nativeChoice = rows[0]?.runtimeChoices?.[0];
+        expect(rows[0]).not.toHaveProperty("usesRuntimeLogin");
+        expect(nativeChoice?.usesRuntimeLogin).toBe(
+          nativeLogin && runtime === "codex" && selectable && initialReadiness === "ready"
+            ? true
+            : undefined,
+        );
         if (runtime === "agentsapi") {
           expect(nativeChoice?.agentRuntime).toMatchObject({
             workspaceEnvironment: { kind: "provider-hosted", label: "Hosted fixture" },
@@ -636,6 +646,7 @@ it.each([
         readiness = "missing";
         const revokedChoice = prepared.read().models[0]?.runtimeChoices?.[0];
         expectUnavailable(revokedChoice, selectable);
+        expect(revokedChoice).not.toHaveProperty("usesRuntimeLogin");
         readiness = "ready";
         const recoveredChoice = prepared.read().models[0]?.runtimeChoices?.[0];
         expect(recoveredChoice?.available).toBe(selectable);

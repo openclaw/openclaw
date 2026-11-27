@@ -350,6 +350,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
+  hideSharedAccountIdentity?: boolean;
   /** Preflight the turn's own runtime, not an available alternative offered by the picker. */
   useConfiguredRuntime?: true;
   /** Session creation supplies its bounded wait; config mutations remain passive. */
@@ -484,7 +485,9 @@ export async function preparePublishedModelRuntimeChoice(params: {
       // Shared replies must not expose the owner/account locator of a personal credential.
       const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
         ? "personal account"
-        : `account "${evaluation.selectedProfileId}"`;
+        : params.hideSharedAccountIdentity
+          ? "shared account"
+          : `account "${evaluation.selectedProfileId}"`;
       return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
     }
     const routeRuntimeId =

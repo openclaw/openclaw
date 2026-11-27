@@ -39,6 +39,7 @@ export type ChatModelPickerParams = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   authProfileId?: string;
   accountSection?: ChatModelAccountSection;
+  nativeLoginLabel?: string;
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
@@ -138,7 +139,15 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       ? undefined
       : contextWindow?.options.find((option) => option.id === contextWindow.selected);
   });
-  const triggerLabel = () => params.triggerStatusLabel ?? params.triggerModelLabel;
+  const triggerLabel = () => {
+    const preferred = params.accountSection?.preferredAccountLabel;
+    return (
+      params.triggerStatusLabel ??
+      (preferred && params.triggerModelLabel
+        ? `${params.triggerModelLabel} · ${t("chat.modelAccounts.preferred", { account: preferred })}`
+        : params.triggerModelLabel)
+    );
+  };
   const triggerAriaLabel = () => {
     const label = triggerLabel();
     const detail =

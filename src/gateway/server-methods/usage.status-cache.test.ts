@@ -130,7 +130,9 @@ describe("usage.status provider usage cache", () => {
 
   it("keeps internal quota auth profile identity out of usage.status", async () => {
     const summary = usageSummary(now, 10);
-    summary.providers[0]!.authProfileId = "openai:quota";
+    const email = "quota@example.test";
+    summary.providers[0]!.authProfileId = `openai:${email}`;
+    summary.providers[0]!.accountEmail = email;
     mocks.loadSummary.mockResolvedValue(summary);
     const reader = {
       ...statusClient,
@@ -140,8 +142,12 @@ describe("usage.status provider usage cache", () => {
       ...statusClient,
       connect: { ...statusClient.connect, scopes: ["operator.admin"] },
     };
-    expect((await settledStatus(reader)).providers[0]).not.toHaveProperty("authProfileId");
-    expect((await settledStatus(admin)).providers[0]).not.toHaveProperty("authProfileId");
+    const visible = await settledStatus(reader);
+    expect(visible.providers[0]).not.toHaveProperty("authProfileId");
+    expect(JSON.stringify(visible)).not.toContain(email);
+    const managed = await settledStatus(admin);
+    expect(managed.providers[0]).toHaveProperty("accountEmail", email);
+    expect(managed.providers[0]).not.toHaveProperty("authProfileId");
   });
 
   it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {

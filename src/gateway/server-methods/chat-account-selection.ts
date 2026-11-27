@@ -17,6 +17,7 @@ import {
   captureUserProfileModelAccountLinksAuthority,
   readUserProfileVersion,
 } from "../../state/user-profile-events.js";
+import { sharedModelAccountOrdinals } from "../shared-model-account-ref.js";
 import type { ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 
 export async function prepareChatAccountSelection(params: {
@@ -93,6 +94,9 @@ export function resolveChatAccountSelection(params: {
     return {
       kind: "shared",
       authProfileId,
+      ordinal:
+        credential &&
+        sharedModelAccountOrdinals(params.authStore, credential.provider)?.get(authProfileId),
       label: truncateUtf16Safe(toUSVString(credential?.displayName?.trim() || authProfileId), 256),
       source,
     };

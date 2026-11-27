@@ -61,7 +61,9 @@ vi.mock("../../config/config.js", async () => {
 });
 
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { sharedModelAccountRef } from "../shared-model-account-ref.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import {
@@ -411,6 +413,61 @@ describe("sessions.patch sticky model persistence", () => {
       });
     },
   );
+});
+
+describe("sessions.patch shared account references", () => {
+  it("resolves the picker reference against the scoped provider without returning the stored ID", async () => {
+    const key = "agent:main:dm:shared-selection";
+    const id = "openai:studio@example.test";
+    const ref = sharedModelAccountRef(id);
+    await seedSession(key);
+    const ctx = context();
+    const snapshot = {
+      ...catalogSnapshot(),
+      observationConfig: cfg,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      authStore: {
+        version: 1,
+        profiles: { [id]: { type: "api_key" as const, provider: "openai", key: "fixture" } },
+      },
+      authModes: {},
+      authMaterializations: [],
+      isCurrent: () => true,
+    };
+    const readPrepared = vi.fn(async () => snapshot);
+    registerGatewayModelCatalogPrivateAccess(ctx.loadGatewayModelCatalogSnapshot, {
+      readPrepared,
+      loadDeferred: async () => snapshot,
+    });
+    const patch = (model: string) =>
+      patchSession({ key, model, agentRuntime: "openclaw" }, ["operator.write"], ctx);
+    for (const model of [
+      "anthropic/claude-opus-4-6@" + ref,
+      "openai/gpt-5.6-sol@" + sharedModelAccountRef("unlisted"),
+    ]) {
+      const rejected = await patch(model);
+      expect(rejected[0]).toBe(false);
+      expect(JSON.stringify(rejected)).not.toContain(id);
+      expect(readSession(key)?.authProfileOverride).toBeUndefined();
+    }
+    const selected = await patch("openai/gpt-5.6-sol@" + ref);
+    expect(selected).toMatchObject([true, { entry: { authProfileOverride: ref } }, undefined]);
+    expect(JSON.stringify(selected)).not.toContain(id);
+    expect(readPrepared).toHaveBeenCalledWith({ agentId: "main" });
+    expect(readSession(key)?.authProfileOverride).toBe(id);
+    expect(runtimeChoice.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hideSharedAccountIdentity: true,
+        sessionEntry: expect.objectContaining({ authProfileOverride: id }),
+      }),
+    );
+    expect((await patch("openai/gpt-5.6-sol@" + id))[1]).toMatchObject({
+      entry: { authProfileOverride: ref },
+    });
+    expect((await patchSession({ key, label: "Admin receipt" }))[1]).toMatchObject({
+      entry: { authProfileOverride: id },
+    });
+  });
 });
 
 describe("sessions.patch personal model-account ownership", () => {

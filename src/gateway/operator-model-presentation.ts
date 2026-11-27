@@ -33,11 +33,11 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import { projectClientModelCatalog } from "./model-account-presentation.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
 import type { ChatMetadataResult } from "./server-methods/chat-metadata-contract.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
 
@@ -130,7 +130,10 @@ export function projectOperatorModelRead<
   input: T,
 ): T {
   const result = input.metadata
-    ? { ...input, metadata: projectModelFastModeCatalog(input.metadata, scope.client) }
+    ? {
+        ...input,
+        metadata: projectClientModelCatalog(input.metadata, scope.client),
+      }
     : input;
   const cfg = scope.context.getRuntimeConfig();
   const presentation = prepareOperatorModelPresentation({

@@ -20,6 +20,7 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { sharedModelAccountOrdinals, sharedModelAccountRef } from "../shared-model-account-ref.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import {
@@ -146,12 +147,7 @@ function prepareSharedAccountProjection(
         })
         .map(({ id }) => id);
       const admin = hasGatewayAdminScope(client);
-      const inventory = Object.entries(store.profiles)
-        .flatMap(([id, credential]) =>
-          credential.provider === provider && !isUserModelAuthProfileId(id) ? [id] : [],
-        )
-        .toSorted();
-      const ordinals = new Map(inventory.map((id, index) => [id, index + 1]));
+      const ordinals = sharedModelAccountOrdinals(store, provider);
       return {
         ...result,
         accountTarget: {
@@ -163,8 +159,8 @@ function prepareSharedAccountProjection(
               ? resolveAuthProfileMetadata({ cfg: snapshot.config, store, profileId })
               : undefined;
             return {
-              profileId,
-              ordinal: inventory.length > 1 ? ordinals.get(profileId) : undefined,
+              profileId: admin ? profileId : sharedModelAccountRef(profileId),
+              ordinal: ordinals?.get(profileId),
               displayName: metadata?.displayName,
               email: metadata?.email,
             };

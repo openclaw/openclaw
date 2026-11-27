@@ -273,6 +273,7 @@ async function prepareSessionPatchArchiveFromSource(
     storeKey: canonicalKey,
     agentId: target.requestedAgentId,
     patch: target.fullPatch,
+    sharedProfileId: target.sharedProfileId,
     archivedBy: target.archiveActor,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     personalModelSelection: params.personalModelSelection,

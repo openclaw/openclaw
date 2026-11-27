@@ -464,15 +464,15 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       triggerRuntime,
     } = selection();
     const catalogState = props.modelCatalogState;
+    const workerInference =
+      props.selectedSession?.placement?.state === "active" &&
+      props.selectedSession.placement.inference === "worker";
     const setupRequired =
       catalogState.hasSnapshot &&
       catalogState.status === "ready" &&
       !catalogState.pendingProviders?.length &&
       !policy?.restricted &&
-      !(
-        props.selectedSession?.placement?.state === "active" &&
-        props.selectedSession.placement.inference === "worker"
-      ) &&
+      !workerInference &&
       hasNoConnectedChatModel(props.modelCatalog, props.modelAuthStatusResult);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
@@ -534,13 +534,24 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const selectedContextWindow =
       contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
     const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
-    const accessProgramModel = resolveModelRuntimeEntry(
+    const selectedRoute = resolveModelRuntimeEntry(
       catalog.entry(currentOverride || defaultModel),
       triggerRuntime,
     );
+    const nativeLoginLabel =
+      props.selectedSession &&
+      !workerInference &&
+      !retired &&
+      !uninitialized &&
+      (!props.modelSelectionLocked || currentOverride) &&
+      selectedRoute?.available === true &&
+      selectedRoute.usesRuntimeLogin &&
+      selectedRoute.agentRuntime?.id === "codex"
+        ? t("chat.modelAccounts.codexLogin")
+        : undefined;
     const effectiveAccessProgram =
       !retired && !uninitialized && !props.modelSwitching
-        ? accessProgramModel?.cyberAccessProgramDefault
+        ? selectedRoute?.cyberAccessProgramDefault
         : undefined;
     const accessPrograms =
       props.connected &&
@@ -549,7 +560,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       !retired &&
       !uninitialized &&
       !props.modelSwitching
-        ? accessProgramModel?.availableAccessPrograms?.cyber
+        ? selectedRoute?.availableAccessPrograms?.cyber
         : undefined;
     const daybreak = resolveDaybreakAccessProgram(
       accessPrograms,
@@ -576,7 +587,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           props.accountSelection?.kind === "automatic"
             ? undefined
             : props.accountSelection?.authProfileId,
-        accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
+        nativeLoginLabel,
+        accountSection: nativeLoginLabel
+          ? undefined
+          : props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
             ? {
@@ -629,7 +643,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
           policy?.restricted || retired || uninitialized ? undefined : props.onProviderSettings,
-        onOpen: props.onModelPickerOpen,
+        onOpen: () => props.onModelPickerOpen?.(!nativeLoginLabel),
         onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey, agentRuntime) =>
           props.onModelSelect?.(next, targetSessionKey, agentRuntime),

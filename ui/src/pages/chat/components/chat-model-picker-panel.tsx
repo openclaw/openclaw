@@ -19,8 +19,6 @@ import {
 } from "./chat-model-favorites.ts";
 import {
   isModelPickerOptionSelected,
-  modelProviderId,
-  prepareChatModelPickerPanel,
   modelPickerOptionKey,
   modelRowKey,
   FAVORITES_GROUP,
@@ -31,6 +29,8 @@ import {
   ChatModelPickerTargets,
   ModelList,
   modelOptionSearchRow,
+  modelProviderId,
+  prepareChatModelPickerPanel,
 } from "./chat-model-picker-options.tsx";
 import {
   createChatModelSearchView,
@@ -45,6 +45,7 @@ import {
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 import {
+  ChatLockedModelHeading,
   ChatModelProviderHeading,
   prepareChatModelProviderAuth,
 } from "./chat-model-provider-heading.tsx";
@@ -405,6 +406,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
     more: ModelPickerOption[];
   }) {
     const provider = createMemo(() => props.provider);
+    const selected = () => provider() === state().activeProvider;
     const providerLabel = () =>
       props.provider === FAVORITES_GROUP
         ? t("chat.modelFavorites.label")
@@ -433,7 +435,8 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
             cooldown={providerCooldown()}
             providerAuth={providerAuth()}
             runtime={providerRuntime(props.provider)}
-            accounts={props.provider === state().activeProvider ? accounts() : undefined}
+            accounts={selected() ? accounts() : undefined}
+            nativeLoginLabel={selected() ? panel.params.nativeLoginLabel : undefined}
             onSettings={panel.params.onProviderSettings}
           />
         ))}
@@ -512,10 +515,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
         }}
       </Show>
       {modelSelectionLocked() ? (
-        <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
-          <span class="chat-controls__locked-model-value">{panel.params.triggerModelLabel}</span>
-          <span class="chat-controls__locked-model-badge">{t("chat.selectors.modelLocked")}</span>
-        </div>
+        <ChatLockedModelHeading {...panel.params} />
       ) : (
         <>
           {showBrowser() || isModelCatalogLoading(panel.params.modelCatalogState) ? (

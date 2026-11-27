@@ -90,6 +90,7 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  hideSharedAccountIdentity?: boolean;
   hydrateThinkingCatalog?: boolean;
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Idle model-only host changes need no thinking policy refresh. */

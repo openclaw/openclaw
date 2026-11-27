@@ -39,6 +39,13 @@ import {
   normalizeGitCoauthorOrganizationIdentity,
   publicGitHubCoauthorEmail,
 } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import type {
+  UsersAuthConnectCatalogResult,
+  UsersAuthConnectStartResult,
+  UsersAuthConnectStatusResult,
+  UsersListAuthLinksResult,
+  UsersListModelAccountsResult,
+} from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -48,6 +55,7 @@ import {
   changeCanonicalUserChannelIdentity,
   listCanonicalUserChannelIdentities,
 } from "../../state/user-channel-identity-operations.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
@@ -76,6 +84,7 @@ import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { sharedModelAccountRef } from "../shared-model-account-ref.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -138,7 +147,14 @@ function connectHandler<P extends { profileId?: string }>(
     service: NonNullable<GatewayRequestContext["modelAccountConnectService"]>,
     action: ModelAccountConnectAction,
     params: P,
-  ) => unknown,
+  ) =>
+    | UsersAuthConnectCatalogResult
+    | Promise<
+        | UsersAuthConnectStartResult
+        | UsersAuthConnectStatusResult
+        | UsersListAuthLinksResult
+        | UsersListModelAccountsResult
+      >,
   requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
 ): GatewayRequestHandler {
   return defineValidatedGatewayHandler(
@@ -156,7 +172,19 @@ function connectHandler<P extends { profileId?: string }>(
       }
       const result = await run(service, action, options.params);
       action.assertCurrent();
-      options.respond(true, result);
+      if ("links" in result && !action.canManageSharedAccounts) {
+        // The same link list is returned by inventory, mutations and completed sign-in replays.
+        options.respond(true, {
+          ...result,
+          links: result.links.map((link) =>
+            isUserModelAuthProfileId(link.authProfileId)
+              ? link
+              : { ...link, authProfileId: sharedModelAccountRef(link.authProfileId) },
+          ),
+        });
+      } else {
+        options.respond(true, result);
+      }
     },
     (error) =>
       error instanceof ModelAccountConnectAuthorityError

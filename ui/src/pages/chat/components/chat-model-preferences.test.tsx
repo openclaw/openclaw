@@ -11,6 +11,7 @@ import { createMediaQueryList } from "../../../test-helpers/media-query.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatHeaderState, renderModelControls } from "../chat-model-controls.test-support.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
@@ -28,6 +29,29 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", (query: string) =>
     createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
   );
+});
+
+it("does not claim the default runtime's login for an unidentified locked session", async () => {
+  const { state } = createChatHeaderState({
+    models: [
+      {
+        id: "default",
+        name: "Default",
+        provider: "openai",
+        available: true,
+        usesRuntimeLogin: true,
+        agentRuntime: { id: "codex", source: "model" },
+      },
+    ],
+  });
+  const container = await renderModelControls(state, {
+    agentDefaultModel: "openai/default",
+    sessionsResult: null,
+    modelSelectionLocked: true,
+  });
+  const heading = container.querySelector(".chat-controls__locked-model");
+  expect(heading?.textContent).toContain("Session model");
+  expect(heading?.textContent).not.toContain("Using Codex’s own login");
 });
 
 async function controls(overrides: Partial<Props>) {

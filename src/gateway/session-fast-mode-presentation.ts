@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -16,22 +15,6 @@ export function prepareSessionFastModePresentation(client?: GatewayClient | null
     hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.ULTRAFAST);
   return (mode: FastMode | undefined): FastMode | undefined =>
     mode === "ultrafast" && !supportsUltrafast ? true : mode;
-}
-
-/** Creation replay retains the canonical result and presents its entry at delivery time. */
-export function projectSessionFastModeEntryResult(
-  payload: unknown,
-  client?: GatewayClient | null,
-): unknown {
-  if (
-    prepareSessionFastModePresentation(client)("ultrafast") !== true ||
-    !isRecord(payload) ||
-    !isRecord(payload.entry) ||
-    payload.entry.fastMode !== "ultrafast"
-  ) {
-    return payload;
-  }
-  return { ...payload, entry: { ...payload.entry, fastMode: true } };
 }
 
 /** Catalog caches stay canonical; each recipient decodes only its negotiated speed values. */

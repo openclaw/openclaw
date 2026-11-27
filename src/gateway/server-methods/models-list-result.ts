@@ -71,6 +71,7 @@ import {
   projectModelCatalogRefreshStatus,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
+  projectRuntimeLogin,
   retainModelChoiceAccountPin,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
@@ -538,6 +539,7 @@ export async function prepareModelsListResult({
             : undefined;
         const choice: ModelChoice = {
           ...preparedEntry,
+          ...projectRuntimeLogin(preparedEntry, evaluation, decisions),
           ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
           ...(speedPolicy.supportsServiceTierRecovery === true
             ? { supportsServiceTierRecovery: true }

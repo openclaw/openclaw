@@ -152,6 +152,8 @@ const oauthMethod: ProviderAuthMethod = {
   kind: "oauth",
   run: runAuth,
 };
+export const fixtureProfileId = "7c550d28-59ff-484d-b4d6-a471bbeded24";
+export const fixtureAccountId = "51d87a7d-d217-41a5-aa04-b68efe5ec3b2";
 export const broadcast = vi.fn();
 export const warn = vi.fn();
 export let service: ReturnType<typeof createModelAccountConnectService>;
@@ -337,7 +339,7 @@ export function setupModelAccountConnectTest() {
       }) => {
         params.assertCurrent();
         writes.push(params.credential);
-        const authProfileId = `personal:${params.ownerProfileId}:account-1`;
+        const authProfileId = `personal:${params.ownerProfileId}:${fixtureAccountId}`;
         const links = [
           ...(linksByOwner.get(params.ownerProfileId) ?? []).filter(
             (link) => link.provider !== params.credential.provider,

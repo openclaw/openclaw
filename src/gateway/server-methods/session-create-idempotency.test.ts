@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SESSION_CREATE_IDEMPOTENCY_RETENTION_MS } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { DEDUPE_MAX } from "../server-constants.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import type {
   GatewayRequestContext,
@@ -109,6 +110,67 @@ it("replays reordered requests and added authorization without accepting downgra
     connection({ device: { ...client.connect.device, id: "other-device" } }),
   );
   expectCached(differentDevice, "agent:main:create-once");
+  expect(execute).toHaveBeenCalledOnce();
+});
+
+it("presents inherited shared account preferences per recipient on creation and replay", async () => {
+  const id = "fixture:shared@example.test";
+  const entry = {
+    authProfileOverride: id,
+    cliSessionBindings: { cli: { sessionId: "native", authProfileId: id } },
+    modelFallback: { prevAuthProfileOverride: id },
+  };
+  const { connection, execute, call } = createFixture(({ respond }) =>
+    respond(true, { key: "agent:main:fixture", entry }),
+  );
+  const editor = connection({ scopes: ["operator.write"] });
+  const fresh = (await call(hello, editor)).mock.calls[0]?.[1];
+  expect(JSON.stringify(fresh)).not.toContain(id);
+  expect(fresh).toMatchObject({
+    entry: { authProfileOverride: expect.stringMatching(/^shared-ref:/) },
+  });
+  expect((await call(hello, editor)).mock.calls[0]?.[1]).toEqual(fresh);
+  expect((await call(hello)).mock.calls[0]?.[1]).toMatchObject({ entry });
+  expect(entry.authProfileOverride).toBe(id);
+  expect(execute).toHaveBeenCalledOnce();
+});
+
+it("omits foreign personal locators from receipts without changing the canonical replay", async () => {
+  const viewer = "00000000-0000-4000-8000-000000000001";
+  const foreign = "00000000-0000-4000-8000-000000000002";
+  const ownId = `personal:${viewer}:${viewer}`;
+  const foreignId = `personal:${foreign}:${foreign}`;
+  const entry = {
+    authProfileOverride: foreignId,
+    modelFallback: { prevAuthProfileOverride: foreignId },
+    cliSessionBindings: {
+      native: { sessionId: "native", authProfileId: foreignId },
+      own: { sessionId: "own", authProfileId: ownId },
+    },
+  };
+  const canonical = structuredClone(entry);
+  const { call, connection, execute } = createFixture(({ respond }) => respond(true, { entry }));
+  const editor = {
+    ...connection({ scopes: ["operator.write"] }),
+    authenticatedUserProfile: gatewayProfile(viewer),
+  };
+  const fresh = (await call(hello, editor)).mock.calls[0]?.[1];
+  expect(fresh).toStrictEqual({
+    entry: {
+      modelFallback: {},
+      cliSessionBindings: {
+        native: { sessionId: "native" },
+        own: canonical.cliSessionBindings.own,
+      },
+    },
+  });
+  expect((await call(hello, editor)).mock.calls[0]?.[1]).toEqual(fresh);
+  const admin = {
+    ...editor,
+    connect: { ...editor.connect, scopes: ["operator.admin", "operator.write"] },
+  };
+  expect((await call(hello, admin)).mock.calls[0]?.[1]).toEqual({ entry: canonical });
+  expect(entry).toEqual(canonical);
   expect(execute).toHaveBeenCalledOnce();
 });
 

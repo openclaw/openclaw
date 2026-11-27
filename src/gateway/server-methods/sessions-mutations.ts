@@ -23,6 +23,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectSessionEntryAccounts } from "../model-account-presentation.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -206,21 +207,24 @@ function createSessionPatchHandler(
         ],
       });
       assertCurrent();
-      respond(
-        true,
-        projectSessionPatchResult({
-          ...prepared,
-          cfg: executed.cfg,
-          preparedAcpMeta: acpMeta ?? null,
-          entry: {
-            ...outcome.entry,
-            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
-          },
-          modelCatalog: catalog?.entries,
-          modelCatalogRouteVariants: catalog?.routeVariants,
-        }),
-        undefined,
-      );
+      const result = projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        preparedAcpMeta: acpMeta ?? null,
+        entry: {
+          ...outcome.entry,
+          fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+        },
+        modelCatalog: catalog?.entries,
+        modelCatalogRouteVariants: catalog?.routeVariants,
+      });
+      if (client !== null && !scopes.includes(ADMIN_SCOPE)) {
+        result.entry = projectSessionEntryAccounts(
+          result.entry,
+          client.authenticatedUserProfile?.profileId,
+        );
+      }
+      respond(true, result, undefined);
     } finally {
       try {
         if (preparingOperator) {
@@ -663,7 +667,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
               }
             : {
                 entry: {
-                  ...result.entry,
+                  ...(client && !client.connect.scopes?.includes(ADMIN_SCOPE)
+                    ? projectSessionEntryAccounts(
+                        result.entry,
+                        client.authenticatedUserProfile?.profileId,
+                      )
+                    : result.entry),
                   fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
                 },
                 resolved: result.resolved,

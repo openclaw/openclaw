@@ -6,6 +6,7 @@ import type {
   ModelChoice,
   ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { isLocalBaseUrl } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -28,6 +29,24 @@ export function retainModelChoiceAccountPin(choice: ModelChoice, pinned: boolean
 
 export function hasModelChoiceAccountPin(choice: ModelChoice): boolean {
   return pinnedAccountChoices.has(choice);
+}
+
+/** The Codex probe observes only a local user-home login. It is not proof of the selected route. */
+export function projectRuntimeLogin(
+  row: ModelChoice,
+  evaluation: ModelAuthAvailabilityEvaluation,
+  owner: { authModes?: PreparedAgentCredentialModes; isCurrent: () => boolean },
+): Pick<ModelChoice, "usesRuntimeLogin"> | undefined {
+  const login = owner.authModes?.codex;
+  return row.provider === "openai" &&
+    row.agentRuntime?.id === "codex" &&
+    evaluation.runtimeAuth?.id === "codex" &&
+    evaluation.availability === true &&
+    typeof login === "object" &&
+    login.source === "native" &&
+    owner.isCurrent()
+    ? { usesRuntimeLogin: true }
+    : undefined;
 }
 
 /** Account observations are never model metadata donors or native-login readiness. */

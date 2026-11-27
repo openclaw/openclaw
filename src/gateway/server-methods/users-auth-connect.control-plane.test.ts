@@ -14,6 +14,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import {
   setupModelAccountConnectTest,
+  fixtureProfileId,
+  fixtureAccountId,
+  resolveProfileId,
   prepareUserProfileSelectionAuthority,
   prepareUserProfileRolePolicyAuthority,
   listUserProfileAuthLinks,
@@ -45,6 +48,15 @@ setupModelAccountConnectTest();
 
 describe("users model-account control plane", () => {
   it("lists account pages for their owner or an identified administrator", async () => {
+    const sharedLink = {
+      provider: "openai",
+      authProfileId: "openai:shared@example.invalid",
+      updatedAt: 1,
+    };
+    linksByOwner.set("profile-1", [sharedLink]);
+    const publicLinks = [
+      { ...sharedLink, authProfileId: expect.stringMatching(/^shared-ref:[\w-]+$/u) },
+    ];
     const accounts = [
       {
         authProfileId: "personal:profile-1:saved",
@@ -61,7 +73,7 @@ describe("users model-account control plane", () => {
       profileId: "profile-1",
       accounts,
       nextCursor: "personal:profile-1:saved",
-      links: [],
+      links: publicLinks,
     });
     expect(listUserModelAccounts).toHaveBeenCalledWith(
       {
@@ -72,7 +84,7 @@ describe("users model-account control plane", () => {
     );
     expect(await rpc("users.listAuthLinks", { profileId: "profile-1" })).toHaveBeenCalledWith(
       true,
-      { links: [] },
+      { links: publicLinks },
     );
     listUserModelAccounts.mockClear();
     listUserProfileAuthLinks.mockClear();
@@ -89,12 +101,13 @@ describe("users model-account control plane", () => {
 
     const admin = createClient("profile-admin", ["operator.admin"]);
     listUserModelAccounts.mockReturnValue({ accounts: [] });
+    linksByOwner.set("profile-other", [sharedLink]);
     expect(
       await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),
     ).toHaveBeenCalledWith(true, {
       profileId: "profile-other",
       accounts: [],
-      links: [],
+      links: [sharedLink],
     });
     expect(listUserModelAccounts).toHaveBeenCalledWith(
       {
@@ -136,6 +149,8 @@ describe("users model-account control plane", () => {
   );
 
   it("selects a retained owned account and cancels an older sign-in without rewriting credentials", async () => {
+    resolveProfileId.mockImplementation((id) => (id === "profile-1" ? fixtureProfileId : id));
+    const authProfileId = `personal:${fixtureProfileId}:${fixtureAccountId}`;
     const flow = await startFlow();
     expect(
       await rpc("users.selectModelAccount", { authProfileId: "personal:profile-other:missing" }),
@@ -143,17 +158,15 @@ describe("users model-account control plane", () => {
     expect(await status(flow)).toMatchObject({ status: "pending" });
     readUserModelAccountSummary.mockReturnValue({
       provider: "openai",
-      authProfileId: "personal:profile-1:saved",
+      authProfileId,
     });
-    expect(
-      await rpc("users.selectModelAccount", { authProfileId: "personal:profile-1:saved" }),
-    ).toHaveBeenCalledWith(true, {
-      links: [{ provider: "openai", authProfileId: "personal:profile-1:saved", updatedAt: 2 }],
+    expect(await rpc("users.selectModelAccount", { authProfileId })).toHaveBeenCalledWith(true, {
+      links: [{ provider: "openai", authProfileId, updatedAt: 2 }],
     });
     expect(readUserModelAccountSummary).toHaveBeenCalledWith(
       {
-        profileId: "profile-1",
-        authProfileId: "personal:profile-1:saved",
+        profileId: fixtureProfileId,
+        authProfileId,
       },
       { context: expect.anything() },
     );
@@ -168,7 +181,7 @@ describe("users model-account control plane", () => {
     expect(
       await rpc("users.unlinkAuthProfile", { profileId: "profile-1", provider: "openai" }),
     ).toHaveBeenCalledWith(true, { links: [] });
-    expect(linksByOwner.get("profile-1")).toEqual([]);
+    expect(linksByOwner.get(fixtureProfileId)).toEqual([]);
     expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
@@ -453,6 +466,20 @@ it("uses the canonical profile role for administrator access, not the membership
         links: [],
       });
       setUserProfileRole(profile.id, "reader");
+      linksByOwner.set(profile.id, [
+        { provider: "example", authProfileId: "example:team@example.invalid", updatedAt: 1 },
+      ]);
+      expect(
+        await rpc("users.listAuthLinks", { profileId: profile.id }, admin),
+      ).toHaveBeenCalledWith(true, {
+        links: [
+          {
+            provider: "example",
+            authProfileId: expect.stringMatching(/^shared-ref:[\w-]+$/u),
+            updatedAt: 1,
+          },
+        ],
+      });
       listUserModelAccounts.mockClear();
       expect(
         await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),

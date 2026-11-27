@@ -15,10 +15,10 @@ import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-m
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
+import { projectClientModelCatalog } from "../model-account-presentation.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
-import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { sessionModelRevision } from "../session-model-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -194,10 +194,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
               respond(
                 true,
                 projectModelsProviderPresentation(
-                  projectModelFastModeCatalog(
-                    policy ? policy.catalog(projected) : projected,
-                    client,
-                  ),
+                  projectClientModelCatalog(policy ? policy.catalog(projected) : projected, client),
                   currentConfig,
                   // Settings reads the configured catalog; only unrestricted whole-catalog
                   // reads may also disclose configured providers with no model rows.

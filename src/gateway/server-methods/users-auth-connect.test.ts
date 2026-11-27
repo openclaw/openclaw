@@ -6,6 +6,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   setupModelAccountConnectTest,
+  fixtureProfileId,
+  fixtureAccountId,
+  linksByOwner,
   resolveProfileId,
   prepareUserProfileSelectionAuthority,
   connectUserModelAccount,
@@ -44,6 +47,7 @@ describe("users model-account connection lifecycle", () => {
   it.each(["direct", "shared-secret", "ingress"] as const)(
     "uses the catalog and exact sensitive step for a %s caller without consuming a rejected answer",
     async (caller) => {
+      resolveProfileId.mockImplementation((id) => (id === "profile-1" ? fixtureProfileId : id));
       if (caller === "shared-secret") {
         self.internal = { operatorRoleActor: { kind: "system" } };
       }
@@ -88,13 +92,22 @@ describe("users model-account connection lifecycle", () => {
         step: pending.step,
         error: expect.any(String),
       });
+      linksByOwner.set(fixtureProfileId, [
+        { provider: "example", authProfileId: "example:team@example.invalid", updatedAt: 1 },
+      ]);
       await complete(flow);
       const result = await terminal(flow, "connected");
+      const authProfileId = `personal:${fixtureProfileId}:${fixtureAccountId}`;
       expect(result).toEqual({
         status: "connected",
-        authProfileId: "personal:profile-1:account-1",
+        authProfileId,
         links: [
-          { provider: "openai", authProfileId: "personal:profile-1:account-1", updatedAt: 1 },
+          {
+            provider: "example",
+            authProfileId: expect.stringMatching(/^shared-ref:[\w-]+$/u),
+            updatedAt: 1,
+          },
+          { provider: "openai", authProfileId, updatedAt: 1 },
         ],
       });
       expect(await complete(flow)).toHaveBeenCalledWith(true, result);

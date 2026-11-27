@@ -40,7 +40,7 @@ export async function prepareUserModelAccountAction(
     | PersonalModelSelectionScope
     | "operator.admin"
     | typeof SESSION_WRITE_SCOPE = WRITE_SCOPE,
-): Promise<ModelAccountConnectWorkerAction> {
+): Promise<ModelAccountConnectWorkerAction & { canManageSharedAccounts: boolean }> {
   const { client, context } = options;
   const profileReference = client?.authenticatedUserProfile?.profileId;
   const userReference = client?.authenticatedUserId;
@@ -99,7 +99,7 @@ export async function prepareUserModelAccountAction(
     throw new UserProfileNotFoundError(ownerReference);
   }
   const owner = ownerIdentity.profileId;
-  const assertCurrent = (roles?: readonly ModelAccountRole[]) => {
+  const currentGrants = (roles?: readonly ModelAccountRole[]) => {
     assertConnectionCurrent();
     if (!actorIdentity.isCurrent() || !ownerIdentity.isCurrent()) {
       throw new ModelAccountConnectAuthorityError();
@@ -127,9 +127,17 @@ export async function prepareUserModelAccountAction(
     ) {
       throw new ModelAccountConnectAuthorityError();
     }
+    return grants;
   };
-  assertCurrent();
-  return { owner, actorProfileId: actor, assertCurrent };
+  const grants = currentGrants();
+  return {
+    owner,
+    actorProfileId: actor,
+    canManageSharedAccounts: grants.every((scopes) => scopes.includes("operator.admin")),
+    assertCurrent: (roles?: readonly ModelAccountRole[]) => {
+      currentGrants(roles);
+    },
+  };
 }
 
 /** Preview and commit share the same self-owned selection; scope follows the requested action. */

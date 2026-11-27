@@ -5,11 +5,15 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../../api/types.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelAccountListEnglish } from "../../../i18n/locales/en-model-account-list.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { sharedModelAccountChoices } from "../../../lib/shared-model-account-choices.ts";
+import {
+  sharedModelAccountChoices,
+  sharedModelAccountLabel,
+} from "../../../lib/shared-model-account-choices.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 
 registerModelAccountListEnglish();
@@ -206,12 +210,22 @@ export function renderChatModelAccountControl(
   const adminProfile = (id: string | undefined) =>
     params.adminIdentity ? profiles?.find((profile) => profile.profileId === id) : undefined;
   const personalLabel = (label: string, id: string | undefined, index: number) => {
-    if (params.adminIdentity || (!label.includes("@") && (!id || !label.includes(id)))) {
+    if (
+      label.toLowerCase() !== provider &&
+      (params.adminIdentity || (!label.includes("@") && (!id || !label.includes(id))))
+    ) {
       return label;
     }
-    return index < 0
-      ? t("chat.modelAccounts.personalAccount")
-      : t("chat.modelAccounts.personalNumber", { number: String(index + 1) });
+    if (!id) {
+      return t("chat.modelAccounts.personalAccount");
+    }
+    const name = providerDisplayLabel(provider, route);
+    return index < 0 || personal.length < 2
+      ? t("chat.modelAccounts.yourProviderAccount", { provider: name })
+      : t("chat.modelAccounts.yourProviderAccountNumber", {
+          provider: name,
+          number: String(index + 1),
+        });
   };
   const selectedProfile = adminProfile(currentId);
   const selectedLabel =
@@ -220,7 +234,7 @@ export function renderChatModelAccountControl(
       : selectedProfile?.displayName ||
         (selection.kind === "shared"
           ? (shared.find((choice) => choice.profileId === currentId)?.label ??
-            (params.adminIdentity ? selection.label : t("chat.modelAccounts.sharedAccount")))
+            (params.adminIdentity ? selection.label : sharedModelAccountLabel(selection.ordinal)))
           : personalLabel(
               selection.label,
               currentId,
@@ -377,6 +391,10 @@ export function renderChatModelAccountControl(
         }
       : undefined;
   return {
+    preferredAccountLabel:
+      params.sessionKey && selection.kind !== "automatic" && selection.source !== "auto"
+        ? selectedLabel
+        : undefined,
     prefetch: params.disabled ? undefined : prefetch,
     onClose: () => {
       currentInventory.open = false;

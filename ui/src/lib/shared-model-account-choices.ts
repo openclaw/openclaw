@@ -3,6 +3,12 @@ import type { ModelAuthStatusResult, ModelCatalogEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { buildQualifiedChatModelValue } from "./chat/model-ref.ts";
 
+export function sharedModelAccountLabel(ordinal?: number) {
+  return ordinal === undefined
+    ? t("chat.modelAccounts.sharedAccount")
+    : t("chat.modelAccounts.sharedNumber", { number: String(ordinal) });
+}
+
 /** Never use another model, runtime or usage-provider alias as a source of account choices. */
 export function sharedModelAccountChoices(
   status: ModelAuthStatusResult | undefined,
@@ -28,9 +34,6 @@ export function sharedModelAccountChoices(
       profileId: account.profileId,
       displayName: account.displayName,
       email: account.email,
-      label:
-        account.ordinal !== undefined
-          ? t("chat.modelAccounts.sharedNumber", { number: String(account.ordinal) })
-          : t("chat.modelAccounts.sharedAccount"),
+      label: sharedModelAccountLabel(account.ordinal),
     }));
 }

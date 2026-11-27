@@ -17,6 +17,7 @@ export type SessionPatchArchiveTarget = {
   archiveActor: SessionCreatedActor | undefined;
   canonicalKey: string;
   fullPatch: SessionsPatchParams;
+  sharedProfileId?: string;
   initialEntry?: SessionEntry;
   initialTarget: GatewaySessionStoreTargetWithStore;
   key: string;

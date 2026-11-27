@@ -277,6 +277,36 @@ async function publishFixture(
 }
 
 describe("chat metadata ownership", () => {
+  it("returns a shared preference without its private ID or label to a session reader", () =>
+    withMetadataFixture(async (fixture) => {
+      const id = "fixture:shared@example.test";
+      const sessionKey = "agent:main:selected-shared";
+      await fixture.saveSession(sessionKey, {
+        authProfileOverride: id,
+        authProfileOverrideSource: "user",
+      });
+      const harness = createChatMetadataHarness(fixture.config);
+      fixture.context.readChatMetadata = harness.runtime.read;
+      try {
+        await harness.runtime.refresh();
+        const response = (await fixture.request({ sessionKey })).mock.calls[0];
+        expect(response).toMatchObject([
+          true,
+          expect.objectContaining({
+            accountSelection: {
+              kind: "shared",
+              source: "user",
+              label: "Shared account",
+              authProfileId: expect.stringMatching(/^shared-ref:/),
+            },
+          }),
+        ]);
+        expect(JSON.stringify(response)).not.toContain(id);
+      } finally {
+        await harness.runtime.stop();
+      }
+    }));
+
   it.for([
     { includeModels: false, first: "response" },
     { includeModels: true, first: "placement" },

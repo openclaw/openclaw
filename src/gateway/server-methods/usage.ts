@@ -29,6 +29,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -93,6 +94,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
       coldRead,
+      includeAccountEmail: hasGatewayAdminScope(client),
     });
     respond(true, summary, undefined);
   },

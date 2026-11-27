@@ -27,6 +27,82 @@ const authStatus = (profileId: string, email: string) =>
   modelAuthStatus([{ profileId, type: "oauth", status: "ok", displayName: accountLabel, email }]);
 
 suite.define(() => {
+  it("shows the saved shared account number in the closed composer without loading account choices", async () => {
+    await suite.withPage({ viewport: { width: 1080, height: 760 } }, async ({ page }) => {
+      const models = [
+        { id: "shared-alpha", provider: "openai", name: "Draft model", available: true },
+      ];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "models.list": {
+            models,
+            accountSelection: {
+              kind: "shared",
+              source: "user",
+              authProfileId: "shared-ref:fixture",
+              label: "Shared account",
+              ordinal: 2,
+            },
+          },
+        },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      await polledText(modelPicker(page).trigger).toContain("Preferred: Shared account 2");
+      expect(await gateway.getRequests("models.authStatus")).not.toContainEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({ accountTarget: expect.anything() }),
+        }),
+      );
+      expect(await gateway.getRequests("users.listModelAccounts")).toHaveLength(0);
+    });
+  });
+
+  it("shows the saved personal preference in chat and only replaces the picker for confirmed native login", async () => {
+    await suite.withPage({ viewport: { width: 1080, height: 760 } }, async ({ page }) => {
+      const model = {
+        provider: "openai",
+        id: "shared-alpha",
+        name: "Draft model",
+        available: true,
+        agentRuntime: { id: "codex", source: "model" as const },
+      };
+      const selection = { kind: "personal", label: "openai", authProfileId: "personal:fixture" };
+      const routeCatalog = (confirmed: boolean) => ({
+        models: [{ ...model, ...(confirmed ? { usesRuntimeLogin: true } : {}) }],
+        accountSelection: selection,
+      });
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models: [model],
+        methodResponses: { "models.list": routeCatalog(false) },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      const { trigger, picker } = modelPicker(page);
+      await polledText(trigger).toContain("Preferred: Your OpenAI account");
+      await gateway.setMethodResponse("models.list", {
+        ...routeCatalog(false),
+        accountSelection: {
+          kind: "shared",
+          label: "Shared account",
+          authProfileId: "shared-ref:fixture",
+          source: "auto",
+        },
+      });
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      await expect.poll(() => trigger.textContent()).not.toContain("Preferred:");
+      await gateway.setMethodResponse("models.list", routeCatalog(true));
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      await expect.poll(() => trigger.textContent()).not.toContain("Preferred:");
+      await trigger.click();
+      await polledVisible(picker.getByText("Using Codex’s own login", { exact: true })).toBe(true);
+      expect(await picker.locator(".chat-controls__account-trigger").count()).toBe(0);
+      expect(await gateway.getRequests("users.listModelAccounts")).toEqual([]);
+    });
+  });
+
   it("loads accounts independently of the catalog and only enables the picker when ready", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "OpenAI Standard", provider: "openai" }];

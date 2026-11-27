@@ -63,6 +63,20 @@ export function prepareChatModelProviderAuth(
   return providerAuth;
 }
 
+export function ChatLockedModelHeading(
+  props: Pick<ChatModelPickerParams, "triggerModelLabel" | "nativeLoginLabel">,
+) {
+  return (
+    <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
+      <span class="chat-controls__locked-model-value">{props.triggerModelLabel}</span>
+      <Show when={props.nativeLoginLabel}>
+        {(label) => <span class="chat-controls__auth-meta">{label()}</span>}
+      </Show>
+      <span class="chat-controls__locked-model-badge">{t("chat.selectors.modelLocked")}</span>
+    </div>
+  );
+}
+
 /** The rail and Favorites use the same stack header; Favorites has only a title. */
 export function ChatModelProviderHeading(props: {
   provider: string;
@@ -73,6 +87,7 @@ export function ChatModelProviderHeading(props: {
   providerAuth: ReadonlyMap<string, ModelProviderAuthLabel>;
   runtime: string | null;
   accounts: ReturnType<ChatModelAccountSection["viewProps"]> | undefined;
+  nativeLoginLabel?: string;
   onSettings: ChatModelPickerParams["onProviderSettings"];
 }) {
   const auth = createMemo(() =>
@@ -98,7 +113,9 @@ export function ChatModelProviderHeading(props: {
     <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
       <span class="chat-controls__provider-label">{props.label}</span>
       <Show when={!props.favorites}>
-        {props.accounts ? (
+        {props.nativeLoginLabel ? (
+          <span class="chat-controls__auth-meta">{props.nativeLoginLabel}</span>
+        ) : props.accounts ? (
           <ChatModelAccountSectionView {...props.accounts} />
         ) : showAuth() ? (
           <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>

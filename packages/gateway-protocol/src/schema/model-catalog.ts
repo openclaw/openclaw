@@ -63,6 +63,8 @@ const ModelServiceTierObservationSchema = closedObject({
 
 const ModelRuntimeProperties = {
   available: Type.Optional(Type.Boolean()),
+  /** This local model route uses the runtime’s confirmed login, not an OpenClaw account. */
+  usesRuntimeLogin: Type.Optional(Type.Literal(true)),
   /** Scoped manual-choice permission; separate from runtime readiness and automatic selection. */
   manualSelectionAllowed: Type.Optional(Type.Boolean()),
   unavailableReason: Type.Optional(ModelUnavailableReasonSchema),

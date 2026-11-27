@@ -433,17 +433,21 @@ describe("models.authStatus", () => {
   });
 
   it("keeps shared auth facts private across concurrent client scopes", async () => {
+    const id = "openai:owner@example.test";
     setPreparedAuthStore({
       version: 1,
       profiles: {
-        "openai:default": oauthCredential("openai", {
+        [id]: oauthCredential("openai", {
           email: "owner@example.com",
           displayName: "Work account",
         }),
       },
-      usageStats: { "openai:default": { lastUsed: 42 } },
+      order: { openai: [id] },
+      usageStats: { [id]: { lastUsed: 42 } },
     });
-    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    const health = createOpenAiCodexOauthHealthSummary();
+    health.profiles[0]!.profileId = id;
+    mocks.buildAuthHealthSummary.mockReturnValue(health);
 
     const admin = createOptions({ agentId: "main" });
     const reader = createOptions({ agentId: "main" }, ["operator.read"]);
@@ -456,6 +460,10 @@ describe("models.authStatus", () => {
       source: "saved",
     });
     const result = firstRespondCall(reader)?.[1] as ModelAuthStatusResult;
+    expect(JSON.stringify(result)).not.toContain(id);
+    expect(result.providers[0]?.profileOrder).toEqual([
+      result.providers[0]?.profiles[0]?.profileId,
+    ]);
     for (const field of ["email", "displayName", "lastUsedAt"]) {
       expect(result.providers[0]?.profiles[0]).not.toHaveProperty(field);
     }

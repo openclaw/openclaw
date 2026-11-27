@@ -331,9 +331,16 @@ it.each([
   { source: "session", runtime: "openclaw", rejected: false, profileId: "anthropic:selected" },
   { source: "default", runtime: "claude-cli", rejected: true, profileId: "anthropic:selected" },
   { source: "session", runtime: "claude-cli", rejected: true, profileId: "personal:work" },
-] as const)(
+  {
+    source: "session",
+    runtime: "openclaw",
+    rejected: true,
+    profileId: "anthropic:studio@example.test",
+    hideSharedAccountIdentity: true,
+  },
+])(
   "directs a $source account failure to that account ($runtime, $profileId, rejected=$rejected)",
-  async ({ source, runtime, rejected, profileId }) => {
+  async ({ source, runtime, rejected, profileId, hideSharedAccountIdentity }) => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
     const entry: ModelCatalogEntry = {
@@ -381,6 +388,7 @@ it.each([
       agentId: "main",
       provider: entry.provider,
       model: entry.id,
+      hideSharedAccountIdentity,
       sessionEntry:
         source === "session"
           ? {
@@ -392,7 +400,7 @@ it.each([
     });
     expect(selection).toEqual({
       kind: "unavailable",
-      message: `A runtime is not available for anthropic/claude-fixture: selected account "${profileId}" is unavailable. Restore that account, or change the explicit or default account selection.`,
+      message: `A runtime is not available for anthropic/claude-fixture: selected ${hideSharedAccountIdentity ? "shared account" : `account "${profileId}"`} is unavailable. Restore that account, or change the explicit or default account selection.`,
     });
   },
 );

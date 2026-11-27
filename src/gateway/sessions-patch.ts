@@ -111,6 +111,8 @@ type SessionPatchProjectionParams = {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
+  /** Server-resolved ID; never reparse it as part of the model string. */
+  sharedProfileId?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
@@ -551,7 +553,9 @@ function* projectSessionPatchSteps(
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      selection = resolved;
+      selection = params.sharedProfileId
+        ? { ...resolved, profile: params.sharedProfileId }
+        : resolved;
     }
     if (selection) {
       const prepared = prepareSessionPatchModelSelection({

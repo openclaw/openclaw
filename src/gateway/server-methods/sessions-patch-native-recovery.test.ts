@@ -5,6 +5,8 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as harnessRegistry from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
@@ -230,6 +232,37 @@ it.each(["model", "agentRuntime", "create"] as const)(
     expect(prepareRuntime).not.toHaveBeenCalled();
   },
 );
+
+it("presents an unavailable inherited account per viewer on explicit native runtime creation", async () => {
+  prepareRuntime.mockRestore();
+  const id = "fixture:studio@example.test";
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg);
+  vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockResolvedValue(
+    owner,
+  );
+  vi.spyOn(harnessRegistry, "getRegisteredAgentHarness").mockReturnValue({ harness });
+  const entry = unrestricted({ authProfileOverride: id, authProfileOverrideSource: "user" });
+  for (const scope of ["operator.admin", "operator.write"]) {
+    const result = await prepareSessionCreateRuntimeSelection({
+      request: { cfg, model, agentRuntime: harness.id, requestingOperatorScopes: [scope] },
+      agentId: "main",
+      sessionKey: key,
+      storePath: "unused-fixture-store",
+      entry,
+      existingEntry: undefined,
+      catalog: owner.modelCatalog,
+      validateModelSelection: undefined,
+    });
+    assert(!result.ok);
+    expect(result.error.message).toContain(
+      scope === "operator.admin" ? id : "selected shared account is unavailable",
+    );
+    if (scope !== "operator.admin") {
+      expect(result.error.message).not.toContain(id);
+    }
+    expect(entry.authProfileOverride).toBe(id);
+  }
+});
 
 it("does not validate an inherited runtime for an unrelated metadata patch", async () => {
   const lookup = vi

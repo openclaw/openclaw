@@ -408,8 +408,12 @@ export function renderChatPaneComposerControls(params: {
           contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
             ? switchChatSetting(state, { kind: "contextWindow", value: next }, targetSessionKey)
             : Promise.resolve(false),
-        onModelPickerOpen: () => {
-          if (modelAccess.allowed && selectedSession?.modelSelectionLocked !== true) {
+        onModelPickerOpen: (prefetchAccounts = true) => {
+          if (
+            prefetchAccounts &&
+            modelAccess.allowed &&
+            selectedSession?.modelSelectionLocked !== true
+          ) {
             prefetchChatModelAccounts({ owner: state, client, ownsScope: ownsRoute });
           }
           return refreshChatModelCatalogOnDemand(state);

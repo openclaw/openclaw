@@ -11,10 +11,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
+import { projectClientModelCatalog } from "../model-account-presentation.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { operatorSessionCap, readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
-import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
@@ -219,7 +219,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
               })?.forAgent(readScope.agentId, metadata.models);
             respond(
               true,
-              projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
+              projectClientModelCatalog(policy ? policy.metadata(metadata) : metadata, client),
             );
           };
           if (readScope.withCurrent) {

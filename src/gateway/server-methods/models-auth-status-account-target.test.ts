@@ -41,13 +41,15 @@ function fixture() {
   const store: AuthProfileStore = {
     version: 1,
     profiles: {
-      "fixture:a": shared,
-      "fixture:b": shared,
+      "fixture:a@example.test": shared,
+      "fixture:b@example.test": shared,
       "fixture:cooldown": shared,
       [personal]: shared,
       "other:a": { ...shared, provider: "other" },
     },
-    order: { fixture: ["fixture:b", "fixture:cooldown", personal, "fixture:a"] },
+    order: {
+      fixture: ["fixture:b@example.test", "fixture:cooldown", personal, "fixture:a@example.test"],
+    },
     usageStats: { "fixture:cooldown": { cooldownUntil: Date.now() + 600_000 } },
   };
   const context = createModelsListTestContext({
@@ -83,15 +85,18 @@ afterEach(() => vi.restoreAllMocks());
 it("returns only the exact usable shared pins in the saved session agent's order", () =>
   withModelsListState(async () => {
     const f = fixture();
-    const result = await f.request();
+    const result = await f.request(target, ["operator.admin"]);
+    const editor = await f.request();
+    expect(JSON.stringify(editor)).not.toMatch(/@example.test|Not public|synthetic-only/);
+    expect(editor).toMatchObject({ accountTarget: { accounts: [{ ordinal: 2 }, { ordinal: 1 }] } });
     expect(result).toMatchObject({
       accountTarget: {
         provider,
         model: "chat",
         runtime: "openclaw",
         accounts: [
-          { profileId: "fixture:b", ordinal: 2 },
-          { profileId: "fixture:a", ordinal: 1 },
+          { profileId: "fixture:b@example.test", ordinal: 2 },
+          { profileId: "fixture:a@example.test", ordinal: 1 },
         ],
       },
     });
@@ -101,9 +106,9 @@ it("returns only the exact usable shared pins in the saved session agent's order
       agentId: undefined,
     });
     expect(JSON.stringify(result)).not.toMatch(
-      /my-session|Not public|personal:|other:a|synthetic-only|fixture:cooldown/,
+      /my-session|personal:|other:a|synthetic-only|fixture:cooldown/,
     );
-    expect(f.release).toHaveBeenCalledOnce();
+    expect(f.release).toHaveBeenCalledTimes(2);
   }));
 it("withholds unknown routes, native and worker ownership, and a different agent's prepared store", () =>
   withModelsListState(async () => {
@@ -138,9 +143,11 @@ it("honors prepared per-account rejection without running discovery or using a f
         expect(allowDiscovery).toBe(false);
         return {
           isCurrent: () => true,
-          hasPublishedCatalog: profileId === "fixture:b",
+          hasPublishedCatalog: profileId === "fixture:b@example.test",
           outcomes:
-            profileId === "fixture:b" ? [{ provider, profileId, status: "auth-rejected" }] : [],
+            profileId === "fixture:b@example.test"
+              ? [{ provider, profileId, status: "auth-rejected" }]
+              : [],
         };
       },
     );
@@ -153,8 +160,8 @@ it("honors prepared per-account rejection without running discovery or using a f
         prepareServiceTierObserver: () => () => false,
       },
     });
-    expect(await f.request()).toMatchObject({
-      accountTarget: { accounts: [{ profileId: "fixture:a", ordinal: 1 }] },
+    expect(await f.request(target, ["operator.admin"])).toMatchObject({
+      accountTarget: { accounts: [{ profileId: "fixture:a@example.test", ordinal: 1 }] },
     });
     expect(acquire.mock.calls.every(([{ profileId }]) => profileId.startsWith("fixture:"))).toBe(
       true,

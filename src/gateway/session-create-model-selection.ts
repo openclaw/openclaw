@@ -84,6 +84,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     operatorAuthority: params.operatorAuthority,
     validateInheritedRuntime: true,
     callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
+    hideSharedAccountIdentity: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === false,
     patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
     entry,
     catalog: params.catalog?.entries,

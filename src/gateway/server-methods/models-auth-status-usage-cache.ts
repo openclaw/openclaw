@@ -278,6 +278,7 @@ export async function readProviderUsage(
 export async function loadUsageStatusStaleWhileRevalidate(options: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";
+  includeAccountEmail: boolean;
 }): Promise<UsageSummary> {
   const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
@@ -308,6 +309,9 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     return { updatedAt: params.now, providers: [], refreshing: true };
   }
   // This public RPC does not share models.authStatus’s gated profile identity.
-  const providers = summary.providers.map(({ authProfileId: _authProfileId, ...usage }) => usage);
+  const providers = summary.providers.map(
+    ({ authProfileId: _authProfileId, accountEmail, ...usage }) =>
+      options.includeAccountEmail && accountEmail ? { ...usage, accountEmail } : usage,
+  );
   return { ...summary, providers };
 }

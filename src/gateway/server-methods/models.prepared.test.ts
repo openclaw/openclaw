@@ -380,7 +380,7 @@ it("isolates saved account and runtime choices between sessions", async () => {
       harness.setAuthStore(authStore);
       context.readPreparedModelsList = harness.runtime.readModelsList;
       const params = { agentId: "main", sessionKey, view: "configured" as const };
-      const read = modelsReader(context, params);
+      const read = modelsReader(context, params, authorizationClient("editor", ["operator.write"]));
       try {
         using sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
         using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
@@ -399,8 +399,15 @@ it("isolates saved account and runtime choices between sessions", async () => {
           choices: Array.from({ length: 3 }, () =>
             expect.objectContaining({ agentRuntime: expect.objectContaining({ id: "codex" }) }),
           ),
-          account: { kind: "shared", authProfileId: "openai:fixture", source: "user" },
+          account: {
+            kind: "shared",
+            authProfileId: expect.stringMatching(/^shared-ref:/),
+            label: "Shared account",
+            ordinal: 2,
+            source: "user",
+          },
         });
+        expect(JSON.stringify(result)).not.toContain("openai:fixture");
         const readsPerRequest = sessionRead.mock.calls.length;
         sessionRead.mockClear();
         expect(await read()).toEqual(result);
@@ -437,10 +444,12 @@ it("isolates saved account and runtime choices between sessions", async () => {
         });
         expect(changed?.accountSelection).toMatchObject({
           kind: "shared",
-          authProfileId: "openai:alternate",
+          authProfileId: expect.stringMatching(/^shared-ref:/),
           source: "user",
         });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
+        expect(JSON.stringify(changed)).not.toContain("openai:alternate");
+        expect(changed?.accountSelection).not.toEqual(result?.accountSelection);
         expect(await read()).toEqual(changed);
         expect(prepareProjection).toHaveBeenCalledTimes(2);
         params.sessionKey = siblingSessionKey;

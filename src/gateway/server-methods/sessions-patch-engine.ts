@@ -69,6 +69,7 @@ import { preparePersonalModelSelection } from "./users-model-account-access.js";
 type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
 const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
+type PlacementValidation = Awaited<ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>>;
 type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
 
 export async function executeSessionPatchMutations(params: {
@@ -99,6 +100,10 @@ export async function executeSessionPatchMutations(params: {
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const sharedAccount = modelSelection.prepareSharedAccountLookup(
+    params.context,
+    callerIsAdmin ? null : params.patch.model,
+  );
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const discovery = await discoverSessionPatchTargets(cfg, params.targets);
   if (!discovery.ok) {
@@ -110,10 +115,7 @@ export async function executeSessionPatchMutations(params: {
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
   const permissionErrors = new Map<number, ErrorShape>();
-  const placementChecks = new Map<
-    number,
-    Awaited<ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>>
-  >();
+  const placementChecks = new Map<number, PlacementValidation>();
   using _ = {
     [Symbol.dispose]: () => {
       for (const validation of placementChecks.values()) {
@@ -121,10 +123,7 @@ export async function executeSessionPatchMutations(params: {
       }
     },
   };
-  const prepared: PreparedPatchTarget[] = [];
-  const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
-    length: params.targets.length,
-  });
+  const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({ length: outcomes.length });
   for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
     // Commit guards are core control state; construct the protocol patch from
     // its public identity fields so closures can never reach hooks or entries.
@@ -158,24 +157,25 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: accessError };
       continue;
     }
-    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-      canonicalKey,
-      initialEntry,
-    );
-    if (missingHarnessSessionError) {
-      outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
-      continue;
-    }
-    const expectationError =
+    const invalidTarget =
+      resolveMissingAgentHarnessSessionError(canonicalKey, initialEntry) ??
       sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
-    if (expectationError) {
-      outcomes[index] = invalidSessionRequest(expectationError);
+    if (invalidTarget) {
+      outcomes[index] = invalidSessionRequest(invalidTarget);
       continue;
     }
-    let placementValidation: Awaited<
-      ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>
-    >;
+    let sharedProfileId: string | undefined;
+    let placementValidation: PlacementValidation;
     try {
+      if (sharedAccount) {
+        sharedProfileId = await sharedAccount(resolved.agentId);
+        if (!sharedProfileId) {
+          outcomes[index] = invalidSessionRequest(
+            "This shared account is unavailable. Refresh the account picker and choose again.",
+          );
+          continue;
+        }
+      }
       placementValidation = await prepareSessionWorkerPlacementPatchValidation({
         agentId: resolved.agentId,
         cfg,
@@ -191,8 +191,9 @@ export async function executeSessionPatchMutations(params: {
       continue;
     }
     placementChecks.set(index, placementValidation);
-    const preparedTarget: PreparedPatchTarget = {
+    preparedByIndex[index] = {
       archiveActor,
+      sharedProfileId,
       canonicalKey,
       fullPatch,
       index,
@@ -204,14 +205,12 @@ export async function executeSessionPatchMutations(params: {
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
     };
-    prepared.push(preparedTarget);
-    preparedByIndex[index] = preparedTarget;
   }
 
   await using preparation = await sessionPatchExpectations.prepareSessionPatchTargets({
     cfg,
     getCurrentConfig,
-    prepared,
+    prepared: preparedByIndex.filter((target) => target !== undefined),
     targets: params.targets,
     placementChecks,
     outcomes,
@@ -446,6 +445,7 @@ export async function executeSessionPatchMutations(params: {
                           storeKey: primaryKey,
                           agentId: target.requestedAgentId,
                           patch: target.fullPatch,
+                          sharedProfileId: target.sharedProfileId,
                           archivedBy: archiveActor,
                           personalModelSelection,
                           operatorAuthority,
@@ -470,6 +470,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          hideSharedAccountIdentity: !callerIsAdmin,
                           operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,

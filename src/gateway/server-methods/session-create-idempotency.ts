@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
@@ -7,8 +8,10 @@ import {
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
+import { projectSessionEntryAccounts } from "../model-account-presentation.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { DEDUPE_MAX } from "../server-constants.js";
-import { projectSessionFastModeEntryResult } from "../session-fast-mode-presentation.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import type { GatewayInflightResult } from "./inflight.js";
 import { respondError } from "./response.js";
 import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
@@ -43,8 +46,24 @@ export function idempotentSessionCreate(
 ): GatewayRequestHandler {
   return async (request) => {
     const respond: RespondFn = (...args) => {
-      if (args[0] && args.length > 1) {
-        args[1] = projectSessionFastModeEntryResult(args[1], request.client);
+      // Keep the canonical creation receipt in the replay cache; present it for this connection.
+      const payload = args[1];
+      if (args[0] && isRecord(payload) && isRecord(payload.entry)) {
+        const entry =
+          request.client && !hasGatewayAdminScope(request.client)
+            ? projectSessionEntryAccounts(
+                payload.entry,
+                request.client.authenticatedUserProfile?.profileId,
+              )
+            : payload.entry;
+        if (
+          entry.fastMode === "ultrafast" &&
+          prepareSessionFastModePresentation(request.client)("ultrafast") === true
+        ) {
+          args[1] = { ...payload, entry: { ...entry, fastMode: true } };
+        } else if (entry !== payload.entry) {
+          args[1] = { ...payload, entry };
+        }
       }
       request.respond(...args);
     };

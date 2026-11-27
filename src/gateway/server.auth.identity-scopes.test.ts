@@ -25,7 +25,7 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { connectUserModelAccount } from "../state/user-model-accounts.js";
+import { connectUserModelAccount, setUserProfileAuthLink } from "../state/user-model-accounts.js";
 import {
   linkEmail,
   setDisplayName,
@@ -639,6 +639,10 @@ test("lets the shared-token owner manage accounts across device-token reconnects
   await withIdentityServer(async ({ connect }) => {
     let deviceToken: string | undefined;
     let authProfileId: string | undefined;
+    const sharedLink = {
+      provider: "openai",
+      authProfileId: expect.stringMatching(/^shared-ref:[\w-]+$/u),
+    };
     for (const reconnect of [false, true]) {
       const { ws, connected } = await connect(
         {
@@ -660,21 +664,37 @@ test("lets the shared-token owner manage accounts across device-token reconnects
           credential: { type: "api_key", provider: "anthropic", key: "synthetic-owner-key" },
           assertCurrent() {},
         }).authProfileId;
+        setUserProfileAuthLink({
+          profileId: GATEWAY_OWNER_PROFILE_ID,
+          provider: "openai",
+          authProfileId: "openai:shared@example.invalid",
+        });
       }
       const cleared = await rpcReq(ws, "users.unlinkAuthProfile", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         provider: "anthropic",
       });
-      expect(cleared.ok, JSON.stringify(cleared.error)).toBe(true);
+      expect(cleared).toMatchObject({ ok: true, payload: { links: [sharedLink] } });
+      await expectPayload(
+        ws,
+        "users.listAuthLinks",
+        { links: [sharedLink] },
+        { profileId: GATEWAY_OWNER_PROFILE_ID },
+      );
       await expectPayload(ws, "users.listModelAccounts", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         accounts: [{ authProfileId, provider: "anthropic", selected: false }],
-        links: [],
+        links: [sharedLink],
       });
       await expectPayload(
         ws,
         "users.selectModelAccount",
-        { links: [{ authProfileId, provider: "anthropic" }] },
+        {
+          links: expect.arrayContaining([
+            expect.objectContaining({ authProfileId, provider: "anthropic" }),
+            expect.objectContaining(sharedLink),
+          ]),
+        },
         { authProfileId },
       );
       await expectPayload(ws, "users.listModelAccounts", {

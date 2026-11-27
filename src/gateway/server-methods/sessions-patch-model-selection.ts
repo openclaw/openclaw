@@ -40,11 +40,40 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import {
+  isSharedModelAccountRef,
+  resolveSharedModelAccountRef,
+} from "../shared-model-account-ref.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
+
+/** Resolve presentation references only against the target agent's current provider inventory. */
+export function prepareSharedAccountLookup(
+  context: Parameters<typeof readPreparedCatalog>[0],
+  raw: string | null | undefined,
+) {
+  const { model, profile } = splitTrailingAuthProfile(raw ?? "");
+  if (!profile || !isSharedModelAccountRef(profile)) {
+    return undefined;
+  }
+  const provider = model.split("/", 1)[0];
+  return async (agentId: string) => {
+    const snapshot = await readPreparedCatalog(context, agentId);
+    if (snapshot?.agentId !== agentId || !snapshot.isCurrent()) {
+      return undefined;
+    }
+    return resolveSharedModelAccountRef(
+      profile,
+      Object.entries(snapshot.authStore.profiles).flatMap(([id, credential]) =>
+        credential.provider === provider ? [id] : [],
+      ),
+    );
+  };
+}
 
 /** Recheck the composed model and Access selection immediately before its effect. */
 export function createSessionAccessProgramValidation(params: {
@@ -329,6 +358,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   placement?: { context: SessionWorkerPlacementContext; sessionKey: string };
   catalog?: readonly ModelCatalogEntry[];
   callerCanConsent?: boolean;
+  hideSharedAccountIdentity?: boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Creation admits inherited defaults even when no selection fields were supplied. */
   validateInheritedRuntime?: boolean;
@@ -409,6 +439,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         workspaceDir: params.entry.spawnedWorkspaceDir,
         ...model,
         catalog: params.catalog ?? [],
+        hideSharedAccountIdentity: params.hideSharedAccountIdentity,
         hydrateThinkingCatalog: params.hydrateThinkingCatalog,
         prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:

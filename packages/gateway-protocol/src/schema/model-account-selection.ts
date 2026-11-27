@@ -22,6 +22,7 @@ export const ChatAccountSelectionSchema = Type.Union([
     kind: Type.Literal("shared"),
     label: ChatAccountSelectionLabelSchema,
     authProfileId: ModelAuthProfileIdSchema,
+    ordinal: Type.Optional(Type.Integer({ minimum: 1 })),
     source: ChatAccountSelectionSourceSchema,
   }),
 ]);

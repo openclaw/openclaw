@@ -36,6 +36,7 @@ import { abortChatRunsForProvider } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { sharedModelAccountRef } from "../shared-model-account-ref.js";
 import { formatForLog } from "../ws-log.js";
 import {
   captureLocalStateMutationGuard,
@@ -498,7 +499,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             const metadata = resolveAuthProfileMetadata({ cfg, store, profileId: prof.profileId });
             const lastUsedAt = store.usageStats?.[prof.profileId]?.lastUsed;
             const profile: ModelAuthStatusProvider["profiles"][number] = {
-              profileId: prof.profileId,
+              profileId: includeProfileIdentity
+                ? prof.profileId
+                : sharedModelAccountRef(prof.profileId),
               type: prof.type,
               status: prof.status,
               reasonCode: prof.reasonCode,
@@ -531,7 +534,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             }
             return profile;
           }),
-          ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
+          ...(profileOrder.order !== undefined
+            ? {
+                profileOrder: includeProfileIdentity
+                  ? profileOrder.order
+                  : profileOrder.order.map(sharedModelAccountRef),
+              }
+            : {}),
           ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
           ...(providerOrderLocked
             ? { profileOrderLocked: "provider-config" as const }
