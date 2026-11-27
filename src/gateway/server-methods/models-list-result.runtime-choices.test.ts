@@ -1,8 +1,11 @@
+import { performance } from "node:perf_hooks";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { Value } from "typebox/value";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ModelChoiceSchema } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
+import { dualRoutes, platformRoute } from "../../agents/model-auth-availability.test-support.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
@@ -23,10 +26,7 @@ import {
   withModelsListState,
 } from "./models-list-result.openai-routes.test-support.js";
 
-function modelEntry(
-  provider: string,
-  overrides: Partial<ModelCatalogEntry> = {},
-): ModelCatalogEntry {
+function modelEntry(provider: string, extra: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
     provider,
     id: "model",
@@ -34,19 +34,35 @@ function modelEntry(
     contextWindow: 32_000,
     reasoning: false,
     input: ["text"],
-    ...overrides,
+    ...extra,
   };
 }
+function modelDefinition(id: string, name = id, contextTokens = 16_000): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    contextTokens,
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 32_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 4_096,
+  };
+}
+const thinkingCompat: ModelCatalogEntry["compat"] = {
+  supportsTools: true,
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: ["low", "high"],
+};
 function nativeModel(base: ModelCatalogEntry, nativeRuntime: string, windowId: string) {
+  const label = windowId === "large" ? "Large" : "Native";
   return modelEntry(base.provider, {
     ...base,
     nativeRuntime,
     contextWindow: 128_000,
     reasoning: true,
     input: ["text", "image"],
-    contextWindows: [
-      { id: windowId, label: windowId === "large" ? "Large" : "Native", contextWindow: 128_000 },
-    ],
+    contextWindows: [{ id: windowId, label, contextWindow: 128_000 }],
     contextWindowDefault: windowId,
   });
 }
@@ -121,15 +137,10 @@ function preparePicker(
   provider?: string,
 ) {
   const loadGatewayModelCatalogSnapshot = vi.fn();
+  const logGateway = { debug: vi.fn() };
+  const context = { getRuntimeConfig: () => cfg, loadGatewayModelCatalogSnapshot, logGateway };
   const params = {
-    source: {
-      kind: "gateway",
-      context: {
-        getRuntimeConfig: () => cfg,
-        loadGatewayModelCatalogSnapshot,
-        logGateway: { debug: vi.fn() },
-      },
-    },
+    source: { kind: "gateway", context },
     agentId: "main",
     params: { view: "configured", includeDetails: true },
     preloadedCatalog: { agentId: "main", config: cfg, snapshot },
@@ -154,16 +165,9 @@ it.each([false, true, "revoked"] as const)(
           return undefined;
         });
         const configuredRowVisits = new Map<ModelDefinitionConfig, number>();
-        const models = Array.from({ length: 17 }, (_, index): ModelDefinitionConfig => ({
-          id: `model-${index}`,
-          name: `Configured ${index}`,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32_000,
-          contextTokens: 16_000 + index,
-          maxTokens: 4096,
-        }));
+        const models = Array.from(Array<undefined>(17).keys(), (index) =>
+          modelDefinition(`model-${index}`, `Configured ${index}`, 16_000 + index),
+        );
         const configuredModels = new Proxy(models, {
           get(target, key, receiver) {
             if (key === Symbol.iterator) {
@@ -185,19 +189,16 @@ it.each([false, true, "revoked"] as const)(
           contextWindow: 8192,
           contextTokens: 2048,
         }));
+        const providerConfig = {
+          baseUrl: "https://models.example.test/v1",
+          models: configuredModels,
+          get apiKey() {
+            return readAuth();
+          },
+        };
         const cfg: OpenClawConfig = {
           agents: { defaults: { workspace: state.workspaceDir, model: `${provider}/model-0` } },
-          models: {
-            providers: {
-              [provider]: {
-                baseUrl: "https://models.example.test/v1",
-                models: configuredModels,
-                get apiKey() {
-                  return readAuth();
-                },
-              },
-            },
-          },
+          models: { providers: { [provider]: providerConfig } },
         };
         const projector = projectorFor(cfg, { entries, routeVariants: entries }, {}, provider);
         // Auth scope preparation visits configured models before projection begins.
@@ -280,7 +281,7 @@ it("bounds configured-row indexing through hydrated implicit OpenAI picker reads
             openai: {
               baseUrl: "http://127.0.0.1:9/v1",
               apiKey: "synthetic-test-key",
-              models: Array.from({ length: 17 }, (_, index) => ({
+              models: Array.from(Array<undefined>(17).keys(), (index) => ({
                 id: "model-" + index,
                 name: "Configured " + index,
               })),
@@ -322,7 +323,6 @@ it("bounds configured-row indexing through hydrated implicit OpenAI picker reads
       };
       using indexing = vi.spyOn(providerModelConfig, "resolveMergedModelProviderModels");
       indexing.mockImplementation(witness);
-
       const { params, loadGatewayModelCatalogSnapshot } = preparePicker(
         cfg,
         { entries, routeVariants: entries },
@@ -388,29 +388,18 @@ it.each([true, false])(
       async (state) => {
         const provider = "picker-fixture";
         const nativeRuntime = "picker-native";
-        const cfg = pickerConfig(
-          state.workspaceDir,
-          `${provider}/model`,
-          nativeRuntime,
-          ["openclaw"],
-          {
-            allow: [`${provider}/manual`],
-          },
-        );
+        const ref = `${provider}/model`;
+        const policy = { allow: [`${provider}/manual`] };
+        const cfg = pickerConfig(state.workspaceDir, ref, nativeRuntime, ["openclaw"], policy);
         const host = modelEntry(provider);
         const native = nativeModel(host, nativeRuntime, "native-only");
         const snapshot: ModelCatalogSnapshot = {
           entries: [native],
           routeVariants: [native, ...(hostDonor ? [host] : [])],
         };
-        const pluginRegistry = registryFor(nativeRuntime);
-        const { params: listParams, loadGatewayModelCatalogSnapshot } = preparePicker(
-          cfg,
-          snapshot,
-          { pluginRegistry },
-          provider,
-        );
-        const prepared = await prepareModelsListResult(listParams);
+        const options = { pluginRegistry: registryFor(nativeRuntime) };
+        const picker = preparePicker(cfg, snapshot, options, provider);
+        const prepared = await prepareModelsListResult(picker.params);
         const row = prepared.read().models.find((entry) => entry.id === "model");
         expect(row).toMatchObject({
           id: "model",
@@ -438,7 +427,7 @@ it.each([true, false])(
         expect(row).not.toHaveProperty("manualSelectionAllowed");
         expect(choice).not.toHaveProperty("manualSelectionAllowed");
         const scoped = await prepareModelsListResult({
-          ...listParams,
+          ...picker.params,
           includeManualSelection: true,
         });
         const scopedRow = scoped.read().models.find((entry) => entry.id === "model");
@@ -449,7 +438,7 @@ it.each([true, false])(
           manualSelectionAllowed: false,
         });
         expect(Value.Check(ModelChoiceSchema, scopedRow)).toBe(true);
-        expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+        expect(picker.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       },
       { agentEnv: "main" },
     );
@@ -466,34 +455,20 @@ it.each(["alternatives", "base-only", "matching-base"] as const)(
         const ref = `${provider}/${id}`;
         const hasAlternatives = scenario === "alternatives";
         const scopedRuntime = scenario === "matching-base" ? "openclaw" : "codex";
-        const cfg = pickerConfig(
-          state.workspaceDir,
-          ref,
-          "openclaw",
-          hasAlternatives ? ["codex"] : [],
-        );
-        cfg.agents!.entries = {
-          main: {
-            models: {
-              [ref]: { agentRuntime: { id: scopedRuntime }, pickerRuntimes: ["agentsapi"] },
-            },
-          },
-        };
+        const runtimes = hasAlternatives ? ["codex"] : [];
+        const cfg = pickerConfig(state.workspaceDir, ref, "openclaw", runtimes);
+        const scoped = { agentRuntime: { id: scopedRuntime }, pickerRuntimes: ["agentsapi"] };
+        cfg.agents!.entries = { main: { models: { [ref]: scoped } } };
         const base = modelEntry(provider, { id });
         const native = nativeModel(base, "codex", "large");
-        const { params } = preparePicker(
-          cfg,
-          { entries: [base], routeVariants: [base, native] },
-          {
-            pluginRegistry: registryFor("codex", {
-              authBootstrap: "harness",
-              loadModelCatalog: async () => [native],
-              readModelCatalogReadiness: () =>
-                hasAlternatives ? { accountType: "chatgpt" } : undefined,
-            }),
-          },
-          provider,
-        );
+        const pluginRegistry = registryFor("codex", {
+          authBootstrap: "harness",
+          loadModelCatalog: async () => [native],
+          readModelCatalogReadiness: () =>
+            hasAlternatives ? { accountType: "chatgpt" } : undefined,
+        });
+        const snapshot = { entries: [base], routeVariants: [base, native] };
+        const { params } = preparePicker(cfg, snapshot, { pluginRegistry }, provider);
         const configured = (await prepareModelsListResult(params)).read();
         const row = configured.models.find((model) => model.id === id);
         expect(row).toMatchObject({ agentRuntime: { id: scopedRuntime } });
@@ -513,19 +488,16 @@ it.each(["alternatives", "base-only", "matching-base"] as const)(
         ]);
         expect(Value.Check(ModelChoiceSchema, row)).toBe(true);
 
-        const ordinary = (
-          await prepareModelsListResult({
-            ...params,
-            params: { ...params.params, includeDefaultModels: false },
-          })
-        ).read();
-        expect(ordinary.models.find((model) => model.id === id)).toMatchObject({
+        const ordinary = await prepareModelsListResult({
+          ...params,
+          params: { ...params.params, includeDefaultModels: false },
+        });
+        const ordinaryRow = ordinary.read().models.find((model) => model.id === id);
+        expect(ordinaryRow).toMatchObject({
           agentRuntime: { id: scopedRuntime },
           runtimeChoices: [{ agentRuntime: { id: "agentsapi" } }],
         });
-        expect(ordinary.models.find((model) => model.id === id)).not.toHaveProperty(
-          "defaultModelRuntimes",
-        );
+        expect(ordinaryRow).not.toHaveProperty("defaultModelRuntimes");
       },
       { agentEnv: "main" },
     );
@@ -545,27 +517,17 @@ it.each([
       async (state) => {
         const model = "gpt-5.6-sol";
         const selectable = provider === "openai";
-        const cfg = pickerConfig(state.workspaceDir, `${provider}/${model}`, "openclaw", [
-          "openclaw",
-          runtime,
-          runtime,
-          "missing-runtime",
-        ]);
+        const ref = `${provider}/${model}`;
+        const runtimes = ["openclaw", runtime, runtime, "missing-runtime"];
+        const cfg = pickerConfig(state.workspaceDir, ref, "openclaw", runtimes);
         const base = modelEntry(provider, { id: model });
         const native: ModelCatalogEntry = {
           ...nativeModel(base, runtime, "large"),
           contextTokens: 96_000,
-          compat: {
-            supportsTools: true,
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts: ["low", "high"],
-          },
+          compat: thinkingCompat,
           thinkingLevelMap: { off: null, low: "low", high: "high" },
         };
-        const snapshot: ModelCatalogSnapshot = {
-          entries: [base],
-          routeVariants: [base, native],
-        };
+        const snapshot = { entries: [base], routeVariants: [base, native] };
         let readiness = initialReadiness;
         const loadModelCatalog = vi.fn(async () => [native]);
         const pluginRegistry = registryFor(runtime, {
@@ -634,8 +596,7 @@ it.each([
         expectMissing(rows[0]?.runtimeChoices?.[1], "contextWindow", "thinkingLevels");
         expect(Value.Check(ModelChoiceSchema, rows[0])).toBe(true);
         readiness = "missing";
-        const revokedChoice = prepared.read().models[0]?.runtimeChoices?.[0];
-        expectUnavailable(revokedChoice, selectable);
+        expectUnavailable(prepared.read().models[0]?.runtimeChoices?.[0], selectable);
         readiness = "ready";
         const recoveredChoice = prepared.read().models[0]?.runtimeChoices?.[0];
         expect(recoveredChoice?.available).toBe(selectable);
@@ -644,11 +605,238 @@ it.each([
         }
         expect(loadModelCatalog).not.toHaveBeenCalled();
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-        expect(cfg.agents?.defaults?.models?.[`${provider}/${model}`]?.agentRuntime?.id).toBe(
-          "openclaw",
-        );
+        expect(cfg.agents?.defaults?.models?.[ref]?.agentRuntime?.id).toBe("openclaw");
       },
       { agentEnv: "main", env: WITHOUT_OPENAI_ENV_AUTH },
     );
   },
 );
+
+type ListParams = Parameters<typeof prepareModelsListResult>[0];
+type ListView = NonNullable<ListParams["params"]["view"]>;
+const views = ["default", "all", "configured", "provider-config"] as const;
+const pickerState = { agentEnv: "main", env: WITHOUT_OPENAI_ENV_AUTH } as const;
+const inPicker = (run: (dir: string) => Promise<void>) =>
+  withModelsListState(({ workspaceDir }) => run(workspaceDir), pickerState);
+function cooperativePicker(dir: string, view: ListView, onVisit?: (count: number) => void) {
+  const { api, baseUrl } = platformRoute;
+  const entries = Array.from(Array<undefined>(12).keys(), (index) =>
+    modelEntry("openai", { id: `fixture-${index}`, api, baseUrl }),
+  );
+  const cfg = pickerConfig(dir, "openai/fixture-0", "openclaw", []);
+  const models = Object.fromEntries(entries.map(({ id }) => [`openai/${id}`, {}]));
+  const openai = { api, baseUrl, models: entries.map(({ id }) => modelDefinition(id)) };
+  cfg.agents!.defaults!.models = models;
+  cfg.models = { providers: { openai } };
+  const visited = new Set<string>();
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => visited.size * 9);
+  onTestFinished(() => clock.mockRestore());
+  const routeResolverFactory: NonNullable<ListParams["routeResolverFactory"]> =
+    () =>
+    ({ modelId }) => {
+      if (modelId && !visited.has(modelId)) {
+        visited.add(modelId);
+        onVisit?.(visited.size);
+      }
+      return dualRoutes;
+    };
+  const snapshot = { entries, routeVariants: entries };
+  const { params } = preparePicker(cfg, snapshot, { routeResolverFactory }, "openai");
+  const request = { ...params.params, view, includeDefaultModels: false };
+  return { params: { ...params, routeResolverFactory, params: request }, visited };
+}
+const draft = (assertCurrent: () => void) => ({
+  agentId: "main",
+  draftAccountSelection: { authProfileId: "openai:test", owner: "fixture", assertCurrent },
+});
+const fallback = { supported: false, fallbackRuntime: "openclaw" } as const;
+const revocations = views.flatMap((view) =>
+  ["draft", "publication"].map((source) => ({ view, source })),
+);
+describe("cooperative models list preparation regressions", () => {
+  it.each(views)("slices %s with bounded authority", (view) =>
+    inPicker(async (dir) => {
+      const { params, visited } = cooperativePicker(dir, view);
+      let wrapperEntries = 0,
+        interleaved = 0;
+      async function withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
+        wrapperEntries++;
+        return await consume();
+      }
+      const probe = (async () => {
+        for (let tick = 0; tick < 12; tick += 1) {
+          await nextImmediate();
+          interleaved += Number(visited.size > 0 && visited.size < 12);
+        }
+      })();
+      onTestFinished(() => probe);
+      const preparationAuthority = { withCurrent, assertCurrent() {} };
+      const { read } = await prepareModelsListResult({ ...params, preparationAuthority });
+      expect([visited.size, read().models.length]).toEqual([12, 12]);
+      expect(interleaved).toBeGreaterThanOrEqual(3);
+      expect(wrapperEntries).toBeLessThanOrEqual(6);
+    }),
+  );
+  it.each(revocations)("stops $view when its $source scope revokes", ({ view, source }) =>
+    inPicker(async (dir) => {
+      const revoked = new Error("Fixture scope revoked");
+      const assertCurrent = vi.fn();
+      const { params, visited } = cooperativePicker(dir, view, (count) => {
+        if (count === 3) {
+          const pending = nextImmediate().then(() => {
+            assertCurrent.mockImplementation(() => {
+              throw revoked;
+            });
+          });
+          onTestFinished(() => pending);
+        }
+      });
+      const scope =
+        source === "draft"
+          ? { readScope: draft(assertCurrent) }
+          : { publicationScope: { assertCurrent } };
+      const prep = { ...params, ...scope, preparationAuthority: { assertCurrent() {} } };
+      await expect(prepareModelsListResult(prep)).rejects.toBe(revoked);
+      expect(visited.size).toBe(3);
+    }),
+  );
+  it("reads the main row's live harness fallback", () =>
+    inPicker(async (dir) => {
+      const base = modelEntry("openai", { id: "gpt-5.6-sol", nativeRuntime: "codex" });
+      const cfg = pickerConfig(dir, `openai/${base.id}`, "codex", ["openclaw", "codex"]);
+      let supported = true;
+      const supports = () => (supported ? { supported: true as const } : fallback);
+      const pluginRegistry = registryFor("codex", { supports });
+      const catalog = { entries: [base], routeVariants: [base] };
+      const { params } = preparePicker(cfg, catalog, { pluginRegistry }, "openai");
+      const { read } = await prepareModelsListResult(params);
+      const sequence = [true, false, true].map((value) => {
+        supported = value;
+        const row = read().models[0];
+        const pairs = row?.runtimeChoices?.map((c) => [c.agentRuntime.id, c.available]);
+        const preview = row?.defaultModelRuntimes;
+        expect(preview?.base.agentRuntime.id).toBe(row?.agentRuntime?.id);
+        expect(preview?.alternatives.map((c) => [c.agentRuntime.id, c.available])).toEqual(pairs);
+        return [row?.agentRuntime?.id, pairs];
+      });
+      expect(sequence).toEqual([
+        ["codex", [["openclaw", true]]],
+        ["openclaw", [["codex", false]]],
+        ["codex", [["openclaw", true]]],
+      ]);
+    }));
+});
+describe("cooperative models list preparation compatibility invariants", () => {
+  it.each([
+    ["provider-config", "preparation"],
+    ["all", "publication"],
+  ] as const)("keeps %s synchronous with a %s wrapper", (view, wrapper) =>
+    inPicker(async (dir) => {
+      let inWrapper = false;
+      const assertDraft = vi.fn(),
+        visit = () => expect(inWrapper).toBe(true);
+      const { params, visited } = cooperativePicker(dir, view, visit);
+      async function withCurrent<T>(consume: () => T): Promise<Awaited<T>> {
+        inWrapper = true;
+        try {
+          return await consume();
+        } finally {
+          inWrapper = false;
+        }
+      }
+      const scope =
+        wrapper === "preparation"
+          ? { preparationAuthority: { withCurrent } }
+          : { publicationScope: { withCurrent } };
+      await prepareModelsListResult({ ...params, ...scope, readScope: draft(assertDraft) });
+      expect(visited.size).toBe(12);
+      expect(assertDraft).toHaveBeenCalled();
+    }),
+  );
+  it.each([
+    ["ordinary", 0],
+    ["preview", 1],
+    ["requested", 1],
+    ["stacked", 2],
+    ["provider-config", 1],
+    ["pin", 0],
+  ] as const)("%s preparation makes %i native readiness reads", (scenario, expected) =>
+    inPicker(async (dir) => {
+      const provider = "readiness-fixture",
+        ref = `${provider}/model`;
+      const stacked = scenario === "stacked",
+        preview = stacked || scenario === "preview";
+      const configured = scenario === "provider-config",
+        pinned = scenario === "pin";
+      const base = modelEntry(provider, { nativeRuntime: "codex" });
+      const requested = scenario === "requested" ? ["openclaw"] : stacked ? ["codex"] : [];
+      const cfg = pickerConfig(dir, ref, preview ? "openclaw" : "codex", requested);
+      if (preview) {
+        const pickerRuntimes = stacked ? ["openclaw"] : [];
+        const scoped = { agentRuntime: { id: "codex" }, pickerRuntimes };
+        cfg.agents!.entries = { main: { models: { [ref]: scoped } } };
+      }
+      cfg.agents!.defaults!.model = pinned ? `${ref}@${provider}:fixture` : ref;
+      if (configured) {
+        const models = [modelDefinition(base.id)];
+        cfg.models = { providers: { [provider]: { baseUrl: "", models } } };
+      }
+      let readiness = "ready";
+      const readModelCatalogReadiness = vi.fn(() => {
+        if (readiness === "throws") {
+          throw new Error("Fixture readiness error");
+        }
+        return readiness === "ready" ? { accountType: "chatgpt" as const } : undefined;
+      });
+      const registry = registryFor("codex", {
+        authBootstrap: "harness",
+        readModelCatalogReadiness,
+      });
+      const snapshot = { entries: [base], routeVariants: [base] };
+      const isCurrent = () => readiness !== "revoked";
+      const { params } = preparePicker(cfg, snapshot, { pluginRegistry: registry, isCurrent });
+      const view: ListView = configured ? "provider-config" : "all";
+      const request = { ...params.params, view, includeDefaultModels: preview };
+      const { read } = await prepareModelsListResult({ ...params, params: request });
+      expect(readModelCatalogReadiness).toHaveBeenCalledTimes(expected);
+      const live = scenario === "ordinary" || configured;
+      const states = live ? ["ready", "missing", "throws", "revoked"] : pinned ? ["ready"] : [];
+      const observed = states.map((state) => {
+        readiness = state;
+        return read().models[0]?.available;
+      });
+      expect(observed).toEqual(live ? [true, false, false, false] : states.map(() => false));
+      expect(readModelCatalogReadiness).toHaveBeenCalledTimes(expected + (live ? 3 : 0));
+    }),
+  );
+  it("isolates base and native thinking levels", () =>
+    inPicker(async (dir) => {
+      const provider = "picker-fixture";
+      const base = modelEntry(provider, {
+        reasoning: true,
+        compat: thinkingCompat,
+        thinkingLevelMap: { off: null, low: "low", high: null },
+      });
+      const native = {
+        ...nativeModel(base, "picker-native", "native-only"),
+        thinkingLevelMap: { off: null, low: null, high: "high" },
+      };
+      const cfg = pickerConfig(dir, "picker-fixture/model", "picker-native", ["openclaw"]);
+      const pluginRegistry = registryFor("picker-native");
+      const catalog = { entries: [native], routeVariants: [native, base] };
+      const { params } = preparePicker(cfg, catalog, { pluginRegistry }, provider);
+      const { read } = await prepareModelsListResult(params);
+      for (const {
+        models: [row],
+      } of [read(), read()]) {
+        for (const [choice, present, absent] of [
+          [row, "high", "low"],
+          [row?.runtimeChoices?.[0], "low", "high"],
+        ] as const) {
+          const ids = choice?.thinkingLevels?.map(({ id }) => id);
+          expect(ids).toContain(present);
+          expect(ids).not.toContain(absent);
+        }
+      }
+    }));
+});

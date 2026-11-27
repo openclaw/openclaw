@@ -3,7 +3,6 @@ import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
-import { resolveProviderRefOwnership } from "../plugins/providers.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import {
@@ -24,8 +23,6 @@ import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-
 import { materializePreparedPersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
 import { resolveAuthStoreReadOnlyValidUntil } from "./auth-profiles/read-only-availability.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { buildAgentHarnessSupportContext } from "./harness/support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -33,14 +30,17 @@ import {
 } from "./model-auth-availability.js";
 import { createAccountCatalogOutcomes } from "./model-catalog-account-outcomes.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
-import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
+import {
+  createCatalogDecisionRuntimeResolver,
+  createCatalogProjectionReader,
+  type CatalogProjection,
+} from "./model-catalog-decision-runtime.js";
 import { createCatalogPluginAuth } from "./model-catalog-decisions.plugin-auth.js";
 import type { ModelCatalogDecisionParams } from "./model-catalog-decisions.types.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
   prepareModelCatalogView,
-  selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -56,7 +56,10 @@ import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalo
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type { ModelCatalogDecisionParams } from "./model-catalog-decisions.types.js";
-export { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
+export {
+  CATALOG_SCAN_YIELD_BUDGET_MS,
+  resolveCatalogDecisionRuntime,
+} from "./model-catalog-decision-runtime.js";
 
 /** Prepare private records once under the caller's retained credential authority. */
 export async function prepareModelCatalogDecisions(
@@ -114,7 +117,9 @@ export async function prepareModelCatalogDecisions(
   });
 }
 
-/** Builds requester/session auth views without changing shared catalog or credential snapshots. */
+/**
+ * Builds requester/session auth views without changing shared catalog or credential snapshots.
+ */
 export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) {
   // The Gateway owns one process-lifecycle plugin metadata snapshot. Carry it
   // through the whole projection so per-model normalization cannot rediscover it.
@@ -245,26 +250,33 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       return statusSource.pendingProviders;
     },
   };
-  // Share only stable provider/config indexes within this decision owner, never account decisions.
+  // Share only stable provider/config indexes within this decision owner.
+  // Account decisions are evaluated separately.
   const resolveOpenAIProviderRoutes = createProviderModelRoutesResolver({
     provider: "openai",
     config: params.cfg,
     env: process.env,
   });
-  const nativeEvaluator = prepareModelCatalogView({
+  const catalogView = prepareModelCatalogView({
     ...params,
     snapshot,
     workspaceDir,
     profileProvider,
     resolveOpenAIProviderRoutes,
-  }).evaluateNative;
+  });
+  const nativeEvaluator = catalogView.evaluateNative;
+  const isNativeAccountBound = (entry: ModelCatalogEntry) =>
+    preferredProfilesByProvider.has(normalizeProviderId(entry.provider)) ||
+    configuredPinForEntry(entry);
+  const prepareNativePolicy: typeof catalogView.prepareNativePolicy = (entry, host, runtimeId) => {
+    if (!isNativeAccountBound(entry)) {
+      catalogView.prepareNativePolicy(entry, host, runtimeId);
+    }
+  };
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
   const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>
-    preferredProfilesByProvider.has(normalizeProviderId(entry.provider)) ||
-    configuredPinForEntry(entry)
-      ? host
-      : nativeEvaluator(entry, host, runtimeId);
+    isNativeAccountBound(entry) ? host : nativeEvaluator(entry, host, runtimeId);
   // Retire the captured host evaluation so its caller prepares fresh facts.
   const authValidUntil = resolveAuthStoreReadOnlyValidUntil(authStore, Date.now());
   const isPluginAuthProvider = (provider: string) =>
@@ -422,12 +434,55 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             }
     : evaluateStoredEntry;
   const accountObservations: Array<() => boolean> = [];
+  const ownerCurrentChecks = [
+    () => !hasPluginAuth || getActiveSecretsRuntimeSnapshotRevisionState() === pluginAuthRevision,
+    () => personalCatalog?.isCurrent() !== false,
+    () => params.isCurrent?.() ?? params.observationConfig === undefined,
+    () => accountObservations.every((current) => current()),
+  ];
   const isCurrent = () =>
-    Date.now() < authValidUntil &&
-    (!hasPluginAuth || getActiveSecretsRuntimeSnapshotRevisionState() === pluginAuthRevision) &&
-    personalCatalog?.isCurrent() !== false &&
-    (params.isCurrent?.() ?? params.observationConfig === undefined) &&
-    accountObservations.every((current) => current());
+    Date.now() < authValidUntil && ownerCurrentChecks.every((check) => check());
+  const accountCatalog = params.accountCatalog;
+  const selections = new Map(
+    [...preferredProfilesByProvider].map(([provider, profile]) => [profile, provider]),
+  );
+  if (selectedProfileId && profileProvider) {
+    selections.set(selectedProfileId, normalizeProviderId(profileProvider));
+  }
+  if (
+    configuredProfileId &&
+    primaryEntry &&
+    pinnedProfileForEntry(primaryEntry) === configuredProfileId
+  ) {
+    // Automatic session preferences can still own siblings; retain both account inventories.
+    selections.set(configuredProfileId, normalizeProviderId(primaryEntry.provider));
+  }
+  const hasAccountCatalogSelections = accountCatalog !== undefined && selections.size > 0;
+  let pendingAccountPreparations = 0;
+  let pendingAccountPrepPromise: Promise<void> | undefined;
+  let resolveAccountPrep: (() => void) | undefined;
+  const getPendingAccountCatalogPreparation = () => pendingAccountPrepPromise;
+  const notePendingAccountCatalogPreparation = () => {
+    if (pendingAccountPreparations++ === 0) {
+      pendingAccountPrepPromise = new Promise<void>((resolve) => {
+        resolveAccountPrep = resolve;
+      });
+    }
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (--pendingAccountPreparations === 0) {
+        pendingAccountPrepPromise = undefined;
+        resolveAccountPrep?.();
+        resolveAccountPrep = undefined;
+      }
+    };
+  };
+  let accountCatalogEpoch = 0;
+  let projectedCatalog: CatalogProjection | undefined;
   const prepareSelectedAccountCatalog = async (
     assertCurrent: () => void,
     options: {
@@ -436,25 +491,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       beforeRequest?: () => void;
     },
   ): Promise<void> => {
-    const accountCatalog = params.accountCatalog;
     if (!accountCatalog) {
       return;
     }
     const authority = { assertCurrent, withCurrent: options.withCurrent };
-    const selections = new Map(
-      [...preferredProfilesByProvider].map(([provider, profile]) => [profile, provider]),
-    );
-    if (selectedProfileId && profileProvider) {
-      selections.set(selectedProfileId, normalizeProviderId(profileProvider));
-    }
-    if (
-      configuredProfileId &&
-      primaryEntry &&
-      pinnedProfileForEntry(primaryEntry) === configuredProfileId
-    ) {
-      // Automatic session preferences can still own siblings; retain both account inventories.
-      selections.set(configuredProfileId, normalizeProviderId(primaryEntry.provider));
-    }
     for (const [profileId, providerId] of selections) {
       const credential = await withCurrentReadAuthority(
         authority,
@@ -511,168 +551,85 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         ) {
           return;
         }
-        // A projection can evaluate rows before its selected account publishes. Retire those
-        // decisions along with the listing, including routes using this provider's auth alias.
+        // Retire decisions for the changed provider and routes that use its auth alias.
         for (const provider of evaluations.keys()) {
           if (provider === providerId || normalizeAuthProvider(provider) === providerId) {
             evaluations.delete(provider);
           }
         }
+        accountCatalogEpoch += 1;
         projectedCatalog = undefined;
       });
     }
   };
-  let projectedCatalog: ModelCatalogEntry[] | undefined;
+  const runtime = createCatalogDecisionRuntimeResolver({
+    ...params,
+    workspaceDir,
+    cliRuntimeBindings,
+    resolveOpenAIProviderRoutes,
+    evaluateEntry,
+    evaluateNative,
+    prepareNativePolicy,
+  });
+  const projectCatalog = createCatalogProjectionReader({
+    createView: () => createModelCatalogSnapshotView(params.cfg, snapshot),
+    evaluateEntry,
+    prepareNativePolicy,
+    hasAccountCatalogSelections,
+    readEpoch: () => accountCatalogEpoch,
+    readPendingAccountPrep: getPendingAccountCatalogPreparation,
+    readProjection: () => projectedCatalog,
+    publishProjection(projection) {
+      projectedCatalog = projection;
+    },
+    captureCurrent(authority) {
+      const initiallyAuthValid = Date.now() < authValidUntil;
+      const initialChecks = ownerCurrentChecks.map((check) => check());
+      return {
+        initiallyAuthValid,
+        initiallyOwnerCurrent: initialChecks.every(Boolean),
+        reassertCatalogScanCurrent() {
+          authority?.assertCurrent?.();
+          if (
+            (initiallyAuthValid && Date.now() >= authValidUntil) ||
+            ownerCurrentChecks.some((check, index) => initialChecks[index] && !check())
+          ) {
+            throw new PreparedModelRuntimePublicationSupersededError(
+              "Model catalog changed while projecting catalog",
+            );
+          }
+        },
+      };
+    },
+    warmEntry(view, entry, host) {
+      const runtimeId = runtime.prepareDecisionRuntime(entry, host)?.id ?? "openclaw";
+      const selected = view.selectRuntimeEntry({ entry, runtimeId });
+      view.project(selected.entry, host, selected.variants);
+    },
+    projectEntry(view, entry, host) {
+      const evaluation = evaluateNative(entry, host);
+      const runtimeId = runtime.resolveDecisionRuntime(entry, evaluation)?.id ?? "openclaw";
+      const selected = view.selectRuntimeEntry({ entry, runtimeId });
+      return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
+    },
+  });
   return {
     preparedPersonalCatalog: personalCatalog,
-    projectCatalog: (authority?: CurrentReadAuthority) =>
-      withCurrentReadAuthority(authority, () => {
-        if (projectedCatalog) {
-          return projectedCatalog;
-        }
-        const view = createModelCatalogSnapshotView(params.cfg, snapshot);
-        const projection = view.logicalEntries.map((entry) => {
-          const routeVariants = view.variantsOf(entry) ?? [entry];
-          const host = evaluateEntry(entry, routeVariants);
-          const evaluation = evaluateNative(entry, host);
-          const runtimeId =
-            resolveCatalogDecisionRuntime({
-              cfg: params.cfg,
-              agentId: params.agentId,
-              entry,
-              evaluation,
-              pluginRegistry: params.pluginRegistry,
-              resolveOpenAIProviderRoutes,
-            })?.id ?? "openclaw";
-          const selected = selectModelCatalogRuntimeEntry({ entry, routeVariants, runtimeId });
-          return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
-        });
-        // Request authority belongs to this preparation, never the shared projector cache.
-        if (!authority) {
-          projectedCatalog = projection;
-        }
-        return projection;
-      }),
+    projectCatalog,
+    notePendingAccountCatalogPreparation,
     accountCatalog: params.accountCatalog,
     prepareSelectedAccountCatalog,
     hasPinnedAccount: (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
       pinnedProfileForEntry(entry) !== undefined,
     evaluateEntry,
     evaluateNative,
+    prepareNativePolicy,
+    ...runtime,
     resolveOpenAIProviderRoutes,
     snapshot,
     metadataSnapshot,
     authStore,
     authModes: params.preparedRuntimeAuthModes,
-    runtimeChoices(
-      entry: ModelCatalogEntry,
-      variants: readonly ModelCatalogEntry[] = [entry],
-    ): string[] | undefined {
-      const initial = evaluateEntry(entry, variants);
-      const selected = resolveCatalogDecisionRuntime({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry,
-        evaluation: initial,
-        pluginRegistry: params.pluginRegistry,
-        resolveOpenAIProviderRoutes,
-      });
-      const candidates = new Set([
-        selected?.id ?? "openclaw",
-        "openclaw",
-        ...(params.pluginRegistry?.agentHarnesses.map(({ harness }) => harness.id) ?? []),
-        ...variants.flatMap((variant) => (variant.nativeRuntime ? [variant.nativeRuntime] : [])),
-        ...(initial.routeResolution?.kind === "routes"
-          ? initial.routeResolution.routes.flatMap(
-              (route) => route.runtimePolicy?.compatibleIds ?? [],
-            )
-          : []),
-        ...cliRuntimeBindings
-          .filter(
-            (binding) =>
-              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
-          )
-          .map((binding) => binding.runtime),
-      ]);
-      const choices: string[] = [];
-      let unknown = false;
-      for (const runtimeId of candidates) {
-        const host = evaluateEntry(entry, variants, runtimeId);
-        const evaluation = evaluateNative(entry, host, runtimeId);
-        if (evaluation.availability === undefined) {
-          unknown = true;
-        }
-        if (evaluation.availability !== true) {
-          continue;
-        }
-        const route = evaluation.selectedRoute;
-        const policy = resolveAgentHarnessPolicy({
-          config: params.cfg,
-          agentId: params.agentId,
-          provider: entry.provider,
-          modelId: entry.id,
-          modelApi: route?.api ?? entry.api,
-          modelBaseUrl: route?.baseUrl ?? entry.baseUrl,
-          requestTransportOverrides: route?.requestTransportOverrides,
-          resolveOpenAIProviderRoutes,
-        });
-        if (policy.forcedByEnvironment && policy.runtime !== runtimeId) {
-          continue;
-        }
-        const compatible = evaluation.selectedRoute?.runtimePolicy?.compatibleIds;
-        if (compatible && !compatible.includes(runtimeId)) {
-          continue;
-        }
-        if (evaluation.runtimeAuth && evaluation.runtimeAuth.id !== runtimeId) {
-          continue;
-        }
-        if (
-          runtimeId !== "openclaw" &&
-          !cliRuntimeBindings.some(
-            (binding) =>
-              binding.runtime === runtimeId &&
-              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
-          )
-        ) {
-          const harness = params.pluginRegistry?.agentHarnesses.find(
-            (registration) => registration.harness.id === runtimeId,
-          )?.harness;
-          if (!harness) {
-            unknown ||= params.pluginRegistry === undefined;
-            continue;
-          }
-          const supported = harness.supports(
-            buildAgentHarnessSupportContext({
-              config: params.cfg,
-              agentId: params.agentId,
-              provider: entry.provider,
-              modelId: entry.id,
-              requestedRuntime: runtimeId,
-              contextManagement: harness.contextManagement,
-              providerOwnership: resolveProviderRefOwnership({
-                provider: entry.provider,
-                config: params.cfg,
-                workspaceDir,
-                metadataSnapshot,
-              }),
-              modelProvider: {
-                api: route?.api ?? entry.api,
-                baseUrl: route?.baseUrl ?? entry.baseUrl,
-                runtimePolicy: route?.runtimePolicy,
-                requestTransportOverrides: route?.requestTransportOverrides,
-                // Native observations select a route but do not supply host credentials.
-                preparedAuth: evaluation.selectedCredential,
-              },
-            }),
-          );
-          if (!supported.supported) {
-            continue;
-          }
-        }
-        choices.push(runtimeId);
-      }
-      return choices.length === 0 && unknown ? undefined : choices;
-    },
     authMaterializations: params.preparedRuntimeAuthMaterializations,
     cliRuntimeBindings,
     pluginRegistry: params.pluginRegistry,
