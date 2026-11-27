@@ -10,6 +10,9 @@ import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
 import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
+import { logGatewayReady } from "../gateway/server-startup-readiness.js";
+import { createPreparedReadinessFixture } from "../gateway/server/readiness.test-support.js";
+import { registerGatewayInstallationReplacementHandler } from "../gateway/stale-install.js";
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
@@ -37,6 +40,7 @@ import {
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
+import * as trialStore from "./store.js";
 import {
   acquireUpdateLock,
   allocateStaging,
@@ -171,7 +175,7 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
 }, 15_000);
 
 it.each(["succeeded", "rolled-back"] as const)(
-  "settles a %s trial at ready without letting its expired preparation lock win",
+  "settles a %s activation run when the serving Gateway becomes ready",
   async (status) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
     directories.push(state);
@@ -211,7 +215,14 @@ it.each(["succeeded", "rolled-back"] as const)(
     await writeTrial(trial);
     await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
     const work = new AsyncWorkScope();
-    await work.run(() => announceReady(null));
+    const dispose = registerGatewayInstallationReplacementHandler(() => {});
+    try {
+      await work.run(() =>
+        logGatewayReady({ getReadiness: createPreparedReadinessFixture(), log: { info: vi.fn() } }),
+      );
+    } finally {
+      dispose();
+    }
     await Promise.all(backgroundWork);
     await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
@@ -254,6 +265,76 @@ it.each(["succeeded", "rolled-back"] as const)(
     expect((await getUpdateRunAsync(run.runId, options))?.finishedAtMs).toBe(
       finished?.finishedAtMs,
     );
+  },
+);
+
+it.each(["acknowledgement", "disconnect"] as const)(
+  "settles a committed trial after a delayed launcher %s",
+  async (event) => {
+    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-ipc-"));
+    directories.push(state);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "1");
+    openOpenClawStateDatabase({ env: process.env });
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    const trial = await createTrialPending({
+      runId: run.runId,
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+    });
+    await writeTrial({ ...trial, phase: "trial" });
+    const connected = Object.getOwnPropertyDescriptor(process, "connected");
+    const send = Object.getOwnPropertyDescriptor(process, "send");
+    const fallbackReads: Array<Promise<Trial | null>> = [];
+    const readCurrentTrial = trialStore.readTrial;
+    vi.spyOn(trialStore, "readTrial").mockImplementation((...args) => {
+      const read = readCurrentTrial(...args);
+      fallbackReads.push(read);
+      return read;
+    });
+    Object.defineProperty(process, "connected", { configurable: true, value: true });
+    Object.defineProperty(process, "send", {
+      configurable: true,
+      value: vi.fn(() => true),
+    });
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const ready = announceReady(null);
+      await vi.advanceTimersByTimeAsync(3_000);
+      vi.useRealTimers();
+      await Promise.all(fallbackReads);
+      const committed: Trial = {
+        ...trial,
+        phase: "committed",
+        outcome: { status: "succeeded", at: Date.now() },
+      };
+      await writeTrial(committed);
+      if (event === "acknowledgement") {
+        process.emit("message", { type: "openclaw.trial", trial: committed });
+      } else {
+        process.emit("disconnect");
+      }
+      await ready;
+      await Promise.all(backgroundWork);
+      expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+        phase: "finished",
+        status: "succeeded",
+      });
+      expect(await readTrial()).toMatchObject({ reported: true });
+    } finally {
+      vi.useRealTimers();
+      for (const [key, descriptor] of [
+        ["connected", connected],
+        ["send", send],
+      ] as const) {
+        if (descriptor) {
+          Object.defineProperty(process, key, descriptor);
+        } else {
+          Reflect.deleteProperty(process, key);
+        }
+      }
+    }
   },
 );
 
