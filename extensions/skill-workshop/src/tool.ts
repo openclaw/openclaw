@@ -33,7 +33,7 @@ import {
 } from "./library.js";
 import { getWorkshopRuntime, readWorkshopRuntimeConfig } from "./runtime.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
-import { skillWriteAdvisories } from "./skill-lint.js";
+import { skillReplacementReport, skillWriteAdvisories } from "./skill-lint.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { SkillWorkshopToolSchema } from "./tool-schema.js";
 
@@ -49,10 +49,11 @@ const SKILL_WORKSHOP_DESCRIPTION = `Your learned skills: reusable procedures sav
 Actions: list | view name [file_path] [version] | create name content | patch name old_text new_text [file_path] | write_file name file_path content | remove_file name file_path | archive name (absorbed_into or reason) | restore name [version] | draft name content | view draft [file_path] | discard draft.
 - create: content is the full SKILL.md: frontmatter name (= name) and description (aim for ≤160 bytes, triggers first), then the procedure.
 - patch: replaces one exact, unique old_text; view first and copy the text exactly. Prefer patch over rewrites.
+- write_file and draft: content is the complete file and replaces it whole; nothing is merged. A SKILL.md rewrite or draft holds the full skill, never a note about what changed.
 - file_path: SKILL.md or files under references/, templates/, scripts/, assets/. remove_file deletes one of those support files; archive removes a whole skill.
 - reason: one short line saying what changed; shown to the user.
 - restore without version undoes the last change.
-- draft: saves a proposed SKILL.md for the user to review later; skills stay unchanged. list shows waiting drafts. When reviewing drafts with the user, save approved changes with create/patch, then discard the drafts the user decided on.
+- draft: saves a complete proposed SKILL.md for the user to review later; skills stay unchanged. list shows waiting drafts. When reviewing drafts with the user, save approved changes with create/patch, then discard the drafts the user decided on.
 
 ${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 
@@ -124,6 +125,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       },
     };
     const runMutation = <T>(run: () => Promise<T>) => run();
+    const readLiveSkillFile = async (skillName: string) =>
+      (await viewWorkshopSkill(options.config, options.agentId, skillName).catch(() => undefined))
+        ?.content;
     if (action === "list") {
       const [skills, archive] = await Promise.all([
         listWorkshopSkills(options.config, options.agentId),
@@ -159,9 +163,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const view = await viewWorkshopDraft(options.config, options.agentId, draftId, filePath);
         const header = `Draft ${draftId} for skill "${view.draft.skillName}"${view.draft.reason ? ` (${view.draft.reason})` : ""}:`;
         const others = view.draft.files.filter((file) => file !== view.filePath);
+        const live =
+          view.filePath === "SKILL.md" ? await readLiveSkillFile(view.draft.skillName) : undefined;
         return textResult(
           [
             header,
+            ...(live ? [skillReplacementReport(live, view.content).join("\n")] : []),
             view.content,
             ...(others.length > 0 ? [`[Other files: ${others.join(", ")}]`] : []),
           ].join("\n\n"),
@@ -211,16 +218,21 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     }
 
     if (action === "draft") {
+      const content = readToolStringParam(params, "content", { required: true, trim: false });
       const savedId = await runMutation(() =>
         saveWorkshopDraft(options.config, options.agentId, {
           name,
-          content: readToolStringParam(params, "content", { required: true, trim: false }),
+          content,
           ...(reason ? { reason } : {}),
           assertLive: ctx.assertLive,
         }),
       );
+      const live = await readLiveSkillFile(name);
       return textResult(
-        `Saved draft ${savedId} for "${name}". Skills are unchanged; the user reviews drafts with /learn drafts.`,
+        [
+          `Saved draft ${savedId} for "${name}". Skills are unchanged; the user reviews drafts with /learn drafts.`,
+          ...(live ? skillReplacementReport(live, content) : []),
+        ].join("\n"),
         { draft: savedId },
       );
     }
@@ -241,14 +253,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       action === "create" ||
       ((action === "patch" || action === "write_file") &&
         (!filePath?.trim() || filePath.trim() === "SKILL.md"));
-    const readLiveSkillFile = async () =>
-      (await viewWorkshopSkill(options.config, options.agentId, name).catch(() => undefined))
-        ?.content;
     const before = !skillFileWrite
       ? undefined
       : action === "create"
         ? ""
-        : await readLiveSkillFile();
+        : await readLiveSkillFile(name);
     let written: string | undefined;
 
     let change: WorkshopChange;
@@ -337,10 +346,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           `Unknown action "${action}". Use list, view, create, patch, write_file, remove_file, archive, restore, draft, or discard.`,
         );
     }
-    const after = skillFileWrite ? (written ?? (await readLiveSkillFile())) : undefined;
+    const after = skillFileWrite ? (written ?? (await readLiveSkillFile(name))) : undefined;
     const lines = [formatChange(verb, change)];
     if (before !== undefined && after !== undefined) {
-      lines.push(...skillWriteAdvisories(before, after));
+      lines.push(...skillReplacementReport(before, after), ...skillWriteAdvisories(before, after));
     }
     if (action === "create") {
       // The agent, not a string heuristic, judges whether a new skill duplicates an old one.
