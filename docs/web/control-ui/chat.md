@@ -1643,6 +1643,9 @@ transcript search is filtering messages.
 
 In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
 messages, and tool activity can share one **Worked for…** disclosure above the answers.
+Text without a commentary label, such as text before a tool call on Chat
+Completions transports, folds only when it is a short status line (200 characters
+or fewer); a longer explanation stays visible below the disclosure.
 For other models, mixed-model work, or history that does not identify the model,
 there is no turn-wide disclosure: text and tools stay inline. Switching the selected
 model does not change earlier turns. Tool names and tool grouping are unchanged.

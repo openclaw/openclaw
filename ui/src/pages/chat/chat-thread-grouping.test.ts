@@ -486,6 +486,27 @@ describe("completed-turn rollup", () => {
     );
   });
 
+  it("keeps a long unlabeled explanation visible while its status lines fold", () => {
+    const explanation =
+      "The deploy pipeline has three stages: build, verify and release. Verify replays the smoke " +
+      "suite against the exact build artifacts.\n\nReleases freeze from Thursday evening until " +
+      "Monday morning, so late merges wait for the next train.";
+    const messages = [
+      ask,
+      { ...call("first", 2, explanation), stopReason: "toolUse" },
+      tool("first", 3, run),
+      { ...call("second", 4, "Let me check the notes."), stopReason: "toolUse" },
+      tool("second", 5, run),
+      answer,
+    ];
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+      expect(JSON.stringify(visible(items))).toContain("late merges wait");
+      expect(JSON.stringify(work(items))).toContain("Let me check the notes.");
+    }
+  });
+
   it("keeps tool-result images inside completed work without hiding the answer", () => {
     const frame = { type: "image", mimeType: "image/png", artifactId: "frame", omitted: true };
     const result = toolResult("frame", "view_image", [textBlock("Loaded"), frame, frame], 3, run);
