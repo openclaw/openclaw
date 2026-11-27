@@ -261,7 +261,9 @@ export function createWritingProfileEditor(gateway: ApplicationGateway) {
         edit({
           ...draft,
           profiles: draft.profiles.map((item) =>
-            item.id === profile.id ? { ...item, ...patch, revision: crypto.randomUUID() } : item,
+            item.id === profile.id
+              ? Object.assign({}, item, patch, { revision: crypto.randomUUID() })
+              : item,
           ),
         });
       }

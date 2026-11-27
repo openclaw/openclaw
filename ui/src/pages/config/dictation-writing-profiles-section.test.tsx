@@ -20,11 +20,12 @@ afterEach(() => {
 });
 
 function mountProfiles(entries: Record<string, unknown> = {}, firstRead?: Promise<unknown>) {
+  let pendingRead = firstRead;
   const request = vi.fn(async (method: string, params: unknown) => {
     if (method === "users.prefs.get") {
-      if (firstRead) {
-        const reply = firstRead;
-        firstRead = undefined;
+      if (pendingRead) {
+        const reply = pendingRead;
+        pendingRead = undefined;
         return reply;
       }
       return { status: "ok", entries: structuredClone(entries) };

@@ -15,7 +15,7 @@ export { WRITING_PROFILES_PREFERENCE_KEY };
 
 export type WritingProfilePreferenceSnapshot = Readonly<{
   profileId: string;
-  raw: unknown | null;
+  raw: unknown;
   catalog: WritingProfileCatalog | null;
   readOnlyReason: "unsupported-version" | "invalid-catalog" | null;
   issues: readonly WritingProfileIssue[];
@@ -78,18 +78,24 @@ function serializePreferenceJson(input: unknown): string {
     } else if (typeof value === "string") {
       append(quoted(value));
     } else if (typeof value === "object") {
-      const array = Array.isArray(value);
-      const prototype = Object.getPrototypeOf(value);
+      const container = value;
+      const array = Array.isArray(container);
+      const prototype = Object.getPrototypeOf(container);
       if (
-        ancestors.has(value) ||
+        ancestors.has(container) ||
         (prototype !== null && prototype !== (array ? Array.prototype : Object.prototype))
       ) {
         throw new Error("Invalid writing-profile preference JSON");
       }
-      const keys = array ? null : Object.keys(value);
+      const keys = array ? null : Object.keys(container);
       append(array ? "[" : "{");
-      ancestors.add(value);
-      frames.push({ value, keys, length: array ? value.length : keys!.length, index: 0 });
+      ancestors.add(container);
+      frames.push({
+        value: container,
+        keys,
+        length: array ? container.length : keys!.length,
+        index: 0,
+      });
     } else {
       throw new Error("Invalid writing-profile preference JSON");
     }
@@ -138,7 +144,7 @@ function createSnapshot(
   client: GatewayBrowserClient,
   profileId: string,
   generation: number,
-  raw: unknown | null,
+  raw: unknown,
 ): WritingProfilePreferenceSnapshot {
   // Retain a private comparator independent of editor drafts and exported objects.
   const expectedJson = raw === null ? null : serializePreferenceJson(raw);

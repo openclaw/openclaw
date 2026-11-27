@@ -37,7 +37,7 @@ const rawCatalog: WritingProfileCatalog = {
     enabled: true,
     priority: 0,
     policy: { ...domain.BASELINE_WRITING_POLICY },
-    selectors: Array.from({ length: 20 }, (_, selector) => ({
+    selectors: Array.from({ length: 20 }, (_unused, selector) => ({
       kind: "origin" as const,
       app,
       origin: `https://profile-${index}-selector-${selector}.example`,
