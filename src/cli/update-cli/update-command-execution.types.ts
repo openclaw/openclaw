@@ -37,11 +37,6 @@ export type MutableUpdateExecutionParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
   switchToGit: boolean;
-  /**
-   * A POSIX Git checkout update switches a release link: the serving Gateway keeps its
-   * own release until the service restarts, so nothing is verified, stopped or parked first.
-   */
-  gitRelease?: boolean;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;
   startedAt: number;

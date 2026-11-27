@@ -197,10 +197,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   it.each([
     [
-      new Error("Approval requester authority changed", { cause: new Error(secret) }),
-      "authority-changed",
-    ],
-    [
       new GatewayProtocolRequestTimeoutError(
         { method: secret, timeoutMs: 100, requestSent: true },
         secret,

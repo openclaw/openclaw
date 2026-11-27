@@ -12,6 +12,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
@@ -275,4 +276,19 @@ export function registerClaudeCliBackend(ownsNativeCompaction = false): void {
       },
     ],
   });
+}
+
+export function usageEvent(
+  content: string,
+  usage: Partial<ReturnType<typeof makeAssistantMessageFixture>["usage"]>,
+  api?: string,
+) {
+  return {
+    type: "message",
+    message: { role: "assistant", content, usage, ...(api ? { api } : {}) },
+  };
+}
+
+export function compactionConfig(compaction: AgentDefaultsConfig["compaction"]) {
+  return { agents: { defaults: { compaction } } };
 }

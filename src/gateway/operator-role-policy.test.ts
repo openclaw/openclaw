@@ -56,7 +56,7 @@ import {
   resolveOperatorRolePolicyForProfile,
   resolveOperatorRoleSelection,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
@@ -71,28 +71,23 @@ const github = (accountId: number, login: string) =>
     identity: { accountId, login },
     authenticationAlias: { kind: "github-login", login },
   });
-type Source = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+type Source = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
 type Authority = Source["authority"];
-type CaptureInput = Parameters<typeof captureGatewayOperatorRunAuthority>[0];
+type CaptureInput = Parameters<typeof prepareGatewayOperatorRunAuthority>[0];
 const liveDependency = (controller: AbortController) => ({
   signal: controller.signal,
   assertCurrent: () => controller.signal.throwIfAborted(),
 });
 async function captureSource(input: CaptureInput) {
   return disposable(
-    expectDefined(await captureGatewayOperatorRunAuthority(input), "operator source"),
+    expectDefined(await prepareGatewayOperatorRunAuthority(input), "operator source"),
   );
 }
 function disposable<T extends { release(): void }>(resource: T) {
   return Object.assign(resource, { [Symbol.dispose]: () => resource.release() });
 }
-function expectCurrent(authority: Pick<Authority, "signal" | "assertCurrent">, error?: string) {
-  expect(authority.signal?.aborted).toBe(Boolean(error));
-  if (error) {
-    expect(authority.assertCurrent).toThrow(error);
-  } else {
-    expect(authority.assertCurrent).not.toThrow();
-  }
+function expectCurrent(authority: Pick<Authority, "signal">, error?: string) {
+  expect(authority.signal?.aborted ?? false).toBe(Boolean(error));
 }
 function expectModel(authority: Authority, model: string, allowed: boolean) {
   const assertion = expect(() => assertOperatorModelAllowed(authority, modelRef(model)));
@@ -371,12 +366,12 @@ describe("operator role policy", () => {
         expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(originalKey);
         expectModel(narrowed, "b", true);
         expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
-        if (dependencyKind === "gateway resolver") {
-          expect(original.assertCurrent).toThrow("authority is no longer active");
-          expect(narrowed.assertCurrent).toThrow("authority is no longer active");
-        } else {
+        if (dependencyKind === "invocation") {
           expect(original.signal?.aborted).toBe(true);
           expect(narrowed.signal?.aborted).toBe(true);
+        } else {
+          expectCurrent(original);
+          expectCurrent(narrowed);
         }
         expectCurrent(independent);
       }),
@@ -387,7 +382,7 @@ describe("operator role policy", () => {
     { ended: "access", independent: false },
     { ended: "access", independent: true },
   ] as const)(
-    "retains request and selected access authority when $ended ends (independent: $independent)",
+    "keeps admitted access but honors request cancellation when $ended ends (independent: $independent)",
     ({ ended, independent }) =>
       inState(async () => {
         const { client, context } = roleFixture();
@@ -407,12 +402,11 @@ describe("operator role policy", () => {
           invocationAuthority: liveDependency(request),
         });
         expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
-        expect(captured.authority.assertCurrent).not.toThrow();
         const endedSource = ended === "request" ? request : access;
         const otherSource = ended === "request" ? access : request;
         endedSource.abort(new Error(`${ended} source ended`));
         expect(otherSource.signal.aborted).toBe(false);
-        expectCurrent(captured.authority, independent ? undefined : "source ended");
+        expectCurrent(captured.authority, ended === "request" ? "source ended" : undefined);
       }),
   );
 
@@ -426,14 +420,12 @@ describe("operator role policy", () => {
         captureRole(profileId, { getRuntimeConfig: () => cfg });
       using original = await capture(source.id);
       using unaffected = await capture(unrelated.id);
-      original.authority.assertCurrent();
       linkEmail("source-role@example.test", target.id);
       expectCurrent(original.authority);
       await expect(capture(source.id)).rejects.toThrow();
       expectCurrent(unaffected.authority);
       using fresh = await capture(target.id);
-
-      expect(() => fresh.authority.assertCurrent()).not.toThrow();
+      expectCurrent(fresh.authority);
       expectCurrent(original.authority);
     }));
   it("keeps admitted authority on profile reassignment and refuses new admin requests", () =>
@@ -450,7 +442,6 @@ describe("operator role policy", () => {
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
       expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
       expectCurrent(source.authority);
-      expect(source.authority.reauthorize).toThrow("Your operator role changed");
       await expect(captureSource({ client: admin, context })).rejects.toThrow(
         "Your operator role changed",
       );
@@ -466,10 +457,9 @@ describe("operator role policy", () => {
         const otherProfile = ensureProfileForEmail("committed-role-unaffected@example.test");
         setUserProfileRole(otherProfile.id, "maintainer");
         const initial = roleConfig();
-        let runtimeConfig = initial;
         let committedConfig = initial;
         const context = {
-          getRuntimeConfig: () => runtimeConfig,
+          getRuntimeConfig: () => initial,
           getCommittedRuntimeConfig: () => committedConfig,
         };
         const capture = (profileId: string) => captureRole(profileId, context);
@@ -491,17 +481,14 @@ describe("operator role policy", () => {
         expect(
           authorizeCurrentOperatorRoleScopes(identifiedClient(profile.id), candidate),
         ).toBeUndefined();
-        runtimeConfig = candidate;
-        expect(original.authority.assertCurrent).not.toThrow();
-        runtimeConfig = initial;
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
 
         committedConfig = { ...initial, logging: { level: "debug" } };
         publishOperatorRoleConfigChange(context);
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
         committedConfig = candidate;
         publishOperatorRoleConfigChange({});
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
         publishOperatorRoleConfigChange(context);
         expectCurrent(original.authority);
         expect(original.authority.readCurrentRoleFacts?.().policy).toEqual(
@@ -536,7 +523,7 @@ describe("operator role policy", () => {
       assertOperatorModelAllowed(original.authority, modelRef("primary"));
       cfg = { ...cfg, logging: { level: "debug" } };
       publishOperatorRoleConfigChange(context);
-      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.signal?.aborted).not.toBe(true);
       const result = await runWithModelFallback({
         cfg,
         provider: "fixture",

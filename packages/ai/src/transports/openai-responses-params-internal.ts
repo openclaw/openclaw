@@ -161,7 +161,13 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
+    ...resolveOpenAIPromptCacheParams(
+      model,
+      cacheRetention,
+      compat,
+      options?.promptCacheTtl,
+      options?.cachePrewarm,
+    ),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -199,7 +205,7 @@ export function buildOpenAIResponsesParams(
       tools,
       strict,
       model,
-      Boolean(options?.onPayload),
+      conversion.mutableInput,
     );
     if (
       converted.length > 0 ||

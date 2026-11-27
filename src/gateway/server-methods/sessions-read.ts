@@ -55,6 +55,7 @@ import {
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
+import { PERSONAL_PIN_PROFILE_REQUIRED, prepareSessionPinRead } from "./session-pin-requester.js";
 import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -65,7 +66,8 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
-  "sessions.search": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.search": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;
     }
@@ -75,26 +77,39 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     if (params.recall) {
-      const result = await searchRecallSessionTranscripts({
+      await searchRecallSessionTranscripts({
         query,
         limit: params.limit,
         recall: params.recall,
         projection: requireSessionRowProjection(context),
         client: client ?? null,
+        onResult: (result) => {
+          sessionMutationAuthorization?.assertCurrent();
+          respond(true, result);
+        },
       });
-      sessionMutationAuthorization?.assertCurrent();
-      respond(true, result);
       return;
     }
     if (params.scope !== undefined) {
       try {
+        const pins = prepareSessionPinRead(options);
+        if (!pins.canFilter && params.scope.pinned !== undefined) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.FORBIDDEN, PERSONAL_PIN_PROFILE_REQUIRED),
+          );
+          return;
+        }
         await searchProjectedSessionTranscripts({
+          personalPins: await pins.read(),
           query,
           limit: params.limit,
           scope: params.scope,
           context,
           client: client ?? null,
           onResult: (result) => {
+            pins.assertCurrent?.();
             sessionMutationAuthorization?.assertCurrent();
             respond(true, result);
           },
@@ -360,8 +375,22 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return undefined;
       }
       const projection = requireSessionRowProjection(context);
-      const assertCurrent = () => args.sessionMutationAuthorization?.assertCurrent();
+      const pins = prepareSessionPinRead(args, params);
+      if (!pins.canFilter && params.pinned !== undefined) {
+        respondToCaller(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, PERSONAL_PIN_PROFILE_REQUIRED),
+        );
+        diagnostics?.finish("returned");
+        return undefined;
+      }
+      const assertCurrent = () => {
+        args.sessionMutationAuthorization?.assertCurrent();
+        pins.assertCurrent?.();
+      };
       return {
+        shareable: pins.shareable,
         respond: respondToCaller,
         assertCurrent,
         beforeRespond: () => {
@@ -376,6 +405,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         release: (outcome) => diagnostics?.finish(outcome),
         run: async (respond) => {
           await listProjectedSessions({
+            personalPins: await pins.read(),
             projection,
             opts: params,
             context,

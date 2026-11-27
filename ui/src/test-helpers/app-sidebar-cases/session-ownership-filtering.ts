@@ -330,6 +330,7 @@ describe("AppSidebar session ownership filtering", () => {
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    await selectOwner(sidebar, "profile-ada");
     sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
@@ -361,7 +362,6 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    await selectOwner(sidebar, "profile-ada");
     expect(sidebar.querySelector(`[data-session-key="${unloadedSessionKey}"]`)).not.toBeNull();
   });
 
@@ -406,7 +406,7 @@ describe("AppSidebar session ownership filtering", () => {
     expect(`${link.textContent} ${name} ${description}`.match(/Unread/g)).toHaveLength(1);
   });
 
-  it("keeps owner avatars off child rows", async () => {
+  it("uses the same owner attribution for parent and child rows", async () => {
     const parentKey = "agent:main:parent";
     const childKey = "agent:main:child";
     const harness = createSessionsHarness("main", [parentKey]);
@@ -454,9 +454,6 @@ describe("AppSidebar session ownership filtering", () => {
     ).not.toBeNull();
     expect(
       sidebar.querySelector(`[data-session-key="${childKey}"] openclaw-session-owner-chip`),
-    ).toBeNull();
-    expect(
-      sidebar.querySelector(`[data-session-key="${childKey}"] [aria-label="Done"]`),
     ).not.toBeNull();
   });
 
@@ -491,11 +488,9 @@ describe("AppSidebar session ownership filtering", () => {
       ]),
     });
     await settleLitElement(sidebar);
-    expect(
-      sidebar
-        .querySelector(`[data-child-session-toggle="${navigationParentKey}"]`)
-        ?.getAttribute("aria-expanded"),
-    ).toBe("true");
+    sidebar
+      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${navigationParentKey}"]`)!
+      .click();
     await waitForFast(() =>
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({ spawnedBy: navigationParentKey }),

@@ -85,17 +85,19 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
-      // Catalogs load their grid, cards, and loading state together.
+      // Catalogs load these together; shared category icons must not pull in either page.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -153,13 +155,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-    case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/templates-lab-feature.ts":
-      // Draft navigation and its Labs gate belong to the optional template flow.
+      // Draft navigation belongs to the optional template flow.
       return "template-draft-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
@@ -193,7 +194,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":
@@ -326,7 +326,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
       return "chat-interaction-runtime";
     case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
-    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "src/shared/context-budget-categories.ts":
     case "ui/src/pages/chat/components/chat-context-report.tsx":
     case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
     case "ui/src/lib/session-context-report.ts":

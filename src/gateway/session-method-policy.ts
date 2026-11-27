@@ -16,6 +16,8 @@ type SessionTargetPolicy = {
 
 const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["worktrees.recoverFile", { fields: ["sessionKey"], required: true }],
+  // The restore handler supplies the owning session from the worktree record.
+  ["worktrees.restore", { fields: ["sessionKey"] }],
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
@@ -70,6 +72,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
   ["sessions.steer", { fields: ["key"], required: true, runStart: true }],
+  ["sessions.steerTarget", { fields: ["sessionKey"], required: true }],
   ["sessions.steerActive", { fields: ["sessionKey"], required: true }],
   ["sessions.branches.switch", { fields: ["sessionKey"], required: true }],
   ["talk.voice.set", { fields: ["sessionKey"] }],
@@ -223,4 +226,25 @@ export function isSessionArchiveMutation(method: string, requestParams: unknown)
         ? requestParams
         : undefined;
   return isRecord(patch) && typeof patch.archived === "boolean";
+}
+
+/** Target admission is separate: this list never grants a scope or management authority. */
+export function isParticipantPublicationMethod(method: string, params: unknown): boolean {
+  const request = isRecord(params) ? params : undefined;
+  if (!request || request.publishingSessionKey !== undefined) {
+    return false;
+  }
+  return (
+    method === "sessions.github.publish" ||
+    (method === "sessions.github.action" &&
+      [
+        "edit",
+        "ready",
+        "request_review",
+        "inspect_pr",
+        "prepare_pr",
+        "refresh_base",
+        "upload_evidence",
+      ].includes(String(request.action)))
+  );
 }

@@ -1,6 +1,7 @@
 // Install transport fixtures before publication owners enter the module cache.
 // oxfmt-ignore
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -26,6 +27,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 
 const checkpoint = vi.hoisted(() => vi.fn());
 // mock-isolation: Repository checkpoints are external worker I/O; requester policy and storage are real.
@@ -80,6 +82,19 @@ it("refuses unattested membership and member-attributed System publication snaps
   expect(
     decodeGitHubPublicationRequester(JSON.stringify({ ...snapshot, actor: { kind: "system" } })),
   ).toBeUndefined();
+});
+
+it("keeps stored requester records from before participation byte-identical", () => {
+  // The 2026.11.8 encoder wrote only version/actor/scopes/grant; main later added origin.
+  for (const stored of [
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null}',
+    '{"version":1,"actor":{"kind":"system"},"scopes":[],"grant":null}',
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null,"origin":{"agentId":"main","sessionKey":"agent:main:main","sessionId":"session","lifecycleRevision":null,"runId":"run"}}',
+  ]) {
+    const decoded = expectDefined(decodeGitHubPublicationRequester(stored), stored);
+    expect(decoded).not.toHaveProperty("participation");
+    expect(encodeGitHubPublicationRequester(decoded)).toBe(stored);
+  }
 });
 
 describe("member publication authority", () => {
@@ -166,22 +181,32 @@ describe("member publication authority", () => {
         setRuntimeConfigSnapshot(next);
       }
       if (change !== "allowed") {
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,
             f.guestSource.session,
             f.guestSource.context.getCommittedRuntimeConfig,
           ),
-        ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+        ).rejects.toThrow(
+          change === "policy required"
+            ? GatewayOperatorAccessUnavailableError
+            : GitHubPublicationRequesterUnavailableError,
+        );
       }
       await f.placements.releaseTurn(claim);
       const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      if (change === "policy required") {
+        await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
+      } else {
+        await restarted.resumeSessionRequests();
+      }
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject(
         change === "allowed"
           ? { status: "published" }
-          : { status: "failed", code: "identity_changed" },
+          : change === "policy required"
+            ? { status: "requested" }
+            : { status: "failed", code: "identity_changed" },
       );
       expect(f.publishedTitles).toEqual(change === "allowed" ? ["member-publication"] : []);
       if (change !== "allowed") {
@@ -190,7 +215,7 @@ describe("member publication authority", () => {
     },
   );
   it.each(forPublicationBackends(["member", "linked owner", "nonmember"] as const))(
-    "rechecks parent-format $change provenance at recovery and write ($backend)",
+    "rechecks parent-format $change provenance at recovery, not during admitted work ($backend)",
     async ({ backend, change }) => {
       const f = await createRequesterPublicationFixture(checkpoint, backend);
       const config = structuredClone(f.config);
@@ -243,7 +268,7 @@ describe("member publication authority", () => {
         );
         onTestFinished(knownNonmember.release);
         expect(knownNonmember.assertCurrent).not.toThrow();
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,

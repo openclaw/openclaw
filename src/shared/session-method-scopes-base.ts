@@ -86,11 +86,13 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.fork",
   "sessions.send",
   "sessions.steer",
+  "sessions.steerTarget",
   "sessions.steerActive",
   "sessions.processes.stop",
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
+  "worktrees.restore",
 ]);
 
 /** Admission only: reads retain sharing policy; mutation owners must bind the caller's own row. */
@@ -165,6 +167,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "pinned",
   "sidebarRoot",
   "archived",
+  "requestArchiveUndo",
   "snoozedUntil",
   "unread",
   "model",
@@ -183,9 +186,11 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
+  "archiveUndoToken",
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",
+  "expectedArchivedAt",
   "expectedSidebarAncestors",
 ]);
 

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,6 +12,34 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
+  it("starts a resource broker without the file reader and reports the missing reader for a command broker", async () => {
+    const wrapper = path.join(tempDirs.make("openclaw-broker-reader-"), "broker.mts");
+    writeFileSync(
+      wrapper,
+      `import { registerHooks } from "node:module";
+       registerHooks({ resolve(specifier, context, nextResolve) {
+         if (specifier === "@openclaw/fs-safe/advanced" && context.parentURL?.includes("/process/spawn-broker/")) {
+           throw new Error("fixture file reader is unavailable");
+         }
+         return nextResolve(specifier, context);
+       } });
+       await import(${JSON.stringify(new URL("./worker.ts", import.meta.url).href)});`,
+    );
+    const workerUrl = pathToFileURL(wrapper);
+    const resource = createSpawnBrokerHost({ workerUrl, nativeResources: true });
+    try {
+      await resource.ready();
+    } finally {
+      await resource.close();
+    }
+    const command = createSpawnBrokerHost({ workerUrl });
+    try {
+      await expect(command.ready()).rejects.toThrow("fixture file reader is unavailable");
+    } finally {
+      await command.close();
+    }
+  });
+
   it("imports without resolving defaults and starts an explicit captured source after Gateway fallback", () => {
     const hostUrl = new URL("./host.js", import.meta.url).href;
     const contextUrl = new URL("./context.js", import.meta.url).href;

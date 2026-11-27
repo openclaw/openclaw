@@ -140,7 +140,7 @@ export type SkillsDiscoveryOutput =
   | { kind: "sandbox-projection"; preparation: SandboxFsPreparation }
   | { kind: "sandbox-path"; path: ReturnType<typeof resolveSandboxFsPathWithMounts> }
   | { kind: "sandbox-mounts"; plan: SandboxMountPlan }
-  | { kind: "sandbox-mount-sources"; created: boolean }
+  | { kind: "sandbox-mount-sources"; created: string[] }
   | { kind: "library"; result: SkillLibraryFilesystemOutput }
   | { kind: "sync-filesystem"; prepared: SkillsSyncFilesystemPrepared | undefined }
   | {

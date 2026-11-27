@@ -2,9 +2,9 @@ import type { Command } from "commander";
 import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 type MediaUnderstandingOptions = {
   file: string;
@@ -37,7 +37,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         } = await import("./shared.js");
         const file = opts.file;
         const agent = resolveCapabilityAgentOption(actionCommand, opts.agent);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
         const { describeVideoFile, runMediaFileWithModel, transcribeAudioFile } =
           await import("../../media-understanding/runtime.js");
         const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({

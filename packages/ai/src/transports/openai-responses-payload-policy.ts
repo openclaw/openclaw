@@ -12,6 +12,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
+import { resolveCompactionThreshold } from "../utils/compaction-threshold.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { parsePositiveInteger } from "./positive-integer.js";
@@ -81,8 +82,8 @@ function resolveOpenAIResponsesEndpointClass(baseUrl: unknown) {
   return "custom";
 }
 
-function isOpenAIResponsesApi(api: string | undefined): boolean {
-  return api !== undefined && OPENAI_RESPONSES_APIS.has(api);
+export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+  return api != null && OPENAI_RESPONSES_APIS.has(api);
 }
 
 function readCompatPayloadBoolean(
@@ -178,7 +179,11 @@ function resolveOpenAIResponsesCompactThreshold(model: {
       ? Math.min(contextTokens, contextWindow)
       : contextTokens || contextWindow;
   if (effectiveBudget) {
-    return Math.max(1_000, Math.floor(effectiveBudget * 0.7));
+    return resolveCompactionThreshold({
+      contextWindowTokens: effectiveBudget,
+      reserveTokensFloor: 0,
+      minimumThresholdTokens: 1_000,
+    });
   }
   return 80_000;
 }

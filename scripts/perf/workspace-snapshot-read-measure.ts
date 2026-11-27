@@ -29,7 +29,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { observeBootstrapWorkers } from "./bootstrap-worker-telemetry.mjs";
 
@@ -367,12 +367,7 @@ try {
   const observedWorkerPopulation = bootstrapObservation?.assertPopulation(expectedBootstrapWorkers);
   global.gc();
   if (values.mode === "allocation" && !bootstrap) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const allocationBefore =
     bootstrap && values.mode === "allocation"

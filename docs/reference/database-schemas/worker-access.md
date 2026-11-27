@@ -66,6 +66,16 @@ worker checks the same physical database. Concurrent session creation and patch
 requests can consume that proof without revoking one another's pending handoffs.
 Explicit invalidation still retires the owner and refuses delayed publications.
 
+PostgreSQL agent read-only operations retain their admitted schema before opening
+the transaction. A concurrent first-use search extension can publish a new schema
+without making an already admitted chat-history or model-context read fail. The
+read releases those historical facts when its transaction ends, including failed
+startup. Current-row publication still requires the live schema and write receipts;
+historical schema facts never authorize publishing stale rows or replaying a turn.
+Shared-state reads still require current admission and preserve their existing
+publication waits, deadlines, and cancellation checks. Schemas, stored bytes,
+permissions, and update behavior are unchanged.
+
 Released session sharing, entry-predicate, and generation authorities drop their
 decoded rows even when a caller retains the inactive handle. Predicate comparison
 baselines last only until release; a late acknowledgement cannot restore them.
@@ -98,7 +108,11 @@ projection and decodes its fingerprint bytes once for receipt and acknowledgemen
 Checkpoint bytes, rollback journals, and persistence timing are unchanged.
 
 Idle session reclamation workers retain their admitted connection, not completed
-deletion plans or the caller's async context. Retirement callbacks capture only
+deletion plans or the caller's async context. The process retains at most four
+ordinary reclamation workers, reusing recently visited databases. Before admitting
+another database, it joins the least recently used worker's native cleanup;
+failed cleanup retains ownership and its capacity slot for retry.
+Retirement callbacks capture only
 the worker's registry key. Request handlers release completed replies before
 waiting for the next message, including buffered admission replies. Lazy plugin
 capture imports reuse the shared detached maintenance context rather than
@@ -300,7 +314,7 @@ before caller SQL. A lost active transaction or uncertain statement outcome stil
 fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
-shared-state reads before their callback, and standalone feature-schema ensures
+shared-state reads and writes before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
@@ -311,6 +325,11 @@ the retry deadline. Cancellation and earlier transport failures remain distinct.
 Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.
+First-use fragment creation checks the committed catalog under the writer lock
+when admitted facts say the fragment is absent. A peer-created fragment must
+pass schema-seal validation before adoption. During migrations or publication
+gaps, schema helpers inspect the transaction's catalog instead of treating
+unavailable facts as an absent table, column, or primary key.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

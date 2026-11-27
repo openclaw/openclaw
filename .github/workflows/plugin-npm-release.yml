@@ -49,6 +49,10 @@ on:
       - "src/utils/run-with-concurrency.ts"
   workflow_dispatch:
     inputs:
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
+        required: false
+        type: string
       publish_scope:
         description: Publish the selected plugins or all publishable plugins from the ref
         required: true
@@ -136,6 +140,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
   RELEASE_TARGET_SHA: ${{ inputs.ref }}
@@ -280,10 +285,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
-          EVIDENCE_ARGS=()
-          if [[ -n "$PREPARED_NPM_FRV_RUN_ID" && -n "$PREPARED_NPM_PARENT_RUN_ID" ]]; then
-            EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
-          fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
             --report-capacity true \
             --artifact "$PREPARED_ARTIFACT" \
@@ -296,14 +297,13 @@ jobs:
             --prune-published true \
             --cache-dir "$RUNNER_TEMP/plugin-npm-preview-downloads" \
             --output-dir "$RUNNER_TEMP/plugin-npm-preview-packages" \
-            "${EVIDENCE_ARGS[@]}" \
+            --evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
-          echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable publication evidence
         id: evidence_upload
-        if: inputs.prepared_artifact != '' && inputs.full_release_validation_run_id != '' && inputs.release_publish_run_id != ''
+        if: steps.prepared_plan.outputs.evidence_attempt != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2062,6 +2062,11 @@ jobs:
           set -euo pipefail
           # Runtime shape and README were checked before sealing. Exact registry
           # byte equality carries that proof forward without installing tooling.
+          if [[ "$DEFER_VISIBILITY" == "true" ]]; then
+            # The release parent owns the full readback window; defer early so
+            # its job budget is not spent waiting on this child.
+            export OPENCLAW_NPM_READBACK_TIMEOUT_MS=900000
+          fi
           node scripts/plugin-npm-prepared-release.mjs registry \
             --package-name "$PACKAGE_NAME" --version "$PACKAGE_VERSION" \
             --publish-tag "$PUBLISH_TAG" --route "$PUBLISH_ROUTE" \
@@ -2109,15 +2114,15 @@ jobs:
           set -euo pipefail
           exact_version=missing
           tagged_version=missing
-          # Initial read plus five minutes of replication waits, matching core.
-          for attempt in {1..31}; do
+          # Initial read plus one hour of replication waits, matching core.
+          for attempt in {1..361}; do
             exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
             tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
             if [[ "${exact_version}" == "${PACKAGE_VERSION}" && "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
               echo "Verified ${PACKAGE_NAME}@${PACKAGE_VERSION} and @extended-stable."
               exit 0
             fi
-            if [[ "${attempt}" != "31" ]]; then
+            if [[ "${attempt}" != "361" ]]; then
               sleep 10
             fi
           done

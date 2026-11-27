@@ -4,7 +4,6 @@ import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -44,7 +43,10 @@ import {
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { existingPathOrUndefined, resolveDatabasePath } from "./openclaw-state-db.paths.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  hasAdmittedMaintenanceLiveAuthorityReads,
+} from "./openclaw-state-maintenance-context.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import {
   isStateReadReply,
@@ -60,10 +62,7 @@ import {
   runRetainedReadScope,
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
-import {
-  prepareOpenClawStateReadSnapshotSource,
-  type StateReadSnapshotSource,
-} from "./openclaw-state-read-snapshot-source.js";
+import { prepareOpenClawStateReadSnapshotSource } from "./openclaw-state-read-snapshot-source.js";
 import type {
   OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
@@ -71,6 +70,7 @@ import type {
   OpenClawStateReadOnlyDatabase,
   StateReadScopeOptions,
   RetainedReadScope,
+  OpenClawStateReadSnapshotScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
@@ -84,19 +84,7 @@ const disposableStateReads = resolveGlobalSingleton(
 
 const stateSnapshotReads = resolveGlobalSingleton(
   Symbol.for("openclaw.stateSnapshotReads"),
-  () =>
-    new AsyncLocalStorage<
-      RetainedReadScope & {
-        readSource(): StateReadSnapshotSource | undefined;
-        prepareSource?: () => Promise<void>;
-        forkSource: Awaited<
-          ReturnType<typeof prepareOpenClawStateReadSnapshotSource>
-        >["forkSource"];
-        recoverRollbackJournal: () => void;
-        env: NodeJS.ProcessEnv;
-        callerSignal?: AbortSignal;
-      }
-    >(),
+  () => new AsyncLocalStorage<OpenClawStateReadSnapshotScope>(),
 );
 
 function exitStateReadSnapshot<T>(operation: () => T): T {
@@ -163,7 +151,6 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
   options: StateReadScopeOptions = {},
 ): Promise<T> {
-  const live = isLiveStateRead();
   const inheritedSignal = resolveStateReadCallerSignal();
   const callerSignal =
     options.signal && inheritedSignal
@@ -173,11 +160,18 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const postgres = isStatePostgres();
   const pathname = resolveOpenClawStateReadPath(options);
   const current = stateSnapshotReads.getStore();
+  if (current?.active && current.path === pathname) {
+    return await operation();
+  }
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  const live =
+    isLiveStateRead() ||
+    Boolean(maintenance && hasAdmittedMaintenanceLiveAuthorityReads(maintenance, pathname)) ||
+    (options.preferLiveOwner === true &&
+      !postgres &&
+      hasVerifiedLiveSqliteOwner(pathname, { unknownOwner: "return-false" }));
   const lazy = options.lazy === true && !postgres && !live;
-  if (
-    (current?.active && current.path === pathname) ||
-    (!lazy && !existingPathOrUndefined(pathname))
-  ) {
+  if (!lazy && !existingPathOrUndefined(pathname)) {
     return await operation();
   }
   const env = options.env ?? process.env;
@@ -267,19 +261,17 @@ function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   if (isStatePostgres() || isLiveStateRead()) {
     return false;
   }
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  // Doctor already owns this source and admitted native reads after its backup boundary.
+  if (maintenance && hasAdmittedMaintenanceLiveAuthorityReads(maintenance, pathname)) {
+    return false;
+  }
   // Live owners already hold the WAL family; explicit snapshots select their own source.
-  let required =
+  const required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
-    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname);
-  try {
-    required &&= !hasVerifiedLiveSqliteOwner(pathname);
-  } catch (error) {
-    // An unverifiable owner cannot permit a live read; preserve offline inspection.
-    if (!(error instanceof GatewayLockNamespaceError)) {
-      throw error;
-    }
-  }
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname) &&
+    !hasVerifiedLiveSqliteOwner(pathname, { unknownOwner: "return-false" });
   if (required) {
     assertStateFileSnapshotAllowed();
   }

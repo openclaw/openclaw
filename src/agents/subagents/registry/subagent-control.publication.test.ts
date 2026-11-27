@@ -80,7 +80,7 @@ async function writeRegistrationSession(runId: string, lifecycleRevision?: strin
   return { target, storePath, sessionEntry, childSessionKey: target.sessionKey };
 }
 
-it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
+it.each(["live", "replaced child", "replaced Gateway"] as const)(
   "settles an unstarted plugin registration with a %s owner",
   async (ownerState) => {
     const runId = "unstarted-plugin";
@@ -94,7 +94,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     const context = createContext();
     let currentGateway = context;
     context.getRuntimeConfig = getRuntimeConfig;
-    const { client, revoked, source } = await retainedOperatorFixture(
+    const { client, source } = await retainedOperatorFixture(
       "unstarted-plugin-requester",
       context,
       () => currentGateway,
@@ -105,16 +105,10 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      // A revoked owner's result is still delivered, at the System baseline.
-      if (ownerState === "revoked") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          source: source.authority.source,
-          scopes: ["operator.write"],
-        });
-        retained?.assertCurrent();
-      }
+      expect(retained).toMatchObject({
+        source: source.authority.source,
+        scopes: ["operator.write"],
+      });
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -125,7 +119,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           params.isChildSessionEffectsAllowed?.(),
         ]).toEqual([false, false]);
       }
-      return ownerState === "replaced Gateway" ? "intentional_non_delivery" : "delivered";
+      return ownerState === "replaced Gateway" ? "undelivered" : "delivered";
     });
     let rejectAdmission: SubagentAdmissionRejection | undefined;
     try {
@@ -151,7 +145,6 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             },
             gatewayContextResolver: context.resolveGatewayContext,
             assertCurrent: () => {
-              source.authority.assertCurrent();
               return sessionEntry;
             },
             admittedSession: {
@@ -165,9 +158,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           }),
       );
       source.release();
-      if (ownerState === "revoked") {
-        revoked.abort(new Error("requester access revoked"));
-      } else if (ownerState === "replaced child") {
+      if (ownerState === "replaced child") {
         await writeSubagentSessionEntry({
           ...target,
           sessionId: "replacement-session",
@@ -313,8 +304,8 @@ it("does not refresh session metadata when an owned abort marker is already pers
   expect(read()).toEqual(before);
 });
 
-it("revalidates the original session after deletion during cancellation result handoff", async () => {
-  const { target } = await runs.seed("prepared-publication", {
+it("keeps the claimed kill outcome after session deletion during result handoff", async () => {
+  const { target, storePath } = await runs.seed("prepared-publication", {
     childSessionKey: rootKey,
     expectsCompletionMessage: undefined,
   });
@@ -348,9 +339,11 @@ it("revalidates the original session after deletion during cancellation result h
   expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
   expect(result).toMatchObject({
     found: true,
-    error: expect.stringContaining("ownership changed"),
+    killed: true,
+    targetState: { state: "terminal", task: { status: "cancelled" } },
   });
-  expect(result).not.toHaveProperty("targetState");
+  expect(result).not.toHaveProperty("error");
+  expect(readSession(storePath, rootKey)).toBeUndefined();
 });
 
 it.each([
@@ -640,7 +633,7 @@ describe("metadata publication", () => {
                 }),
           )
           .finally(release);
-        if (!replacement && publication !== "result") {
+        if (publication !== "result") {
           expect(result, JSON.stringify(result)).toMatchObject({ status: "ok", killed: 1 });
         }
         expect(state).toEqual({ holdingResult: true, joinedPublication: true });
@@ -654,21 +647,15 @@ describe("metadata publication", () => {
           expect(onSnapshot).toHaveBeenCalledExactlyOnceWith(result);
           expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
           expect(result).toMatchObject({ found: true, killed: true });
-          if (replacement) {
-            expect(result).toHaveProperty("error", expect.stringContaining("ownership changed"));
-            expect(result).not.toHaveProperty("targetState");
-          } else {
-            expect(result).not.toHaveProperty("error");
-            expect(result).toMatchObject({
-              targetState: { state: "terminal", task: { status: "cancelled" } },
-            });
-          }
+          expect(result).not.toHaveProperty("error");
+          expect(result).toMatchObject({
+            targetState: { state: "terminal", task: { status: "cancelled" } },
+          });
           return;
         }
         if (replacement) {
-          expect(result, JSON.stringify(result)).toMatchObject({ status: "error", killed: 0 });
           expect(persisted?.abortedLastRun).not.toBe(true);
-          expect(subagentRuns.get(runId)?.endedReason).not.toBe("subagent-killed");
+          expect(subagentRuns.get(runId)).toMatchObject(killedRun);
         } else {
           expect(persisted?.abortedLastRun).toBe(true);
           expect(subagentRuns.get(runId)).toMatchObject(killedRun);

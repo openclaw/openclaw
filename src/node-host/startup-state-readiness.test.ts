@@ -3,7 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
-import { ClientCredentialMigrationRequiredError } from "../infra/client-credential-readiness.js";
+import {
+  ClientCredentialMigrationRequiredError,
+  readClientCredentialReceipt,
+  writeClientCredentialReceipt,
+} from "../infra/client-credential-readiness.js";
 import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../infra/device-auth-store.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import * as identityStore from "../infra/device-identity.js";
@@ -201,6 +205,49 @@ describe("node-host state readiness", () => {
       expect(fixture.prepare).toHaveBeenCalledOnce();
     },
   );
+
+  async function admitManagedNode() {
+    stateDb.openOpenClawStateDatabase({ env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    await expect(withExistingOpenClawStateSchema({ path: databasePath() }, run)).rejects.toBe(
+      fixture.admitted,
+    );
+    await stateDb.closeOpenClawStateDatabaseAsync();
+  }
+
+  it("names the owner's Doctor repair when a managed node finds stale credential state", async () => {
+    await admitManagedNode();
+    // A restored state database keeps its bytes but not the receipt's recorded file identity.
+    fs.copyFileSync(databasePath(), `${databasePath()}.restored`);
+    fs.renameSync(`${databasePath()}.restored`, databasePath());
+    vi.clearAllMocks();
+    const starting = withExistingOpenClawStateSchema({ path: databasePath() }, run);
+    await expect(starting).rejects.toThrow(ClientCredentialMigrationRequiredError);
+    await expect(starting).rejects.toThrow(/run openclaw doctor --fix with that installation/u);
+    expectUnprepared();
+  });
+
+  it("lets a managed node defer an optional credential metadata upgrade", async () => {
+    await admitManagedNode();
+    const credentials = new DatabaseSync(path.join(stateDir, "client", "credentials.sqlite"));
+    try {
+      const stored = readClientCredentialReceipt(credentials)!;
+      expect(stored.receipt.sharedFile).not.toBeNull();
+      writeClientCredentialReceipt(credentials, { ...stored.receipt, source: null }, "complete");
+    } finally {
+      credentials.close();
+    }
+    vi.clearAllMocks();
+    fixture.prepare.mockRejectedValue(fixture.admitted);
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(withExistingOpenClawStateSchema({ path: databasePath() }, run)).rejects.toBe(
+      fixture.admitted,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Client credential metadata upgrade deferred"),
+    );
+    warn.mockRestore();
+  });
 
   it("automatically migrates native identity and policy before startup", async () => {
     const nativeIdentity = makeIdentity();

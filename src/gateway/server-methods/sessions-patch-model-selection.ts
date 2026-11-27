@@ -11,6 +11,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -18,6 +19,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   getModelRefStatus,
+  NO_MODEL_CONFIGURED_MESSAGE,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   type ModelRef,
@@ -96,6 +98,9 @@ export function persistSessionPatchModelSelection(params: {
     agentId: params.targetAgentId,
   });
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
+  if (!resolved) {
+    return;
+  }
   persistStickyModelSelectionBestEffort({
     agentId,
     model: `${resolved.provider}/${resolved.model}`,
@@ -119,6 +124,10 @@ export function refreshSessionPatchQueuedSelection(params: {
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
+  if (!model) {
+    // Queued work cannot run without a model; its dispatch reports the missing model.
+    return;
+  }
   refreshQueuedFollowupSession({
     key: sessionKey,
     // A preference-only edit must not replace a queued route/account or clear its
@@ -159,27 +168,28 @@ export function resolveSessionPatchModelSelection(params: {
   agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
-  defaultProvider: string;
-  defaultModel: string;
+  /** Provider for a bare model id; omitted uses the core bare-id provider. */
+  defaultProvider?: string;
+  defaultModel: string | undefined;
   subagentModelHint?: string;
   preparedModelSelection?: ModelRef;
 }):
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
   const { cfg, agentId } = params;
+  const defaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const configuredDefault = resolveDefaultModelForAgent({ cfg, agentId });
   const isDefault = (ref: ModelRef) =>
-    ref.provider === configuredDefault.provider && ref.model === configuredDefault.model;
+    ref.provider === configuredDefault?.provider && ref.model === configuredDefault.model;
   const policy = {
     cfg,
     agentId,
     catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? {
-      provider: params.defaultProvider,
-      model: params.defaultModel,
-    },
+    defaultProvider,
+    defaultModel:
+      params.subagentModelHint ??
+      (params.defaultModel && { provider: defaultProvider, model: params.defaultModel }),
   };
   if (params.preparedModelSelection) {
     const ref = params.preparedModelSelection;
@@ -270,8 +280,8 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   >[0]["preparedSessionCapabilityEntry"];
   persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
-  provider: string;
-  modelId: string;
+  provider?: string;
+  modelId?: string;
   callerCanConsent: boolean;
 }): ErrorShape | undefined {
   const { harness } = params;
@@ -353,13 +363,18 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   if (modelError) {
     return { ok: false, error: modelError };
   }
+  const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  // A runtime choice needs a model; clearing or inheriting with none has nothing to admit.
+  if (!model && preparesRuntimeSelection) {
+    return invalid(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   if (
-    preparesRuntimeSelection ||
-    params.patch.agentRuntime === null ||
-    params.patch.model === null ||
-    params.validateInheritedRuntime
+    model &&
+    (preparesRuntimeSelection ||
+      params.patch.agentRuntime === null ||
+      params.patch.model === null ||
+      params.validateInheritedRuntime)
   ) {
-    const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
     const previousModel = params.expectedEntry
       ? resolveSessionModelRef(params.cfg, params.expectedEntry, params.agentId)
       : undefined;

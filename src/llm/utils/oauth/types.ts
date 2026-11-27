@@ -27,14 +27,6 @@ export type OAuthPrompt = {
   allowEmpty?: boolean;
 };
 
-/** Parsed OAuth callback/code input accepted by manual and callback-server flows. */
-export type OAuthAuthorizationInput = {
-  /** Authorization code parsed from a callback URL, query string, or pasted code. */
-  code?: string;
-  /** Optional OAuth state parsed from callback URL, query string, or `code#state` input. */
-  state?: string;
-};
-
 /** Authorization URL and optional instructions shown before OAuth completion. */
 export type OAuthAuthInfo = {
   /** Provider authorization URL shown to the user. */

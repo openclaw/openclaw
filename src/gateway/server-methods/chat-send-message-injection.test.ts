@@ -6,7 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
@@ -191,6 +191,7 @@ function makeStarterParams(params?: { entry?: unknown; sessionKey?: string; stor
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
+      resolvedSessionModel: { provider: "openai", model: "test-model" },
       sessionKey,
       storePath: params?.storePath ?? "",
     },
@@ -395,13 +396,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     },
   );
 
-  it.for([
-    "normal",
-    "caller revoked",
-    "source canceled",
-    "backend unavailable",
-    "backend replaced",
-  ] as const)(
+  it.for(["normal", "source canceled", "backend unavailable", "backend replaced"] as const)(
     "rechecks collaborative admission after awaited projection: %s",
     async (change, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -410,8 +405,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const scope = { agentId: "main", sessionKey, storePath };
         await upsertSessionEntryCore(scope, initial);
-        let callerCurrent = true;
-        const refusal = new Error("caller authority revoked during projection");
+        const refusal = new Error("source canceled during projection");
         const source = new AbortController();
         let available = true;
         const entered = createDeferred();
@@ -430,21 +424,14 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         const params = makeStarterParams({ entry: initial, sessionKey, storePath });
         params.session.cfg = { messages: { queue: { allowCollaborativeSteering: true } } };
         params.abortSignal = source.signal;
-        params.assertCurrent = () => {
-          if (!callerCurrent) {
-            throw refusal;
-          }
-        };
-        const ownerAuthority = createAdmittedRunOperatorAuthority({
+        const ownerAuthority = createTestOperatorAuthority({
           profileId: "projection-owner",
           scopes: ["operator.write"],
           gatewayAccessGrant: null,
-          assertCurrent: () => operation.abortSignal.throwIfAborted(),
         });
-        params.operatorAuthority = createAdmittedRunOperatorAuthority({
+        params.operatorAuthority = createTestOperatorAuthority({
           ...ownerAuthority,
           profileId: "projection-participant",
-          assertCurrent: params.assertCurrent,
         });
         vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReturnValueOnce({
           operatorAuthority: params.operatorAuthority,
@@ -500,7 +487,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             signal,
           );
           expect(queueMessage).not.toHaveBeenCalled();
-          callerCurrent = change !== "caller revoked";
           if (change === "source canceled") {
             source.abort(refusal);
           } else if (change === "backend unavailable") {
@@ -517,7 +503,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           resume.resolve();
           const result = await outcome;
           sql.expectIdle();
-          if (change === "caller revoked" || change === "source canceled") {
+          if (change === "source canceled") {
             expect(result).toEqual({ error: refusal });
             expect(queueMessage).not.toHaveBeenCalled();
           } else if (change === "normal") {

@@ -9,10 +9,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -294,11 +294,10 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         profile: { profileId: "visitor", emails: [], assignedRole: null },
         requiredByRole: true,
       })!;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "visitor",
         scopes: ["operator.write"],
         signal: access.signal,
-        assertCurrent: access.assertCurrent,
       });
       runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
         await startEmbeddedTurn(params, "reply admission");
@@ -327,9 +326,6 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
         expect(outcome.error).not.toContain("reloaded or disabled");
         expect(outcome.error).toContain("couldn't finish this reply");
-        expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
-          true,
-        );
       } finally {
         invocations.release();
         await drainGlobalSingletonLifecycleState("restart");
@@ -461,14 +457,9 @@ it.for([
         let sourceReferences = 1;
         const operatorAuthority =
           scenario === "allow-control" || (scheduled && !failure)
-            ? createAdmittedRunOperatorAuthority({
+            ? createTestOperatorAuthority({
                 profileId: "original-guest",
                 scopes: ["operator.write"],
-                assertCurrent() {
-                  if (sourceReferences === 0) {
-                    throw new Error("original source released");
-                  }
-                },
                 retain() {
                   sourceReferences++;
                   return () => {

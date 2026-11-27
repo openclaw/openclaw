@@ -109,3 +109,37 @@ it("keeps its rows while the tab is hidden and reads again when it returns", asy
   await waitForSolid(() => expect(rows()).toHaveLength(250));
   expect(sidebar.textContent).not.toContain("no longer presented");
 });
+
+it("lists failing automations in their own group, out of Active and Paused", async () => {
+  const pages = inventory.read.getMockImplementation()!;
+  inventory.read.mockImplementation(async () => ({
+    jobs: [
+      { id: "ok", name: "Healthy", enabled: true, updatedAtMs: 0, lastRunStatus: "ok" },
+      { id: "error", name: "Broken", enabled: true, updatedAtMs: 0, lastRunStatus: "error" },
+      { id: "stopped", name: "Stopped", enabled: false, updatedAtMs: 0, autoDisabled: true },
+      { id: "paused", name: "Resting", enabled: false, updatedAtMs: 0 },
+    ],
+    total: 4,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+  }));
+  try {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: gatewayHelloForMethods(["cron.list"]) });
+    const context = createContext(gateway.gateway, createSessionsHarness("main", []).sessions);
+    const { sidebar } = await mountSidebarContext(context);
+    Object.assign(sidebar, { connected: true, navigationView: "automations" });
+    await sidebar.updateComplete;
+    const group = (label: string) =>
+      [
+        ...(sidebar
+          .querySelector(`[role='group'][aria-label='${label}']`)
+          ?.querySelectorAll(".sidebar-automations__name") ?? []),
+      ].map((name) => name.textContent);
+    await waitForSolid(() => expect(group("Needs attention")).toEqual(["Broken", "Stopped"]));
+    expect(group("Active")).toEqual(["Healthy"]);
+  } finally {
+    inventory.read.mockImplementation(pages);
+  }
+});

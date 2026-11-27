@@ -8,6 +8,7 @@ import {
   withDeferredPluginConfigCompletion,
 } from "../../../infra/deferred-plugin-migrations.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
 import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
@@ -68,7 +69,18 @@ export async function preparePluginUpdateConfigMigration(params: {
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent();
-      const inspected = new Map<string, boolean>();
+      // A package with no Doctor contract or artifact has no config repair to inspect.
+      // A failed artifact load never reports, so it still refuses below.
+      const inspected = new Map(
+        metadata.plugins
+          .filter(
+            (plugin) =>
+              selectedIds.has(plugin.id) &&
+              !plugin.doctorContract &&
+              !resolvePluginDoctorContractArtifact(plugin),
+          )
+          .map((plugin) => [plugin.id, false]),
+      );
       const migrated = applyPluginDoctorCompatibilityMigrations(params.config, {
         historicalWebhookListeners: HISTORICAL_WEBHOOK_CHANNELS.some((id) => selectedIds.has(id)),
         config: params.config,

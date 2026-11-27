@@ -120,6 +120,7 @@ describe("presence wire size", () => {
     let updated: ReturnType<typeof preparePresenceDelivery>;
     try {
       updated = preparePresenceDelivery(client, source, projected, 2);
+      expect(stringify).not.toHaveBeenCalledWith(expect.objectContaining({ reset: true }));
       // Immutable fields shared with the prior row need no wire comparison.
       expect(stringify).not.toHaveBeenCalledWith(source[0]!.user);
       expect(stringify).not.toHaveBeenCalledWith(source[0]!.scopes);

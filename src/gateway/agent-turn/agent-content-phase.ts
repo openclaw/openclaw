@@ -37,6 +37,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { resolveGatewaySessionTurnModelRef } from "../session-utils-store-lineage.js";
 import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
@@ -181,6 +182,7 @@ export async function prepareAgentContentPhase(params: {
   if (params.normalizedAttachments.length > 0) {
     let session: Awaited<ReturnType<typeof readAcpSessionEntryAsync>> = null;
     let catalogAgentId = agentId;
+    let baseModel = resolveSessionModelRef(params.cfg, undefined, agentId);
     const attachmentSessionKey = requestedSessionKey ?? params.requestedSessionKeyRaw;
     if (attachmentSessionKey) {
       const target = resolveSessionStoreIdentity({
@@ -196,19 +198,27 @@ export async function prepareAgentContentPhase(params: {
       });
       params.assertAdmissionCurrent?.();
       catalogAgentId = target.agentId;
+      // A request naming both provider and model never consults the session's selection.
+      if (!params.providerOverride?.trim() || !params.modelOverride?.trim()) {
+        baseModel = await resolveGatewaySessionTurnModelRef({
+          cfg: session?.cfg ?? params.cfg,
+          agentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          entry: session?.entry,
+        });
+        params.assertAdmissionCurrent?.();
+      }
     }
-    const baseModel = resolveSessionModelRef(
-      session?.cfg ?? params.cfg,
-      session?.entry,
-      catalogAgentId,
-    );
     const model = params.modelOverride
       ? (resolvePersistedOverrideModelRef({
-          defaultProvider: params.providerOverride ?? baseModel.provider,
+          defaultProvider: params.providerOverride ?? baseModel?.provider,
           overrideProvider: params.providerOverride,
           overrideModel: params.modelOverride,
         }) ?? baseModel)
-      : { provider: params.providerOverride ?? baseModel.provider, model: baseModel.model };
+      : baseModel && {
+          provider: params.providerOverride ?? baseModel.provider,
+          model: baseModel.model,
+        };
     const isConfirmedAcpSession =
       params.request.acpTurnSource === "manual_spawn" &&
       params.requestedSessionKeyRaw !== undefined &&

@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import {
   bindEmbeddedSessionRowProjection,
   createEmbeddedCallGateway,
@@ -14,6 +13,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -81,6 +81,85 @@ function patchEntry(
 ) {
   writeListEntry(key, { ...store[key]!, ...patch });
 }
+
+test("reuses invited pages until committed membership changes their visible roster", async () => {
+  await withStateDirEnv("openclaw-list-invited-", async () => {
+    const scopes = ["operator.read", "operator.write"] as const;
+    const cfg = initialize({
+      agents: { entries: { main: {}, work: {} } },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+          },
+        },
+      },
+    });
+    const guest = viewer("guest");
+    const other = viewer("other");
+    const guestId = guest.authenticatedUserProfile!.profileId;
+    const otherId = other.authenticatedUserProfile!.profileId;
+    const granted = { agentId: "work", sessionKey: "agent:work:granted", sessionId: "granted" };
+    const later = { agentId: "main", sessionKey: "agent:main:later", sessionId: "later" };
+    writeResidentEntries({
+      ...Object.fromEntries(
+        Array.from({ length: 256 }, (_, i) => [
+          `agent:main:uninvited-${i}`,
+          { sessionId: `uninvited-${i}`, updatedAt: 100 + i, createdActor: profileActor(otherId) },
+        ]),
+      ),
+      [granted.sessionKey]: {
+        sessionId: granted.sessionId,
+        updatedAt: 5,
+        createdActor: profileActor(otherId),
+      },
+      [later.sessionKey]: {
+        sessionId: later.sessionId,
+        updatedAt: 4,
+        createdActor: profileActor("another-owner"),
+      },
+      "agent:main:own": { sessionId: "own", updatedAt: 3, createdActor: profileActor(guestId) },
+    });
+    await addSessionMember(granted, { identityId: guestId, addedBy: otherId });
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using checkMembership = vi.spyOn(projection, "hasMembership");
+    const read = (offset = 0) =>
+      listProjectedSessions({
+        projection,
+        client: guest,
+        opts: { limit: 1, ownerFirst: true, offset },
+      });
+    try {
+      await projection.ensureMaterialized();
+      const warm = await read();
+      expectPage(warm, ["own", "granted"], 2);
+      expect(warm).toMatchObject({ hasMore: true, nextOffset: 1 });
+      const owners = warm.owners;
+      expectPage(await read(1), ["own"], 2);
+      checkMembership.mockClear();
+      expectPage(await read(), ["own", "granted"], 2);
+      expect(checkMembership).not.toHaveBeenCalled();
+
+      await addSessionMember(later, { identityId: guestId, addedBy: otherId });
+      checkMembership.mockClear();
+      const extended = await read(1);
+      expectPage(extended, ["later"], 3);
+      expect(extended).toMatchObject({ hasMore: true, nextOffset: 2 });
+      expect(checkMembership.mock.calls.length).toBeLessThan(32);
+
+      await removeSessionMember(granted, guestId);
+      const revoked = await read();
+      expectPage(revoked, ["own", "later"], 2);
+      expect(revoked.owners).not.toEqual(owners);
+      expectPage(await read(1), ["own"], 2);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {
@@ -360,48 +439,6 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
       });
     try {
       expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
-      using owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-      const repeated = await Promise.all(
-        Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
-      );
-      expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
-      expect(owner).not.toHaveBeenCalled();
-      for (const client of [alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          await read(rowMode, client, 2);
-          await read(rowMode, client, 128);
-        }
-      }
-      using stringify = vi.spyOn(JSON, "stringify");
-      using present = vi.spyOn(projection, "present");
-      for (const client of [alice, bob, alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          stringify.mockClear();
-          await read(rowMode, client, 2);
-          const smallPageEncodings = stringify.mock.calls.length;
-          stringify.mockClear();
-          const result = await read(rowMode, client, 128);
-          const encodings = stringify.mock.calls.length;
-          expect(result.totalCount).toBe(128);
-          // Fixed request preparation may encode facts; additional warm rows must not.
-          if (wire) {
-            expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
-              smallPageEncodings,
-            );
-          }
-          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
-          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
-          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
-            client === bob ? "owner" : "viewer",
-          );
-          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
-            client === alice ? "owner" : "viewer",
-          );
-        }
-      }
-      expect(present).not.toHaveBeenCalled();
-      stringify.mockRestore();
-      present.mockRestore();
       const people = () =>
         listProjectedSessions({
           projection,
@@ -410,15 +447,11 @@ test.each([true, false])("shares unchanged list selection (wire=%s)", async (wir
           opts: { limit: 2, includePeople: true },
         });
       const beforeUsage = await people();
-      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { inputTokens: 123 });
       await read("compact", bob);
       expect((await people()).people).toEqual(beforeUsage.people);
-      expect(owner).not.toHaveBeenCalled();
-      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);
-      expect(owner.mock.calls.length).toBeLessThan(32);
       expectPage(await read("compact", bob), ["s127", "s126"], 127);
       // An exact publication must not hide an expired retained partition.
       clock.mockReturnValue(now + 60_128);

@@ -132,11 +132,7 @@ export async function compactQueuedEmbeddedAgentSession(
     const assertHostActive = options.assertActive;
     const host = {
       ...options,
-      assertActive: composeSessionSourceAssertion([
-        assertHostActive,
-        sourceAuthority.assertActive,
-        sourceAuthority.operatorAuthority?.assertCurrent,
-      ]),
+      assertActive: composeSessionSourceAssertion([assertHostActive, sourceAuthority.assertActive]),
     };
     const signals = [input.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
       (signal): signal is AbortSignal => signal !== undefined,

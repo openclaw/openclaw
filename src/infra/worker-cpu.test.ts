@@ -445,10 +445,19 @@ describe("worker CPU lifecycle", () => {
         file,
         'import("node:worker_threads").then(({ parentPort }) => parentPort.on("message", () => {}));',
       );
-      const [directHeap, ownedHeap] = await Promise.all([
-        direct.getHeapStatistics(),
-        owned.getHeapStatistics(),
-      ]);
+      const native = await direct.getHeapStatistics();
+      const directHeap = {
+        ...native,
+        used_heap_size: 1024,
+        total_heap_size: 4096,
+        external_memory: 256,
+      };
+      const ownedHeap = {
+        ...native,
+        used_heap_size: 2048,
+        total_heap_size: 8192,
+        external_memory: 512,
+      };
       const directHeapRead = vi.spyOn(direct, "getHeapStatistics").mockResolvedValue(directHeap);
       const ownedHeapRead = vi.spyOn(owned, "getHeapStatistics").mockResolvedValue(ownedHeap);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount + 2);
@@ -473,8 +482,9 @@ describe("worker CPU lifecycle", () => {
         workerArrayBuffersBytes: undefined,
         workerMemoryCoverage: "partial",
       });
-      expect(memory.workerHeapTotalBytes).toBeGreaterThan(memory.workerHeapUsedBytes!);
-      expect(memory.workerExternalBytes).toBeGreaterThan(0);
+      expect(memory.workerHeapUsedBytes).toBe((initial.workerHeapUsedBytes ?? 0) + 3072);
+      expect(memory.workerHeapTotalBytes).toBe((initial.workerHeapTotalBytes ?? 0) + 12288);
+      expect(memory.workerExternalBytes).toBe((initial.workerExternalBytes ?? 0) + 768);
       expect(memory.workerHeaps).toEqual([
         ...initial.workerHeaps,
         expect.objectContaining({ script: "other", ...nativeHeap(directHeap) }),

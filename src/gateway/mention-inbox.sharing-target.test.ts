@@ -214,7 +214,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           expectMentionError(result, "UNAVAILABLE");
           expect(guard.mock.results).toContainEqual({
             type: "throw",
-            value: new Error("Mention authority changed before commit"),
+            value: new Error("Mention session changed before commit. Retry the request."),
           });
           await f.setSession({ visibility: "shared" });
         } else {

@@ -30,16 +30,13 @@ private final class GatedClipPlayer: ChatSpeechClipPlaying {
 @MainActor
 private final class RecordingLocalSpeaker: ChatSpeechLocalSpeaking {
     var spokenTexts: [String] = []
-    var stopCount = 0
 
     func speak(text: String) async -> Bool {
         self.spokenTexts.append(text)
         return true
     }
 
-    func stop() {
-        self.stopCount += 1
-    }
+    func stop() {}
 }
 
 @MainActor
@@ -130,9 +127,10 @@ struct ChatSpeechControllerTests {
         harness.controller.toggle(messageID: messageID, text: "Long reply")
         #expect(await waitForPhase(harness.controller, .speaking(messageID)))
 
+        let stopCountBeforeToggle = harness.clipPlayer.stopCount
         harness.controller.toggle(messageID: messageID, text: "Long reply")
         #expect(harness.controller.phase == .idle)
-        #expect(harness.clipPlayer.stopCount > 0)
+        #expect(harness.clipPlayer.stopCount > stopCountBeforeToggle)
         // Cancelling playback must not fall through to the on-device voice.
         for _ in 0..<50 {
             await Task.yield()

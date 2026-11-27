@@ -122,10 +122,8 @@ suite.define(() => {
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
-        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
-        const picker = page.getByRole("dialog", { name: "Add an account" });
-        await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
+        await page.locator("[data-models-catalog-search]").fill("Tencent");
+        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-remove-in-use");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
@@ -170,20 +168,34 @@ suite.define(() => {
         expect(await dialog.textContent()).toMatch(/Defaults for all agents keep using \S*hy4/i);
         await confirm.click();
 
-        // The saved account is gone; the default stays selected and the page asks for a model.
+        // Wait for sign-out to settle; removing access keeps the saved default selected.
         await expect
           .poll(
-            () =>
-              page
+            async () => ({
+              savedAccess: await row
                 .getByRole("button", { name: "Remove saved access: Tencent TokenHub", exact: true })
                 .count(),
+              canSetKey: await row
+                .getByRole("button", { name: "Set API key: Tencent TokenHub", exact: true })
+                .isVisible(),
+              removeProvider: await row
+                .getByRole("button", {
+                  name: "Remove provider: Tencent TokenHub",
+                  exact: true,
+                  disabled: false,
+                })
+                .count(),
+            }),
             { timeout: 30_000 },
           )
-          .toBe(0);
-        const required = page.getByText("Model required", { exact: true });
-        await required.waitFor();
+          .toEqual({ savedAccess: 0, canSetKey: true, removeProvider: 1 });
         await expect.poll(() => page.getByText("Checking models…").count()).toBe(0);
-        await shot("after-remove.png", required);
+        expect(
+          await page
+            .getByText("Couldn’t load model settings. Refresh and try again.", { exact: true })
+            .count(),
+        ).toBe(0);
+        await shot("after-remove.png", row);
         expect(await savedDefault()).toBe("tencent-tokenhub/hy4");
 
         const sent = chatRequests.length;

@@ -75,7 +75,11 @@ import {
   materializeRequesterScopedMcpToolsForHarnessRunCore,
   materializeStaticMcpToolsForHarnessRunCore,
 } from "./agent-bundle-mcp-harness.js";
-import { makeConnectRuntime, makeRuntime } from "./agent-bundle-mcp-harness.test-support.js";
+import {
+  makeConnectRuntime,
+  makeMixedAuthConnectRuntime,
+  makeRuntime,
+} from "./agent-bundle-mcp-harness.test-support.js";
 
 function staticTools(
   sessionId: string,
@@ -443,8 +447,8 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it.each([false, true])(
-    "reports actual heartbeat omissions, not warnings (deny: %s)",
+  it.each(["none", "config", "session"] as const)(
+    "reports only unexpected heartbeat omissions (deny: %s)",
     async (deny) => {
       makeStaticRuntime("scheduled-group");
       const warnings: string[] = [];
@@ -455,16 +459,17 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           ...heartbeatPolicy,
           config: {
             ...heartbeatPolicy.config,
-            ...(deny ? { tools: { deny: ["user-mail__inbox"] } } : {}),
+            ...(deny === "config" ? { tools: { deny: ["user-mail__inbox"] } } : {}),
           },
+          ...(deny === "session" ? { conversationToolPolicy: { deny: ["user-mail__inbox"] } } : {}),
         },
         warn: (message) => warnings.push(message),
       });
-      expect(toolNames(result.tools)).toEqual(deny ? [] : ["user-mail__inbox"]);
+      expect(toolNames(result.tools)).toEqual(deny === "none" ? ["user-mail__inbox"] : []);
       expect(warnings).toContain(
         "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
       );
-      if (deny) {
+      if (deny === "session") {
         expect(result.diagnosticNotice).toContain(
           "Configured MCP is incomplete for this scheduled run",
         );
@@ -504,6 +509,50 @@ afterEach(() => {
 });
 
 describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
+  it("advertises an unauthenticated server's connect tool alongside an already-authenticated server's tools", async () => {
+    readCredentialsStatus.mockResolvedValue([
+      { state: "unauthenticated" },
+      { state: "authorized" },
+    ]);
+    mocks.resolveRuntime.mockImplementation(async (params) =>
+      makeMixedAuthConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+        publicOrigin: "https://gateway.example",
+      }),
+    );
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-mixed-auth",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+      cfg: {
+        gateway: { publicOrigin: "https://gateway.example" },
+        mcp: {
+          servers: {
+            "user-mail": {
+              url: "https://mcp.example/user-mail",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result?.tools.map((tool) => tool.name)).toEqual([
+      "calendar__connect",
+      "user-mail__inbox",
+    ]);
+    await result!.dispose();
+  });
+
   it("returns undefined before any requester resolves", async () => {
     const result = await requesterTools("session-empty", { requesterSenderId: "guest" });
     expect(result).toBeUndefined();

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig } from "../../config/config.js";
 import { callGatewayCli } from "../../gateway/call.js";
@@ -16,12 +17,28 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { formatExternalSupervisorActionRequired } from "../../infra/gateway-supervision.js";
+import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import {
   clearGatewayRestartIntentSync,
   type GatewayRestartIntent,
   writeGatewayRestartIntentSync,
 } from "../../infra/restart-intent.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { appendGatewayLifecycleAudit } from "./lifecycle-audit.js";
+import { commandInterrupted } from "./lifecycle-core.js";
+import {
+  runSafeGatewayRestart,
+  resolveGatewayRestartIntentOptions,
+} from "./lifecycle-safe-restart.js";
+import { createDaemonActionContext } from "./response.js";
+import {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+  renderGatewayPortHealthDiagnostics,
+  waitForGatewayHealthyListener,
+} from "./restart-health.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
   const cfg = await readBestEffortConfig({ observe: false }).catch(() => undefined);
@@ -181,4 +198,92 @@ export async function signalGatewayRestart(
     previousLockIdentity,
     message: `Gateway restart request sent to ${params.processLabel} process on port ${port}: ${pid}.`,
   };
+}
+
+export function postRestartHealthAttempts(): number {
+  return process.platform === "win32"
+    ? Math.ceil(resolveGatewayStartupTiming().deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS)
+    : DEFAULT_RESTART_HEALTH_ATTEMPTS;
+}
+
+export function resolveRestartListenerHealthWait(restartIntent: GatewayRestartIntent | undefined) {
+  const drainTimeoutMs = resolveGatewayRestartDrainTimeoutMs(restartIntent);
+  const attempts =
+    postRestartHealthAttempts() +
+    Math.ceil((drainTimeoutMs ?? 0) / DEFAULT_RESTART_HEALTH_DELAY_MS);
+  return {
+    attempts,
+    waitIndefinitelyForPreviousOwner: drainTimeoutMs === undefined,
+    timeoutSeconds: Math.round((attempts * DEFAULT_RESTART_HEALTH_DELAY_MS) / 1000),
+  };
+}
+
+export async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
+  const { emitMessage, fail } = createDaemonActionContext({
+    action: "restart",
+    json: Boolean(opts.json),
+  });
+  const restartIntent = resolveGatewayRestartIntentOptions(opts);
+  const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
+  if (!lockIdentity?.ownerId) {
+    // Owner IDs and targeted restart semantics shipped together. Older Gateways
+    // ignore target fields, so fail before a candidate can mutate their state.
+    fail(
+      "Gateway restart failed: the active Gateway lock predates targeted restart ownership; update the running Gateway before retrying",
+    );
+    return false;
+  }
+  if (opts.safe) {
+    return await runSafeGatewayRestart(opts, { ...lockIdentity, ownerId: lockIdentity.ownerId });
+  }
+
+  let signaled: Awaited<ReturnType<typeof signalGatewayRestart>>;
+  try {
+    signaled = await signalGatewayRestart(lockIdentity.port, {
+      restartIntent,
+      enforceRestartConfig: false,
+      processLabel: "externally supervised",
+      auditSource: "supervisor",
+    });
+  } catch (err) {
+    fail(`Gateway restart failed: ${String(err)}`);
+    return false;
+  }
+  if (!signaled) {
+    fail(
+      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway")}`,
+    );
+    return false;
+  }
+
+  const healthWait = resolveRestartListenerHealthWait(restartIntent);
+  let health: Awaited<ReturnType<typeof waitForGatewayHealthyListener>>;
+  try {
+    health = await waitForGatewayHealthyListener({
+      port: lockIdentity.port,
+      attempts: healthWait.attempts,
+      delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      previousLockIdentity: signaled.previousLockIdentity,
+      waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
+      signal: getAsyncWorkSignal(),
+    });
+  } catch (err) {
+    // An accepted interrupt owns the exit status; a cancelled wait is not a restart failure.
+    if (!commandInterrupted(err)) {
+      throw err;
+    }
+    return false;
+  }
+  if (!health.healthy) {
+    const message = `Gateway restart timed out after ${healthWait.timeoutSeconds}s waiting for health checks.`;
+    fail(message, renderGatewayPortHealthDiagnostics(health));
+    return false;
+  }
+
+  emitMessage({
+    ok: true,
+    result: signaled.result,
+    message: signaled.message,
+  });
+  return true;
 }

@@ -56,13 +56,18 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { formatSchemaMigrationFailure, SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import {
   backupDoctorSqliteRepair,
   repairDoctorSqliteIndexCorruptionAsync,
 } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
-import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  isTerminalSqliteIntegrityError,
+  sqliteIntegrityCheckSteps,
+} from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { refreshSqlitePlannerStatistics } from "./sqlite-planner-statistics.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
@@ -118,8 +123,8 @@ async function migrateAgentDatabase(params: {
   if (agentEngineInput()) {
     return inspectPostgresMediaPersistence(params);
   }
-  const database = openNodeSqliteDatabase(params.pathname);
-  const nativeVersionMigration = params.migratedFromVersion !== undefined && !agentEngineInput();
+  const { pathname, integrityCheck: check = "quick", migratedFromVersion } = params;
+  const database = openNodeSqliteDatabase(pathname);
   const schemaWarnings: string[] = [];
   const schemaOptions = {
     agentId: params.agentId,
@@ -174,10 +179,10 @@ async function migrateAgentDatabase(params: {
         finalVersion: userVersion,
       };
     }
-    if (!nativeVersionMigration) {
+    if (migratedFromVersion === undefined) {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
     }
-    const initialVersion = params.migratedFromVersion ?? userVersion;
+    const initialVersion = migratedFromVersion ?? userVersion;
     let preserved = false;
     const prepareRewrite = async () => {
       if (!preserved) {
@@ -208,13 +213,13 @@ async function migrateAgentDatabase(params: {
       }
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
         // The canonical owner admits supported versions and converges additive schema.
-        if (params.migratedFromVersion !== undefined) {
-          // The version phase verified this file under the same Doctor custody.
-          // Only ordinary additive maintenance remains before readers can open it.
+        if (migratedFromVersion !== undefined) {
+          // Tolerated FTS damage has no clean receipt and must reach index repair.
+          if (!readSqliteDatabaseIntegrityVerification(database)) {
+            await runSchema(sqliteIntegrityCheckSteps(database, pathname, undefined, { check }));
+          }
           ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
-          const admittedDb = nativeVersionMigration
-            ? admitOpenClawAgentDatabaseSchema(database, schemaOptions)
-            : undefined;
+          const admittedDb = admitOpenClawAgentDatabaseSchema(database, schemaOptions);
           registerOpenClawAgentDatabase({ ...schemaOptions, admittedDb });
         } else {
           await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
@@ -585,14 +590,13 @@ export async function migrateLegacyMediaPersistence(
         if ("entryStatePreparationRequired" in result && params.prepareSessionEntryState) {
           // The normal entry writer owns its own maintenance admission and backup.
           // Let the media lease settle before that writer runs, then re-admit media once.
-          const preparationWarnings = result.warnings;
           const preparation = await params.prepareSessionEntryState(entry);
           changes.push(...preparation.changes);
           if (preparation.completed) {
             const resumed = await migrateWithLease(true);
             result = {
               ...resumed,
-              warnings: [...preparationWarnings, ...resumed.warnings],
+              warnings: [...result.warnings, ...resumed.warnings],
             };
           }
         }
@@ -629,8 +633,7 @@ export async function migrateLegacyMediaPersistence(
           admittedTargets.push(entry);
         }
         // Only a version-only advance postpones the following Doctor repairs.
-        const preparedForRepair = !result.deferred || !schemaAdvanced;
-        if (preparedForRepair) {
+        if (!result.deferred || !schemaAdvanced) {
           preparedRepairTargets.push(entry);
         }
       } catch (error) {

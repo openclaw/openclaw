@@ -23,10 +23,7 @@ import {
   loadSubagentBrowserCleanupModule,
 } from "./subagent-registry-deps.js";
 import { stopEndedSubagentProcesses } from "./subagent-registry-execution-cleanup.js";
-import {
-  ANNOUNCE_EXPIRY_MS,
-  GATEWAY_ADMISSION_RETRY_DELAY_MS,
-} from "./subagent-registry-helpers.js";
+import { GATEWAY_ADMISSION_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -58,6 +55,7 @@ import {
   isRequesterRetirementCustodyCurrent,
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
@@ -150,7 +148,6 @@ const {
   scheduleResume,
   completeCleanupBookkeeping,
   completeSubagentRun,
-  finalizeResumedAnnounceGiveUpInBackground,
   refreshFrozenResultFromSession,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
@@ -301,7 +298,7 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
     entry.requesterSettleWake &&
     typeof entry.execution.endedAt === "number" &&
     (!yieldedWakeWaitingForDelivery ||
-      (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake.pauseNotice))
+      (isSubagentPausedByYield(entry) && entry.requesterSettleWake.pauseNotice))
   ) {
     resumeRequesterSettleWake(runId, entry);
     return;
@@ -318,28 +315,9 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
   }
   // Yielded runs stay paused until explicitly steered, except orchestrators
   // waiting on descendants: their settle retry must reach the wake path.
-  if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
+  if (isSubagentPausedByYield(entry) && entry.wakeOnDescendantSettle !== true) {
     return;
   }
-  // Required completions are deadline-driven; retry count is diagnostic only.
-  if (
-    entry.expectsCompletionMessage !== true &&
-    typeof entry.execution.endedAt === "number" &&
-    Date.now() - entry.execution.endedAt > ANNOUNCE_EXPIRY_MS
-  ) {
-    finalizeResumedAnnounceGiveUpInBackground(runId, entry, "expiry");
-    return;
-  }
-
-  const now = Date.now();
-  const earliestRetryAt = entry.delivery?.nextAttemptAt ?? 0;
-  if (entry.expectsCompletionMessage === true && now < earliestRetryAt) {
-    const waitMs = Math.max(1, earliestRetryAt - now);
-    scheduleResume(entry, waitMs);
-    resumedRuns.add(getSubagentRunRuntimeKey(entry));
-    return;
-  }
-
   if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
     // Operation settlement or, without one, the sweeper owns provisional cancellation cleanup.
     if (
@@ -436,24 +414,16 @@ function retireSupersededSubagentRun(
 }
 
 const subagentSweeper = createSubagentRegistrySweeper({
-  ...contextCleanup,
+  cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
+  runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
+  notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   runs: subagentRuns,
-  resumedRuns,
   clearPendingLifecycleError,
-  clearPendingLifecycleTimeout,
   sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   startSubagentAnnounceCleanupFlow,
-  completeCleanupBookkeeping,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
-  isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
-  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
-  sessionEffectsHostCurrent: (entry) =>
-    subagentLifecycleController.sessionEffectsHostCurrent(entry),
-  shouldSuppressSessionEffects: (entry, effects) =>
-    subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
-  discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,
@@ -576,7 +546,7 @@ export function initSubagentRegistry() {
 }
 
 export {
-  listLiveSubagentRootSessions,
+  listLiveSubagentSessions,
   resolveRootSubagentRequester,
 } from "./subagent-registry-read.js";
 

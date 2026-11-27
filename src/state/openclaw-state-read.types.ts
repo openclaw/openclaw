@@ -47,6 +47,10 @@ import type {
   RegisteredStateReadCommand,
   RegisteredStateReadResult,
 } from "./openclaw-state-read-operation-registry.js";
+import type {
+  prepareOpenClawStateReadSnapshotSource,
+  StateReadSnapshotSource,
+} from "./openclaw-state-read-snapshot-source.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { RepositoryWorkspaceOwner } from "./session-repository-workspaces.types.js";
@@ -57,12 +61,23 @@ import type {
   CachedGitHubIdentityBinding,
 } from "./user-profiles.types.js";
 
+export type OpenClawStateReadSnapshotScope = RetainedReadScope & {
+  readSource(): StateReadSnapshotSource | undefined;
+  prepareSource?: () => Promise<void>;
+  forkSource: Awaited<ReturnType<typeof prepareOpenClawStateReadSnapshotSource>>["forkSource"];
+  recoverRollbackJournal: () => void;
+  env: NodeJS.ProcessEnv;
+  callerSignal?: AbortSignal;
+};
+
 export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
   admissionTimeoutMs?: number;
   /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
   allowStartupRollbackRecovery?: true;
   /** Selected reports acquire shared bytes only when a reader actually needs them. */
   lazy?: boolean;
+  /** Read-only reports can use the canonical source when it has a verified live SQLite owner. */
+  preferLiveOwner?: true;
   /** Command owners may cancel preparation before the callback acquires its read scope. */
   signal?: AbortSignal;
 };
@@ -221,6 +236,7 @@ export type OpenClawStateReadCommand =
       type: "sessionRows.sharedFacts";
       entries: readonly {
         acp?: AcpSessionReadInput;
+        worktreeId?: string;
         repositoryWorkspace?: RepositoryWorkspaceOwner & { workspaceId: string };
       }[];
     }

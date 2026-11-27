@@ -319,6 +319,8 @@ describe("agents tools panel (browser)", () => {
       "Message Actions",
       "Probe Tool",
     ]);
+    // Neither the channel action nor the discovered MCP tool has a row in this catalog.
+    expect(container.querySelectorAll("a.agent-tools-runtime-chip")).toHaveLength(0);
     expect(texts(container, ".agent-tools-runtime-chip__meta")).toEqual([
       "Channel: guildchat",
       "MCP",

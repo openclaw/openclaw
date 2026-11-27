@@ -47,6 +47,10 @@ export const validateSessionsCatalogListParams = createProtocolValidator(
   S.SessionsCatalogListParamsSchema,
   Checks.isSessionsCatalogListParams,
 );
+export const validateSessionsCatalogRouteParams = createProtocolValidator(
+  S.SessionsCatalogRouteParamsSchema,
+  Checks.isSessionsCatalogRouteParams,
+);
 export const validateSessionsCatalogReadParams = createProtocolValidator(
   S.SessionsCatalogReadParamsSchema,
   Checks.isSessionsCatalogReadParams,
@@ -155,6 +159,10 @@ export const validateSessionMemberAddParams = createProtocolValidator(
   S.SessionMemberAddParamsSchema,
   Checks.isSessionMemberAddParams,
 );
+export const validateSessionMemberSetAccessParams = createProtocolValidator(
+  S.SessionMemberSetAccessParamsSchema,
+  Checks.isSessionMemberSetAccessParams,
+);
 export const validateSessionMemberRemoveParams = createProtocolValidator(
   S.SessionMemberRemoveParamsSchema,
   Checks.isSessionMemberRemoveParams,
@@ -194,6 +202,10 @@ export const validateSessionsCreateParams = createProtocolValidator(
 export const validateSessionsTitlePrepareParams = createProtocolValidator(
   S.SessionsTitlePrepareParamsSchema,
   Checks.isSessionsTitlePrepareParams,
+);
+export const validateSessionsSteerTargetParams = createProtocolValidator(
+  S.SessionsSteerTargetParamsSchema,
+  Checks.isSessionsSteerTargetParams,
 );
 export const validateSessionsSteerActiveParams = createProtocolValidator(
   S.SessionsSteerActiveParamsSchema,

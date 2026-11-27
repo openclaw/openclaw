@@ -10,10 +10,14 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadReads,
+  observeMainThreadSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
-import { readUpdateRunAdmissionCommand } from "./update-run-admission.read.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
+import { prepareUpdateRunAdmissionRead } from "./update-run-admission.read.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,
@@ -111,11 +115,14 @@ describe("update run history reads", () => {
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
     expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
     const transactions = vi.spyOn(initial.db, "exec");
-    const result = readUpdateRunAdmissionCommand(initial.db, {
+    const readCandidates = await prepareUpdateRunAdmissionRead({
       type: "updateRuns.reconciliationCandidates",
       input: { excludeRunId: runId },
     });
-    expect(result).toEqual({ type: "updateRuns.reconciliationCandidates", candidates: [] });
+    expect(readCandidates(initial.db)).toEqual({
+      type: "updateRuns.reconciliationCandidates",
+      candidates: [],
+    });
     expect(transactions).not.toHaveBeenCalled();
     closeOpenClawStateDatabaseForTest();
     const olderReader = new DatabaseSync(filename);
@@ -130,6 +137,60 @@ describe("update run history reads", () => {
     expect(getUpdateRun(runId, options)).toEqual(created);
     expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
     expect(listUpdateRuns({}, options)).toEqual([created]);
+  });
+
+  it("probes one status outside the snapshot and reads current records inside it", async () => {
+    const options = isolatedOptions();
+    const { runId } = createUpdateRun({ trigger: "cli" }, options);
+    const other = createUpdateRun({ trigger: "api" }, options);
+    const { db } = openOpenClawStateDatabase(options);
+    const selected = await prepareUpdateRunAdmissionRead({
+      type: "updateRuns.reconciliationCandidates",
+      input: { runIds: [other.runId, runId], excludeRunId: other.runId },
+    });
+    const all = await prepareUpdateRunAdmissionRead({
+      type: "updateRuns.reconciliationCandidates",
+      input: {},
+    });
+    const reads: [pinned: boolean, sql: string, bindings: readonly unknown[]][] = [];
+    const observer = observeMainThreadReads((sql, bindings) => {
+      if (sql.includes('from "update_runs"')) {
+        reads.push([db.isTransaction, sql, bindings]);
+      }
+    });
+    const exec = db.exec.bind(db);
+    const begin = vi.spyOn(db, "exec").mockImplementationOnce((sql) => {
+      expect(sql).toBe("BEGIN");
+      db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(runId);
+      exec(sql);
+    });
+    try {
+      expect(selected(db)).toMatchObject({ candidates: [{ record: { runId, phase: "staging" } }] });
+      const running = 'from "update_runs" where "status" = ?';
+      const targeted = `${running} and "run_id" in (?, ?) and "run_id" != ?`;
+      const ids = ["running", other.runId, runId, other.runId];
+      const fullRead = `select * ${running} order by "run_id"`;
+      expect(reads.splice(0)).toEqual([
+        [false, `select "status" ${targeted} order by "run_id" limit ?`, [...ids, 1]],
+        [true, `select * ${targeted} order by "run_id"`, ids],
+      ]);
+      all(db);
+      expect(reads.splice(0)).toEqual([
+        [false, `select "status" ${running} limit ?`, ["running", 1]],
+        [true, fullRead, ["running"]],
+      ]);
+      runSqliteReadSnapshotSync(db, () => all(db));
+      expect(reads).toEqual([[true, fullRead, ["running"]]]);
+      begin.mockImplementationOnce((sql) => {
+        expect(sql).toBe("BEGIN");
+        exec("DROP TABLE update_runs");
+        exec(sql);
+      });
+      expect(all(db)).toMatchObject({ candidates: [] });
+    } finally {
+      begin.mockRestore();
+      observer.restore();
+    }
   });
 
   it.each([

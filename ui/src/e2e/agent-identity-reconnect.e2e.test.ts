@@ -19,13 +19,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [],
         methodResponses: {
-          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
           "cron.list": cronJobsListResponse([], { snapshotRevision: "idle" }),
         },
       });
       await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-      const methods = ["agent.identity.get", "cron.list", "cron.status", "models.list"];
+      const methods = ["agent.identity.get", "cron.list", "models.list"];
       // The sidebar defers startup reads until the foreground conversation is ready.
       await Promise.all(methods.map((method) => gateway.waitForRequest(method)));
       await pauseVirtualClock(page);
@@ -63,7 +62,13 @@ suite.define(() => {
       const beforeProfiles = await Promise.all(
         unaffected.map(async (method) => (await gateway.getRequests(method)).length),
       );
-      for (const changedPaths of [["browser.profiles.temporary"], ["browser.profiles"]]) {
+      for (const changedPaths of [
+        ["browser.profiles.temporary"],
+        ["browser.profiles"],
+        ["ui.prefs.sidebarEntries"],
+        ["logging.level"],
+        ["browser.headless"],
+      ]) {
         await gateway.emitGatewayEvent("config.changed", { changedPaths });
         await page.clock.runFor(1_000);
       }
