@@ -13,8 +13,12 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedAuthProfileStoreAtDatabasePath,
+} from "../agents/auth-profiles/persisted.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -214,25 +218,35 @@ it(
           retry: { provider: { maxRetries: 1 } },
         });
         signal.throwIfAborted();
-        for (const agentId of ["rate", "auth"] as const) {
-          await gateway.state.writeAuthProfiles(
-            {
-              version: 1,
-              profiles: {
-                [profileIds[agentId]]: {
-                  type: "api_key",
-                  provider: agentId === "rate" ? rateProviderId : provider.providerId,
-                  key: credentials[agentId],
-                },
+        await gateway.state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              [profileIds.rate]: {
+                type: "api_key",
+                provider: rateProviderId,
+                key: credentials.rate,
               },
             },
-            // Models saves connection credentials in the shared owner; rate health stays agent-local.
-            agentId === "auth" ? "main" : agentId,
-          );
-          signal.throwIfAborted();
-        }
+          },
+          "rate",
+        );
+        signal.throwIfAborted();
         const activeClient = await connect();
         const request = createFixtureRequest(activeClient, signal);
+        const saveAuthKey = (apiKey: string) =>
+          request<{ provider: string; profileId: string; warning?: string }>(
+            "models.authSetApiKey",
+            { agentId: "auth", provider: provider.providerId, apiKey },
+            { timeoutMs: 30_000 },
+          );
+        expect(await saveAuthKey(credentials.auth)).toEqual({
+          provider: provider.providerId,
+          profileId: profileIds.auth,
+        });
+        const sharedAuthPath = resolveOpenClawStateSqlitePath({
+          OPENCLAW_STATE_DIR: gateway.state.stateDir,
+        });
         const gatewayPid = gateway.child?.pid;
         expect(gatewayPid).toBeTypeOf("number");
         const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
@@ -262,9 +276,11 @@ it(
           expect(terminal.status).toBe("error");
           expect(requests[agentId]).toBeGreaterThan(0);
           expect(unexpectedCredential).toBe(false);
-          return loadPersistedAuthProfileStore(
-            gateway.state.agentDir(agentId === "auth" ? "main" : agentId),
-          )?.usageStats?.[profileIds[agentId]];
+          const store =
+            agentId === "auth"
+              ? loadPersistedAuthProfileStoreAtDatabasePath(sharedAuthPath, "shared-state")
+              : loadPersistedAuthProfileStore(gateway.state.agentDir(agentId));
+          return store?.usageStats?.[profileIds[agentId]];
         };
         const rateStats = await failTurn("rate");
         signal.throwIfAborted();
@@ -279,15 +295,7 @@ it(
         expect(["auth", "auth_permanent"]).toContain(
           authStats?.cooldownReason ?? authStats?.disabledReason,
         );
-        const saved = await request<{
-          provider: string;
-          profileId: string;
-          warning?: string;
-        }>(
-          "models.authSetApiKey",
-          { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
-          { timeoutMs: 30_000 },
-        );
+        const saved = await saveAuthKey(credentials.recovered);
         expect(saved).toEqual({ provider: provider.providerId, profileId: profileIds.auth });
         const refreshed = await request<{ refreshed: boolean }>(
           "models.authRefresh",

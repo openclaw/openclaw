@@ -74,7 +74,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         sessionId: "ready-restart-admission",
       };
       const targets = [scope, readyScope];
-      const marker = { queuedInputIds: [] };
+      const marker = {};
       const claims: Array<[string, string | undefined]> = [];
       try {
         for (const target of targets) {
@@ -138,7 +138,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         using db = openNodeSqliteDatabase(pathname);
         db.exec("UPDATE session_key_contract SET canonical_ready=NULL");
       }
-      invalidateValidation(pathname);
+      invalidateValidation(pathname, "a maintenance write");
       revokeSqliteDatabaseAdmissionsForPath(pathname);
 
       await withAgentDatabaseStartupAdmission(async (admission) => {

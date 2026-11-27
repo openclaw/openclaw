@@ -1,6 +1,7 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { promptCacheHitRate } from "../../../src/shared/prompt-cache-hit-rate.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
@@ -10,7 +11,7 @@ import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { formatMissingOperatorReadScopeMessage } from "./permission-error.ts";
 import { listen } from "./reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
-import { promptCacheHitRate, requestSessionUsage } from "./sessions/usage.ts";
+import { requestSessionUsage } from "./sessions/usage.ts";
 
 type SessionContextReportTarget = {
   sessionKey: string;
@@ -29,6 +30,9 @@ export type SessionCostTotal = {
   unpriced: boolean;
   /** Share of prompt tokens served from the provider cache; null when no prompt was billed. */
   cacheHitRate: number | null;
+  /** Lifetime uncached input and output tokens; lower bounds while `partial`. */
+  input: number;
+  output: number;
 };
 type SessionContextReportSnapshot = {
   report: SessionSystemPromptReport | null;
@@ -148,6 +152,8 @@ function createSessionContextReports(gateway: ApplicationGateway) {
                 unpriced: usage.totalCost === 0 && usage.missingCostEntries > 0,
                 // Unlike cost, a ratio of incomplete counters is no bound: withhold it.
                 cacheHitRate: response.partial || row?.computing ? null : promptCacheHitRate(usage),
+                input: usage.input,
+                output: usage.output,
               }
             : null,
           loading: false,

@@ -24,6 +24,7 @@ import {
   historyLane,
   sessionStoreLane,
   rotateDatabaseWorkers,
+  withSessionHistoryWorkerReadCandidates,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prewarmSessionHistoryWorker,
@@ -48,7 +49,6 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prewarmGatewaySessionHistory } from "./server-history-prewarm.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import {
@@ -216,30 +216,6 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   expect(previousWorker?.threadId).toBe(-1);
 });
 
-it("prewarms presentation after a lightweight read and reuses that worker", async () => {
-  await withHistoryState(async (state) => {
-    const fixture = await seed(state, "main", "lightweight-before-prewarm");
-    expect(await prepareSessionEntryPresenceRead(fixture.target).read()).toBe(true);
-    const worker = observed.workers.at(-1);
-    expect(worker?.threadId).toBeGreaterThan(0);
-    const prewarms: Worker[] = [];
-    observed.dispatch = (message, dispatchedWorker) => {
-      if (asOptionalRecord(asOptionalRecord(message)?.input)?.kind === "prewarm") {
-        prewarms.push(dispatchedWorker);
-      }
-    };
-    const config = {
-      agents: { entries: { main: {} } },
-      session: { store: fixture.target.storePath },
-    };
-    await prewarmGatewaySessionHistory(config);
-    await prewarmGatewaySessionHistory(config);
-    expect(prewarms).toEqual([worker]);
-    expectMessageIds((await fixture.read()).messages, ["lightweight-before-prewarm-message"]);
-    expect(observed.workers.at(-1)).toBe(worker);
-  });
-});
-
 async function seed(state: OpenClawTestState, agentId: string, sessionId: string) {
   const target = {
     agentId,
@@ -266,6 +242,41 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     read: () => readChatHistoryPage(params),
   };
 }
+
+it("preserves pages as discovery targets change and their reader workers restart", async () => {
+  await withHistoryState(async (state) => {
+    const a = await seed(state, "main", "candidate-a");
+    const b = await seed(state, "other", "candidate-b");
+    for (const targets of [[a], [a, b], [b], [a]]) {
+      for (const restart of [false, true]) {
+        if (restart) {
+          await rotateDatabaseWorkers(historyLane);
+        }
+        const results = await withSessionHistoryWorkerReadCandidates(
+          targets.map(({ path: pathname }) => ({ path: pathname, physicalPath: pathname })),
+          async (discovery) => {
+            const pages = [];
+            for (const target of targets) {
+              const selected = await discovery.readStoreTarget({
+                agentId: target.target.agentId,
+                storePath: target.target.storePath,
+                env: state.env,
+                registeredDatabases: [],
+              });
+              expect(selected).toMatchObject({
+                kind: "session-store-target",
+                database: { path: target.path },
+              });
+              pages.push((await target.read()).messages.map(readChatHistoryMessageId));
+            }
+            return pages;
+          },
+        );
+        expect(results).toEqual(targets.map(({ target }) => [`${target.sessionId}-message`]));
+      }
+    }
+  });
+});
 
 it("settles cancelled message reads before later reads and closes their database handles", async () => {
   await withHistoryState(async (state) => {

@@ -167,7 +167,7 @@ describe("runCronIsolatedAgentTurn watchdog cause", () => {
     expect(result).toMatchObject({
       status: "error",
       error: expect.stringMatching(
-        /^blocked_tool_call staleReason=no_activity pendingTools=\[\{"toolName":"hang_forever","toolCallId":"host-call-1","elapsedMs":\d+\}\]$/,
+        /^blocked_tool_call staleReason=no_activity pendingTools=\[\{"toolName":"hang_forever","toolCallId":"host-call-1","elapsedMs":\d+,"explicitDeadline":false\}\]$/,
       ),
       errorClassification: { kind: "reason", reason: "timeout" },
       failureNotificationDetail: { kind: "agent-stall", classification: "blocked_tool_call" },

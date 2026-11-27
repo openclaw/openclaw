@@ -19,7 +19,11 @@ export function buildTlonInboundMediaPrompt(messageText: string, media: TlonInbo
   return { body: `${mediaLines}\n${messageText}`, media };
 }
 
-export async function downloadMessageImages(content: unknown, maxBytes?: number) {
+export async function downloadMessageImages(
+  content: unknown,
+  maxBytes?: number,
+  abortSignal?: AbortSignal,
+) {
   const images: string[] = [];
   const attachments: TlonInboundMedia[] = [];
   let unavailableCount = 0;
@@ -51,7 +55,8 @@ export async function downloadMessageImages(content: unknown, maxBytes?: number)
         maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
         ...TLON_MEDIA_FETCH_TIMEOUTS,
         ssrfPolicy: undefined,
-        requestInit: { method: "GET" },
+        // Cancel in-flight downloads when the ingress claim is abandoned.
+        requestInit: { method: "GET", ...(abortSignal ? { signal: abortSignal } : {}) },
       });
       attachments.push({
         path: saved.path,

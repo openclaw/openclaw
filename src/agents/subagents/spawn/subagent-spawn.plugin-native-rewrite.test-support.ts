@@ -19,6 +19,7 @@ import { withNativeSubagentRuntimeGuard } from "../../../plugins/runtime/native-
 import type { NativeSubagentRuntime } from "../../../plugins/runtime/types-native-subagent.js";
 import type { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
@@ -73,7 +74,10 @@ export function nativeRequestSource(
       ...overrides,
     },
     operatorAuthority: source.authority,
-    assertCurrent: source.authority.assertCurrent,
+    assertCurrent: expectDefined(
+      resolveAdmittedRunActiveAssertion(bound.admitted, bound.parent.controller.signal),
+      "native requester run",
+    ),
     async prepareSpawn(assertCurrent) {
       assertCurrent();
       return bound.admitted;
@@ -120,15 +124,21 @@ export function nativeReplyFixture(
           sessionKey: bound.parentSessionKey,
           sessionStoreEntry: { sessionKey: bound.parentSessionKey, entry },
           getPreDispatchAbortSignal: () => undefined,
-          assertProgressCurrent: source.authority.assertCurrent,
+          assertProgressCurrent: () => bound.parent.controller.signal.throwIfAborted(),
           assertCurrentBindingRoute: async () => {
-            source.authority.assertCurrent();
+            bound.parent.controller.signal.throwIfAborted();
           },
-          turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt },
+          turnAdoption: {
+            assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+            adopt,
+          },
         },
         () =>
           withNativeSubagentRuntimeGuard(
-            { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
+            {
+              pluginId: "native-test",
+              assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+            },
             run,
           ),
       ),
@@ -187,7 +197,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
           ) =>
             createRequestNativeSubagentRuntime(nativeRequestSource(parent, owner), {
               pluginId: "native-test",
-              assertCurrent: owner.authority.assertCurrent,
+              assertCurrent: () => parent.parent.controller.signal.throwIfAborted(),
             });
           const [ordinary] = finalizeAgentTools({
             tools: [

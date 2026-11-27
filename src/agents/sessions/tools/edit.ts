@@ -9,10 +9,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
 import { decodeUtf8Input } from "../../../infra/utf8-input.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ToolInputError } from "../../tool-input-error.js";
 import { textResult } from "../../tools/tool-results.js";
@@ -140,7 +136,6 @@ export function createEditTool(
     outputSchema: EditToolOutputSchema,
     prepareArguments: prepareEditArguments,
     async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
-      const assertCurrent = captureAgentToolSourceExecutionGuard();
       if (!Array.isArray(input.edits) || input.edits.length === 0) {
         throw new ToolInputError(
           "Edit tool input is invalid. edits must contain at least one replacement.",
@@ -159,10 +154,7 @@ export function createEditTool(
           let expectedContent: string | undefined;
 
           try {
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-              await ops.access(absolutePath, signal);
-            });
+            await ops.access(absolutePath, signal);
           } catch (error: unknown) {
             const errorMessage =
               error instanceof Error && "code" in error
@@ -173,10 +165,7 @@ export function createEditTool(
             });
           }
 
-          const buffer = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            return ops.readFile(absolutePath, signal);
-          });
+          const buffer = await ops.readFile(absolutePath, signal);
           const rawContent = decodeUtf8Input(buffer, `File ${absolutePath}`);
           try {
             assertFileToolNotAborted(signal);
@@ -191,17 +180,9 @@ export function createEditTool(
             }
             editCount = plan.editCount;
             expectedContent = plan.content;
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-              await ops.writeFile(absolutePath, plan.content, signal);
-            });
+            await ops.writeFile(absolutePath, plan.content, signal);
             assertFileToolNotAborted(signal);
-            if (
-              !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-                assertCurrent();
-                return verifyPersistedUtf8File(absolutePath, plan.content, ops, signal);
-              }))
-            ) {
+            if (!(await verifyPersistedUtf8File(absolutePath, plan.content, ops, signal))) {
               throw new Error(
                 `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
               );
@@ -212,17 +193,11 @@ export function createEditTool(
               { changed: true, ...plan.receipt },
             );
           } catch (error: unknown) {
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              assertCurrent();
-            });
             const normalizedError = error instanceof Error ? error : new Error(String(error));
             const recoveryContent = expectedContent;
             if (
               recoveryContent !== undefined &&
-              (await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-                assertCurrent();
-                return verifyPersistedUtf8File(absolutePath, recoveryContent, ops, signal);
-              }))
+              (await verifyPersistedUtf8File(absolutePath, recoveryContent, ops, signal))
             ) {
               return textResult<EditToolDetails>(
                 `Successfully replaced ${editCount} block(s) in ${path}.`,

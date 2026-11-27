@@ -38,7 +38,7 @@ type VersionedTemplateTable = keyof Pick<
   | "template_cron_refs"
   | "template_mcp_server_refs"
 >;
-export const TEMPLATE_RECORD_VERSIONS: readonly (readonly [
+const TEMPLATE_RECORD_VERSIONS: readonly (readonly [
   VersionedTemplateTable,
   readonly (readonly [string, string])[],
 ])[] = [

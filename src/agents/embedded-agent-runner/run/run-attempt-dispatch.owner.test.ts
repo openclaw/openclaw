@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  createPluginRegistryFixture,
-  registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -14,14 +10,12 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import { resolvePreparedGatewayOperatorAccessAuthority } from "../../../gateway/operator-access-policy.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
-import { testApi as logTestApi } from "../../../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
@@ -240,7 +234,6 @@ it.each(dispatchCases)(
       const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
       let promptSessionId = `${agentId}-global`;
       const cancellation = new AbortController();
-      const policyGrant = new AbortController();
       const cancellationError = new Error("session aborted");
       const interrupted =
         transcriptTargetInvalidation === "stopped" || transcriptTargetInvalidation === "restart";
@@ -250,7 +243,7 @@ it.each(dispatchCases)(
           : createAgentRunDirectAbortError();
       const diagnosticFile = state.path("target-refusal.log");
       const readTargetRefusals = async () => {
-        await logTestApi.flushFileLogQueueForTests();
+        await flushLogger();
         const contents = existsSync(diagnosticFile)
           ? await fs.readFile(diagnosticFile, "utf8")
           : "";
@@ -264,51 +257,17 @@ it.each(dispatchCases)(
         setLoggerOverride({ level: "warn", consoleLevel: "silent", file: diagnosticFile });
       }
       const storePath = state.path("agents", agentId, "sessions", "sessions.json");
-      if (
-        cancelTrajectory ||
-        transcriptTargetInvalidation === "target" ||
-        transcriptTargetInvalidation === "policy" ||
-        interrupted
-      ) {
+      if (cancelTrajectory || transcriptTargetInvalidation === "target" || interrupted) {
         await replaceSessionEntry(
           { sessionKey: "global", storePath },
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
-      let onValidateSource: (() => void) | undefined;
-      const assertSourceCurrent = vi.fn(() => onValidateSource?.());
+      const assertSourceCurrent = vi.fn();
       setActivePluginRegistry(createEmptyPluginRegistry());
-      let policyAccess: ReturnType<typeof resolvePreparedGatewayOperatorAccessAuthority> = null;
-      if (transcriptTargetInvalidation === "policy") {
-        const { registry } = createPluginRegistryFixture(config);
-        registerVirtualTestPlugin({
-          registry,
-          config,
-          id: "transcript-access",
-          name: "Transcript access",
-          register(api) {
-            api.registerGatewayAccessPolicy({
-              authorize: () => ({
-                grantId: randomUUID(),
-                signal: policyGrant.signal,
-                assertCurrent: () => policyGrant.signal.throwIfAborted(),
-              }),
-            });
-          },
-        });
-        setActivePluginRegistry(registry.registry);
-        policyAccess = resolvePreparedGatewayOperatorAccessAuthority(
-          { profileId: "transcript-operator", emails: [], role: null, isCurrent: () => true },
-          config,
-          { requireLivePolicySet: true },
-        );
-        assert(policyAccess?.gatewayAccessGrant);
-      }
       const admission = prepareAgentRunAdmission({
         cfg: config,
-        assertSourceCurrent:
-          policyAccess?.assertCurrent ??
-          (transcriptTargetInvalidation ? assertSourceCurrent : undefined),
+        assertSourceCurrent: transcriptTargetInvalidation ? assertSourceCurrent : undefined,
         facts: {
           runId,
           agentId,
@@ -366,42 +325,30 @@ it.each(dispatchCases)(
             );
             throw targetChecked;
           }
-          if (
-            transcriptTargetInvalidation === "target" ||
-            transcriptTargetInvalidation === "policy"
-          ) {
+          if (transcriptTargetInvalidation === "target") {
             assert(capturedAttempt);
             await assertDurableTranscriptRevocation(capturedAttempt, workspaceDir, () => {
-              if (transcriptTargetInvalidation === "policy") {
-                policyGrant.abort(new Error("synthetic private authority detail /private/target"));
-              } else {
-                onValidateSource = () => {
-                  onValidateSource = undefined;
-                  input.sessionPromptState.sessionTarget = {
-                    ...input.sessionPromptState.sessionTarget!,
-                    [targetField!]: "synthetic-private-rebound-target",
-                  };
-                };
-              }
+              input.sessionPromptState.sessionTarget = {
+                ...input.sessionPromptState.sessionTarget!,
+                [targetField!]: "synthetic-private-rebound-target",
+              };
             });
             throw targetChecked;
           }
           expect(assertPreparedTarget).toBeTypeOf("function");
           assertSourceCurrent.mockClear();
           assertPreparedTarget!();
-          expect(assertSourceCurrent).toHaveBeenCalledOnce();
-          onValidateSource = () => {
-            onValidateSource = undefined;
-            if (transcriptTargetInvalidation === "closed") {
-              activeControls!.close();
-            } else if (transcriptTargetInvalidation === "replaced") {
-              laneController.createAttemptControls({ admittedRunContext });
-            } else if (transcriptTargetInvalidation === "identity") {
-              promptSessionId = "synthetic-private-rebound-session";
-            } else if (transcriptTargetInvalidation === "source-closed") {
-              admission.close();
-            }
-          };
+          // Admission checked the run's source once; the prepared target never re-checks it.
+          expect(assertSourceCurrent).not.toHaveBeenCalled();
+          if (transcriptTargetInvalidation === "closed") {
+            activeControls!.close();
+          } else if (transcriptTargetInvalidation === "replaced") {
+            laneController.createAttemptControls({ admittedRunContext });
+          } else if (transcriptTargetInvalidation === "identity") {
+            promptSessionId = "synthetic-private-rebound-session";
+          } else if (transcriptTargetInvalidation === "source-closed") {
+            admission.close();
+          }
           expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
           throw targetChecked;
         }
@@ -513,9 +460,7 @@ it.each(dispatchCases)(
       };
       sourceTurn.stamp(params);
       const writerClaim =
-        transcriptTargetInvalidation === "target" ||
-        transcriptTargetInvalidation === "policy" ||
-        interrupted
+        transcriptTargetInvalidation === "target" || interrupted
           ? await claimAgentSessionWriter({
               ...params,
               sessionTarget: {
@@ -784,9 +729,8 @@ it.each(dispatchCases)(
                   ? "target_changed"
                   : transcriptTargetInvalidation === "identity"
                     ? "session_identity_changed"
-                    : transcriptTargetInvalidation === "policy" ||
-                        transcriptTargetInvalidation === "source-closed"
-                      ? "source_authority_refused"
+                    : transcriptTargetInvalidation === "source-closed"
+                      ? "scope_authority_refused"
                       : "attempt_inactive",
               ...(targetField ? { field: targetField } : {}),
             },
@@ -992,7 +936,7 @@ it.each(dispatchCases)(
         baseline.resolve();
         await pending.catch(() => undefined);
         await retainedTranscript?.dispose();
-        await logTestApi.flushFileLogQueueForTests();
+        await flushLogger();
         setLoggerOverride(null);
         resetLogger();
         hostObserver?.mockRestore();
@@ -1000,7 +944,6 @@ it.each(dispatchCases)(
         remoteImageRead?.mockRestore();
         restorePlacement();
         admission.close();
-        policyGrant.abort();
         restoreSandbox();
       }
     });

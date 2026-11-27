@@ -12,6 +12,7 @@ import * as control from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import * as layout from "./schtasks-layout.js";
 import { readScheduledTaskRuntime } from "./schtasks-runtime.js";
+import { scheduledTaskXmlPolicy } from "./schtasks-xml-enabled.js";
 import * as proof from "./schtasks.installed-command.test-support.js";
 import type { InstalledTask } from "./schtasks.installed-diagnostics.test-support.js";
 import { entry, packageRoot } from "./schtasks.installed-package.test-support.js";
@@ -181,10 +182,7 @@ export async function inspectInstalledTaskAuthority(params: {
           lastRunTime: disabled.lastRunTime,
           lastTaskResult: disabled.lastTaskResult,
         });
-        assert.equal(
-          native.normalizeScheduledTaskXmlEnabledForFixture(enabled.xml),
-          native.normalizeScheduledTaskXmlEnabledForFixture(disabled.xml),
-        );
+        assert.equal(scheduledTaskXmlPolicy(enabled.xml), scheduledTaskXmlPolicy(disabled.xml));
         assert.equal(
           await control.suspendScheduledTaskAutoStartForUpdate(task.env, controlOptions(admitted)),
           true,

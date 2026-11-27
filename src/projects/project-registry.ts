@@ -12,7 +12,11 @@ import {
   prepareProjectRegistration,
   registerPreparedProjectRegistry,
 } from "./project-registration.js";
-import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
+import type {
+  ProjectRegistryIdentity,
+  ProjectRegistryInsert,
+  ProjectRegistryRecord,
+} from "./project-registry.types.js";
 import { isWorkspaceProjectId, WORKSPACE_PROJECT_ID_PREFIX } from "./workspace-project-id.js";
 
 export {
@@ -223,10 +227,12 @@ export async function selectStoredProjectRegistry(
   };
 }
 
-export async function resolveRecordedProjectRoot(
+export async function resolveRecordedProjectByRoot(
   projectPath: string,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
-): Promise<string | undefined> {
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+    source?: ProjectRegistryInsert["source"];
+  } = {},
+): Promise<ProjectRegistryRecord | undefined> {
   const context = captureOpenClawStateWorkerContext(options);
   const repoRoot = await fs.realpath(projectPath).catch(() => undefined);
   if (!repoRoot) {
@@ -234,8 +240,37 @@ export async function resolveRecordedProjectRoot(
   }
   const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, {
-    type: "projects.findRoot",
-    input: { repoRoot },
+    type: "projects.findByRoot",
+    input: { repoRoot, source: options.source },
+  });
+}
+
+/** Renames the resolved registry project; a concurrently replaced or removed project is unchanged. */
+export async function renameProjectRegistry(
+  project: ProjectRegistryRecord,
+  displayName: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<ProjectRegistryRecord | undefined> {
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  return await withProjectCheckoutLifecycle(project.repoRoot, { context }, async (lease) => {
+    const { runWithOpenClawStateLeasesWorker } =
+      await import("../state/openclaw-state-lease-worker-operation.js");
+    return await runWithOpenClawStateLeasesWorker([lease], context, (scope, identities) =>
+      scope.execute({
+        type: "projects.rename",
+        input: {
+          project: {
+            id: project.id,
+            repoRoot: project.repoRoot,
+            source: project.source,
+            originUrl: project.originUrl,
+            displayName,
+          },
+          leases: identities,
+        },
+      }),
+    );
   });
 }
 

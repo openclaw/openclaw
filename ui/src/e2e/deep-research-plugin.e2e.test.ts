@@ -100,6 +100,123 @@ const read = (job: FixtureJob) => ({
 });
 
 suite.define(() => {
+  it("keeps citation return beside its source and within its report", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        reducedMotion: "reduce",
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const first = {
+          ...partial,
+          sources: Array.from({ length: 8 }, (_, index) => ({
+            ...running.sources[0]!,
+            id: `S${index + 1}`,
+            title: `Canopy study ${index + 1}`,
+          })),
+        };
+        const intro = "Café ☕. First finding ";
+        const beforePassage = `${intro}[S8].\n\nSecond finding: `;
+        const passage = "Urban shade\ncontinues here";
+        first.report = `${beforePassage}${passage}.`;
+        first.citations = [
+          {
+            sourceId: "S8",
+            startByte: Buffer.byteLength(intro),
+            endByte: Buffer.byteLength(intro) + 4,
+          },
+          {
+            sourceId: "S8",
+            startByte: Buffer.byteLength(beforePassage),
+            endByte: Buffer.byteLength(beforePassage + passage),
+          },
+        ];
+        const second = { ...first, jobId: "b".repeat(64), title: "A different question" };
+        const gateway = await installNativePluginMockGateway(page, {
+          nativePlugins: [
+            {
+              pluginId: "deep-research",
+              rootDir: resolve("extensions/deep-research"),
+              source: "./browser/index.tsx",
+            },
+          ],
+          featureMethods: [...defaultControlUiFeatureMethods, ...["list", "read"].map(method)],
+          methodResponses: {
+            [method("list")]: { ...list(), jobs: [first, second] },
+            [method("read")]: read(first),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await openChatPanels(page, "mobile");
+        await page
+          .locator(".chat-mobile-host:not([hidden])")
+          .getByRole("button", { name: "Deep research", exact: true })
+          .tap();
+        const pane = page.locator(".deep-research-pane");
+        const reportTab = pane.getByRole("button", { name: "Report", exact: true });
+        const sourcesTab = pane.getByRole("button", { name: "Sources (8)", exact: true });
+        const references = pane.getByRole("button", { name: "Source S8", exact: true });
+        const cited = references.filter({ hasText: "Urban shade" });
+        const continuation = references.filter({ hasText: "continues here" });
+        const source = pane.locator("details").last().locator("summary");
+        const back = pane.getByRole("button", { name: "Back to citation" });
+        await reportTab.tap();
+        await cited.tap();
+        await pw(source).toBeFocused();
+        expect(
+          await back.evaluate((button) => {
+            const r = button.getBoundingClientRect();
+            return button.contains(
+              document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await source.press("Shift+Tab");
+        await pw(back).toBeFocused();
+        const refreshed = { ...first, revision: "refreshed", summary: "Report refreshed" };
+        await gateway.setMethodResponse(method("read"), read(refreshed));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(pane.getByText(refreshed.summary, { exact: true })).toBeVisible();
+        await back.press("Enter");
+        await pw(cited).toBeFocused();
+        await continuation.tap();
+        await pw(source).toBeFocused();
+        await back.press("Enter");
+        await pw(continuation).toBeFocused();
+        await sourcesTab.tap();
+        await pw(back).toHaveCount(0);
+        await reportTab.tap();
+        await cited.tap();
+        await gateway.setMethodResponse(method("read"), read(second));
+        await pane.getByLabel("Retained research").selectOption(second.jobId);
+        await pw(pane.locator("details")).toHaveCount(8);
+        await pw(back).toHaveCount(0);
+        await reportTab.tap();
+        await cited.tap();
+        const revised = {
+          ...second,
+          revision: "revised",
+          report: "An updated report without this citation.",
+          citations: [],
+        };
+        await gateway.setMethodResponse(method("read"), read(revised));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        const reportReturn = pane.getByRole("button", { name: "Back to report", exact: true });
+        await pw(reportReturn).toBeVisible();
+        await pw(back).toHaveCount(0);
+        const withoutSource = { ...revised, sources: revised.sources.slice(0, -1) };
+        await gateway.setMethodResponse(method("read"), read(withoutSource));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(pane.getByRole("button", { name: "Sources (7)", exact: true })).toBeVisible();
+        await reportReturn.tap();
+        await pw(pane.getByRole("region", { name: "Research report" })).toBeFocused();
+      },
+    );
+  });
+
   it("restores uncertain starts only for the same account after a native remount", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const questionA = "Private question belonging to A";

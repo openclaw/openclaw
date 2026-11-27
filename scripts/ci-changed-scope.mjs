@@ -152,7 +152,8 @@ const ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE =
 // Native bundling owns Mermaid assets and their shared coercion dependency.
 const MERMAID_ASSET_INPUT_RE =
   /^packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)/;
-const ANDROID_TALK_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
+const ANDROID_TALK_CONTRACT_FIXTURE_RE =
+  /^test\/fixtures\/talk-(?:config|realtime-relay)-contract\.json$/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 // Packaged workspace templates ship with the runtime, so they keep Node lanes.

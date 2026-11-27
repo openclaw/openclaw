@@ -9,7 +9,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { commandResult } from "../../test-support/command-result.test-support.js";
 import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";

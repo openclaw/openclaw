@@ -7,7 +7,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { matchQuery } from "../lib/text-match.ts";
-import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
+import { PluginArtTile } from "../pages/plugins/presentation.tsx";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -109,6 +109,7 @@ export function CommandPaletteResult(props: {
   registerPluginIcon?: (readId: () => string) => () => void;
 }) {
   const session = () => props.item.session;
+  const archived = () => props.item.category === "archived";
   const owner = () => session()?.owner?.actor;
   const agentName = () =>
     props.agent ? normalizeAgentLabel(props.agent, props.identity) : undefined;
@@ -137,7 +138,10 @@ export function CommandPaletteResult(props: {
       >
         <Match when={props.agent}>
           {(agent) => (
-            <span class="cmd-palette__avatar" aria-hidden="true">
+            <span
+              class={["cmd-palette__avatar", { "cmd-palette__avatar--archived": archived() }]}
+              aria-hidden="true"
+            >
               <AgentIdentityAvatar
                 agent={{
                   id: agent().id,
@@ -168,7 +172,9 @@ export function CommandPaletteResult(props: {
       </Switch>
       <span class="cmd-palette__item-copy">
         <span class="cmd-palette__item-heading">
-          <span class="cmd-palette__item-title">
+          <span
+            class={["cmd-palette__item-title", { "cmd-palette__item-title--archived": archived() }]}
+          >
             {highlightMatch(props.item.label, props.query)}
           </span>
           <Show when={session()?.updatedAt}>

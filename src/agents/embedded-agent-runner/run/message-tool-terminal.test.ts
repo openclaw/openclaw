@@ -54,6 +54,22 @@ function settledResult(sourceReplyDelivered?: boolean): AfterToolCallContext["re
   };
 }
 
+// Invoke within the hook's current accepted input, as the agent runtime does.
+function scoped(f: ReturnType<typeof fixture>) {
+  const completion = getInternalToolTurnCompletion(f.agent);
+  if (!completion) {
+    throw new Error("Message completion owner was not installed");
+  }
+  return {
+    completion,
+    invoke: (input: CallInput) => {
+      const context = createAfterToolCallContext(input);
+      captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
+      return f.agent.afterToolCall?.(context);
+    },
+  };
+}
+
 describe("message-tool-only source replies", () => {
   it.each<[string, CallInput, boolean, HookResult?, Route["sourceReplyDeliveryMode"]?]>([
     ["implicit successful send", {}, true],
@@ -318,6 +334,88 @@ describe("message-tool-only source replies", () => {
       ).toBe(!newInput);
     },
   );
+
+  it("ends the run only once the input before a steer has its own final reply", async () => {
+    const { completion, invoke } = scoped(fixture());
+    const completesTurn = () =>
+      completion({
+        message: createAfterToolCallContext().assistantMessage,
+        toolResults: [],
+        terminalToolCallIds: new Set(),
+        inputScope: getInternalToolTurnInputScope(completion),
+      });
+    await invoke({ toolName: "exec", args: { command: "sleep 25" } });
+    commitInternalToolTurnInput(completion);
+    // The steered input's answer is delivered, but the earlier input is still open.
+    await expect(invoke({ args: { action: "send", message: "4" } })).resolves.toBeUndefined();
+    expect(completesTurn()).toBe(false);
+    await expect(invoke({ args: { action: "send", message: "file content" } })).resolves.toEqual({
+      terminate: true,
+    });
+    expect(completesTurn()).toBe(true);
+  });
+});
+
+describe("already-pending yield after a delivered reply", () => {
+  const pendingResult = (state: "running" | "paused", wakeArmed: boolean) => ({
+    content: [{ type: "text" as const, text: '{"status":"already_pending"}' }],
+    details: {
+      status: "already_pending",
+      pendingChildren: [
+        { runId: "earlier-child", childSessionKey: "agent:main:subagent:child", state, wakeArmed },
+      ],
+    },
+  });
+  const alreadyPending = pendingResult("running", true);
+  const progressSend = {
+    args: { action: "send", message: "progress reply", final: false },
+    result: settledResult(true),
+  };
+
+  it.each([true, false])("ends the turn only after a delivered reply (sent %s)", async (sent) => {
+    const { invoke } = scoped(fixture());
+    if (sent) {
+      await invoke(progressSend);
+    }
+    const result = await invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending });
+    // Without a delivered reply, already_pending keeps the turn for its normal answer.
+    expect(result).toEqual(sent ? { terminate: true } : undefined);
+  });
+
+  it("keeps a later input's turn open when only an earlier input delivered", async () => {
+    const { completion, invoke } = scoped(fixture());
+    await invoke(progressSend);
+    commitInternalToolTurnInput(completion);
+    await expect(
+      invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["paused", true],
+    ["running", false],
+  ] as const)(
+    "keeps the turn when no pending child will wake the session (%s, armed %s)",
+    async (state, wakeArmed) => {
+      const { invoke } = scoped(fixture());
+      await invoke(progressSend);
+      await expect(
+        invoke({ toolName: "sessions_yield", args: {}, result: pendingResult(state, wakeArmed) }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it("keeps the turn for other yield results", async () => {
+    const { invoke } = scoped(fixture());
+    await invoke(progressSend);
+    await expect(
+      invoke({
+        toolName: "sessions_yield",
+        args: {},
+        result: { content: [], details: { status: "nothing_pending" } },
+      }),
+    ).resolves.toBeUndefined();
+  });
 });
 
 function createAfterToolCallContext({

@@ -11,6 +11,7 @@ import {
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
 } from "../../agents/auth-profiles/store-runtime.js";
+import { collectModelBillingRouteMigrationWarnings } from "../../commands/doctor/shared/model-billing-route-migration.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
@@ -94,3 +95,40 @@ describe.skipIf(!mixedAgentConnection).each(["shared-state", "agent"] as const)(
     });
   },
 );
+
+describe.skipIf(!mixedAgentConnection)("PostgreSQL billing route comparison", () => {
+  useMixedAgentPair("postgres", "postgres");
+
+  it("compares persisted model credentials outside synchronous database admission", async () => {
+    withEngineStoreAdmission(() =>
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "anthropic:metered": { type: "api_key", provider: "anthropic", key: "synthetic-key" },
+            "anthropic:subscription": {
+              type: "token",
+              provider: "anthropic",
+              token: "synthetic-token",
+            },
+          },
+        },
+        undefined,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      ),
+    );
+    const model = (profile: string) => ({
+      agents: { defaults: { model: `anthropic/claude-opus-4-6@anthropic:${profile}` } },
+      plugins: { enabled: false },
+    });
+
+    expect(
+      await collectModelBillingRouteMigrationWarnings({
+        before: model("metered"),
+        after: model("subscription"),
+      }),
+    ).toContain(
+      "Billing route changed for agents.entries.main.model.primary (agent main): anthropic/claude-opus-4-6 via metered API-key profile anthropic:metered -> anthropic/claude-opus-4-6 via subscription/OAuth profile anthropic:subscription. Review its model and authentication settings.",
+    );
+  });
+});

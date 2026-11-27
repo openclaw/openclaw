@@ -77,16 +77,13 @@ export async function sendQueuedChatMessage(
     }
     ({ item: queued, expectedLeafEntryId } = ready);
   }
-  // FIFO and visible history are admitted before preparing transport and the first reply.
-  const { sendPreparedChatQueueItem: sendPrepared, error: preparationError } = await Promise.all([
-    import("./chat-send-delivery.runtime.ts").then(
-      ({ sendPreparedChatQueueItem }) => sendPreparedChatQueueItem,
-    ),
-    loadStreamingMarkdown(),
-  ]).then(
-    ([sendPreparedChatQueueItem]) => ({ sendPreparedChatQueueItem, error: undefined }),
-    (error: unknown) => ({ sendPreparedChatQueueItem: undefined, error }),
-  );
+  // Live replies can use standard Markdown while the optional formatter loads.
+  void loadStreamingMarkdown().catch(() => undefined);
+  const { sendPreparedChatQueueItem: sendPrepared, error: preparationError } =
+    await import("./chat-send-delivery.runtime.ts").then(
+      ({ sendPreparedChatQueueItem }) => ({ sendPreparedChatQueueItem, error: undefined }),
+      (error: unknown) => ({ sendPreparedChatQueueItem: undefined, error }),
+    );
   if (!connectionIsCurrent()) {
     return "pending";
   }

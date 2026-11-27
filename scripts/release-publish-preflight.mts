@@ -3,11 +3,17 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { normalizePublicationIntent } from "./full-release-publication-contract.mjs";
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
 } from "./lib/npm-publish-plan.mjs";
+import {
+  fastTrackRequestDigest,
+  parseFastTrackRequest,
+  serializeFastTrackRequest,
+} from "./lib/release-fast-track-contract.mts";
 import {
   inspectPublishReleasePage,
   inspectStableCloseoutPreflight,
@@ -302,7 +308,7 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          (!options.fastTrackRequest && selectedRun.conclusion !== "success") ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -321,7 +327,7 @@ export async function runReleasePublishPreflight(
         "validation.manifest",
         "Validation manifest downloaded once.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
-        () => {
+        async () => {
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));
           if (!loaded) {
             throw new Error("Full Release Validation manifest artifact is missing.");
@@ -349,8 +355,9 @@ export async function runReleasePublishPreflight(
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
         };
       }
+      let authenticated;
       if (run && sourceSha && SHA.test(toolingSha)) {
-        await check(
+        authenticated = await check(
           "validation.provenance",
           "Full Release Validation provenance and publication selection authenticated.",
           "Use evidence admitted for this exact release source, tooling lineage, publication route and package selection.",
@@ -383,6 +390,7 @@ export async function runReleasePublishPreflight(
             }
             const validationOptions = {
               run,
+              fastTrackRequest: options.fastTrackRequest,
               manifest: fullManifest,
               expectedRepository: options.repo,
               expectedRunId: options.fullReleaseValidationRunId,
@@ -420,6 +428,8 @@ export async function runReleasePublishPreflight(
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            fastTrack: authenticated?.evidence.fastTrack,
+            readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
@@ -541,6 +551,7 @@ export async function runReleasePublishPreflight(
                 fullReleaseValidationRunId: options.fullReleaseValidationRunId,
                 fullReleaseValidationRunAttempt: attempt,
                 fullManifest: manifest,
+                fastTrackRequest: options.fastTrackRequest,
                 pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement ?? "",
                 currentSelectorRef: `v${version}`,
                 currentSelectorSha: resolvePreflightTag(runGh, options.repo, `v${version}`),
@@ -564,6 +575,8 @@ export async function runReleasePublishPreflight(
             sourceSha,
             toolingSha,
             retiredLineReason: options.retiredLinePublicationReason,
+            // Only successful full-evidence npm admission can report build-only.
+            dependencyEvidenceRequired: npmEvidence?.buildOnly !== true,
             runGh,
           }),
       );
@@ -655,18 +668,54 @@ export async function runReleasePublishPreflight(
   };
 }
 
+export async function runReleasePublishPreflightCommand(args = process.argv.slice(2)) {
+  if (args[0] === "fast-track") {
+    const { values, positionals } = parseArgs({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { request: { type: "string" } },
+    });
+    if (positionals.length !== 1 || positionals[0] !== "request" || !values.request) {
+      throw new Error(
+        "Usage: pnpm release:publish-preflight fast-track request --request <immutable-request.json>. Preparation only; no machine approval or custom status operation.",
+      );
+    }
+    const request = parseFastTrackRequest(JSON.parse(readFileSync(values.request, "utf8")));
+    if (Date.parse(request.expiresAt) <= Date.now()) {
+      throw new Error("Request expired. Create a new request ID with a fresh expiry.");
+    }
+    process.stdout.write(
+      `${JSON.stringify({
+        requestId: request.requestId,
+        digest: fastTrackRequestDigest(request),
+        payload: serializeFastTrackRequest(request),
+        state: "awaiting-npm-release-environment-approval",
+        instructions:
+          "Supply the exact request packet to the publisher. A release manager approves publication only through the GitHub Actions npm-release environment. No chat decision, approval URL or external approval service is required. Agents must not approve the environment using available tokens.",
+        publicationAuthorized: false,
+      })}\n`,
+    );
+    return;
+  }
+  const parsed = parsePublishPreflightArgs(args);
+  if (!parsed) {
+    return;
+  }
+  if (parsed.options.fastTrackRequest) {
+    parsed.options.fastTrackRequest = readFileSync(parsed.options.fastTrackRequest, "utf8");
+  }
+  const report = await runReleasePublishPreflight(parsed.options);
+  console.log(
+    parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
+  );
+  if (report.failed) {
+    process.exitCode = 1;
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    const parsed = parsePublishPreflightArgs(process.argv.slice(2));
-    if (parsed) {
-      const report = await runReleasePublishPreflight(parsed.options);
-      console.log(
-        parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
-      );
-      if (report.failed) {
-        process.exitCode = 1;
-      }
-    }
+    await runReleasePublishPreflightCommand();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

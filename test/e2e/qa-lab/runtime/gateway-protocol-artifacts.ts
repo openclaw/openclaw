@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { x as extractTar } from "tar";
+import { x as extractTar } from "tar/raw";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,

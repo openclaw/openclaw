@@ -1,3 +1,4 @@
+import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import {
   findServiceOwnershipRefusal,
@@ -11,6 +12,8 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
+import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import {
@@ -35,6 +38,43 @@ import {
   tryInstallShellCompletion,
 } from "./update-command-service.js";
 import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
+
+/** The package route leaves node-owned runtimes alone and names their activation commands. */
+function appendNodeOnlyPackageUpdateAdvice(
+  params: Pick<FinishUpdateParams, "root" | "opts" | "preManagedServiceStop">,
+  result: UpdateRunResult,
+): void {
+  if (
+    result.status === "error" ||
+    !["npm", "pnpm", "bun"].includes(result.mode) ||
+    params.preManagedServiceStop?.serviceUpdateVerdict?.kind !== "absent"
+  ) {
+    return;
+  }
+  const env = params.opts.run?.env ?? process.env;
+  const entrypoint = path.join(result.root ?? params.root, "openclaw.mjs");
+  const executable =
+    process.platform === "win32"
+      ? `& ${quotePowerShellArg(process.execPath)} ${quotePowerShellArg(entrypoint)}`
+      : [process.execPath, entrypoint].map(quoteCliArg).join(" ");
+  const install = formatCliCommand("openclaw node install --force", env).replace(
+    "openclaw",
+    executable,
+  );
+  const restart = formatCliCommand("openclaw node restart", env).replace("openclaw", executable);
+  const advice = `Node-only hosts: this package update does not restart a retained node runtime. Wait for node work to be idle, then refresh and restart through its service owner: \`${install}\`, then \`${restart}\`.`;
+  result.steps.push({
+    name: "advisory:node-restart",
+    command: "describe node package activation",
+    cwd: params.root,
+    durationMs: 0,
+    exitCode: 0,
+    stdoutTail: advice,
+  });
+  if (!params.opts.json) {
+    defaultRuntime.log(advice);
+  }
+}
 
 export async function preparePostUpdateService(
   params: FinishUpdateParams,
@@ -184,6 +224,8 @@ export async function completePostUpdateMaintenance(
   assertCurrent: () => void,
   context: { root: string },
 ): Promise<void> {
+  assertCurrent();
+  appendNodeOnlyPackageUpdateAdvice(params, result);
   const run = params.opts.run;
   const plugins = result.postUpdate?.plugins;
   // Plugin work runs before activation. What it left undone is owed only now, on a kept result.

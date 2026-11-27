@@ -13,6 +13,10 @@ import {
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
+import {
+  createRestartResumeMarker,
+  resolveRestartResumeScope,
+} from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -29,6 +33,8 @@ export type SessionLifecyclePatchInput = {
   exactCronRun: boolean;
   gatewayShutdown?: true;
   providerReview?: SessionLifecycleProviderReview;
+  /** When the newest visible assistant row in the transcript arrived; drives unread at run end. */
+  visibleActivityAt?: number;
   expectedWriter?: {
     allowUnstartedFailure?: true;
     requireYielded?: true;
@@ -45,6 +51,7 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    summaryAsTitle?: true;
     desktopNotice?: string;
     /** The run's provider error observation; the failure recorder bounds what it keeps. */
     errorObservation?: unknown;
@@ -54,7 +61,6 @@ export type SessionLifecyclePatchEffects = {
 export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
-  controlUiVisible?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -70,6 +76,7 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    summaryAsTitle?: unknown;
     /** Desktop-only presentation; shared transcript copy stays unchanged. */
     desktopErrorNotice?: unknown;
     errorObservation?: unknown;
@@ -97,21 +104,25 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId" | "lifecycleRestartScope"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
 
-export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry) {
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  directChat = entry?.resumeAfterRestart?.directChat === true,
+) {
   if (isCronSessionKey(sessionKey)) {
     return "cron";
   }
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
+  if (isSubagentSessionKey(sessionKey) || (entry?.createdVia === "spawn" && !directChat)) {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {
@@ -245,12 +256,6 @@ export function deriveSessionLifecycleSnapshot(params: {
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
-    ...(terminal &&
-    !stoppedForRestart &&
-    params.event.controlUiVisible === true &&
-    endedAt !== undefined
-      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
-      : {}),
     abortedLastRun: status === "killed",
   };
 }
@@ -281,7 +286,11 @@ export function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...snapshot,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? {
+          lifecycleRunId: runId,
+          lifecycleRestartScope: resolveRestartResumeScope(),
+          lastRunId: undefined,
+        }
       : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
@@ -436,6 +445,10 @@ export function projectSessionLifecyclePatch(
   }
   const endedAt = patch.endedAt ?? params.event.ts;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
+  if (terminal && (params.visibleActivityAt ?? 0) > (entry.lastActivityAt ?? 0)) {
+    // Unread follows the chat: a run that appended no visible reply leaves activity alone.
+    patch.lastActivityAt = params.visibleActivityAt;
+  }
   if (
     params.gatewayShutdown &&
     patch.status === "killed" &&
@@ -444,7 +457,13 @@ export function projectSessionLifecyclePatch(
     !restartResumeSkipReason(params.canonicalKey, entry)
   ) {
     // A timed-out shutdown marker must not turn cancellation into a lost continuation.
-    patch.resumeAfterRestart = entry.resumeAfterRestart ?? { queuedInputIds: [] };
+    // A matching execution can supersede the earlier marker before shutdown captures its replacement.
+    const sourceRunId =
+      params.event.data?.executionStarted === true && entry.lifecycleRunId === eventRunId
+        ? eventRunId
+        : undefined;
+    const marker = entry.resumeAfterRestart ?? createRestartResumeMarker({});
+    patch.resumeAfterRestart = sourceRunId ? { ...marker, sourceRunId } : marker;
   }
   const stopped =
     patch.status === "killed" &&
@@ -486,6 +505,7 @@ export function projectSessionLifecyclePatch(
       ...(typeof params.event.data?.errorNotice === "string"
         ? { notice: params.event.data.errorNotice }
         : {}),
+      ...(params.event.data?.summaryAsTitle === true ? { summaryAsTitle: true } : {}),
       ...(typeof params.event.data?.desktopErrorNotice === "string"
         ? { desktopNotice: params.event.data.desktopErrorNotice }
         : {}),

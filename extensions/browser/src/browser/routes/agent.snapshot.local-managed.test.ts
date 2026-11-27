@@ -425,6 +425,11 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdp.captureScreenshot).toHaveBeenCalledWith(
       expect.objectContaining({ headless: false }),
     );
+    pwMocks.connected = true;
+    expect((await screenshot()).statusCode).toBe(200);
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({ headless: false }),
+    );
   });
 
   it("rejects loose screenshot timeoutMs values before dispatching", async () => {

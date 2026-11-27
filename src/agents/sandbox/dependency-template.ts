@@ -35,7 +35,9 @@ const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
 const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
-class SandboxDependencyStorageError extends Error {}
+class SandboxDependencyPreparationError extends Error {}
+const MISSING_IDLE_PRIORITY =
+  "Background dependency preparation requires ionice in the sandbox image";
 
 type StartedBuilder = {
   containerName: string;
@@ -252,6 +254,7 @@ export async function prepareSandboxDependencyTemplate(params: {
   cfg: SandboxConfig;
   scopeKey: string;
   identity: SandboxDependencyTemplateIdentity;
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
   rollbackGuard: () => void;
@@ -325,7 +328,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
+            `${params.idleIoPriority ? `command -v ionice >/dev/null 2>&1 || { echo '${MISSING_IDLE_PRIORITY}' >&2; exit 127; }; exec ionice -c 3 ` : "exec "}pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
           ],
           {
             allowFailure: true,
@@ -339,11 +342,19 @@ export async function prepareSandboxDependencyTemplate(params: {
       if (installed.code === 0) {
         return { installed: true };
       }
+      if (
+        params.idleIoPriority &&
+        installed.code === 127 &&
+        installed.stderr.includes(MISSING_IDLE_PRIORITY)
+      ) {
+        // Leave foreground installation available instead of caching a priority-tool failure.
+        throw new SandboxDependencyPreparationError(MISSING_IDLE_PRIORITY);
+      }
       // Detect before truncation: pnpm may emit progress after its storage error.
       if (
         /ENOSPC|no\s+space\s+left\s+on\s+device/iu.test(`${installed.stdout}\n${installed.stderr}`)
       ) {
-        throw new SandboxDependencyStorageError(
+        throw new SandboxDependencyPreparationError(
           "Sandbox dependency installation ran out of space. Check free bytes and inodes in /tmp/openclaw-deps and the workspace. For a full temporary pnpm store, set sandbox.docker.env.PNPM_CONFIG_STORE_DIR to a disk-backed workspace path, then retry.",
         );
       }
@@ -360,7 +371,7 @@ export async function prepareSandboxDependencyTemplate(params: {
     } catch (error) {
       // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
-      if (error instanceof SandboxDependencyStorageError) {
+      if (error instanceof SandboxDependencyPreparationError) {
         throw error;
       }
       return {

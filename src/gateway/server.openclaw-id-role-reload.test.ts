@@ -18,7 +18,6 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -137,13 +136,12 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       scopes: ["operator.admin"],
     };
     await apply(config);
-    const connectMember = async (memberDeviceToken?: string) => {
+    const connectMember = async () => {
       const closed = createDeferredCore<number>();
       let hello: HelloOk | undefined;
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         origin: memberOrigin,
-        deviceToken: memberDeviceToken,
         timeoutMs: 6000,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
@@ -162,10 +160,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     };
     const firstViewer = await connectMember();
     expect(firstViewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
-    const memberPairing = (await listDevicePairing()).paired.find(
-      (device) => device.tokens?.operator?.token === firstViewer.hello?.auth.deviceToken,
-    )!;
-    expect(memberPairing.approvedScopes).toEqual(["operator.sessions.read"]);
+    expect(firstViewer.hello?.auth.deviceToken).toBeUndefined();
     // The real owner RPC accepts a device signature; a member cannot sign this change.
     const changeRole = async (role: string) => {
       const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
@@ -182,32 +177,23 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       await reconnect.request("openclawId.authority", { action: "submit", statement });
     };
     await changeRole("guest");
-    expect(await withinTest(firstViewer.closed.promise, signal)).toBe(1008);
+    expect(await withinTest(firstViewer.closed.promise, signal)).toBe(4001);
     await firstViewer.client.stopAndWait();
     const member = await connectMember();
     expect(member.hello?.auth.scopes).toEqual(["operator.admin"]);
     expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
     await member.client.request("device.pair.list", {});
     expect((await listDevicePairing()).pending).toEqual([]);
-    const oldAdminToken = member.hello?.auth.deviceToken;
-    expect(oldAdminToken).toBeTruthy();
+    expect(member.hello?.auth.deviceToken).toBeUndefined();
     await changeRole("viewer");
-    expect(await withinTest(member.closed.promise, signal)).toBe(1008);
+    expect(await withinTest(member.closed.promise, signal)).toBe(4001);
     await member.client.stopAndWait();
-    expect(
-      await verifyDeviceToken({
-        deviceId: memberPairing.deviceId,
-        token: oldAdminToken!,
-        role: "operator",
-        scopes: ["operator.admin"],
-      }),
-    ).toMatchObject({ ok: false });
-    const reassigned = await connectMember(oldAdminToken);
+    const reassigned = await connectMember();
     expect(reassigned.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
     await reassigned.client.request("sessions.list", {});
     await expect(reassigned.client.request("device.pair.list", {})).rejects.toThrow();
     await changeRole("guest");
-    expect(await withinTest(reassigned.closed.promise, signal)).toBe(1008);
+    expect(await withinTest(reassigned.closed.promise, signal)).toBe(4001);
     await reassigned.client.stopAndWait();
     const restored = await connectMember();
     expect(restored.hello?.auth.roleAllowsAdmin).toBe(true);
@@ -282,7 +268,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       ).rejects.toMatchObject({ details: { code: "not_local_operator" } });
     }
     await changeRole("operator");
-    expect(await withinTest(administrator.closed.promise, signal)).toBe(1008);
+    expect(await withinTest(administrator.closed.promise, signal)).toBe(4001);
     await administrator.client.stopAndWait();
     const operator = await connectMember();
     expect(operator.hello?.auth.scopes).not.toContain("operator.admin");

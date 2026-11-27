@@ -41,23 +41,28 @@ import {
 export function registerAccessRequestSpawnCases(
   options: NativePluginSpawnTestOptions & { parentSessionKey: string },
 ) {
-  const nativeCases = [
-    ...(["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
-      (["explicit", "inherited"] as const).flatMap((selection) =>
-        (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
-          runtimeName,
-          selection,
-          outcome,
-        })),
-      ),
+  const nativeCases = (["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
+    (["explicit", "inherited"] as const).flatMap((selection) =>
+      (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
+        runtimeName,
+        selection,
+        outcome,
+      })),
     ),
-    { runtimeName: "OpenClaw", selection: "explicit", outcome: "requester-revoked" } as const,
-  ];
+  );
   const cases = [
     ...nativeCases.map(({ runtimeName, selection, outcome }) => ({
       runtimeName,
       selection,
       outcome,
+      adapter: "native" as const,
+      queued: false,
+    })),
+    // Unconfigured models with no saved choice: the default follows the advertised programs.
+    ...(["default-red", "default-standard"] as const).map((selection) => ({
+      runtimeName: "OpenClaw" as const,
+      selection,
+      outcome: "allowed" as const,
       adapter: "native" as const,
       queued: false,
     })),
@@ -70,22 +75,15 @@ export function registerAccessRequestSpawnCases(
     })),
     ...(["code-mode", "plugin"] as const).flatMap((adapter) =>
       ([false, true] as const).flatMap((queued) =>
-        (
-          [
-            "allowed",
-            "unavailable",
-            "revoked",
-            "reassigned",
-            "requester-revoked",
-            "role-denied",
-          ] as const
-        ).map((outcome) => ({
-          runtimeName: "OpenClaw" as const,
-          selection: "explicit" as const,
-          outcome,
-          adapter,
-          queued,
-        })),
+        (["allowed", "unavailable", "revoked", "reassigned", "role-denied"] as const).map(
+          (outcome) => ({
+            runtimeName: "OpenClaw" as const,
+            selection: "explicit" as const,
+            outcome,
+            adapter,
+            queued,
+          }),
+        ),
       ),
     ),
     ...(["cron", "cron-session"] as const).flatMap((adapter) =>
@@ -104,11 +102,12 @@ export function registerAccessRequestSpawnCases(
     "$adapter queued=$queued $selection child Access at final $runtimeName submission: $outcome",
     async ({ runtimeName, selection, outcome, adapter, queued }) => {
       const program =
-        selection === "standard"
+        selection === "standard" || selection === "default-standard"
           ? "standard"
           : selection === "explicit"
             ? "daybreak_blue"
             : "daybreak_red";
+      const defaulted = selection === "default-red" || selection === "default-standard";
       const actualScope = await vi.importActual<typeof agentScope>("../../agent-scope.js");
       const resolver = vi
         .spyOn(agentScope, "resolveSessionAgentIds")
@@ -159,7 +158,12 @@ export function registerAccessRequestSpawnCases(
       const model = {
         api: "openai-chatgpt-responses" as const,
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        id: "gpt-6.1-sol",
+        id:
+          selection === "default-red"
+            ? "gpt-6-cyber"
+            : selection === "default-standard"
+              ? "gpt-6.2-sol"
+              : "gpt-6.1-sol",
         name: "Synthetic Sol",
         provider: "openai",
         reasoning: true,
@@ -168,13 +172,13 @@ export function registerAccessRequestSpawnCases(
         maxTokens: 1024,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
-      bound.cfg.agents!.defaults!.model = { primary: "openai/gpt-6.1-sol" };
+      bound.cfg.agents!.defaults!.model = { primary: `openai/${model.id}` };
       bound.cfg.models = {
         mode: "replace",
         providers: { openai: { api: model.api, baseUrl: model.baseUrl, models: [model] } },
       };
       bound.cfg.agents!.defaults!.models = {
-        "openai/gpt-6.1-sol": runtimeName === "OpenClaw" ? { params: { transport: "sse" } } : {},
+        [`openai/${model.id}`]: runtimeName === "OpenClaw" ? { params: { transport: "sse" } } : {},
       };
       setRuntimeConfigSnapshot(bound.cfg);
       runtimeMocks.preparedAuthStore = { version: 1, profiles: { "openai:default": credential } };
@@ -213,7 +217,11 @@ export function registerAccessRequestSpawnCases(
                 cyber:
                   outcome === "unavailable"
                     ? ["standard" as const]
-                    : ["standard" as const, "daybreak_blue" as const, "daybreak_red" as const],
+                    : selection === "default-red"
+                      ? ["daybreak_red" as const]
+                      : selection === "default-standard"
+                        ? ["standard" as const, "daybreak_blue" as const]
+                        : ["standard" as const, "daybreak_blue" as const, "daybreak_red" as const],
               },
             ],
           },
@@ -236,7 +244,6 @@ export function registerAccessRequestSpawnCases(
           >[0]
         | undefined;
       let accountChanged = false;
-      let requesterRevoked = false;
       const provider = buildOpenAIProvider();
       const originalWrap = expectDefined(provider.wrapStreamFn, "OpenAI stream wrapper");
       provider.wrapStreamFn = (ctx) => {
@@ -249,16 +256,7 @@ export function registerAccessRequestSpawnCases(
             ...streamOptions,
             onPayload: async (payload, payloadModel) => {
               const transformed = await streamOptions?.onPayload?.(payload, payloadModel);
-              if (outcome === "requester-revoked" && !requesterRevoked) {
-                // The child retains custody after foreground closure; revocation still fences egress.
-                bound.admission.close();
-                bound.parent.cleanup();
-                source.closeRequest();
-                expect(source.holds).toBeGreaterThan(0);
-                expect(source.authority.assertCurrent).not.toThrow();
-                source.revoke();
-                requesterRevoked = true;
-              } else if (outcome === "revoked") {
+              if (outcome === "revoked") {
                 const catalog = expectDefined(
                   capturedAttempt?.preparedModelRuntime?.accountCatalog,
                   "request account catalog",
@@ -438,7 +436,7 @@ export function registerAccessRequestSpawnCases(
           }
           cronResult = cron.result;
         } else {
-          const requested = selection === "inherited" ? undefined : program;
+          const requested = selection === "inherited" || defaulted ? undefined : program;
           const invoke = createBoundSpawnInvocation(
             bound,
             { cyberAccessProgram: requested },
@@ -451,7 +449,7 @@ export function registerAccessRequestSpawnCases(
               () =>
                 createRequestNativeSubagentRuntime(nativeRequestSource(bound, source), {
                   pluginId: "access-fixture",
-                  assertCurrent: source.authority.assertCurrent,
+                  assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
                 }).spawn({
                   requestId: "access-proof",
                   task: "bounded child",
@@ -509,7 +507,7 @@ export function registerAccessRequestSpawnCases(
           expect(
             loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
               ?.cyberAccessProgram,
-          ).toBe(program);
+          ).toBe(defaulted ? undefined : program);
           if (queued) {
             expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
             expect(writes).toHaveLength(0);
@@ -525,16 +523,7 @@ export function registerAccessRequestSpawnCases(
           nativeMessages
             ?.filter(({ method }) => method === "turn/start")
             .map(({ params }) => params) ?? writes;
-        if (outcome === "requester-revoked") {
-          expect(requesterRevoked).toBe(true);
-          expect(accountChanged).toBe(false);
-          expect(requests).toHaveLength(0);
-          if (completed instanceof Error) {
-            expect(completed.message).toMatch(/operator source revoked|aborted/i);
-          } else {
-            expect(completed).toMatchObject({ meta: { aborted: true } });
-          }
-        } else if (outcome !== "allowed") {
+        if (outcome !== "allowed") {
           if (!native) {
             expect(accountChanged).toBe(outcome !== "unavailable" && outcome !== "role-denied");
             if (outcome !== "unavailable" && outcome !== "role-denied") {

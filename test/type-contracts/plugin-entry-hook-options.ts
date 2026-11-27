@@ -1,6 +1,13 @@
 import { expectTypeOf } from "vitest";
 import type {
   OpenClawPluginApi,
+  OpenClawPluginServiceContext,
+  PluginHookBeforeModelRequestEvent,
+  PluginHookBeforeModelRequestResult,
+  PluginMetricFamily,
+  PluginMetricFamilyDeclaration,
+  PluginMetricLabels,
+  PluginMetrics,
   WorkerMachineOption,
   WorkerProvider,
 } from "../../src/plugin-sdk/plugin-entry.js";
@@ -35,6 +42,35 @@ function registerAuthorizedPromptHook(api: OpenClawPluginApi): void {
 
 void registerScopedReplyHook;
 void registerAuthorizedPromptHook;
+
+function registerNamedModelAndMetricsContracts(
+  api: OpenClawPluginApi,
+  ctx: OpenClawPluginServiceContext,
+) {
+  api.on(
+    "before_model_request",
+    (event: PluginHookBeforeModelRequestEvent): PluginHookBeforeModelRequestResult => ({
+      payload: event.payload,
+    }),
+  );
+  const family: PluginMetricFamilyDeclaration = {
+    name: "jobs_total",
+    type: "counter",
+    help: "Synthetic jobs",
+  };
+  const metrics: PluginMetrics | undefined = api.metrics?.register({ families: [family] });
+  const labels: PluginMetricLabels = {};
+  metrics?.counter("jobs_total").inc(labels);
+  ctx.internalDiagnostics?.onPluginMetrics?.({
+    record: (admitted: PluginMetricFamily, sampleLabels: PluginMetricLabels) => {
+      void admitted;
+      void sampleLabels;
+    },
+    retire: () => {},
+  });
+}
+
+void registerNamedModelAndMetricsContracts;
 
 // plugin entry hook option contracts
 // exposes scoped reply and prompt authority options through the public plugin API

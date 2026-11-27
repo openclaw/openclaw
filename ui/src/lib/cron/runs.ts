@@ -1,5 +1,7 @@
+import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { readCronJobNotFoundError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { resolveGatewayErrorDetailCode, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronDeliveryStatus,
   CronRunScope,
@@ -7,8 +9,9 @@ import type {
   CronRunsStatusValue,
   CronSortDir,
 } from "../../api/types.ts";
-import { formatUiError } from "../format-error.ts";
-import type { CronState } from "./types.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { isGatewayAccessDeniedError, isMissingOperatorReadScopeError } from "../gateway-errors.ts";
+import type { CronRunsFailure, CronState } from "./types.ts";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 export type CronRunsViewState = "idle" | "pending" | "failed" | "ready";
@@ -83,6 +86,16 @@ export function getCronRunsViewState(state: CronState): CronRunsViewState {
     return "idle";
   }
   return state.cronRunsError === null ? "ready" : "failed";
+}
+
+export async function retryCronRuns(state: CronState): Promise<CronRunsLoadStatus> {
+  if (getCronRunsViewState(state) === "failed") {
+    const reason = state.cronRunsError?.reason;
+    if (reason === "load" || reason === "more") {
+      return loadCronRuns(state, { append: reason === "more" });
+    }
+  }
+  return "skipped";
 }
 
 export async function loadCronRuns(
@@ -174,7 +187,28 @@ export async function loadCronRuns(
       return "skipped";
     }
     cronRunsViews.set(state, request);
-    state.cronRunsError = formatUiError(err);
+    let reason: CronRunsFailure["reason"] = append ? "more" : "load";
+    if (readCronJobNotFoundError(err)) {
+      // The Gateway uses this for both missing and no-longer-visible automations.
+      reason = "automationUnavailable";
+    } else if (isMissingOperatorReadScopeError(err)) {
+      reason = "readAccess";
+    } else if (isGatewayAccessDeniedError(err)) {
+      reason = "accessDenied";
+    } else if (
+      err instanceof GatewayProtocolRequestError &&
+      (err.gatewayCode === ErrorCodes.INVALID_REQUEST ||
+        resolveGatewayErrorDetailCode(err) === "CRON_STORE_SELECTION_REQUIRED")
+    ) {
+      reason = "blocked";
+    }
+    state.cronRunsError = {
+      reason,
+      detail:
+        err instanceof GatewayProtocolRequestError
+          ? formatUiExternalText(err.message)
+          : formatUiError(err),
+    };
     return "error";
   } finally {
     const reload = ownsCronRunsRequest(state, request);

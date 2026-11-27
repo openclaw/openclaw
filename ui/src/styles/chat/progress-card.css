@@ -209,20 +209,39 @@
 .session-progress-card__markdown progress {
   display: block;
   width: 100%;
-  margin-top: var(--space-2);
+  margin-block: 0 var(--space-2);
   accent-color: var(--accent);
-}
 
-.session-progress-card__markdown progress::-webkit-progress-bar {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-}
+  /* The block bar already breaks the line when Markdown adds a hard break. */
+  & + br {
+    display: none;
+  }
 
-.session-progress-card__markdown progress::-webkit-progress-value,
-.session-progress-card__markdown progress::-moz-progress-bar {
-  background: var(--accent);
-  border-radius: var(--radius-lg);
+  /* Unmeasured progress and forced colors keep the browser's native indicator. */
+  @media (forced-colors: none) {
+    &[value] {
+      appearance: none;
+      height: var(--space-1);
+      overflow: hidden;
+      border: 0;
+      border-radius: var(--radius-full);
+      background: var(--border-strong);
+
+      &::-webkit-progress-bar {
+        background: transparent;
+      }
+
+      &::-webkit-progress-value {
+        border-radius: var(--radius-full);
+        background: var(--accent);
+      }
+
+      &::-moz-progress-bar {
+        border-radius: var(--radius-full);
+        background: var(--accent);
+      }
+    }
+  }
 }
 
 .session-progress-card__steps {

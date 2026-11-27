@@ -280,11 +280,6 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
 }
 
 export type TranscriptActiveFactsBackfillOperations = {
-  discover: {
-    input: undefined;
-    output: { supported: boolean; sessions: TranscriptActiveFactsBackfillSession[] };
-  };
-  probe: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillProbe };
   batch: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillBatch };
 };
 
@@ -294,18 +289,8 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
     execute(command: SqliteWorkerCommand<TranscriptActiveFactsBackfillOperations>) {
       // PostgreSQL needs a separately measured source-row locking protocol; its
       // ordinary writers continue filling facts through the existing owner.
-      if (command.type === "discover") {
-        return isPostgresSqlConnection(database)
-          ? { supported: false, sessions: [] }
-          : { supported: true, sessions: discoverTranscriptActiveFactsBackfillSessions(database) };
-      }
       if (isPostgresSqlConnection(database)) {
         throw new Error("Transcript facts background backfill currently supports SQLite only");
-      }
-      if (command.type === "probe") {
-        // Read-only WAL snapshot: never contends with the writer. The write batch
-        // rechecks coverage inside its transaction, so a stale probe only costs a visit.
-        return probeTranscriptActiveFactsBackfill(database, command.input);
       }
       context.admit("transaction");
       context.admit("commit");

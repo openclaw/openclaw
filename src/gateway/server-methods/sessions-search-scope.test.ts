@@ -29,6 +29,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import * as sessionLists from "../session-utils-list.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -152,6 +153,21 @@ test.each(["needle", "会"])(
       }
       const client = identifiedClient(viewer);
       client.connect.scopes = ["operator.read"];
+      const prepare = vi.spyOn(sessionLists, "prepareProjectedSessionList");
+      const originalSearch = transcriptSearch.searchSessionTranscripts;
+      let batches = 0;
+      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+        (params, database, filter) =>
+          originalSearch(
+            params,
+            database,
+            filter &&
+              ((keys) => {
+                batches++;
+                return filter(keys);
+              }),
+          ),
+      );
       const result = await search(requestContext(cfg), client, {
         query,
         limit: 1,
@@ -160,9 +176,137 @@ test.each(["needle", "会"])(
       expect(result.ok, result.error?.message).toBe(true);
       expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
       expect(result.payload).not.toHaveProperty("truncated");
+      expect(batches).toBeGreaterThan(0);
+      // Transcript recall already has the matching keys and needs no list presentation.
+      expect(prepare).not.toHaveBeenCalled();
     });
   },
 );
+
+test("recall batch verdicts match singleton checks over mixed physical owners", async () => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("recall-mixed@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {}, work: {} },
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+      },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const requester = "agent:main:requester";
+    const own = await seed("main", "requester", viewer);
+    const archived = await seed("main", "archived", viewer, undefined, { archivedAt: 1 });
+    const child = await seed("main", "subagent:child", viewer, undefined, { spawnedBy: requester });
+    const foreignChild = await seed("work", "subagent:child", viewer, undefined, {
+      spawnedBy: requester,
+    });
+    const foreign = await seed("work", "visible", viewer);
+    const hidden = await seed("main", "hidden", "other-profile");
+    const cron = await seed("main", "cron:job:run:execution", viewer);
+    const incognito = await seed("main", "private", viewer, undefined, { incognito: true });
+    const phantom = "agent:main:sessions";
+    // Legacy phantom metadata has neither a durable session ID nor an update timestamp.
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: phantom },
+      JSON.parse('{"sessionId":""}'),
+    );
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: viewer },
+        },
+      );
+    }
+    const keys = [
+      own,
+      archived,
+      child,
+      foreignChild,
+      foreign,
+      hidden,
+      cron,
+      incognito,
+      phantom,
+      "agent:main:incognito:absent",
+      "unknown",
+      "legacy",
+      "global",
+      "agent:main:missing",
+    ];
+    const context = requestContext(cfg);
+    const client = identifiedClient(viewer);
+    client.connect.scopes = ["operator.read"];
+    let singleton = false;
+    const verdicts: Record<string, boolean[]> = {};
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(
+      async (params, _database, filter) => {
+        expect(filter).toBeDefined();
+        const allowed: boolean[] = [];
+        for (const batch of singleton ? keys.map((key) => [key]) : [keys]) {
+          allowed.push(...(await filter!(batch)));
+        }
+        verdicts[params.agentId] = allowed;
+        return { hits: [], indexing: false, truncated: false };
+      },
+    );
+    for (const restriction of [
+      {},
+      { restrictToSpawned: true },
+      { sandboxed: true },
+      { visibility: "tree" as const },
+      { visibility: "self" as const },
+      { visibility: "agent" as const },
+      { visibility: "all" as const, agentToAgent: { enabled: false } },
+    ]) {
+      const recall = { requesterAgentId: "main", requesterSessionKey: requester, ...restriction };
+      singleton = true;
+      expect((await search(context, client, { query: "synthetic", recall })).ok).toBe(true);
+      const expected = JSON.stringify(verdicts);
+      singleton = false;
+      expect((await search(context, client, { query: "synthetic", recall })).ok).toBe(true);
+      expect(JSON.stringify(verdicts)).toBe(expected);
+      const childrenOnly =
+        "restrictToSpawned" in restriction ||
+        "sandboxed" in restriction ||
+        restriction.visibility === "tree";
+      const allowed =
+        restriction.visibility === "self"
+          ? [own]
+          : childrenOnly
+            ? [own, child, foreignChild]
+            : restriction.visibility === "agent"
+              ? [own, archived, child, "global"]
+              : [
+                  own,
+                  archived,
+                  child,
+                  foreignChild,
+                  "global",
+                  ...("agentToAgent" in restriction ? [] : [foreign]),
+                ];
+      for (const agentId of ["main", "work"]) {
+        expect(
+          keys.filter((_, index) => verdicts[agentId]![index]),
+          JSON.stringify(recall),
+        ).toEqual(
+          keys.filter((key) => allowed.includes(key) && (key !== "global" || agentId === "main")),
+        );
+      }
+    }
+  });
+});
 
 test("CJK recall finishes the text pass and retains timestamp-ordered top-N", async () => {
   await withSearchState(async () => {
@@ -194,6 +338,44 @@ test("CJK recall finishes the text pass and retains timestamp-ordered top-N", as
       timestamps[2],
     ]);
     expect(result.payload?.truncated).toBe(true);
+  });
+});
+
+test("recall keeps transcript order after a committed visibility change", async () => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("recall-commit@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = [];
+    for (const [index, timestamp] of [100, 300, 200].entries()) {
+      const sessionKey = await seed("main", `recall-commit-${index}`, "other-profile");
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionKey, sessionId: `main-recall-commit-${index}` },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ now: timestamp, message: { role: "user", content: "planning notes" } }],
+        },
+      );
+      keys.push(sessionKey);
+    }
+    const context = requestContext(cfg);
+    const client = identifiedClient(viewer);
+    const read = async () => {
+      const response = await search(context, client, {
+        query: "planning notes",
+        limit: 2,
+        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:requester" },
+      });
+      expect(response.ok, response.error?.message).toBe(true);
+      return response.payload?.results.map((hit) => hit.sessionKey);
+    };
+    expect(await read()).toEqual([keys[1], keys[2]]);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: keys[1]! },
+      { visibility: "draft" },
+    );
+    expect(await read()).toEqual([keys[2], keys[0]]);
   });
 });
 
@@ -585,6 +767,7 @@ test.each(["view", "invited"] as const)(
       const viewer = ensureProfileForEmail("worker-search@example.test").id;
       const context = requestContext({
         agents: { entries: { main: {} } },
+        tools: { sessions: { visibility: "all" } },
         gateway: {
           roles: {
             default: "viewer",
@@ -597,8 +780,8 @@ test.each(["view", "invited"] as const)(
       setRuntimeConfigSnapshot(context.getRuntimeConfig());
       const client = identifiedClient(viewer);
       const read = transcriptSearch.searchSessionTranscripts;
-      for (const scoped of [true, false]) {
-        const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+      for (const mode of ["scope", "keys", "recall"] as const) {
+        const key = await seed("main", `worker-revoked-${mode}`, "foreign", "needle");
         if (others === "invited") {
           await addSessionMember(
             { agentId: "main", sessionKey: key },
@@ -623,10 +806,23 @@ test.each(["view", "invited"] as const)(
         try {
           const response = await search(context, client, {
             query: "needle",
-            ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+            ...(mode === "scope"
+              ? { scope: {} }
+              : mode === "keys"
+                ? { sessionKeys: [key] }
+                : {
+                    recall: {
+                      requesterAgentId: "main",
+                      requesterSessionKey: "agent:main:main",
+                      visibility: "all",
+                    },
+                  }),
           });
           expect(response.ok).toBe(true);
-          expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+          expect(response.payload).toEqual({
+            results: [],
+            ...(mode === "scope" ? { sessions: [] } : {}),
+          });
         } finally {
           spy.mockRestore();
         }

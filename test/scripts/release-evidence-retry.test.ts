@@ -195,13 +195,13 @@ describe("release evidence API reads", () => {
           evidenceClient.getRunAttemptJobs(...args),
       },
     );
-    expect(evidence.children).toHaveLength(6);
+    expect(evidence.children).toHaveLength(7);
     const pageSizes = transport.read.mock.calls.map((call) => call[1][1].split("per_page=")[1]);
-    // Parent admission and coverage each read jobs; the six children read once.
+    // Parent admission and coverage each read jobs; the seven children read once.
     // Every inventory falls back from 100 (502) to 50 without sleeping.
-    expect(pageSizes.filter((size) => size === "100")).toHaveLength(8);
-    expect(pageSizes.filter((size) => size === "50")).toHaveLength(8);
-    expect(pageSizes).toHaveLength(16);
+    expect(pageSizes.filter((size) => size === "100")).toHaveLength(9);
+    expect(pageSizes.filter((size) => size === "50")).toHaveLength(9);
+    expect(pageSizes).toHaveLength(18);
     expect(transport.sleep).not.toHaveBeenCalled();
   });
 

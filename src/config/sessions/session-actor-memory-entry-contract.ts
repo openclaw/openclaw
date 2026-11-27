@@ -95,10 +95,7 @@ export type SessionActorMemoryEntryWrites = {
       consumePendingReset?: boolean;
       prepareIf?: { kind: "live-model-switch-pending" };
       expected?: { entry: SessionEntry | undefined };
-      guards?: Pick<
-        SessionEntryPatchCommit,
-        "shouldCommitIf" | "cliHistory" | "conversation" | "sources"
-      >;
+      guards?: Pick<SessionEntryPatchCommit, "shouldCommitIf" | "conversation" | "sources">;
     };
     output: SessionEntry | undefined;
   };
@@ -135,6 +132,7 @@ export type SessionActorMemoryEntryWrites = {
   };
   "session.lifecycle.reclaim": {
     input: {
+      retainedMcpSessionIds?: readonly string[];
       entries: readonly {
         sessionKey: string;
         expected: SessionEntry;
@@ -149,6 +147,7 @@ export type SessionActorMemoryEntryWrites = {
     output: {
       removedSessionKeys: string[];
       archivedSessionKeys: string[];
+      retiredMcpSessionIds?: string[];
       beforeCount: number;
       afterCount: number;
     };

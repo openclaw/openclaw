@@ -1,22 +1,51 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   annotateInterSessionPromptText,
   PROGRESS_CARD_REFRESH_SOURCE_TOOL,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { createHistoryBoundaryFixture } from "./history-boundary.test-support.js";
 import { loadCliSessionPromptContext } from "./session-history.js";
 
 it("preserves unseen Claude exchanges and bounds", async ({ onTestFinished }) => {
   const dirs = useSessionStoreTempDirs(onTestFinished, "openclaw-cli-preserved-");
   onTestFinished(clearRuntimeConfigSnapshot);
-  const { target, withRun } = await createHistoryBoundaryFixture(dirs, false);
-  await withRun("preserved", async (params) => {
+  setRuntimeConfigSnapshot({});
+  const dir = dirs.make();
+  const target = {
+    agentId: "main",
+    sessionId: "history",
+    sessionKey: "agent:main:history",
+    storePath: path.join(dir, "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const admission = prepareSystemAgentRunAdmission({}, "preserved", "main", "history-test");
+  onTestFinished(() => admission.close());
+  const params = {
+    ...target,
+    admittedRunContext: await admission.admit("embedded"),
+    runId: "preserved",
+    sessionFile: target.sessionKey,
+    sessionTarget: target,
+    provider: "test-cli",
+    model: "test-model",
+    prompt: "current ask",
+    workspaceDir: dir,
+    timeoutMs: 1000,
+  };
+  {
     const append = (tick: number, message: unknown) =>
       appendTranscriptMessage(target, { eventId: `message-${tick}`, now: tick * 1000, message });
     const reply = (index: number, runId = `run-${index}`, text = `reply-${index}`) =>
@@ -82,5 +111,5 @@ it("preserves unseen Claude exchanges and bounds", async ({ onTestFinished }) =>
     expect(newest).toContain("`\u200b``");
     expect(newest).toContain("…[truncated]");
     expect(newest).not.toContain("x".repeat(2_000));
-  });
+  }
 });

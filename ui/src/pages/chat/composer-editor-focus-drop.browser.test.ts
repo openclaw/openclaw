@@ -40,6 +40,8 @@ it.each([false, true])("keeps dropped files as attachments with rich=%s", async 
       clientY: rect.top + 4,
     }),
   );
+  // The first attachment lazily loads its preview; cold Vite compilation is not file-read time.
+  await vi.dynamicImportSettled();
   await expect.poll(() => f.container.textContent).toContain("audit.txt");
   expect(f.value().draft).toBe(f.draft);
 });

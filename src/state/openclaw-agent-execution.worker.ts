@@ -13,6 +13,7 @@ import {
 import {
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
+  SQLITE_WORKER_WAL_CHECKPOINT,
   SqliteWorkerOpenRefusedError,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
@@ -180,6 +181,7 @@ function openAgentDatabaseBackend(
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
+  let relayedCheckpointAtNs = 0n;
   admitOpen();
   type RequestPreparation = ReturnType<typeof readAgentDatabaseRequestPreparation>;
   let startup: RequestPreparation | undefined;
@@ -644,6 +646,34 @@ function openAgentDatabaseBackend(
           publicationPreparation = undefined;
         }
       }
+    },
+    [SQLITE_WORKER_WAL_CHECKPOINT](command) {
+      if (!database || !identity) {
+        return undefined;
+      }
+      const observedAtNs = database.walMaintenance.checkpointObservedAtNs;
+      if (observedAtNs === undefined || observedAtNs <= relayedCheckpointAtNs) {
+        return undefined;
+      }
+      if (command.type === "database.walMaintenance") {
+        // Its explicit result is adopted by the delegated WAL owner before publication.
+        relayedCheckpointAtNs = observedAtNs;
+        return undefined;
+      }
+      const checkpoint = database.walMaintenance.checkpointSnapshot;
+      if (!checkpoint) {
+        return undefined;
+      }
+      relayedCheckpointAtNs = observedAtNs;
+      return {
+        identity: {
+          key: `file:${identity.physicalIdentity}`,
+          canonicalPath: identity.nativeLocation,
+          birthtime: identity.birthtime,
+        },
+        incarnation: identity.incarnation,
+        checkpoint,
+      };
     },
     assertSettled() {
       if (openingFailure) {

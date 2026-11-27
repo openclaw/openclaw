@@ -97,6 +97,7 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
       projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      preserveSentToolResults: true,
       sessionFile: attempt.sessionFile,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
@@ -166,7 +167,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
     if (input.providerCompactionAtRequestBoundary) {
       log.warn(
-        "ChatGPT V2 compaction unavailable; falling back to client compaction: pending input exceeds the context budget",
+        "Request-boundary compaction unavailable; falling back to client compaction: pending input exceeds the context budget",
       );
     }
     return {

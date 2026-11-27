@@ -519,7 +519,6 @@ it("round-trips scoped cron requester grants without promoting them to local aut
     undefined,
     undefined,
     undefined,
-    undefined,
     true,
   );
   try {

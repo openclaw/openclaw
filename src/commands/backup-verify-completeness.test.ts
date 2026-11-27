@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -20,8 +20,8 @@ import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("tar", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tar")>();
+vi.mock("tar/raw", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar/raw")>();
   return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
 });
 
@@ -132,6 +132,7 @@ describe("standalone backup database completeness", () => {
     "missing inventory",
   ])("verifies offline local-companion anchors and preserves namespaces (%s)", async (damage) => {
     const sourcePath = "/synthetic/state/state/openclaw.sqlite";
+    const namespace = "openclaw_team-reports_0123456789abcdef";
     const fixture = await writeSmallArchive([{ sourcePath, role: "global" }], []);
     const archivePath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
     const anchorPath = path.join(fixture.root, archivePath);
@@ -141,9 +142,9 @@ describe("standalone backup database completeness", () => {
       database.exec(
         "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)",
       );
-      database.exec(
-        "INSERT INTO openclaw_engine_anchor VALUES ('original-store', 'postgres', 'original_namespace')",
-      );
+      database
+        .prepare("INSERT INTO openclaw_engine_anchor VALUES ('original-store', 'postgres', ?)")
+        .run(namespace);
     }
     const manifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
     const manifest: BackupManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -155,7 +156,7 @@ describe("standalone backup database completeness", () => {
             {
               sourcePath,
               storeId: damage === "identity" ? "other-store" : "original-store",
-              namespace: damage === "namespace" ? "other_namespace" : "original_namespace",
+              namespace: damage === "namespace" ? "other_namespace" : namespace,
             },
           ];
     if (damage === "sidecar") {
@@ -237,7 +238,7 @@ describe("standalone backup database completeness", () => {
       restored.prepare("SELECT store_id, schema FROM openclaw_engine_anchor").get(),
     ).toMatchObject({
       store_id: "original-store",
-      schema: "original_namespace",
+      schema: namespace,
     });
     await expect(fs.stat(path.join(target, `${archivePath}.postgres`))).rejects.toThrow();
   });

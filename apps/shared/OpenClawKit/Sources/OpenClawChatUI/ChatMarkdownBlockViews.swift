@@ -158,6 +158,8 @@ struct ChatMarkdownTableView: View {
 
     /// Width the reply proposes to this card, so 0 until the first layout pass reports it.
     @State private var cardWidth: CGFloat = 0
+    /// The enclosing message's file labels; nil where file links are off.
+    @Environment(\.openClawChatMarkdownFileLabels) private var fileLabels
 
     var body: some View {
         // A horizontal scroll view proposes an unbounded width, so a grid inside it sizes every
@@ -244,7 +246,7 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
         // Cells read at the size of the reply's body text; a fixed footnote size stayed
         // smaller than the surrounding prose at every Dynamic Type setting.
-        Text(self.inlineMarkdown(text))
+        ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
             .font(isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
@@ -257,13 +259,6 @@ struct ChatMarkdownTableView: View {
 
     private func cellAlignment(_ column: Int) -> Alignment {
         Alignment(horizontal: self.columnAlignment(column), vertical: .top)
-    }
-
-    private func inlineMarkdown(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
 
     private func columnAlignment(_ column: Int) -> HorizontalAlignment {

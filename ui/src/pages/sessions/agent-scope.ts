@@ -1,8 +1,12 @@
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { usesGatewayTimedSessionPins } from "../../lib/gateway-methods.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 
 export function sessionAgentId(key: string, context: ApplicationContext): string | undefined {
   const { agentId } = scopedAgentParamsForSession(
@@ -17,6 +21,21 @@ export function sessionAgentId(key: string, context: ApplicationContext): string
 
 export function sessionPathAgentId(key: string, context: ApplicationContext): string {
   return sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
+}
+
+/** Resolve the table's navigation from the same connected agent and profile as its menu. */
+export function sessionTableNavigation(context: ApplicationContext) {
+  const gateway = context.gateway.snapshot;
+  return {
+    agentId: resolveSessionNavigationAgentId(context),
+    allAgentsScope: context.agentSelection.state.scopeId === null,
+    mainKey: resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: gateway.hello,
+    }),
+    personalSidebarEntries: context.navigation.snapshot.sidebarEntries,
+    gatewayTimedPins: usesGatewayTimedSessionPins(gateway),
+  };
 }
 
 export function sessionAgentIds(rows: readonly GatewaySessionRow[]): string[] {

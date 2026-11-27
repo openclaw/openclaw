@@ -49,7 +49,11 @@ export function BrowserToolbar(
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
   const activeUrl = createMemo(
     () =>
-      nativeTab()?.url || props.controller.view?.metrics?.url || props.controller.view?.url || "",
+      nativeTab()?.url ||
+      props.controller.view?.metrics?.url ||
+      props.controller.view?.url ||
+      props.controller.tabs.find((tab) => tab.id === props.controller.activeTargetId)?.url ||
+      "",
   );
   // Take-over covers browsers this Gateway hosts, as the Gateway confirmed for this route;
   // node-routed and native app tabs have no fence.
@@ -141,7 +145,7 @@ export function BrowserToolbar(
       id: "open",
       label: t("browser.openExternal"),
       icon: <Icon name="externalLink" />,
-      disabled: !hasView(),
+      disabled: !activeUrl(),
     },
     ...(!props.controller.host.dashboardTarget?.sessionScoped
       ? [
@@ -223,6 +227,9 @@ export function BrowserToolbar(
           !event.currentTarget.contains(event.relatedTarget)
         ) {
           props.controller.urlDraftEditing = false;
+          if (!props.controller.loading) {
+            props.controller.setState("urlDraft", activeUrl());
+          }
         }
       }}
     >
@@ -316,7 +323,6 @@ export function BrowserToolbar(
             aria-label={t("browser.address")}
             aria-invalid={invalid() ? "true" : undefined}
             aria-describedby={invalid() ? hintId : undefined}
-            title={props.controller.urlDraft}
             disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
             placeholder={t("browser.urlPlaceholder")}
             value={props.controller.urlDraft}
@@ -347,8 +353,16 @@ export function BrowserToolbar(
                   event.currentTarget.blur();
                 }
               } else if (event.key === "Escape") {
-                props.controller.resetUrlDraftFromView();
-                event.currentTarget.blur();
+                if (invalid() || props.controller.urlDraft !== activeUrl()) {
+                  // Cancel the address edit before the surrounding panel handles Escape.
+                  event.preventDefault();
+                  props.controller.setState("urlDraft", activeUrl());
+                  setInvalid(false);
+                  const address = event.currentTarget;
+                  onSettled(() => address.select());
+                } else {
+                  event.currentTarget.blur();
+                }
               }
             }}
           />

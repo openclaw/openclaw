@@ -129,6 +129,16 @@ it("warm project recall observes each unchanged record's file metadata once", as
   for (const file of paths) {
     expect(stat.mock.calls.filter(([name]) => name === file)).toHaveLength(1);
   }
+  const approved = path.join(fs.realpathSync(root), "private", item.path);
+  const changed = [...paths].find((file) => file !== approved)!;
+  fs.appendFileSync(changed, "\nAn external edit to the other fact.\n");
+  stat.mockClear();
+  reads.text.length = 0;
+  expect(await storage.memoryCandidates(request, access)).toEqual(before);
+  // The scan's stamp plus Git observation's before/after publication snapshots.
+  expect(stat.mock.calls.filter(([name]) => name === approved)).toHaveLength(3);
+  expect(reads.text).not.toContain(item.path);
+  expect(reads.approvals).toBe(1);
 });
 
 // Overlay validation shares the parse cache; a descriptor it supplies must not

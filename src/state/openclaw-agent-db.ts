@@ -103,6 +103,7 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertCanonicalAgentPersistenceVersion,
   assertCurrentAgentSchemaMetadata,
@@ -110,10 +111,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import {
-  agentDatabaseIntegrityBeforeMutationSteps,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
 import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
@@ -445,7 +443,7 @@ function* openOpenClawAgentDatabaseSteps(
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
           // The existing full path initializes or converges them before exposure.
-          invalidateOpenClawAgentDatabaseValidation(pathname);
+          invalidateOpenClawAgentDatabaseValidation(pathname, "a reopen that must converge");
           isValidatedReopen = false;
         }
         assertCanonicalAgentPersistenceVersion(db, pathname);
@@ -497,7 +495,7 @@ function* openOpenClawAgentDatabaseSteps(
       }
       const current = cache.databases.get(pathname);
       if (!current || current.db === db) {
-        invalidateOpenClawAgentDatabaseValidation(pathname);
+        invalidateOpenClawAgentDatabaseValidation(pathname, "a failed open");
       }
       if (
         err instanceof Error &&
@@ -536,6 +534,7 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
+          schemaVersion: readExistingAgentSchemaMeta(selected)?.schemaVersion ?? undefined,
           // Bounded admission retains process proof without minting a FULL receipt or seal.
           // Temporary QUICK repair handles still cannot publish runtime admission.
           admittedDb:
@@ -600,7 +599,7 @@ function* openOpenClawAgentDatabaseSteps(
         });
         throw error;
       }
-      invalidateOpenClawAgentDatabaseValidation(pathname);
+      invalidateOpenClawAgentDatabaseValidation(pathname, "an open that retained its database");
       const retainedDatabase =
         openedDatabase ??
         ({
