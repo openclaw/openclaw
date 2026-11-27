@@ -15,7 +15,7 @@ import {
 const MAX_LOCALES = 16;
 const MAX_IMPORT_DEPTH = 6;
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const comparisonKey = (value: string) => value.normalize("NFC");
+export const comparisonKey = (value: string) => value.normalize("NFC");
 
 function record(input: unknown, fields: readonly string[]): Record<string, unknown> {
   if (
@@ -31,7 +31,7 @@ function record(input: unknown, fields: readonly string[]): Record<string, unkno
       throw new VocabularyError("invalid-input");
     }
   }
-  // SAFETY: input is a plain object whose own keys are all checked string data fields.
+  // SAFETY: input is a non-null object whose own keys were all checked as allowed data fields above.
   return input as Record<string, unknown>;
 }
 
@@ -48,7 +48,7 @@ function boundedText(input: unknown, maxBytes: number): string {
   return input;
 }
 
-function canonicalLocale(input: unknown): string {
+export function canonicalVocabularyLocale(input: unknown): string {
   const locale = boundedText(input, 64);
   try {
     return Intl.getCanonicalLocales(locale)[0]!;
@@ -59,7 +59,8 @@ function canonicalLocale(input: unknown): string {
 
 function stringList(input: unknown, maximum: number, normalize: (value: unknown) => string) {
   if (input === undefined) {
-    return Object.freeze<string[]>([]);
+    // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
+    return Object.freeze([] as string[]);
   }
   if (!Array.isArray(input)) {
     throw new VocabularyError("invalid-input");
@@ -110,7 +111,7 @@ export function validateVocabularyTerms(
       id,
       canonical,
       aliases,
-      locales: stringList(item.locales, MAX_LOCALES, canonicalLocale),
+      locales: stringList(item.locales, MAX_LOCALES, canonicalVocabularyLocale),
       enabled: item.enabled !== false,
     });
     bytes += Buffer.byteLength(JSON.stringify(term)) + (terms.length ? 1 : 0);
@@ -144,7 +145,7 @@ export function validateVocabularyDraft(input: unknown): VocabularyCollectionDra
 }
 
 /** Bound raw bytes and nesting before JSON.parse can allocate the imported object graph. */
-export function parseVocabularyImport(text: string): VocabularyCollectionDraft {
+export function parseBoundedVocabularyJson(text: string): unknown {
   if (typeof text !== "string") {
     throw new VocabularyError("invalid-input");
   }
@@ -184,7 +185,11 @@ export function parseVocabularyImport(text: string): VocabularyCollectionDraft {
   } catch {
     throw new VocabularyError("invalid-input");
   }
-  return validateVocabularyDraft(parsed);
+  return parsed;
+}
+
+export function parseVocabularyImport(text: string): VocabularyCollectionDraft {
+  return validateVocabularyDraft(parseBoundedVocabularyJson(text));
 }
 
 type Candidate = { term: VocabularyTerm; source: VocabularySource; priority: number; key: string };
@@ -226,7 +231,7 @@ export function resolveEffectiveVocabulary(params: {
   ) {
     throw new VocabularyError("limit-exceeded");
   }
-  const locale = params.locale === undefined ? undefined : canonicalLocale(params.locale);
+  const locale = params.locale === undefined ? undefined : canonicalVocabularyLocale(params.locale);
   const groups: { terms: readonly VocabularyTerm[]; source: VocabularySource; priority: number }[] =
     [
       { terms: params.sessionTerms ?? [], source: Object.freeze({ kind: "session" }), priority: 0 },
@@ -280,7 +285,8 @@ export function resolveEffectiveVocabulary(params: {
       );
     }
   }
-  // A shadowed canonical term must not suppress an unrelated hint through its aliases.
+  // Resolve canonical precedence before alias conflicts. A shadowed shared spelling
+  // must not suppress an unrelated hint through aliases absent from the personal choice.
   const candidates = admitted.filter(
     (candidate) => candidate.priority === canonicalPriority.get(candidate.key),
   );
@@ -357,12 +363,14 @@ export function resolveEffectiveVocabulary(params: {
       // This derived projection may unite several import records. Its lists are bounded
       // by the aggregate input budget, not a single record's sixteen-alias limit.
       // Lower-priority shared aliases never add behavior to a personal/session override.
+      // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
+      const allLocales = Object.freeze([] as string[]);
       return Object.freeze({
         term: Object.freeze({
           ...first.term,
           aliases: mergeStrings(preferred.map((candidate) => candidate.term.aliases)),
           locales: preferred.some((candidate) => !candidate.term.locales.length)
-            ? Object.freeze<string[]>([])
+            ? allLocales
             : mergeStrings(preferred.map((candidate) => candidate.term.locales)),
         }),
         sources: Object.freeze([...sources.values()]),
@@ -376,7 +384,8 @@ export function selectVocabularyHints(
   effective: EffectiveVocabulary,
   capability: VocabularyHintCapability,
 ): VocabularyHints {
-  const empty = Object.freeze<string[]>([]);
+  // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
+  const empty = Object.freeze([] as string[]);
   if (capability.kind === "unsupported") {
     return Object.freeze({
       status: "unsupported",
@@ -394,7 +403,8 @@ export function selectVocabularyHints(
     throw new VocabularyError("invalid-input");
   }
   const candidates = effective.entries.map((entry) => entry.term.canonical);
-  let selected = { terms: empty, bytes: 0, tokens: 0 };
+  // SAFETY: empty is a frozen string[], which widening to readonly string[] cannot make unsound.
+  let selected = { terms: empty as readonly string[], bytes: 0, tokens: 0 };
   let low = 0;
   let high = Math.min(candidates.length, capability.maxTerms);
   let length = high;

@@ -67,14 +67,14 @@ describe("vocabulary import boundary", () => {
 
   it("rejects raw byte excess and deep nesting before materializing JSON", () => {
     const parse = vi.spyOn(JSON, "parse");
+    const oversized = "é".repeat(VOCABULARY_LIMITS.collectionBytes / 2 + 1);
+    const deep = "[".repeat(7) + "0" + "]".repeat(7);
     try {
-      expect(() =>
-        parseVocabularyImport("é".repeat(VOCABULARY_LIMITS.collectionBytes / 2 + 1)),
-      ).toThrow(new VocabularyError("limit-exceeded"));
-      expect(() => parseVocabularyImport("[".repeat(7) + "0" + "]".repeat(7))).toThrow(
-        new VocabularyError("limit-exceeded"),
-      );
-      expect(parse).not.toHaveBeenCalled();
+      for (const text of [oversized, deep]) {
+        expect(() => parseVocabularyImport(text)).toThrow(new VocabularyError("limit-exceeded"));
+      }
+      // Stack source maps may use JSON.parse; only the rejected imports must never reach it.
+      expect(parse.mock.calls.filter(([text]) => text === oversized || text === deep)).toEqual([]);
     } finally {
       parse.mockRestore();
     }
@@ -183,6 +183,28 @@ describe("effective vocabulary", () => {
     expect(personal[0]!.canonical).toBe("nimBRIX");
   });
 
+  it("removes shadowed aliases before they can suppress unrelated shared hints", () => {
+    const collections = [
+      collection("a", [term("shared-alpha", "Alpha", ["beta"])]),
+      collection("b", [term("shared-beta", "beta")]),
+    ];
+    const parameters = {
+      personalTerms: [term("mine", "Alpha")],
+      personalRevision: 1,
+      collections,
+    };
+    const effective = resolveEffectiveVocabulary(parameters);
+    expect(effective.entries.map((entry) => entry.term.canonical)).toEqual(["Alpha", "beta"]);
+    expect(effective.conflicts).toEqual([]);
+    expect(effective.entries[0]!.term.aliases).toEqual([]);
+    expect(effective).toEqual(
+      resolveEffectiveVocabulary({
+        ...parameters,
+        collections: collections.toReversed(),
+      }),
+    );
+  });
+
   it("never reintroduces ambiguous or overridden canonical hints through a duplicate source", () => {
     const sources = [
       collection("a", [term("one", "Alpha", ["shared alias"])]),
@@ -196,19 +218,6 @@ describe("effective vocabulary", () => {
       personalTerms: [term("mine", "Beta", ["shared alias"])],
     });
     expect(explicit.entries.map((entry) => entry.term.canonical)).toEqual(["Beta"]);
-  });
-
-  it("ignores aliases from shared terms shadowed by a personal canonical override", () => {
-    const effective = resolveEffectiveVocabulary({
-      collections: [
-        collection("first", [term("shared-alpha", "Alpha", ["beta"])]),
-        collection("second", [term("shared-beta", "beta")]),
-      ],
-      personalRevision: 1,
-      personalTerms: [term("personal-alpha", "Alpha")],
-    });
-    expect(effective.entries.map((entry) => entry.term.canonical)).toEqual(["Alpha", "beta"]);
-    expect(effective.conflicts).toEqual([]);
   });
 
   it("compares NFC aliases without destructive case, accent, or compatibility folding", () => {
