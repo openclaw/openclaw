@@ -235,13 +235,13 @@ describe("Make reachable over a personal sign-in", () => {
     {
       linkProfile: true,
       profileLink: "not_admin",
-      expected: "An admin links it by inviting this OpenClaw ID to your profile",
+      expected: "pick your profile under Existing person on this claw",
       canLink: false,
     },
     {
       linkProfile: true,
       profileLink: "link_approval_required",
-      expected: "approving the request in People",
+      expected: "Then approve the request in People.",
       canLink: false,
     },
     {
@@ -290,7 +290,7 @@ describe("Make reachable over a personal sign-in", () => {
   it.each([
     { outcome: "linked", expected: null },
     { outcome: "linked_elsewhere", expected: "already linked to another profile" },
-    { outcome: "link_approval_required", expected: "approving the request in People" },
+    { outcome: "link_approval_required", expected: "Then approve the request in People." },
     { outcome: null, expected: "Sign in again to check the link" },
   ])(
     "checks the link with a fresh sign-in after sign_in_not_held (outcome $outcome)",

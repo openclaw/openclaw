@@ -715,8 +715,9 @@ administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
 Through a personal sign-in, setup also checks whether the OpenClaw ID you signed in
 with is linked to your profile, as **Check link** does. It never creates the first
 link. When the account is not linked, remote access stays on and the note under the
-steps says an admin links it by inviting this OpenClaw ID to your profile and
-approving the request in People. **Check your link** there signs in again when the
+steps tells you to link it yourself: on **Remote access**, choose **Invite someone**,
+enter your OpenClaw ID's email, pick your profile under **Existing person on this
+claw**, then approve the request in People. **Check your link** there signs in again when the
 Gateway no longer holds this browser's sign-in. The Gateway log records who ran each step and over which
 identity (`openclaw-id: remote access …` with the route, auth method, profile and
 verified user), and emits a matching `security.event`.
