@@ -178,7 +178,8 @@ Baseline setup writes no files into the workspace and does not run `git init`. T
 starter files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`) are
 created by the agent's first conversation, through the Gateway or chat, which also runs
 the first-run bootstrap. Existing workspace files are never replaced. `--json` output
-reports this as `"starterFiles": "first-conversation"`. A one-shot
+reports this as `"starterFiles": "first-conversation"`, or `"skipped"` when
+`agents.defaults.skipBootstrap` is in effect. A one-shot
 `openclaw agent --local` run does not create them either.
 
 Use `openclaw setup --baseline --skip-bootstrap` to keep the first conversation from

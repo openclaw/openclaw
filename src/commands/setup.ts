@@ -21,7 +21,11 @@ import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { displayPath, isRecord, resolveUserPath, shortenHomePath } from "../utils.js";
 
 type SetupOptions = { workspace?: string; skipBootstrap?: boolean; json?: boolean };
-const STARTER_FILES_NOTE = "starter files are created by the first conversation";
+type StarterFiles = "first-conversation" | "skipped";
+const STARTER_FILES_NOTE: Record<StarterFiles, string> = {
+  "first-conversation": "starter files are created by the first conversation",
+  skipped: "starter files are skipped because agents.defaults.skipBootstrap is true",
+};
 
 export async function setupCommand(
   opts?: SetupOptions,
@@ -80,6 +84,11 @@ async function planSetupConfig(snapshot: ConfigFileSnapshot, opts: SetupOptions 
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
+  // Baseline never seeds; the first conversation does unless skipBootstrap is in effect.
+  const starterFiles: StarterFiles =
+    opts?.skipBootstrap === true || resolvedDefaults.skipBootstrap === true
+      ? "skipped"
+      : "first-conversation";
   const shouldWriteSkipBootstrap =
     opts?.skipBootstrap === true && resolvedDefaults.skipBootstrap !== true;
   const skipBootstrapPath = ["agents", "defaults", "skipBootstrap"];
@@ -201,6 +210,7 @@ async function planSetupConfig(snapshot: ConfigFileSnapshot, opts: SetupOptions 
     cfg,
     workspace,
     selectedAgentId,
+    starterFiles,
     applyWrites,
     configChanged:
       !snapshot.exists ||
@@ -295,7 +305,9 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
   const workspaceDir = resolveUserPath(workspace);
   await fs.mkdir(workspaceDir, { recursive: true });
   if (!opts?.json) {
-    runtime.log(`Workspace OK: ${displayPath(workspaceDir)} (${STARTER_FILES_NOTE})`);
+    runtime.log(
+      `Workspace OK: ${displayPath(workspaceDir)} (${STARTER_FILES_NOTE[plan.starterFiles]})`,
+    );
   }
 
   const sessionsDir = await ensureSessionsDir(selectedAgentId);
@@ -309,6 +321,7 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
     configStatus: plan.configChanged ? (snapshot.exists ? "updated" : "created") : "unchanged",
     workspaceDir,
     sessionsDir,
+    starterFiles: plan.starterFiles,
   });
 }
 
@@ -383,7 +396,7 @@ async function setupWithGatewayOwner(
       runtime.log(restartHint);
     }
     runtime.log(
-      `Workspace: ${displayPath(resolveUserPath(plan.workspace))} (owned by the running Gateway; ${STARTER_FILES_NOTE})`,
+      `Workspace: ${displayPath(resolveUserPath(plan.workspace))} (owned by the running Gateway; ${STARTER_FILES_NOTE[plan.starterFiles]})`,
     );
   }
   finishSetup(opts, runtime, {
@@ -391,6 +404,7 @@ async function setupWithGatewayOwner(
     configStatus: configChanged ? "updated" : "unchanged",
     workspaceDir: resolveUserPath(plan.workspace),
     sessionsDir: await ensureSessionsDir(plan.selectedAgentId),
+    starterFiles: plan.starterFiles,
   });
 }
 
@@ -409,10 +423,11 @@ function finishSetup(
     configStatus: "created" | "updated" | "unchanged";
     workspaceDir: string;
     sessionsDir: string;
+    starterFiles: StarterFiles;
   },
 ): void {
   if (opts?.json) {
-    writeRuntimeJson(runtime, { ok: true, ...result, starterFiles: "first-conversation" });
+    writeRuntimeJson(runtime, { ok: true, ...result });
     return;
   }
   runtime.log(`Sessions OK: ${displayPath(result.sessionsDir)}`);
