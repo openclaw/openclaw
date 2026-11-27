@@ -183,7 +183,6 @@ describe("ClawRouter cold prepared catalog", () => {
     // Cold chat discovery and the fresh capability check use the same selected credential.
     expect(requests).toEqual([
       { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
-      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
     ]);
     return { agentId, baseUrl, config, pluginMetadataSnapshot, result };
   }

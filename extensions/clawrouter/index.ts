@@ -48,9 +48,9 @@ import { buildClawRouterImageGenerationProvider } from "./image-generation-provi
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
+import { discoverClawRouterProviderCatalog } from "./provider-catalog-discovery.js";
 import {
   buildClawRouterProviderConfig,
-  discoverClawRouterProviderCatalog,
   decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,

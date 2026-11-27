@@ -1,8 +1,10 @@
 import type { ServerResponse } from "node:http";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resolveBasetenDecisionHttpContext } from "./decision-baseten.runtime.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 
 const batch: DecisionBatchV2 = {
@@ -331,4 +333,123 @@ it("checks admission again before inference and keeps a thrown authority termina
       response.end(JSON.stringify(catalog()));
     },
   );
+});
+
+it("checks Baseten admission at the catalog transport handoff", async () => {
+  const baseUrl = "https://router.example/v1";
+  const model = {
+    ...context(baseUrl).model,
+    id: "baseten/decision-models/baseten-elephant-9b-latest",
+  };
+  const handedOff = vi.fn();
+  using guard = vi
+    .spyOn(providerHttp, "fetchWithTimeoutGuarded")
+    .mockImplementation(async (_url, _init, _timeout, _fetch, options) => {
+      options?.beforeRequest?.();
+      handedOff();
+      throw new Error("unexpected handoff");
+    });
+  const admitted = vi.fn(() => false).mockReturnValueOnce(true);
+  await expect(
+    evaluate(baseUrl, {
+      config: { models: { providers: { clawrouter: { baseUrl, models: [] } } } },
+      model,
+      isAdmissible: admitted,
+    }),
+  ).resolves.toEqual({ status: "unavailable", reason: "transport" });
+  const terminal = new Error("fixture owner ended admission");
+  const ended = vi
+    .fn((): boolean => {
+      throw terminal;
+    })
+    .mockReturnValueOnce(true);
+  await expect(
+    evaluate(baseUrl, {
+      config: { models: { providers: { clawrouter: { baseUrl, models: [] } } } },
+      model,
+      isAdmissible: ended,
+    }),
+  ).rejects.toBe(terminal);
+  expect(guard).toHaveBeenCalledTimes(2);
+  expect(handedOff).not.toHaveBeenCalled();
+});
+
+it("matches only effective Baseten credentials and excludes automatic protocol headers", () => {
+  const baseUrl = "https://router.example/v1";
+  const ctx = context(baseUrl);
+  const model = {
+    id: ctx.model.id,
+    name: ctx.model.name,
+    provider: "clawrouter",
+    api: ctx.model.api,
+    baseUrl,
+  };
+  const config = {
+    models: {
+      providers: {
+        clawrouter: {
+          models: [],
+          baseUrl,
+          headers: { "x-fixture-model": "fixture-provider-value", Accept: "fixture-overridden" },
+          request: {
+            headers: { "x-fixture-request": "fixture-request-value" },
+            auth: {
+              mode: "header" as const,
+              headerName: "x-fixture-auth",
+              prefix: "Schema ",
+              value: "fixture-credential",
+            },
+          },
+        },
+      },
+    },
+  };
+  const match = resolveBasetenDecisionHttpContext(
+    { ...ctx, model, config },
+    "fixture-router-key",
+  ).reflectsCredential;
+  for (const value of [
+    "fixture-provider-value",
+    "fixture-request-value",
+    "fixture-credential",
+    "fixture-router-key",
+  ]) {
+    expect(match(value), value).toBe(true);
+  }
+  for (const value of ["openclaw", "application/json", "fixture-overridden"]) {
+    expect(match(value)).toBe(false);
+  }
+  const prepared = attachModelProviderRequestTransport(
+    {
+      ...model,
+      headers: {
+        "x-fixture-model": "fixture-model-value",
+        "x-api-key": "fixture-removed",
+        "x-fixture-auth": "Schema fixture-prepared-value",
+      },
+    },
+    {
+      allowPrivateNetwork: false,
+      auth: {
+        mode: "header",
+        headerName: "x-fixture-auth",
+        prefix: "Schema ",
+        value: "fixture-prepared-value",
+      },
+    },
+  );
+  const effective = resolveBasetenDecisionHttpContext(
+    { ...ctx, config, model: prepared },
+    "fixture-router-key",
+  ).reflectsCredential;
+  expect(effective("fixture-model-value")).toBe(true);
+  expect(effective("fixture-prepared-value")).toBe(true);
+  for (const value of [
+    "fixture-provider-value",
+    "fixture-request-value",
+    "fixture-credential",
+    "fixture-removed",
+  ]) {
+    expect(effective(value)).toBe(false);
+  }
 });

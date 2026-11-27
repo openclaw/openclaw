@@ -1,12 +1,9 @@
 import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
-import type {
-  ProviderCatalogContext,
-  ProviderCatalogResult,
-  ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
+  type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   MISTRAL_MODEL_TRANSPORT_PATCH,
@@ -577,61 +574,13 @@ function buildRoutedModel(
   };
 }
 
-export async function discoverClawRouterProviderCatalog(
-  ctx: ProviderCatalogContext,
-): Promise<ProviderCatalogResult> {
-  const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-  let discoveryApiKey = auth.discoveryApiKey;
-  if (!discoveryApiKey) {
-    try {
-      const { resolveApiKeyForProvider } =
-        await import("openclaw/plugin-sdk/provider-auth-runtime");
-      discoveryApiKey = (
-        await resolveApiKeyForProvider({
-          provider: PROVIDER_ID,
-          cfg: ctx.config,
-          ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-          ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-          ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
-        })
-      )?.apiKey;
-    } catch {
-      return null;
-    }
-  }
-  const apiKey = auth.apiKey ?? discoveryApiKey;
-  if (!apiKey || !discoveryApiKey) {
-    return null;
-  }
-  const provider = await buildClawRouterProviderConfig({
-    apiKey,
-    discoveryApiKey,
-    baseUrl: ctx.config?.models?.providers?.[PROVIDER_ID]?.baseUrl,
-  });
-  const { listClawRouterBasetenDecisionModels } = await import("./decision-baseten-offers.js");
-  const capabilityModels = await listClawRouterBasetenDecisionModels({
-    config: ctx.config,
-    resolveProviderApiKey: () => ({ apiKey, discoveryApiKey }),
-  });
-  return {
-    provider,
-    outcomes: [
-      {
-        provider: PROVIDER_ID,
-        ...(auth.profileId ? { profileId: auth.profileId } : {}),
-        status: capabilityModels === undefined ? "unavailable" : "ready",
-        capabilityModels,
-      },
-    ],
-  };
-}
-
 export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
   baseUrl?: string;
   requestedModelId?: string;
   requestedModelApi?: ProviderRuntimeModel["api"];
+  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
@@ -640,6 +589,7 @@ export async function buildClawRouterProviderConfig(params: {
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     readRows: (body) => readCatalogRows(body, `${rootUrl}/v1`),
+    fetchGuard: params.fetchGuard,
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",
   });

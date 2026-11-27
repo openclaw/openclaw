@@ -8,6 +8,7 @@ import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
   type ClawRouterCapabilityOffer,
+  type ClawRouterCatalogObservation,
 } from "./capability-offers.js";
 
 const MODELS = new Set([
@@ -87,6 +88,7 @@ export function readBasetenDecisionOffer(offer: ClawRouterCapabilityOffer) {
 
 export async function listClawRouterBasetenDecisionModels(
   context: Pick<ProviderAugmentModelCatalogContext, "config" | "resolveProviderApiKey">,
+  onDirectCatalog?: (observation: ClawRouterCatalogObservation) => void,
 ): Promise<ProviderAugmentModelCatalogContext["entries"] | undefined> {
   const auth = context.resolveProviderApiKey?.("clawrouter");
   const apiKey = auth?.discoveryApiKey ?? auth?.apiKey;
@@ -100,6 +102,7 @@ export async function listClawRouterBasetenDecisionModels(
     offers = await fetchClawRouterCapabilityOffers({
       context: http,
       timeoutMs: () => 5_000,
+      onDirectCatalog,
       requireFreshProxyCatalog: true,
     });
   } catch {

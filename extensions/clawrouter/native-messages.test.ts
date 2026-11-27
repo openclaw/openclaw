@@ -200,6 +200,27 @@ beforeEach(() => {
   vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-never-upstream");
 });
 
+it("observes the selected account on each discovery while reusing ordinary Messages rows", async () => {
+  const body = {
+    ...catalog(),
+    scope: { authType: "proxy_key", credentialId: "fixture-profile" },
+    observedAt: new Date().toISOString(),
+  };
+  await fixture(async ({ discover, prepare, seen }) => {
+    expect(await discover()).toMatchObject({
+      outcomes: [{ status: "ready", capabilityModels: [] }],
+    });
+    await prepare();
+    body.scope.authType = "unknown";
+    expect(await discover()).toMatchObject({ outcomes: [{ status: "unavailable" }] });
+    await prepare();
+    expect(seen.map(({ path, key }) => [path, key])).toEqual([
+      ["/v1/catalog", "Bearer synthetic-router-key"],
+      ["/v1/catalog", "Bearer synthetic-router-key"],
+    ]);
+  }, body);
+});
+
 it.each(["removed", "malformed", "explicitly denied legacy"])(
   "does not resurrect a configured Messages model when its provider is %s",
   async (kind) => {

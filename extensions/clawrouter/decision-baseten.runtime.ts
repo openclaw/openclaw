@@ -7,7 +7,10 @@ import {
   type ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
 import { executeDecisionJsonRequest } from "openclaw/plugin-sdk/decisions-unary-runtime";
-import { createProviderCredentialMatcher } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderCredentialMatcher,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 import {
@@ -46,6 +49,57 @@ function supported(batch: DecisionBatchV2, reasoning: DecisionProviderContextV2[
   return options > 0 && options <= 512;
 }
 
+export function resolveBasetenDecisionHttpContext(
+  context: DecisionProviderContextV2,
+  apiKey: string,
+) {
+  const provider = context.config.models?.providers?.clawrouter;
+  const prepared = getModelProviderRequestTransport(context.model);
+  const configuredHeaders = context.model.headers
+    ? omitNullRequestHeaders(context.model.headers)
+    : provider?.headers;
+  const request = prepared
+    ? {
+        proxy: prepared.proxy,
+        tls: prepared.tls,
+        allowPrivateNetwork: prepared.allowPrivateNetwork,
+      }
+    : sanitizeConfiguredModelProviderRequest(provider?.request);
+  const http = resolveClawRouterCapabilityHttpContext(
+    {
+      ...context.config,
+      models: {
+        ...context.config.models,
+        providers: {
+          ...context.config.models?.providers,
+          clawrouter: {
+            ...provider,
+            models: provider?.models ?? [],
+            headers: configuredHeaders,
+            request,
+          },
+        },
+      },
+    },
+    apiKey,
+  );
+  http.headers.delete("x-api-key");
+  const credentialHeaders = new Headers(http.headers);
+  for (const name of ["accept", "content-type", "x-clawrouter-client"]) {
+    credentialHeaders.delete(name);
+  }
+  return {
+    ...http,
+    reflectsCredential: createProviderCredentialMatcher({
+      headers: credentialHeaders,
+      configuredHeaderNames: Object.keys(configuredHeaders ?? {}),
+      request: prepared ?? request,
+      defaultAuthHeader: "Authorization",
+      defaultAuthPrefix: "Bearer ",
+    }),
+  };
+}
+
 export async function evaluateClawRouterBasetenDecision(
   batch: DecisionBatchV2,
   context: DecisionProviderContextV2,
@@ -66,46 +120,35 @@ export async function evaluateClawRouterBasetenDecision(
   if (context.model.baseUrl && normalizeClawRouterApiBaseUrl(context.model.baseUrl) !== baseUrl) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const prepared = getModelProviderRequestTransport(context.model);
-  const http = resolveClawRouterCapabilityHttpContext(
-    {
-      ...context.config,
-      models: {
-        ...context.config.models,
-        providers: {
-          ...context.config.models?.providers,
-          clawrouter: {
-            ...provider,
-            models: provider?.models ?? [],
-            baseUrl,
-            headers: context.model.headers
-              ? omitNullRequestHeaders(context.model.headers)
-              : provider?.headers,
-            request: prepared
-              ? {
-                  proxy: prepared.proxy,
-                  tls: prepared.tls,
-                  allowPrivateNetwork: prepared.allowPrivateNetwork,
-                }
-              : provider?.request,
-          },
-        },
-      },
-    },
-    auth.apiKey,
-  );
-  http.headers.delete("x-api-key");
+  const http = resolveBasetenDecisionHttpContext(context, auth.apiKey);
   const timeoutMs = () => Math.max(1, context.deadlineMonotonicMs - performance.now());
+  let admissionError: { error: unknown } | undefined;
   let offers: ClawRouterCapabilityOffer[];
   try {
     offers = await fetchClawRouterCapabilityOffers({
       context: http,
       timeoutMs,
       signal: context.signal,
+      beforeRequest: () => {
+        context.signal.throwIfAborted();
+        let admitted: boolean;
+        try {
+          admitted = context.isAdmissible();
+        } catch (error) {
+          admissionError = { error };
+          throw error;
+        }
+        if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
+          throw new Error("Baseten discovery is no longer admitted.");
+        }
+      },
       requireFreshProxyCatalog: true,
     });
   } catch {
     context.signal.throwIfAborted();
+    if (admissionError) {
+      throw admissionError.error;
+    }
     return { status: "unavailable", reason: "transport" };
   }
   context.signal.throwIfAborted();
@@ -141,11 +184,6 @@ export async function evaluateClawRouterBasetenDecision(
     prepareTransport: () => ({
       ...http,
       url: qualified.offer.url,
-      reflectsCredential: createProviderCredentialMatcher({
-        headers: http.headers,
-        defaultAuthHeader: "Authorization",
-        defaultAuthPrefix: "Bearer ",
-      }),
     }),
     decode: (payload) => decodeTextSystemOneResponse(batch, payload),
   });
