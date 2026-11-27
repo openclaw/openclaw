@@ -554,8 +554,16 @@ never runs automatically or settles the deferred migration: after explicit
 recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
 the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
 
-When a package baseline's final rescan detects stat drift, the update still
-refuses package replacement. Local failure output and `openclaw update status --json`
+When a package baseline's final rescan detects stat drift that only moved the
+change time or link count (attribute, ACL or extended-attribute changes, a
+same-mode `chmod`, or a hard link added or removed by a backup, sync, indexing
+or security tool), the scan re-reads only those entries: a file's bytes, a
+symbolic link's target or a directory's entry names. When they match what the
+scan recorded, the update continues and reports a warning naming the first
+entries and their changed fields. Any other drift, or drifted entries whose
+contents changed, still refuses package replacement. A change after the scan
+is caught when a rollback verifies the retained package before restoring it.
+Local failure output and `openclaw update status --json`
 diagnostics identify the first entry relative to the package root (`.` for the
 root), changed stat fields, and their before/after values. Public failure reports
 retain only the changed field names. An unavailable original inode still refuses
