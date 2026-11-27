@@ -83,8 +83,8 @@ export function ShellLazyOverlays(props: {
             onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
               props.host.shellNavigation.navigate(routeId, options)
             }
-            onSelectSession={(sessionKey: string) =>
-              props.host.shellNavigation.selectChatSession(sessionKey)
+            onSelectSession={(sessionKey: string, explicitFace?: "chat") =>
+              props.host.shellNavigation.selectChatSession(sessionKey, undefined, explicitFace)
             }
             onSlashCommand={(command: string) =>
               props.host.handleCommandPaletteSlashCommand(command)

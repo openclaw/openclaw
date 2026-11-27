@@ -52,7 +52,12 @@ export function selectItem(item: CommandPaletteItem, props: CommandPaletteProps)
       props.onNavigate?.(page.routeId);
     }
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
-    props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
+    const key = item.action.slice(SESSION_ACTION_PREFIX.length);
+    if (item.category === "messages") {
+      props.onSelectSession?.(key, "chat");
+    } else {
+      props.onSelectSession?.(key);
+    }
   } else if (item.action === "panel:desktop") {
     window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else if (item.action === "panel:custodian") {

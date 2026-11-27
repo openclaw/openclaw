@@ -49,7 +49,7 @@ export type PaletteFilter = "all" | "sessions" | "messages";
 
 export type CommandPaletteProperties = {
   onNavigate?: ApplicationContext["navigate"];
-  onSelectSession?: (sessionKey: string) => void;
+  onSelectSession?: (sessionKey: string, explicitFace?: "chat") => void;
   onSlashCommand?: (command: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;

@@ -67,7 +67,7 @@ export class ShellNavigationOwner {
     return this.communityInviteVisitAllowed === true;
   }
 
-  selectChatSession(sessionKey: string, agentId?: string | null): void {
+  selectChatSession(sessionKey: string, agentId?: string | null, explicitFace?: "chat"): void {
     const context = this.host.context;
     if (!context) {
       return;
@@ -78,7 +78,7 @@ export class ShellNavigationOwner {
       sessionKey,
       agentId,
     });
-    const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+    const face = explicitFace ?? resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
     this.navigate(
       face,
       sessionNavigationTarget({
@@ -86,7 +86,7 @@ export class ShellNavigationOwner {
         face,
         sessionKey,
         ...(agentId ? { agentId } : {}),
-        preferenceDerivedFace: true,
+        preferenceDerivedFace: explicitFace === undefined,
       }).options,
     );
   }

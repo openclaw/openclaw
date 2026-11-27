@@ -114,6 +114,7 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
           visibility: "shared",
           ...(fixture.key === targetKey
             ? {
+                boardFace: "dashboard" as const,
                 category: "HOME ASSISTANT",
                 spawnedBy: "agent:main:search-roster-0",
                 parentSessionKey: "agent:main:search-roster-0",
@@ -652,6 +653,7 @@ suite.define(() => {
             )
             .toBe(targetKey);
           await pane.locator(".chat-thread").getByText(targetMessage, { exact: true }).waitFor();
+          expect(new URL(page.url()).pathname.startsWith("/chat/")).toBe(true);
           await capture("07-opened-fifth-agent-transcript.png", pane, [
             pane.locator(".chat-thread"),
           ]);

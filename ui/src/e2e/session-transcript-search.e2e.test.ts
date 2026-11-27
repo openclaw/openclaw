@@ -113,7 +113,7 @@ suite.define(() => {
     page = await newPage(900, 1440, true, true);
     const gateway = await installMockGateway(page, {
       // Core search remains usable even when omitted from the feature catalog.
-      featureMethods: ["chat.metadata", "chat.startup"],
+      featureMethods: ["board.get", "chat.metadata", "chat.startup"],
       historyMessages: [
         {
           role: "assistant",
@@ -122,11 +122,20 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        "board.get": {
+          sessionKey: "agent:main:launch",
+          revision: 1,
+          tabs: [{ tabId: "main", title: "Launch overview", position: 0, chatDock: "right" }],
+          widgets: [],
+        },
         "sessions.list": listResponse(
           [
             {
               ...sessionRow("launch", "Launch planning"),
               displayName: "Launch planning",
+              boardFace: "dashboard",
+              hasBoard: true,
+              boardPresentation: "expanded",
               status: "done",
               totalTokens: 1200,
             },

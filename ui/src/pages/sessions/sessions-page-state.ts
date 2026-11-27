@@ -656,14 +656,14 @@ export function createSessionsPage(
         state.selectedSessions = new Map();
       },
       onDeleteSelected: () => actions.deleteSelected(),
-      onNavigateToChat: (sessionKey: string) => {
-        const face = resolveSessionPreferredFaceForKey(application, sessionKey);
+      onNavigateToChat: (sessionKey: string, explicitFace?: "chat") => {
+        const face = explicitFace ?? resolveSessionPreferredFaceForKey(application, sessionKey);
         const target = sessionNavigationTarget({
           context: application,
           face,
           sessionKey,
           agentId: sessionPathAgentId(sessionKey, application),
-          preferenceDerivedFace: true,
+          preferenceDerivedFace: explicitFace === undefined,
         });
         application.navigate(face, target.options);
       },

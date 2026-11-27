@@ -582,7 +582,7 @@ describe("CommandPalette search", () => {
       expect(palette.textContent).not.toContain("Couldn’t search sessions");
       expect(Boolean(findPaletteOption(palette, "Archived needle"))).toBe(outcome === "success");
       pressKey(paletteInput(palette), "Enter");
-      expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:message");
+      expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:message", "chat");
     },
   );
 
