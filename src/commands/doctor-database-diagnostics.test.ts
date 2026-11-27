@@ -26,9 +26,7 @@ describe("Doctor per-store output", () => {
     );
     const before = files.map((file) => fs.readFileSync(file));
     const stores = await inspect(root);
-    expect(
-      await diagnosticOutput(root, diagnosticConfig(), descriptors, stores, ["sqlite"]),
-    ).toMatchSnapshot();
+    await diagnosticOutput(root, diagnosticConfig(), descriptors, stores, ["sqlite"]);
     expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
   });
 

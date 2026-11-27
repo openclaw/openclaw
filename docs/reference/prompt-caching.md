@@ -62,10 +62,12 @@ and refuses its calls. A tool or plugin configuration change starts a new pin.
 With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
 `include` or `exclude` selections), every turn of a session builds the same list:
 
-- `message` is listed on every turn: user, cron, wake, subagent completion, and
+- `message` is listed on every turn of a session that has a supported source or a
+  configured messaging route: user, cron, wake, subagent completion, and
   child-session turns. A turn whose reply delivery or tool policy does not allow
   the message tool refuses the call with a visible message. The turn's own
-  delivery rules still decide whether a send is allowed.
+  delivery rules still decide whether a send is allowed. A session with neither,
+  such as `openclaw agent --local` on an install without channels, omits it.
 - A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
   events) and group `tools` / `toolsBySender` policy keep the session's tools
   listed and refuse each call they do not allow with a visible message, including
@@ -118,6 +120,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 `github_publish` definition and catalog while those facts are unchanged. The
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
+
+With Tool Search or Code Mode active, `computer` and the yielding
+`github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
+series.
 
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
@@ -757,6 +766,14 @@ Every embedded Gateway session pins its system prompt and tool definitions when
 it starts, on every provider route. Each later request in the session extends the
 previous one byte for byte: system prompt, tools, and every earlier message stay
 unchanged, and earlier runtime-context carriers stay in history.
+
+State snapshots in those carriers (active exec sessions, subagents,
+media-generation tasks, approved executables, temporal context) are sent only
+when they change. A turn compares each snapshot with the latest copy the request
+already carries and omits an identical one, so history does not grow with
+repeated state. A snapshot the request does not carry, for example after
+compaction or on a route that clears turn-scoped updates, is sent in full,
+including its empty form.
 
 Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an

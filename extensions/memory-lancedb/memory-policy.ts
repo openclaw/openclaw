@@ -4,17 +4,17 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  DEFAULT_CAPTURE_MAX_CHARS,
-  DEFAULT_RECALL_MAX_CHARS,
-  type MemoryCategory,
-} from "./config.js";
 import type { MemoryDB, MemorySearchResult } from "./lancedb-store.js";
 import {
   looksLikeEnvelopeSludge,
   sanitizeForMemoryCapture,
   stripLeadingTimestampPrefix,
 } from "./memory-capture-sanitization.js";
+import {
+  DEFAULT_CAPTURE_MAX_CHARS,
+  DEFAULT_RECALL_MAX_CHARS,
+  type MemoryCategory,
+} from "./memory-policy-data.js";
 
 export function extractUserTextContent(message: unknown): string[] {
   const msgObj = asOptionalRecord(message);

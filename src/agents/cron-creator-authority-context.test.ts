@@ -47,7 +47,6 @@ function admittedFixture(
     { source },
     undefined,
     undefined,
-    undefined,
     callerScopedCreation,
   );
   if (!scope) {

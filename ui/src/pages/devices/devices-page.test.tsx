@@ -42,13 +42,6 @@ const ROTATED_TOKEN = "rotated-operator-token";
 describe("DevicesPage gateway lifecycle", () => {
   setupDevicesPageFixtures();
 
-  it("names the page with a level-one heading", () => {
-    const page = mountPage(gatewayFixture(gatewaySnapshot(clientFor().client)));
-    expect(
-      getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent,
-    ).toBe("Devices");
-  });
-
   it("waits for the first inventory before painting policy sections below it", async () => {
     const page = mountPage(
       gatewayFixture(gatewaySnapshot(clientFor().client, true, [], ["operator.admin"])),

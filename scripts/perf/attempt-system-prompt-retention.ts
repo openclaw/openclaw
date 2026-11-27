@@ -13,6 +13,7 @@ import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/e
 import type { Model } from "../../packages/llm-core/src/types.js";
 import { buildAttemptSystemPrompt } from "../../src/agents/embedded-agent-runner/run/attempt-system-prompt.js";
 import * as currentSessionOwner from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -221,12 +222,7 @@ if (values.mode === "retention") {
 } else {
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const times = [];
   const cpuStart = process.threadCpuUsage();

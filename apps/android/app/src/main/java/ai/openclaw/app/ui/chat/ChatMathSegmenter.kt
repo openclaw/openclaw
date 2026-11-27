@@ -10,6 +10,9 @@ import org.commonmark.node.Link as MarkdownLink
 
 internal const val CHAT_MATH_MAX_BYTES = 5000
 
+// Rejoining with LF must preserve existing CRLF bytes for the math payload limit.
+private val mathLineBreak = Regex("""\n|\r(?!\n)""")
+
 internal sealed interface ChatMarkdownSourceBlock {
   data class Markdown(
     val source: String,
@@ -33,7 +36,7 @@ internal fun segmentChatMarkdown(
     return listOf(ChatMarkdownSourceBlock.Markdown(source))
   }
 
-  val document = parseChatMarkdown(source)
+  val document = parseChatMarkdownWithSourceSpans(source)
   val topLevelParagraphLines = mutableSetOf<Int>()
   val protectedInlineLines = mutableSetOf<Int>()
   for (child in markdownSiblings(document.firstChild)) {
@@ -43,7 +46,7 @@ internal fun segmentChatMarkdown(
     }
   }
 
-  val lines = source.split('\n')
+  val lines = source.split(mathLineBreak)
   val extractions = mutableListOf<MathExtraction>()
   var lineIndex = 0
   while (lineIndex < lines.size) {

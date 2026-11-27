@@ -13,7 +13,6 @@ import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
 import { nativePanelTabStripCss } from "./panel-tab-strip-styles.ts";
-import sessionPanelRailStyles from "../styles/session-panel-rail.css?inline";
 import linkReaderContentStyles from "./link-reader-content.css?inline";
 import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
@@ -33,7 +32,6 @@ export const linkReaderViewStyles = `
 ${nativePanelTabStripCss}
 ${nativeDockPanelCss}
 :where(openclaw-link-reader-panel) {
-${sessionPanelRailStyles}
 ${linkReaderPanelStyles}
 ${linkReaderContentStyles}
 }
@@ -98,13 +96,13 @@ type PanelView =
   | ReaderReadyView;
 export type ReaderTab = {
   id: string;
-  history: LinkReaderTarget[];
-  index: number;
+  /** One item per tab; another item opens another tab. */
+  target: LinkReaderTarget | null;
   view: PanelView;
   reloadPending: boolean;
 };
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
-  return tab?.history[tab.index] ?? null;
+  return tab?.target ?? null;
 }
 
 export function* readerTabMetadata(

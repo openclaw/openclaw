@@ -20,7 +20,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import {
   runStartupConfigPreflight,
@@ -208,38 +207,23 @@ it.each([
   ["localhost", "loopback"],
   ["0.0.0.0", "lan"],
 ] as const)(
-  "leaves legacy bind %s untouched until Doctor repairs it",
+  "repairs supported legacy bind %s during startup and preserves its authored backup",
   async (legacy, canonical) => {
-    await withPreflightHome(async (home, stateDir, configPath) => {
-      const original = JSON.stringify({
-        gateway: { mode: "local", bind: legacy },
-        plugins: { enabled: false },
-      });
+    await withPreflightHome(async (_home, _stateDir, configPath) => {
+      const original = Buffer.from(
+        JSON.stringify({
+          gateway: { mode: "local", bind: legacy },
+          plugins: { enabled: false },
+        }),
+      );
       await fs.writeFile(configPath, original);
 
-      const blocked = await runStartupConfigPreflight({ gateway: true, observe: false });
-
-      expect(blocked.snapshot.valid).toBe(false);
-      expect(blocked.snapshot.legacyIssues).toContainEqual(
-        expect.objectContaining({ path: "gateway.bind" }),
-      );
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      expect(
-        (await fs.readdir(stateDir)).filter((name) => name.startsWith("openclaw.json.")),
-      ).toEqual([]);
-
-      await runDoctorConfigPreflight({
-        observe: false,
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      });
-      const ready = await runStartupConfigPreflight({ gateway: true });
+      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
 
       expect(ready.snapshot.valid).toBe(true);
       expect(ready.snapshot.config.gateway?.bind).toBe(canonical);
       expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.bind).toBe(canonical);
+      expect(await fs.readFile(`${configPath}.bak`)).toEqual(original);
     });
   },
 );

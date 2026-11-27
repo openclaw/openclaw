@@ -38,6 +38,8 @@ export type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   /** Finalizer-owned execution status if delivery cannot recover a presentation warning. */
   undeliveredRunStatus: "ok" | "error";
+  /** The execution already presents its own terminal reply in the settlement conversation. */
+  executionReplyAlreadyVisible?: boolean;
   skipDelivery?: NormalizeReplySkipReason;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;

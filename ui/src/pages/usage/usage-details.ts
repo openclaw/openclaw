@@ -24,6 +24,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import {
+  buildSessionUsageDateParams,
   requestSessionUsage,
   type SessionUsageQuery,
   type SessionUsageTarget,
@@ -173,10 +174,19 @@ export function createUsageDetails(
   const timeSeries = createUsageDetailRequest(
     notify,
     gateway,
-    (client, target) =>
-      client
-        .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
-        .then((result) => result ?? null),
+    async (client, target, signal) => {
+      const { startDate, endDate, selectedDays, timeZone } = query();
+      const params = selectedDays?.length
+        ? { ...target, startDate, endDate, selectedDays, ...buildSessionUsageDateParams(timeZone) }
+        : target;
+      return (
+        (await client.request<SessionUsageTimeSeries | undefined>(
+          "sessions.usage.timeseries",
+          params,
+          { signal },
+        )) ?? null
+      );
+    },
     resolveTarget,
     clearTimeSeriesRange,
   );

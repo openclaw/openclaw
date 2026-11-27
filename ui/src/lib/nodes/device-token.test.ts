@@ -109,7 +109,10 @@ it("reads the stored device id without minting or fingerprint-verifying an ident
 it.each([
   { name: "no stored identity", raw: null },
   { name: "malformed JSON", raw: "{not-json" },
-  { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
+  {
+    name: "unsupported version",
+    raw: JSON.stringify({ version: 2, deviceId: "00", publicKey: "AA", privateKey: "AA" }),
+  },
   { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
 ])("returns no stored identity for $name without creating one", ({ raw }) => {
   if (raw !== null) {
@@ -176,7 +179,7 @@ describe("device token request lifecycle", () => {
     ["a scalar payload", "rotated"],
     ["an empty object", {}],
     ["an array payload", []],
-    ["a payload naming no role", { deviceId: "00" }],
+    ["a payload naming no role", { ...grant, role: undefined }],
     ["a payload omitting scopes", { deviceId: "00", role: "operator", rotatedAtMs: 1 }],
     ["a payload omitting rotatedAtMs", { deviceId: "00", role: "operator", scopes: [] }],
     ["a fractional timestamp", { ...grant, rotatedAtMs: 1.5 }],

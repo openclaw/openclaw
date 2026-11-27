@@ -11,6 +11,7 @@ import {
   latest,
   onSettled,
 } from "solid-js";
+import { orderTranscriptSpeech } from "../../../../src/shared/transcript-speech-order.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -30,6 +31,7 @@ import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {
+  isTranscriptQueryTooLong,
   transcriptRouteSearch,
   transcriptListParams,
   TRANSCRIPT_QUERY_LIMIT,
@@ -531,7 +533,9 @@ function Reader(props: TranscriptsViewProps) {
                   ) : null}
                   <ol class="transcripts-utterances">
                     <For
-                      each={props.reader.pages.flatMap((result) => result.utterances ?? [])}
+                      each={orderTranscriptSpeech(
+                        props.reader.pages.flatMap((result) => result.utterances ?? []),
+                      )}
                       keyed={(utterance) => utterance.sequence}
                     >
                       {(utterance) => (
@@ -581,6 +585,7 @@ function Reader(props: TranscriptsViewProps) {
 
 export function TranscriptsView(props: TranscriptsViewProps) {
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
+  const queryTooLong = createMemo(() => isTranscriptQueryTooLong(props.drafts.query ?? ""));
   const phone = createPhoneLayout();
   const captureHref = () =>
     pathForRoute(captureTarget.routeId, props.basePath) + captureTarget.search + captureTarget.hash;
@@ -673,8 +678,17 @@ export function TranscriptsView(props: TranscriptsViewProps) {
             aria-label={t("transcripts.library")}
             aria-busy={props.listLoading ? "true" : "false"}
           >
-            <Filters {...props} phone={phone()} />
-            <Library {...props} />
+            <Filters {...props} phone={phone()} queryTooLong={queryTooLong()} />
+            <Show
+              when={!queryTooLong()}
+              fallback={
+                <p id="transcript-query-length-error" role="alert">
+                  {t("transcripts.queryTooLong", { limit: String(TRANSCRIPT_QUERY_LIMIT) })}
+                </p>
+              }
+            >
+              <Library {...props} />
+            </Show>
           </section>
           {new URLSearchParams(props.search).get("selector") ? <Reader {...props} /> : null}
         </div>

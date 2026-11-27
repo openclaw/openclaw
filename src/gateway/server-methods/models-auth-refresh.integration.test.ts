@@ -78,7 +78,7 @@ it("publishes saved credentials and persisted removals before acknowledging an a
     tokenStore("auth-refresh-proof", "local"),
   );
   await refresh(client, "login", "auth-refresh-proof:local");
-  await writeAuthStoreExternally(state, agentDatabasePath, null);
+  await writeAuthStoreExternally(state, agentDatabasePath);
   await refresh(client, "logout");
   const refreshed = await client.request<ModelAuthStatusResult>("models.authStatus", {
     agentId: "main",

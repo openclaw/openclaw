@@ -164,7 +164,7 @@ it.each([
   expect(read(old)).toEqual(terminal);
 });
 
-it.each(["automatic", "explicit", "supersede"] as const)(
+it.each(["automatic", "supersede"] as const)(
   "preserves durable recovery during %s cleanup",
   (mode) => {
     const run = create({ origin: mode === "supersede" ? {} : { driver: exitedDriver() } });
@@ -173,7 +173,7 @@ it.each(["automatic", "explicit", "supersede"] as const)(
     if (mode === "supersede") {
       create({ supersedeStaleIdentityless: true });
     } else {
-      expect(reconcile({ explicit: mode === "explicit" })).toEqual([]);
+      expect(reconcile()).toEqual([]);
     }
     expect(read(run)).toEqual(run);
     expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);

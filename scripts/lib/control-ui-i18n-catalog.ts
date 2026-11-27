@@ -22,6 +22,7 @@ import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
+import { registerChatGoalsOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-goals-optional.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -83,6 +84,7 @@ import { registerPreferencesEnglish } from "../../ui/src/i18n/locales/en-prefere
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
+import { registerRolesEnglish } from "../../ui/src/i18n/locales/en-roles.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
@@ -163,6 +165,7 @@ const sourceFiles = [
   "en-chat-worktree.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
+  "en-chat-goals-optional.ts",
   "en-chat-message-metadata.ts",
   "en-chat-move-to-project.ts",
   "en-chat-media.ts",
@@ -225,6 +228,7 @@ const sourceFiles = [
   "en-plugin-management.ts",
   "en-portals.ts",
   "en-profile.ts",
+  "en-roles.ts",
   "en-settings.ts",
   "en-settings-sidebar.ts",
   "en-sidebar-attention.ts",
@@ -612,6 +616,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       aboutPage: registerAboutEnglish.catalog.aboutPage,
       dashboardsPage: registerDashboardsEnglish.catalog.dashboardsPage,
       worktrees: registerSessionOrganizationEnglish.catalog.worktrees,
+      projectsPage: registerSessionOrganizationEnglish.catalog.projectsPage,
       configForm: registerSettingsEnglish.catalog.configForm,
       configView: registerSettingsEnglish.catalog.configView,
       quickSettings: registerPreferencesEnglish.catalog.quickSettings,
@@ -716,6 +721,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       },
     },
     registerChatGoalsEnglish.catalog,
+    registerChatGoalsOptionalEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerChatPublicQrEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
@@ -781,6 +787,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
     registerProfileEnglish.catalog,
+    registerRolesEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,

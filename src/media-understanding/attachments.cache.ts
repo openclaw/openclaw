@@ -63,11 +63,25 @@ type AttachmentCacheEntry = {
   lastLocalError?: MediaUnderstandingSkipError;
 };
 
-function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
+export function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
   return new MediaUnderstandingSkipError(
     "maxBytes",
-    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+    `Attachment ${params.attachmentIndex + 1} exceeds the size limit of ${params.maxBytes} bytes.`,
   );
+}
+
+function localFileSkipError(index: number, error: FsSafeError): MediaUnderstandingSkipError {
+  const label = `Attachment ${index + 1}`;
+  if (error.code === "not-found") {
+    return new MediaUnderstandingSkipError(
+      "empty",
+      `The file for attachment ${index + 1} does not exist.`,
+    );
+  }
+  if (error.code === "not-file") {
+    return new MediaUnderstandingSkipError("empty", `${label} path is not a regular file.`);
+  }
+  return new MediaUnderstandingSkipError("blocked", `${label} path is outside allowed roots.`);
 }
 
 let defaultLocalPathRoots: readonly string[] | undefined;
@@ -266,16 +280,7 @@ export class MediaAttachmentCache {
         if (err.code === "too-large") {
           throw maxBytesError(params);
         }
-        if (err.code === "not-file" || err.code === "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
-          );
-        }
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
-        );
+        throw localFileSkipError(params.attachmentIndex, err);
       }
       throw err;
     } finally {
@@ -513,29 +518,12 @@ export class MediaAttachmentCache {
       }
       if (err instanceof FsSafeError) {
         entry.resolvedPath = undefined;
-        if (err.code === "not-file") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${entry.attachment.index + 1} path is not a regular file.`,
-          );
-        }
-        if (err.code !== "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "blocked",
-            `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
-          );
-        }
-      } else {
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
-        );
+        throw localFileSkipError(entry.attachment.index, err);
       }
-      entry.resolvedPath = undefined;
-      if (shouldLogVerbose()) {
-        logVerbose(`Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`);
-      }
-      return undefined;
+      throw new MediaUnderstandingSkipError(
+        "blocked",
+        `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
+      );
     }
   }
 

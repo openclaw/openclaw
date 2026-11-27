@@ -3,7 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -14,11 +14,15 @@ import {
 } from "../plugins/plugin-cache.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { collectForRetentionCheck, expectCollected, forceFullGc } from "../test-utils/retention.js";
 import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
 import { withAgentDeletion } from "./agent-lifecycle-registry.js";
 import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  loadPreparedModelRuntimeAuth,
+} from "./prepared-model-runtime-auth.js";
 import * as discoveryRetry from "./prepared-model-runtime.discovery-retry.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -36,7 +40,7 @@ import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lif
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime-retention" });
-const { mocks } = fixture;
+const { mocks, holdCatalogWrite } = fixture;
 
 async function publishSettledCatalogBatch(
   config: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[0],
@@ -207,28 +211,6 @@ it("releases the reload caller while a superseded acquisition signal remains ret
 });
 
 describe("retired owner publication", () => {
-  function holdCatalogWrite() {
-    const started = createDeferred();
-    const result = createDeferred<Record<string, never>>();
-    const pending: Promise<unknown>[] = [];
-    const release = () => result.resolve({});
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-      started.resolve();
-      return await result.promise;
-    });
-    return {
-      started: started.promise,
-      release,
-      track<T>(promise: Promise<T>) {
-        pending.push(promise);
-        return promise;
-      },
-      async [Symbol.asyncDispose]() {
-        release();
-        await Promise.allSettled(pending);
-      },
-    };
-  }
   it("retires only the deleted agent's physical owners", async () => {
     mocks.configuredAgentIds = ["worker"];
     mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
@@ -366,4 +348,87 @@ describe("retired owner publication", () => {
       await retirePluginCache(operationCache);
     }
   });
+});
+
+it("keeps retained catalog auth facts without retaining a superseded build snapshot", async () => {
+  mocks.configuredAgentIds = ["default"];
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+    entries: [{ provider: "custom", id: "model", name: "Model" }],
+    routeVariants: [],
+  }));
+  const config = {
+    models: {
+      providers: {
+        custom: {
+          baseUrl: "https://retention.invalid/v1",
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+  await refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+  const retained = await (async () => {
+    const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
+    const catalog = await snapshot.loadFullModelCatalog!({ refresh: true, wait: true });
+    expect(getPreparedModelFullCatalogAuth(catalog)).toBeDefined();
+    return { catalog, snapshot: new WeakRef(snapshot) };
+  })();
+  await refreshPreparedModelRuntimeSnapshots(
+    { ...config, logging: { level: "debug" } },
+    { gatewayLifecycle: true, catalogMode: "static" },
+  );
+  vi.clearAllMocks();
+  await expectCollected(retained.snapshot);
+  expect(retained.catalog.entries).toEqual([
+    expect.objectContaining({ provider: "custom", id: "model" }),
+  ]);
+  expect(getPreparedModelFullCatalogAuth(retained.catalog)).toBeDefined();
+});
+
+it("releases closed borrowed snapshots while native async contexts remain retained", () => {
+  const output = execNodeEvalSync(
+    `import assert from "node:assert/strict";
+     import { AsyncLocalStorage } from "node:async_hooks";
+     import { expectCollected } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
+     import { scopePreparedModelRuntimeLease, getPreparedModelRuntimeBorrowedSnapshot } from ${JSON.stringify(new URL("./prepared-model-runtime-generation-scope.ts", import.meta.url).href)};
+     class Snapshot {}
+     const generation = { remoteCatalog: null };
+     const otherGeneration = { remoteCatalog: null };
+     const live = scopePreparedModelRuntimeLease({
+       snapshot: new Snapshot(), pluginGeneration: otherGeneration, run: run => run(),
+       [Symbol.asyncDispose]: async () => {},
+     });
+     const liveContext = live.run(() => AsyncLocalStorage.snapshot());
+     const { promise: pending, resolve: finish } = Promise.withResolvers();
+     const retained = (() => {
+       const snapshot = new Snapshot();
+       const lease = scopePreparedModelRuntimeLease({
+         snapshot, pluginGeneration: generation, run: run => run(),
+         [Symbol.asyncDispose]: () => pending,
+       });
+       const context = lease.run(() => AsyncLocalStorage.snapshot());
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), snapshot);
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), undefined);
+       const disposal = lease[Symbol.asyncDispose]();
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
+       assert.throws(() => lease.run(() => {}), /lease is closed/);
+       assert.equal(lease[Symbol.asyncDispose](), disposal);
+       return { context, snapshot: new WeakRef(snapshot), disposal };
+     })();
+     // The retired disposer is still pending while the independent sibling is usable.
+     await expectCollected(retained.snapshot);
+     assert.equal(liveContext(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), live.snapshot);
+     finish();
+     await retained.disposal;
+     await live[Symbol.asyncDispose]();
+     assert.equal(liveContext(() => getPreparedModelRuntimeBorrowedSnapshot(otherGeneration)), undefined);
+     assert.equal(retained.context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
+     console.log("Closed borrowed snapshot released");`,
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
+  );
+  expect(output.trim()).toBe("Closed borrowed snapshot released");
 });

@@ -67,12 +67,9 @@ describe("shared-state disposal ownership", () => {
       const owner = openOpenClawStateDatabase({ path: path.join(root, "old.sqlite") });
       // Vitest runs outside admission's host; register the host's real identity descriptor.
       const descriptor = fs.openSync(owner.path, "r");
+      const originalFile = fs.fstatSync(descriptor, { bigint: true });
       const registry = sqliteDatabaseAdmissionState.registry;
-      registry.retainDescriptorCustody(
-        owner.path,
-        descriptor,
-        fs.fstatSync(descriptor, { bigint: true }),
-      );
+      registry.retainDescriptorCustody(owner.path, descriptor, originalFile);
       await closeOpenClawStateDatabaseAsync();
       expect(owner.db.isOpen).toBe(false);
       expect(
@@ -87,7 +84,14 @@ describe("shared-state disposal ownership", () => {
 
       await expect(releaseOpenClawStateDatabaseCustody()).resolves.toBeUndefined();
       expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual([]);
-      expect(() => fs.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      // Cleanup yields before this check; the number may now identify a different file.
+      let remaining: fs.BigIntStats | undefined;
+      try {
+        remaining = fs.fstatSync(descriptor, { bigint: true });
+      } catch (error) {
+        expect(error).toMatchObject({ code: "EBADF" });
+      }
+      expect([remaining?.dev, remaining?.ino]).not.toEqual([originalFile.dev, originalFile.ino]);
     },
   );
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { sanitizeToolUseResultPairingForModel } from "../../agents/session-transcript-repair.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
@@ -496,5 +497,91 @@ it.each(["executor", "discovery"] as const)(
     expect(forkEvents.slice(1)).toEqual(parentEvents.slice(1));
     expect(loadSessionEntry(parentScope)).toEqual(parentEntry);
     await expect(loadTranscriptEvents(parentTranscriptScope)).resolves.toEqual(parentEvents);
+  },
+);
+
+it.each(["linear", "side", "root"] as const)(
+  "keeps an in-flight fork's missing tool results neutral (cursor=%s)",
+  async (cursor) => {
+    const { root, storePath } = await createStore();
+    const parentSessionId = "parent-in-flight";
+    const calls = ["completed", "spawn", "parallel"].map((id) => ({
+      type: "toolCall",
+      id,
+      name: id === "spawn" ? "sessions_spawn" : "read",
+      arguments: {},
+    }));
+    const completed = {
+      role: "toolResult",
+      toolCallId: "completed",
+      toolName: "read",
+      content: [{ type: "text", text: "real tool failure" }],
+      isError: true,
+      timestamp: 0,
+    };
+    await seedParentTranscript(storePath, parentSessionId, [
+      header(parentSessionId, root),
+      messageEvent("context", null, "user", "CONTEXT_MARKER"),
+      event("message", "calls", {
+        parentId: "context",
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: calls, stopReason: "toolUse", timestamp: 0 },
+      }),
+      event("message", "done", {
+        parentId: "calls",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: completed,
+      }),
+      ...(cursor === "linear"
+        ? []
+        : [
+            metadata("opaque", "done"),
+            leafEvent("selected", "opaque", "done", {
+              appendParentId: cursor === "root" ? null : "opaque",
+              ...(cursor === "side" ? { appendMode: "side" as const } : {}),
+            }),
+          ]),
+    ]);
+    const parentTarget = {
+      agentId: "main",
+      sessionId: parentSessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const before = await loadTranscriptEvents(parentTarget);
+    const fork = await forkChildTranscript(storePath, parentSessionId);
+    const child = await openForkedChildSession(storePath, fork);
+    if (cursor !== "linear") {
+      expect(child.getAppendParentId()).toBe(cursor === "root" ? null : "opaque");
+      expect(child.getAppendMode()).toBe(cursor === "side" ? "side" : undefined);
+    }
+    await appendUser(child, "Read the file and return its contents and CONTEXT_MARKER.");
+    if (cursor !== "linear") {
+      expect((await childEvents(storePath, fork.sessionId)).at(-1)).toMatchObject({
+        type: "message",
+        parentId: cursor === "root" ? null : "opaque",
+      });
+    }
+    const messages = sanitizeToolUseResultPairingForModel(
+      child.buildSessionContext().messages,
+      true,
+    );
+    const results = messages.filter((message) => message.role === "toolResult");
+    expect(results).toHaveLength(3);
+    expect(results.find((message) => message.toolCallId === "completed")).toEqual(completed);
+    for (const id of ["spawn", "parallel"]) {
+      const result = results.find((message) => message.toolCallId === id);
+      expect(result).toMatchObject({ isError: false });
+      expect(JSON.stringify(result?.content)).toContain(
+        "not available when this conversation was forked",
+      );
+      expect(JSON.stringify(result?.content)).not.toContain("aborted");
+    }
+    expect(messages[0]).toMatchObject({ role: "user", content: "CONTEXT_MARKER" });
+    expect(messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "Read the file and return its contents and CONTEXT_MARKER.",
+    });
+    expect(await loadTranscriptEvents(parentTarget)).toEqual(before);
   },
 );

@@ -38,10 +38,7 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import {
-  createPluginToolFactoryContext,
-  type PluginToolOwnerContinuation,
-} from "./tool-factory-context.js";
+import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
@@ -198,7 +195,6 @@ type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
-  ownerContinuation?: PluginToolOwnerContinuation;
   bindExecutionCapabilities?: Parameters<
     typeof createPluginToolFactoryContext
   >[0]["bindExecutionCapabilities"];
@@ -589,7 +585,6 @@ function* resolvePluginToolsFromRegistry(
         registry: owner.registry,
         context: params.context,
         assertInvocationCurrent: params.assertInvocationCurrent,
-        ownerContinuation: params.ownerContinuation,
         bindExecutionCapabilities: params.bindExecutionCapabilities,
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.

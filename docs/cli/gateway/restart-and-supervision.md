@@ -78,8 +78,10 @@ so repeated stops across process lifetimes are logged at info without the hint.
 Restart-intent settlement has a one-second bound, including queued signals and
 closed stores. If it stalls, SIGTERM proceeds with ordinary graceful shutdown:
 record running sessions for resume, abort work, and run bounded cleanup. A locally
-authorized SIGUSR2 can continue without the stored intent; an unauthorized signal
-still requires authorization. A timed-out stored restart intent may be lost.
+authorized SIGUSR2 can continue without the stored intent. An external SIGUSR2
+that times out follows the normal `commands.restart` policy: it schedules a
+restart if enabled and is ignored if disabled. A timed-out stored restart intent
+may be lost.
 
 A SIGTERM that arrives after an in-process restart released Gateway state stops
 the Gateway and logs at info, since no restart intent can be read then. Deep local status shows
@@ -92,7 +94,8 @@ state ownership and installed its own signal handling, stops it like any other C
 command: the current startup step finishes or is cancelled and releases what it
 holds, the Gateway does not take state ownership, and the process exits with status
 `143` (`130` for SIGINT). No state lock is left behind, so a replacement in another
-container starts without `openclaw gateway recover-lock`. SIGKILL still leaves locks.
+container can start normally. SIGKILL leaves locks; a replacement container
+[waits for heartbeat expiry](/gateway/gateway-lock#container-restarts-and-replacements).
 
 After a downgrade, the Gateway refuses databases whose schema is newer than the
 running build supports. The startup error and `openclaw gateway status --deep`

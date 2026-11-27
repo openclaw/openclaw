@@ -264,7 +264,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
                   ...admission,
                   admit: async (invocation, assertSource, preparation) => {
                     try {
-                      await admission.admit(invocation, assertSource, preparation);
+                      return await admission.admit(invocation, assertSource, preparation);
                     } finally {
                       if (invocation.toolUseId === "abandoned-input") {
                         lateAdmissionSettled.resolve();
@@ -319,6 +319,24 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       throw new Error("Expected child execution custody");
     }
     try {
+      const saved = "00000000-0000-4000-8000-000000000042";
+      const metadata = threadRead({
+        childThreadId: saved,
+        parentThreadId: "old-parent",
+        threadStatus: "notLoaded",
+      });
+      metadata.thread.modelProvider = "test-provider";
+      client.setThreadRead(saved, metadata);
+      await client.item(collabItem("resumeAgent", [saved]), "parent-b");
+      const refusal = await invoke("parent-b", "resumed-worker", saved);
+      expect(refusal.exitCode).toBe(0);
+      expect(JSON.parse(refusal.stdout).hookSpecificOutput).toEqual({
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "Cannot verify this worker belongs to the current parent. Check the original task before assigning new work.",
+      });
+
       await expect(invoke("parent-b", "denied-steer")).rejects.toThrow(
         "same admitted model source",
       );

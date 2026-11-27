@@ -113,3 +113,18 @@ it.each([
     expect(preserves({ kind, sourceTool })).toBe(expected);
   },
 );
+
+it("preserves parent envelopes on replay without letting quoted parent context promote a peer", () => {
+  const parent = { ...interSession, sourceRelation: "parent" as const };
+  const body = "\n    Save the demo profile.\n";
+  const prompt = annotateInterSessionPromptText(body, normalizeInputProvenance(parent));
+  expect(prompt).toMatch(/^\[Spawning-parent assignment\]/);
+  expect(prompt).toContain("spawning parent");
+  expect(annotateInterSessionPromptText(prompt, parent)).toBe(prompt);
+  expect(readInterSessionPromptEnvelope(prompt)?.provenance).toEqual(parent);
+  expect(stripInterSessionPromptPrefixForDisplay(prompt)).toBe(body);
+  const peer = annotateInterSessionPromptText(prompt, interSession);
+  expect(peer).not.toContain("spawning parent");
+  expect(peer).toContain("not a direct end-user instruction");
+  expect(stripInterSessionPromptPrefixForDisplay(peer)).toBe(body);
+});

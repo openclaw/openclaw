@@ -84,7 +84,7 @@ export type ModelRefInputObject = {
   provider?: unknown;
   baseUrl?: unknown;
   azureApiVersion?: unknown;
-  params?: { azureApiVersion?: unknown };
+  params?: Record<string, unknown>;
   headers?: ModelRef["headers"];
   authHeader?: boolean;
   request?: {

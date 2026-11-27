@@ -80,7 +80,7 @@ enum ChatCodeHighlighter {
             if startsLineComment {
                 flushPlain()
                 var end = index
-                while end < chars.count, chars[end] != "\n" {
+                while end < chars.count, !self.isLineBreak(chars[end]) {
                     end += 1
                 }
                 tokens.append(ChatCodeToken(kind: .comment, text: String(chars[index..<end])))
@@ -141,6 +141,11 @@ enum ChatCodeHighlighter {
 
     // MARK: - Scanning helpers
 
+    private static func isLineBreak(_ character: Character) -> Bool {
+        // Swift represents a CRLF pair as one Character.
+        character == "\n" || character == "\r\n" || character == "\r"
+    }
+
     private static func consumeBlockComment(
         _ chars: [Character],
         from start: Int,
@@ -173,7 +178,7 @@ enum ChatCodeHighlighter {
 
     static func isWithinHighlightLimits(_ code: String) -> Bool {
         guard code.utf8.count <= self.maxHighlightedBytes else { return false }
-        let newlineCount = code.lazy.count(where: { $0 == "\n" })
+        let newlineCount = code.lazy.count(where: self.isLineBreak)
         let lineCount = code.isEmpty ? 0 : newlineCount + 1
         return lineCount <= self.maxHighlightedLines
     }
@@ -202,7 +207,7 @@ enum ChatCodeHighlighter {
                 end += delimiter.count
                 break
             }
-            if !multiline, chars[end] == "\n" { break }
+            if !multiline, self.isLineBreak(chars[end]) { break }
             end += 1
         }
         end = min(end, chars.count)
@@ -310,11 +315,13 @@ public enum ChatCodeHighlightCache {
             var lastUse: UInt64
         }
 
-        private var entries: [String: Entry] = [:]
+        private var entries: [Data: Entry] = [:]
         private var access: UInt64 = 0
         private let capacity = 160
 
-        mutating func value(for key: String, create: () -> AttributedString) -> AttributedString {
+        mutating func value(for contentKey: String, create: () -> AttributedString) -> AttributedString {
+            // Swift String equality merges canonical spellings, but the cached text retains the original bytes.
+            let key = Data(contentKey.utf8)
             self.access &+= 1
             if var entry = self.entries[key] {
                 entry.lastUse = self.access

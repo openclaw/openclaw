@@ -14,6 +14,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { restorePluginRecoverySourceResolver } from "../../src/plugins/plugin-generation-source-lookup.js";
 import { GenerationCodec } from "../../src/plugins/plugin-generation-worker-codec.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "4000"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -64,12 +65,7 @@ const observer = new PerformanceObserver((list) => {
 });
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

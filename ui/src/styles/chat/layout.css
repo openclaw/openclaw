@@ -1643,11 +1643,8 @@ openclaw-chat-video-player {
   box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 32%, transparent);
 }
 
+/* The tray is a .chat-queue; rows lead with the author's avatar, not a queue glyph. */
 .session-suggestions {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--panel-strong);
   font-size: 13px;
   line-height: 20px;
 }
@@ -1658,7 +1655,7 @@ openclaw-chat-video-player {
 }
 
 .session-suggestion + .session-suggestion {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--chat-queue-divider, var(--border));
 }
 
 .session-suggestion__details {
@@ -1674,7 +1671,7 @@ openclaw-chat-video-player {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 6px 8px 6px 12px;
   white-space: nowrap;
 }
 
@@ -1682,25 +1679,16 @@ openclaw-chat-video-player {
   display: none;
 }
 
-.session-suggestion__author,
-.session-suggestion__text {
+/* The collapsed row previews one line; opening it shows the body. */
+.session-suggestion__preview {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .session-suggestion__author {
-  flex: none;
-  max-width: 80px;
-  font-size: 11px;
+  color: var(--text-strong);
   font-weight: 600;
-}
-
-.preview .session-suggestion__author {
-  border-radius: 999px;
-  padding: 0 6px;
-  color: var(--chat-text-link, var(--link));
-  background: var(--person-reference-bg);
 }
 
 .session-suggestion__details[open] .session-suggestion__text {
@@ -1711,7 +1699,7 @@ openclaw-chat-video-player {
   max-height: 12rem;
   overflow: auto;
   overflow-wrap: anywhere;
-  padding: 0 10px 10px;
+  padding: 0 10px 10px 40px;
   white-space: pre-wrap;
 }
 
@@ -1741,7 +1729,7 @@ openclaw-chat-video-player {
 .session-suggestions__more {
   width: 100%;
   border: 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--chat-queue-divider, var(--border));
   padding: 4px;
   background: transparent;
   color: var(--muted);

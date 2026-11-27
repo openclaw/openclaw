@@ -183,7 +183,9 @@ export function prepareSessionMutationAuthorizationRequest(
     targetOwnership: {
       requireOwner:
         requiresCommunicationAuthority ||
-        isSessionArchiveMutation(params.method, params.requestParams),
+        isSessionArchiveMutation(params.method, params.requestParams) ||
+        // Restoring a removed workspace is the same creator-or-admin action as unarchiving.
+        params.method === "worktrees.restore",
       ownerAction: requiresCommunicationAuthority ? "change communication settings" : undefined,
     },
   };
