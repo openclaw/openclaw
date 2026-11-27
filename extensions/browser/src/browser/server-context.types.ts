@@ -64,7 +64,11 @@ export type EnsureTabAvailableOptions = BrowserOperationOptions & {
 
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
-  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
+  ensureBrowserAvailable: (opts?: {
+    headless?: boolean;
+    prewarm?: true;
+    signal?: AbortSignal;
+  }) => Promise<void>;
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,

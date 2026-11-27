@@ -6,6 +6,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -27,6 +28,7 @@ type ProfileLifecycleActor = {
   /** Settled-only tail: failed starts/transitions never poison later work. */
   tail: Promise<void>;
   starts: Map<string, Promise<void>>;
+  addressWarmupOnly?: boolean;
   leases: Set<Promise<void>>;
   handles: Set<RunningChrome>;
   cleanupChromeMcp: string | undefined;
@@ -208,6 +210,40 @@ export function registerProfileHandle(
   return true;
 }
 
+/** An address edit may launch Chrome, but never close a browser someone has since used. */
+export function scheduleAddressWarmupExpiry(
+  state: BrowserServerState,
+  runtime: ProfileRuntimeState,
+  launched: RunningChrome,
+  readPages: () => Promise<{ url: string }[]>,
+): void {
+  const actor = getProfileLifecycle(runtime);
+  const unclaimed = () => actor.addressWarmupOnly && runtime.running === launched;
+  async function expire() {
+    if (!unclaimed()) {
+      return;
+    }
+    // A human or CDP client can navigate without going through this actor.
+    const pages = await readPages();
+    if (
+      unclaimed() &&
+      pages.length <= 1 &&
+      pages.every(({ url }) =>
+        ["about:blank", "chrome://newtab/", "chrome://new-tab-page/"].includes(url),
+      )
+    ) {
+      await beginProfileTransition({ state, runtime, reason: "unused address warmup" });
+    }
+  }
+  setTimeout(() => {
+    void expire().catch((error: unknown) =>
+      createSubsystemLogger("browser").warn(
+        `Could not retire unused Chrome warmup: ${String(error)}`,
+      ),
+    );
+  }, 30_000).unref();
+}
+
 /** Release only the exact managed-process handle that completed cleanup. */
 export function releaseProfileHandle(runtime: ProfileRuntimeState, running: RunningChrome): void {
   getProfileLifecycle(runtime).handles.delete(running);
@@ -367,6 +403,7 @@ export function beginProfileTransition(
   actor.controller.abort(reason);
   actor.controller = new AbortController();
   actor.starts.clear();
+  actor.addressWarmupOnly = false;
   if (params.terminal) {
     actor.terminal = params.terminal;
   }

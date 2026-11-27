@@ -288,8 +288,11 @@ export async function requestBrowserOperatorControl(
   return { available: result.available, controlled: result.controlled, byYou: result.byYou };
 }
 
-export async function startBrowser(client: BrowserRequestClient): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/start", body: {} });
+export async function startBrowser(
+  client: BrowserRequestClient,
+  path: "/start" | "/prewarm" = "/start",
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path, body: {} });
 }
 
 export async function openBrowserTab(

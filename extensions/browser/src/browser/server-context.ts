@@ -134,6 +134,7 @@ function createProfileContext(
     profile,
     ensureBrowserAvailable,
     ensureTabAvailable: async (targetId, options) => {
+      getProfileLifecycle(profileState).addressWarmupOnly = false;
       if (targetId === undefined) {
         await ensureBrowserAvailable({ signal: options?.signal });
       }

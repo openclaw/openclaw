@@ -51,6 +51,7 @@ import {
   ProfileRestartRequiredError,
   registerProfileHandle,
   releaseProfileHandle,
+  scheduleAddressWarmupExpiry,
   withProfileOperationLease,
   waitForProfileOperation,
 } from "./server-context.lifecycle.js";
@@ -166,6 +167,15 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
+  const readCdpPages = async (timeoutMs: number | undefined, signal?: AbortSignal) => {
+    const targets = await fetchJson<{ type: string; url: string }[]>(
+      appendCdpPath(normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl), "/json/list"),
+      resolveTimeouts(timeoutMs).httpTimeoutMs,
+      { signal },
+      getCdpReachabilityPolicy(),
+    );
+    return targets.filter((target) => target.type === "page");
+  };
   const observeExternalBrowserMode = async (
     diagnostic: ChromeCdpDiagnostic,
     timeoutMs: number,
@@ -289,13 +299,8 @@ export function createProfileAvailability({
       return true;
     }
     // HTTP inventory is passive; reachability helpers may fall back to a CDP WebSocket.
-    const tabs = await fetchJson<Array<{ type?: string }>>(
-      appendCdpPath(normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl), "/json/list"),
-      resolveTimeouts(timeoutMs).httpTimeoutMs,
-      { signal },
-      getCdpReachabilityPolicy(),
-    ).catch(() => null);
-    pageProbe?.onResult(tabs?.filter((tab) => tab.type === "page").length ?? null);
+    const tabs = await readCdpPages(timeoutMs, signal).catch(() => null);
+    pageProbe?.onResult(tabs?.length ?? null);
     return tabs !== null;
   };
 
@@ -572,6 +577,11 @@ export function createProfileAvailability({
           );
         }
         adoptRunning(launched, signal);
+        if (actor.addressWarmupOnly) {
+          scheduleAddressWarmupExpiry(current, runtime, launched, () =>
+            readCdpPages(MANAGED_CDP_READY_HTTP_TIMEOUT_MS, signal),
+          );
+        }
         runtime.managedLaunchFailure = undefined;
       } catch (err) {
         await stopExactRunning(launched);
@@ -626,6 +636,14 @@ export function createProfileAvailability({
   };
 
   const ensureBrowserAvailable = async (options?: BrowserEnsureOptions): Promise<void> => {
+    if (options?.prewarm) {
+      if (!managed || runtime.running || actor.starts.size > 0) {
+        return;
+      }
+      actor.addressWarmupOnly = true;
+    } else {
+      actor.addressWarmupOnly = false;
+    }
     if (capabilities.mode === "local-extension") {
       // Gateway authentication needs a concurrent lease before it can send the
       // hello this caller-owned, abortable readiness operation is waiting for.
