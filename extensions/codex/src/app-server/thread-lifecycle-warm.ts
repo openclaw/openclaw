@@ -680,7 +680,7 @@ export async function tryReuseCodexLiveThread(
           withCurrent: params.authority?.withCurrent,
         });
       } catch (error) {
-        // The ephemeral conversation survives a failed instruction handoff; the retained
+        // The conversation survives a failed instruction handoff; the retained
         // record still names the old instructions, so the next turn delivers it again.
         preserveSubscription = true;
         throw error;

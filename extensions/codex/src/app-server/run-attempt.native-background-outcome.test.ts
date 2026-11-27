@@ -9,7 +9,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { ownCodexInferenceClient } from "./inference-routing.js";
-import type { JsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   answerCompleted,
@@ -275,6 +275,84 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     harness.close();
   }
 });
+
+it.each([
+  ["managed relay", true],
+  ["appServer.command", false],
+] as const)(
+  "refreshes edited skills on a protected thread without a cold resume (%s)",
+  async (_route, relay) => {
+    const agentDir = path.join(tempDir, "protected-skills-agent");
+    const codexHome = resolveCodexAppServerHomeDir(agentDir);
+    const rolloutPath = path.join(codexHome, "sessions", "protected-skills.jsonl");
+    let nativeTools: unknown;
+    const source = new AbortController();
+    const command = runningCommand("background-listener", "synthetic-callback-listener", "12345");
+    const harness = createStartedThreadHarness(
+      async (method, request) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        if (method === "thread/backgroundTerminals/list") {
+          return { data: [{ itemId: command.id, processId: command.processId }], nextCursor: null };
+        }
+        if (method === "thread/start") {
+          nativeTools = isJsonObject(request) ? request.dynamicTools : undefined;
+          const result = threadStartResult();
+          return { ...result, thread: { ...result.thread, path: rolloutPath } };
+        }
+        if (method === "turn/start") {
+          await writeNativeCatalogFixture(rolloutPath, "thread-1", nativeTools);
+        }
+        return undefined;
+      },
+      { persistedThreads: [], codexHome },
+    );
+    if (relay) {
+      ownCodexInferenceClient(harness.client);
+    }
+    try {
+      for (const [index, catalog] of [FIRST_CATALOG, SECOND_CATALOG].entries()) {
+        const params = Object.assign(
+          createParams(path.join(tempDir, "protected-skills.jsonl"), tempDir, {
+            runId: `run-${index}`,
+          }),
+          { agentDir },
+        );
+        params.skillsSnapshot = { prompt: catalog, skills: [] };
+        params.hostCapabilities = {
+          ...params.hostCapabilities,
+          retainSourceAuthority: retainSourceAuthority(source.signal),
+        };
+        const run = runCodexAppServerAttempt(params);
+        // A refused cold resume rejects the run before any turn is accepted.
+        await Promise.race([run.waitForTurnAccepted(), run]);
+        if (index === 0) {
+          await harness.notify(itemNotification("item/started", command));
+        }
+        await harness.notify(answerCompleted("Ready."));
+        expect(readAttemptTerminal(await run).promptError).toBeNull();
+        expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+      }
+      const threadRequests = harness.requests.filter(
+        ({ method, params }) =>
+          ["thread/start", "thread/resume", "thread/unsubscribe", "thread/inject_items"].includes(
+            method,
+          ) && !isCodexTurnContextHandoff(params),
+      );
+      expect(threadRequests.map(({ method }) => method)).toEqual([
+        "thread/start",
+        "thread/inject_items",
+      ]);
+      expect(JSON.stringify(threadRequests[0])).toContain(FIRST_CATALOG);
+      expect(JSON.stringify(threadRequests[1])).toContain(SECOND_CATALOG);
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(2);
+    } finally {
+      source.abort(new Error("fixture cleanup"));
+      harness.close();
+    }
+  },
+);
 
 it.each([
   ["retained", "52627"],

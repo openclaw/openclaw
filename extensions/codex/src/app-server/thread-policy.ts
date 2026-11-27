@@ -75,9 +75,10 @@ export async function refreshCodexThreadPolicy(
 }
 
 /**
- * Refreshes skills, persona, and memory instructions on a live thread whose generic policy cannot
- * change (ephemeral threads have no resume source). The refresh is a client-authored
- * developer message, so it must be re-delivered after every compaction.
+ * Refreshes skills, persona, and memory instructions on a live thread without replacing
+ * its conversation or cold-resuming it (protected background work blocks that). The
+ * refresh is a client-authored developer message, so it must be re-delivered after
+ * every compaction.
  */
 export async function refreshCodexThreadInstructions(
   params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
