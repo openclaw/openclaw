@@ -30,6 +30,7 @@ import {
 } from "../../src/logging/secret-redaction-registry.js";
 import { loggingState } from "../../src/logging/state.js";
 import { createSubsystemLogger, runtimeForLogger } from "../../src/logging/subsystem.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -209,12 +210,7 @@ for (scenario of scenarios) {
     logLines = logBytes = requests = failures = reports = 0;
     const inspector = new Session();
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 8192,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 8192);
     }
     const hostLoad = loadavg();
     const before = process.threadCpuUsage();

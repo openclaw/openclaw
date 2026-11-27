@@ -23,7 +23,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
-import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -36,7 +36,11 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
-import { resolveInstalledPackageFrontend } from "./installation-identity.js";
+import {
+  checkUpdateInstallationSlot,
+  isNodeOnlyUpdateInstallation,
+  resolveInstalledPackageFrontend,
+} from "./installation-identity.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
@@ -46,6 +50,7 @@ import {
   allocateStaging,
   collectReleases,
   createTrialPending,
+  hasReleaseUpdateOwner,
   publishStaging,
   readTrial,
   releaseUpdateLock,
@@ -105,7 +110,7 @@ export async function prepareUpdate(params: {
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const { plugins, step } = await runPluginMaintenance({
+    const { plugins, step, nextAction } = await runPluginMaintenance({
       root: params.runningRoot,
       node,
       env,
@@ -116,7 +121,11 @@ export async function prepareUpdate(params: {
     await recordUpdateRunStepAsync(params.runId, step, { env });
     await finishUpdateRunAsync(
       params.runId,
-      { status: "skipped", reason: "already-current" },
+      {
+        status: "skipped",
+        reason: "already-current",
+        ...(nextAction ? { nextAction } : {}),
+      },
       { env },
     );
     return { status: "current", version, pluginsChanged: plugins?.changed === true };
@@ -166,6 +175,7 @@ export async function prepareUpdate(params: {
           { env },
         );
       }
+      await checkUpdateInstallationSlot(params.runningRoot, env);
       await assertUpdateRecoveryAdmission({ env });
       const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
         timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
@@ -173,6 +183,16 @@ export async function prepareUpdate(params: {
       const install: InstallKind = missingGit
         ? { kind: "package" }
         : await detectInstall(params.runningRoot);
+      if (
+        install.kind === "package" &&
+        !(await hasReleaseUpdateOwner(env)) &&
+        (await isNodeOnlyUpdateInstallation(env))
+      ) {
+        return await fail(
+          "package-installer-owned",
+          "No local Gateway can activate a release trial on this node-only installation. Nothing was staged. Rerun openclaw update to use its package installer.",
+        );
+      }
       try {
         const ownership = {
           root: params.runningRoot,
@@ -301,6 +321,7 @@ export async function prepareUpdate(params: {
         target.kind === "git"
           ? await prepareGit({
               checkout: target.checkout,
+              runningRoot: params.runningRoot,
               sha: target.sha,
               staging: staging.path,
               node,
@@ -352,7 +373,32 @@ export async function prepareUpdate(params: {
           );
         }
       }
+      const checkStartedAtMs = Date.now();
       const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+      if (verdict.candidate) {
+        await recordUpdateRunPhaseAsync(
+          params.runId,
+          "validating",
+          {
+            origin: {
+              releaseAdmission: {
+                owner: "candidate",
+                candidateVersion: prepared.version,
+                verdict: verdict.ok ? "admit" : "refuse",
+                ...(verdict.reason ? { reason: verdict.reason } : {}),
+                warnings: (verdict.candidate.warnings ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT),
+              },
+            },
+            step: {
+              step: "candidate-release-check",
+              status: verdict.ok ? "completed" : "failed",
+              startedAtMs: checkStartedAtMs,
+              endedAtMs: Date.now(),
+            },
+          },
+          { env },
+        );
+      }
       if (!verdict.ok) {
         return await fail(
           "release-check-failed",
@@ -516,14 +562,15 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
   const failed = parsed.surfaces.filter((surface) => surface.error);
   return {
     ok: parsed.ok && result.code === 0,
+    candidate: parsed,
     reason: parsed.reason,
     detail: failed.map((s) => `${s.plugin}/${s.surface}: ${s.error}`).join("\n") || result.stderr,
   };
 }
 
 /**
- * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
- * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
+ * Plugins follow the serving core and report their required maintenance result separately
+ * from core activation. A failed step keeps the core serving but fails the aggregate run.
  */
 export async function runPluginMaintenance(params: {
   root: string;
@@ -532,7 +579,11 @@ export async function runPluginMaintenance(params: {
   channel: UpdateChannel;
   timeoutMs: number;
   acceptCapabilities?: boolean;
-}): Promise<{ plugins: PostCorePluginUpdateResult | undefined; step: UpdateRunStep }> {
+}): Promise<{
+  plugins: PostCorePluginUpdateResult | undefined;
+  step: UpdateRunStep;
+  nextAction?: string;
+}> {
   const startedAtMs = Date.now();
   const args = [
     "plugins",
@@ -559,7 +610,7 @@ export async function runPluginMaintenance(params: {
     ];
   }
   const failures = plugins?.npm.outcomes.filter((outcome) => outcome.status === "error") ?? [];
-  // Plugin failures are warnings for the core update, but remain failed plugin steps.
+  // Failed maintenance remains a failed step, not a failed core update.
   const failed =
     result.code !== 0 ||
     !plugins ||
@@ -588,12 +639,15 @@ export async function runPluginMaintenance(params: {
         (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
-  if (failed && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
-    const ids = failures.map((outcome) => outcome.pluginId).join(" ");
-    messages.push(`Run \`openclaw plugins update ${ids || "--all"}\` to retry.`);
+  const nextAction = failed
+    ? `openclaw plugins update ${failures.map((outcome) => outcome.pluginId).join(" ") || "--all"}`
+    : undefined;
+  if (nextAction && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
+    messages.push(`Run \`${nextAction}\` to retry.`);
   }
   return {
     plugins,
+    ...(nextAction ? { nextAction } : {}),
     step: {
       step: "plugins",
       status: failed ? "failed" : "completed",

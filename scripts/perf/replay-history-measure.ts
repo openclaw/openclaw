@@ -18,6 +18,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { SessionManager } from "../../src/agents/sessions/index.js";
 import { markInboundContextLabel } from "../../src/auto-reply/reply/inbound-context-marker.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -135,12 +136,7 @@ if (startAt > Date.now()) {
 }
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const pauses: Array<{ duration: number; kind: number }> = [];
 const gc = new PerformanceObserver((list) => {

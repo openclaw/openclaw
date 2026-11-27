@@ -215,9 +215,9 @@ The `run-failure-feedback` replacement occupies only the feedback action beside
 an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
 repeatCount }`; `runId` identifies the displayed failed run, not the currently
 running reply. The host preserves the original error details, copying, and
-recovery controls. No replacement, a disabled plugin, or a failed mount keeps
-the built-in **Report a bug** link available; `context.mountDefault(container)`
-can also delegate to that link.
+recovery controls. The built-in failure row has no feedback action, so no
+replacement, a disabled plugin, or a failed mount shows nothing there, and
+`context.mountDefault(container)` mounts nothing.
 
 Plugins can render their own feedback actions and status receipts in this slot
 without appending a transcript message or starting a model turn. Rendering the

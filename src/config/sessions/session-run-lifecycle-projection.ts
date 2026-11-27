@@ -51,6 +51,7 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    summaryAsTitle?: true;
     desktopNotice?: string;
     /** The run's provider error observation; the failure recorder bounds what it keeps. */
     errorObservation?: unknown;
@@ -75,6 +76,7 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    summaryAsTitle?: unknown;
     /** Desktop-only presentation; shared transcript copy stays unchanged. */
     desktopErrorNotice?: unknown;
     errorObservation?: unknown;
@@ -455,7 +457,13 @@ export function projectSessionLifecyclePatch(
     !restartResumeSkipReason(params.canonicalKey, entry)
   ) {
     // A timed-out shutdown marker must not turn cancellation into a lost continuation.
-    patch.resumeAfterRestart = entry.resumeAfterRestart ?? createRestartResumeMarker({});
+    // A matching execution can supersede the earlier marker before shutdown captures its replacement.
+    const sourceRunId =
+      params.event.data?.executionStarted === true && entry.lifecycleRunId === eventRunId
+        ? eventRunId
+        : undefined;
+    const marker = entry.resumeAfterRestart ?? createRestartResumeMarker({});
+    patch.resumeAfterRestart = sourceRunId ? { ...marker, sourceRunId } : marker;
   }
   const stopped =
     patch.status === "killed" &&
@@ -497,6 +505,7 @@ export function projectSessionLifecyclePatch(
       ...(typeof params.event.data?.errorNotice === "string"
         ? { notice: params.event.data.errorNotice }
         : {}),
+      ...(params.event.data?.summaryAsTitle === true ? { summaryAsTitle: true } : {}),
       ...(typeof params.event.data?.desktopErrorNotice === "string"
         ? { desktopNotice: params.event.data.desktopErrorNotice }
         : {}),

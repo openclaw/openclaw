@@ -46,6 +46,7 @@ export async function runAgentStep(params: {
   expectedSession?: AgentStepSession;
   expectedSourceSession?: AgentStepSession;
   replyAdmission?: SessionSendReplyAdmission;
+  hideInput?: boolean;
 }): Promise<void> {
   const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
@@ -113,6 +114,7 @@ export async function runAgentStep(params: {
       inputProvenance,
       allowApproval: false,
       acceptedReply: params.replyAdmission,
+      hideInput: params.hideInput,
       assertSourceCurrent,
       signal: operatorSource?.signal,
       callGateway: gatewayCall,

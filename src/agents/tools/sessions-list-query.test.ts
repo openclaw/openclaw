@@ -400,8 +400,9 @@ describe("sessions-list inventory queries", () => {
   });
 
   it("does not advertise or silently ignore live-activity filtering in embedded mode", async () => {
-    const tool = createSessionsListTool({ config: VALID_CONFIG, supportsActiveOnly: false });
+    const tool = createSessionsListTool({ config: VALID_CONFIG, gatewayBacked: false });
     expect(tool.parameters).not.toHaveProperty("properties.activeOnly");
+    expect(tool.parameters).not.toHaveProperty("properties.pinned");
     await expect(tool.execute("embedded-activity", { activeOnly: true })).rejects.toThrow(
       "activeOnly requires a Gateway-backed inventory",
     );

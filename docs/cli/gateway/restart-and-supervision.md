@@ -92,7 +92,8 @@ state ownership and installed its own signal handling, stops it like any other C
 command: the current startup step finishes or is cancelled and releases what it
 holds, the Gateway does not take state ownership, and the process exits with status
 `143` (`130` for SIGINT). No state lock is left behind, so a replacement in another
-container starts without `openclaw gateway recover-lock`. SIGKILL still leaves locks.
+container can start normally. SIGKILL leaves locks; a replacement container
+[waits for heartbeat expiry](/gateway/gateway-lock#container-restarts-and-replacements).
 
 After a downgrade, the Gateway refuses databases whose schema is newer than the
 running build supports. The startup error and `openclaw gateway status --deep`

@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -36,6 +37,7 @@ import type {
   SessionDeletionPlanningOperation,
   SessionDeletionPlanningResult,
   SessionMaintenanceLiveProtection,
+  SessionMaintenanceMcpRelease,
   SqliteArchiveReclamationPlan,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
@@ -138,6 +140,7 @@ type SqliteSessionReclamationParams = {
     operation?: RetainedWorkerTransactionAdmission,
   ) => void;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
+  onMaintenanceMcpCommit?: (release: SessionMaintenanceMcpRelease) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
     databaseIdentity: string | symbol,
@@ -184,6 +187,7 @@ export async function runSqliteSessionReclamation(
         participants,
         (operation) => params.assertCommitAllowed?.(operation),
         params.onWorkerResult,
+        params.onMaintenanceMcpCommit,
       );
     }
   }
@@ -207,6 +211,14 @@ export async function runSqliteSessionReclamation(
                 }
               },
               onCommit: (database, result) => {
+                const release = result?.kind === "maintenance-finalize" && result.value.mcpRelease;
+                if (release && params.onMaintenanceMcpCommit) {
+                  // Native maintenance suppresses runtime notifications. Remember only the durable
+                  // receipt at the outer COMMIT; the caller closes transports after writer release.
+                  stageSqliteTransactionState(database.db, {
+                    commit: () => params.onMaintenanceMcpCommit?.(release),
+                  });
+                }
                 // The native connection now sees its own removals; row guards ran before mutation.
                 const publish = prepareReclamationPublication(
                   params.plan,
@@ -500,6 +512,7 @@ function prepareReclamationWorkerTransferList(plan: SqliteArchiveReclamationPlan
 async function runPreparedSqliteSessionReclamation(
   params: {
     diagnostics?: SqliteSessionReclamationDiagnostics;
+    onMaintenanceMcpCommit?: (release: SessionMaintenanceMcpRelease) => void;
     onWorkerResult?: (
       result: SqliteSessionReclamationResult,
       databaseIdentity: string | symbol,
@@ -530,6 +543,13 @@ async function runPreparedSqliteSessionReclamation(
     validationOwner: owner.validationOwner,
     plan,
     diagnostics: params.diagnostics,
+    onResultReceived: params.onMaintenanceMcpCommit
+      ? (result) => {
+          if (result.kind === "maintenance-finalize" && result.value.mcpRelease) {
+            params.onMaintenanceMcpCommit?.(result.value.mcpRelease);
+          }
+        }
+      : undefined,
     withWriteAdmission: async (run, reclamationAdmission, operation) =>
       await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,

@@ -24,6 +24,7 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { cancelSelfSnooze, isOriginalVisibleUserInput } from "./session-self-snooze.js";
 import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -102,6 +103,7 @@ export function createUserTurnTranscriptRecorder(
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
   let persistedMessageNotified = false;
   let originalInputCommitted = false;
+  let inputAlreadyAccepted = params.inputAlreadyAccepted === true;
   let resolvedSourceMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
   let sentToProvider = false;
@@ -229,18 +231,14 @@ export function createUserTurnTranscriptRecorder(
   const notifyOriginalInputCommitted = (commit: UserTurnOriginalInputCommit) => {
     const sourceMessage = commit.message;
     const metadata = sourceMessage["__openclaw"];
-    if (
-      originalInputCommitted ||
-      blocked ||
-      sourceMessage.display === false ||
-      sourceMessage.excludeFromContext === true ||
-      (sourceMessage.provenance && sourceMessage.provenance.kind !== "external_user") ||
-      metadata?.lateMedia === true ||
-      metadata?.beforeAgentRunBlocked !== undefined
-    ) {
+    if (originalInputCommitted || blocked || !isOriginalVisibleUserInput(sourceMessage)) {
       return;
     }
     originalInputCommitted = true;
+    // Promotion/replay of custody already accepted at staging isn't a new user input.
+    if (!inputAlreadyAccepted && !acceptedPendingInputId && !params.pendingInputSources?.length) {
+      cancelSelfSnooze(commit.anchor);
+    }
     // Collection commits one framed message, but each source owns its sender and
     // selections. A rewritten aggregate no longer attests those original bytes.
     if (
@@ -590,6 +588,7 @@ export function createUserTurnTranscriptRecorder(
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
             onCommitted: adopt,
+            inputAlreadyAccepted,
             prepareMessageAfterIdempotencyCheck: (next) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 projectUserTurnRequesterOrigin(next, stagedOrigin),
@@ -723,6 +722,9 @@ export function createUserTurnTranscriptRecorder(
     inputActorBinding = binding;
   });
   const admissionOwner = registerUserTurnTranscriptAdmissionOwner(recorder, {
+    markInputAccepted: () => {
+      inputAlreadyAccepted = true;
+    },
     onOriginalInputCommitted: (anchor) => {
       const sourceMessage = pendingInput?.message ?? resolvedSourceMessage ?? message;
       if (sourceMessage) {

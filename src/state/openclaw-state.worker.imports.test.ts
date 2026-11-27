@@ -106,6 +106,14 @@ it.each([
   },
 );
 
+it("keeps the shared writer independent of ordinary agent lease management", () => {
+  expect(
+    findSourceImportBackedges("src/state/openclaw-state.worker.ts", [
+      "src/state/openclaw-agent-db-lease.ts",
+    ]),
+  ).toEqual([]);
+});
+
 it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges(

@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
@@ -24,6 +25,7 @@ import {
   textButton,
   inlineEditor,
   sessionPicker,
+  type SelectPicker,
   toast,
 } from "./view.test-support.ts";
 
@@ -51,6 +53,44 @@ function selectedLabels(container: Element) {
 }
 
 describe("WorkboardView", () => {
+  it("checks the bulk Add limit only for remaining cards and submits their opening revision", async () => {
+    const full = createWorkboardCard({
+      id: "full",
+      labels: Array.from({ length: 12 }, (_, i) => `label-${i}`),
+    });
+    const remaining = createWorkboardCard({ id: "remaining", labels: ["original"], updatedAt: 10 });
+    const request = vi.fn().mockRejectedValue(new Error("Card changed"));
+    const { state, container, renderView } = createWorkboardView({
+      client: { request },
+      canWrite: true,
+    });
+    setWorkboardCards(state, [full, remaining]);
+    state.selectedCardIds = new Set([full.id, remaining.id]);
+    renderView();
+    requireButton(container, "Edit properties").click();
+    flush();
+    const dialog = expectDefined(container.querySelector(".workboard-bulk-dialog"), "bulk editor");
+    const pickers = [...dialog.querySelectorAll<SelectPicker>("[data-test-select-picker]")];
+    const labelMode = pickers.find((picker) => picker.accessibleLabel === "Labels");
+    expectDefined(labelMode, "label mode").onSelect("add");
+    flush();
+    addLabel(container, "new");
+    expect(requireButton(container, "Apply changes").disabled).toBe(true);
+
+    setWorkboardCards(state, [{ ...remaining, labels: ["concurrent"], updatedAt: 11 }]);
+    renderView();
+    const apply = requireButton(container, "Apply changes");
+    expect(apply.disabled).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    apply.click();
+    await waitForFast(() => expect(state.bulkSaving).toBe(false));
+    expect(request).toHaveBeenCalledExactlyOnceWith("workboard.cards.update", {
+      id: remaining.id,
+      expectedUpdatedAt: remaining.updatedAt,
+      patch: { labels: ["original", "new"] },
+    });
+  });
+
   it("keeps a stale edit draft disabled until it is cancelled", async () => {
     const { host, state, container, renderView } = createWorkboardView();
     state.cards = [createWorkboardCard({ title: "Canonical title" })];

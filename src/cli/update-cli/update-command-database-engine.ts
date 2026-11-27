@@ -2,7 +2,7 @@ import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 /** Read authored update configuration without selecting or opening a database. */
-export async function readUpdateDatabaseEngineConfig(env: NodeJS.ProcessEnv) {
+async function readUpdateDatabaseEngineConfig(env: NodeJS.ProcessEnv) {
   const [
     { cloneEnvWithPlatformSemantics },
     { createConfigIO },

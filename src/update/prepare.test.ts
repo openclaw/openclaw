@@ -3,9 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import * as nodeService from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
+import * as gatewayService from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processCensus from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -34,6 +38,12 @@ import { settleRunFromTrial } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
+import {
+  irohBinary,
+  irohCrate,
+  irohRepository,
+  registerIrohPreparationTests,
+} from "./prepare-iroh.test-support.js";
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
@@ -42,6 +52,25 @@ import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
+
+describe("Git prepared release iroh binding", () => {
+  it.each(["checkout", "running", "both"] as const)(
+    "copies compatible native bytes from %s without compiling",
+    async (artifact) => {
+      const target = await irohRepository({ artifact });
+      expect(await prepareGit(target)).toMatchObject({ ok: true });
+      expect(await fs.readFile(path.join(target.release, irohCrate, irohBinary), "utf8")).toBe(
+        artifact === "checkout" ? "checkout bytes" : "running bytes",
+      );
+      expect(await fs.readFile(path.join(target.release, "steps.txt"), "utf8")).not.toContain(
+        "build:iroh",
+      );
+    },
+  );
+
+  registerIrohPreparationTests();
+});
+
 describe("release preparation", () => {
   it("keeps the repository HEAD recognizable as release-aware", async () => {
     const checkout = await fs.realpath(new URL("../../", import.meta.url));
@@ -252,10 +281,15 @@ process.exit(result.status ?? 1);
         pid: process.pid,
         createdAt: new Date().toISOString(),
         configPath: path.join(root, "openclaw.json"),
+        port: 18789,
+        startTime:
+          readGatewayLockProcessStartTime(process.pid, process.platform, 1000) ?? undefined,
         processNamespace: readGatewayLockProcessNamespace(),
         role: "gateway",
       },
     });
+    const argv = process.argv;
+    process.argv = [node, path.join(checkout, "openclaw.mjs"), "gateway"];
     try {
       await owner.run(async () => {
         const run = await createUpdateRunAsync({
@@ -283,6 +317,7 @@ process.exit(result.status ?? 1);
         owner.assertCurrent();
       });
     } finally {
+      process.argv = argv;
       database.db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
         UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION} WHERE meta_key = 'primary';
@@ -538,15 +573,15 @@ describe("package release conversion", () => {
     { releaseAware: true, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: false, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: true, runtime: "bun", adopt: false, readOnly: false },
-    { releaseAware: true, runtime: "node", adopt: true, readOnly: false },
+    { releaseAware: true, runtime: "node", adopt: true, readOnly: false, nodeOnly: true },
     { releaseAware: true, runtime: "node", adopt: true, readOnly: true },
     { releaseAware: false, runtime: "node", adopt: true, readOnly: false },
     // An explicit artifact rebuilt at the installed version is still a new release.
     { releaseAware: true, runtime: "node", build: "rebuilt" },
     { releaseAware: true, runtime: "node", build: "installed" },
   ])(
-    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build)",
-    async ({ releaseAware, runtime, adopt = false, readOnly = false, build }) => {
+    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build, deferred node-only=$nodeOnly)",
+    async ({ releaseAware, runtime, adopt = false, readOnly = false, build, nodeOnly }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningVersion = adopt ? "2026.11.20" : "2026.11.21";
       const runningRoot = adopt
@@ -620,9 +655,15 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
         `import fs from 'node:fs';
 fs.appendFileSync(${JSON.stringify(path.join(root, "release-commands"))}, process.argv[3] + ':' + (process.env.FIXTURE_RUNTIME ?? 'node') + '\\n');
 console.log(JSON.stringify(process.argv[3] === 'check-release'
-  ? {ok:true,surfaces:[]}
+  ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
+      if (build === "installed") {
+        await fs.copyFile(
+          path.join(packedRoot, "openclaw.mjs"),
+          path.join(runningRoot, "openclaw.mjs"),
+        );
+      }
       const archive = path.join(root, "candidate.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       await executable(
@@ -675,6 +716,15 @@ if (process.argv[2] !== 'install') {
           code: "ENOENT",
         });
       });
+      // A converted deferred update keeps its owner even after only the node service remains.
+      if (nodeOnly) {
+        vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => false }),
+        );
+        vi.spyOn(nodeService, "resolveNodeService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => true }),
+        );
+      }
       if (readOnly) {
         const writeFile = fs.writeFile.bind(fs);
         vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
@@ -707,6 +757,7 @@ if (process.argv[2] !== 'install') {
           });
         }
         if (!releaseAware) {
+          expect(preparedRun?.origin.releaseAdmission).toBeUndefined();
           expect(outcome).toMatchObject({
             status: "failed",
             reason: "release-updates-unsupported",
@@ -741,6 +792,20 @@ if (process.argv[2] !== 'install') {
           return;
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        expect(preparedRun?.steps).toContainEqual(
+          expect.objectContaining({ step: "candidate-release-check", status: "completed" }),
+        );
+        expect(preparedRun?.origin.releaseAdmission).toEqual({
+          owner: "candidate",
+          candidateVersion: "2026.11.21",
+          verdict: "admit",
+          warnings: [
+            {
+              code: "configured-plugin-path-unavailable",
+              message: "Fixture plugin path is unavailable",
+            },
+          ],
+        });
         if (adopt) {
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           if (readOnly) {
@@ -779,6 +844,7 @@ if (process.argv[2] !== 'install') {
         });
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
+        expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
         for (const name of ["pack", "install"]) {
           expect(rolledBack?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
             status: "completed",
@@ -837,7 +903,7 @@ describe("retained updater runtimes", () => {
       // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
       expect(log.mock.calls.map(([line]) => String(line))).toEqual([
         `Removed abandoned updater runtime: ${abandoned}`,
-        "Already up to date.",
+        expect.stringContaining("already up to date"),
       ]);
     } finally {
       process.exitCode = undefined;

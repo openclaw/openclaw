@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -100,6 +100,65 @@ describe("configured catalog authority", () => {
       configuredRuntimeModels: [],
     });
   }
+  it.each([undefined, "merge", "replace"] as const)(
+    "preserves alias rows and reads captured inventory once when needed (mode %s)",
+    (mode) => {
+      const alias = "fixture-alias";
+      const baseUrl = "https://fixture.invalid/v1";
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelCatalog: { aliases: { [alias]: { provider: "fixture" } } },
+          },
+        ],
+      });
+      const config: OpenClawConfig = {
+        models: {
+          mode,
+          providers: {
+            [alias]: { api: "openai-responses", baseUrl, models: [modelDefinition("model")] },
+          },
+        },
+      };
+      const registry = ModelRegistry.inMemory(AuthStorage.inMemory({}));
+      const window = { id: "long", label: "Long", contextWindow: 128_000 };
+      const captured = {
+        id: "model",
+        reasoning: false,
+        maxTokens: 256,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        provider: alias,
+        api: "openai-responses" as const,
+        name: "Captured",
+        baseUrl,
+        input: ["text" as const],
+        contextWindow: 128_000,
+        contextWindows: [window],
+      };
+      const getAll = vi.spyOn(registry, "getAll").mockReturnValue([captured]);
+      const { modelCatalog } = captureRegistry(registry, config, metadata);
+      expect(getAll).toHaveBeenCalledTimes(mode === "replace" ? 0 : 1);
+      expect(modelCatalog.routeVariants).toBe(modelCatalog.entries);
+      expect(modelCatalog.entries.map(({ provider, name }) => [provider, name])).toEqual(
+        mode === "replace"
+          ? [[alias, "model"]]
+          : [
+              [alias, "model"],
+              ["fixture", "Captured"],
+            ],
+      );
+      expect(captured.provider).toBe(alias);
+      if (mode !== "replace") {
+        const [configured, canonical] = modelCatalog.entries;
+        expect(configured!.contextWindows).toEqual([window]);
+        expect(canonical!.contextWindows).toEqual([window]);
+        expect(configured!.contextWindows![0]).not.toBe(canonical!.contextWindows![0]);
+        expect(canonical!.contextWindows![0]).not.toBe(window);
+      }
+    },
+  );
   const fallback = {
     provider: "fixture",
     id: "new-model",

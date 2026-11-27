@@ -9,7 +9,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
-import { createPluginStateOperation } from "./plugin-state-operation.js";
+import { createPluginStateOperation, deletePluginStateKeys } from "./plugin-state-operation.js";
 import {
   assertPluginStatePublicationSettled,
   isPluginStatePublicationUnavailable,
@@ -208,6 +208,7 @@ function createAsyncKeyedStore<T>(
   const store: Required<PluginStateKeyedStore<T, 2>> = {
     createOperation: (stores, handler, authority) =>
       createPluginStateOperation(store, stores, handler, authority),
+    deleteKeys: (keys, options) => deletePluginStateKeys(store, keys, options?.alsoFrom),
     observe: async (key) => {
       const observation = await observePluginStateInWorker({
         ...scope,

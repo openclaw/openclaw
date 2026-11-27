@@ -30,7 +30,10 @@ export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService("node");
   const { hasInstalledDefinition, isAbsent, readDefinitionMutationCapability } = base;
   const owned = <
-    T extends { env: Record<string, string | undefined>; beforeMutation?: () => Promise<void> },
+    T extends {
+      env: Record<string, string | undefined>;
+      beforeMutation?: () => void | Promise<void>;
+    },
   >(
     args: T,
   ) => ({

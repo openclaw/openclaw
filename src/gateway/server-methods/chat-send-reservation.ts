@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
+import { cancelSelfSnooze } from "../../sessions/session-self-snooze.js";
 import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
@@ -77,7 +78,7 @@ export function createPendingChatSendReservationAccess(params: {
         params.context.dedupe.delete(key);
       }
     },
-    markInputAccepted: () => {
+    markInputAccepted: (unstaged: boolean) => {
       const accepted = params.context.dedupe.get("chat:" + runId);
       if (
         accepted?.ok !== true ||
@@ -88,6 +89,18 @@ export function createPendingChatSendReservationAccess(params: {
         throw new Error("Chat input acceptance marker changed before acknowledgment");
       }
       accepted.effectAccepted = true;
+      // Commands without a durable input transfer custody here, rather than at append/stage.
+      if (
+        unstaged &&
+        (!params.request.systemInputProvenance ||
+          params.request.systemInputProvenance.kind === "external_user")
+      ) {
+        cancelSelfSnooze({
+          agentId: params.session.agentId,
+          sessionKey,
+          storePath: params.session.storePath,
+        });
+      }
     },
   };
 }

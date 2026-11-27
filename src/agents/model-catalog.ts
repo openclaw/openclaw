@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { getActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -45,7 +46,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  rows: ModelCatalogEntry[];
+  /** A long-lived registration config must not retain a superseded publication or its rows. */
+  rowsBySource: WeakMap<object, ModelCatalogEntry[]>;
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
@@ -126,21 +128,9 @@ function createModelCatalogSnapshot(
   routeVariants: ModelCatalogRouteVariantCollector,
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
-  return {
-    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
-    routeVariants: sortModelCatalogEntries(
-      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
-    ),
-  };
-}
-
-function applyReadyCatalogModelOrder(
-  entries: ModelCatalogEntry[],
-  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
-): ModelCatalogEntry[] {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const orders = new Map<string, Map<string, number>>();
-  for (const outcome of outcomes ?? []) {
+  for (const outcome of providerOutcomes ?? []) {
     if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
       continue;
     }
@@ -154,10 +144,8 @@ function applyReadyCatalogModelOrder(
     }
     orders.set(provider, order);
   }
-  if (orders.size === 0) {
-    return entries;
-  }
-  return entries.map((entry) => {
+  // Both projections use the same ready publication, but each owns its ranked row objects.
+  const rankEntry = (entry: ModelCatalogEntry): ModelCatalogEntry => {
     const order = orders.get(normalizeProviderId(entry.provider));
     if (!order) {
       return entry;
@@ -168,7 +156,10 @@ function applyReadyCatalogModelOrder(
       providerOrder:
         rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
     };
-  });
+  };
+  const sortRows = (rows: ModelCatalogEntry[]) =>
+    sortModelCatalogEntries(orders.size === 0 ? rows : rows.map(rankEntry));
+  return { entries: sortRows(entries), routeVariants: sortRows(routeVariants.entries) };
 }
 
 export function loadManifestModelCatalog(params: {
@@ -225,9 +216,12 @@ function loadManifestModelCatalogRows(
   if (config.models?.mode === "replace") {
     return [];
   }
+  // The metadata snapshot keys manifest-only rows when there is no hosted publication.
+  const source = getActiveRemoteModelCatalog(config) ?? snapshot;
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot) {
-    return cached.rows;
+  const cachedRows = cached?.snapshot === snapshot ? cached.rowsBySource.get(source) : undefined;
+  if (cachedRows) {
+    return cachedRows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
   const plan =
@@ -257,7 +251,7 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, rowsBySource: new WeakMap([[source, rows]]) });
   return rows;
 }
 
