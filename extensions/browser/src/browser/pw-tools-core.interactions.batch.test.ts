@@ -331,16 +331,16 @@ describe("executeActViaPlaywright batches", () => {
         { kind: "clickCoords", x: 10, y: 20 },
         { kind: "insertText", text: "hello" },
         { kind: "press", key: "Enter" },
-        ],
-      });
+      ],
+    });
     expect(result).toEqual({ sent: 3, targetId: "tab-1" });
     expect(session.getPageForTargetId).toHaveBeenCalledWith(
       expect.objectContaining({ ...target, allowCrashed: false }),
-      );
+    );
     expect(page.mouse.click).toHaveBeenCalledWith(10, 20);
     expect(page.keyboard.insertText).toHaveBeenCalledWith("hello");
     expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
-    });
+  });
 
   it.each([
     { kind: "scrollIntoView", ref: "1" },
