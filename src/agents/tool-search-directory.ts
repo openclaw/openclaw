@@ -538,10 +538,15 @@ function withInputs(
   servers: readonly McpDirectoryServer[],
   layout: McpDirectoryLayout,
 ): McpDirectoryLayout {
+  const withEvery: McpDirectoryLayout = { ...layout, signed: all };
+  if (fitsMcpToolDirectory(renderMcpToolDirectory(servers, withEvery))) {
+    return withEvery;
+  }
   const signed = new Set<McpDirectoryRow>();
   const result: McpDirectoryLayout = { ...layout, signed: (row) => signed.has(row) };
-  // The layout lists no inputs yet, so its heading is the describe-first one. Reserve the
-  // growth to the longest call-by-name heading; the rest of the heading does not change.
+  // Not every input fits, so some listed row stays without one and the heading carries both
+  // call sentences. The layout lists no inputs yet (describe-first heading): reserve the
+  // growth to that heading; the rest of it does not change.
   const headingGrowth =
     Buffer.byteLength(
       `${MCP_TOOL_DIRECTORY_CALL_WITH_INPUT} ${MCP_TOOL_DIRECTORY_CALL_WITHOUT_INPUT}`,

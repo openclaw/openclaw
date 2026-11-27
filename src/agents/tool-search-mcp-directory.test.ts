@@ -157,7 +157,7 @@ describe("MCP directory in the system prompt", () => {
     expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   });
 
-  it("degrades to input signatures, then names, then per-server counts, without dropping servers", () => {
+  it("degrades to names, then per-server counts, without dropping servers", () => {
     const longDescription =
       "Does something useful for the caller with a fairly long description text.";
     const names = apply(
@@ -286,7 +286,7 @@ describe("MCP directory in the system prompt", () => {
       );
     });
 
-    it("stays within the byte budget with an instruction row under names overflow", () => {
+    it("stays within the byte budget with an instruction row when names barely fit", () => {
       for (let size = 90; size <= 130; size += 1) {
         const guided = tool("guided", "query");
         setPluginToolMeta(guided, {
