@@ -47,9 +47,36 @@ struct SidebarGatewayPickerTests {
 
         #expect(beforeHandoff.focusedEntry == a)
         #expect(afterHandoff.focusedEntry == b)
-        #expect(beforeHandoff.rowTitle(a) == "Studio — Online")
-        #expect(beforeHandoff.rowTitle(b) == "Home")
-        #expect(afterHandoff.rowTitle(b) == "Home — Connecting")
+        #expect(beforeHandoff.rowSubtitle(a) == "Online")
+        #expect(beforeHandoff.rowSubtitle(b) == nil)
+        #expect(afterHandoff.rowSubtitle(b) == "Connecting")
+    }
+
+    @Test func `legacy addresses keep just enough information to identify each connection`() {
+        func endpoint(_ host: String, _ port: Int) -> GatewaySettingsStore.GatewayRegistryEntry {
+            .init(
+                stableID: "\(host):\(port)",
+                kind: .manual,
+                name: "\(host):\(port)",
+                host: host,
+                port: port,
+                useTLS: true,
+                lastConnectedAtMs: nil)
+        }
+        let studio = endpoint("tidal-vireo.example.net", 8448)
+        var test = endpoint("tidal-vireo.example.net", 8449)
+        let home = endpoint("192.0.2.2", 443)
+        var registry = GatewaySettingsStore.GatewayRegistry(entries: [studio, test, home])
+        #expect(studio.displayName == "tidal-vireo")
+        #expect(registry.compactName(for: studio) == "tidal-vireo:8448")
+        #expect(registry.distinguishingAddress(for: test) == "Port 8449")
+        #expect(home.displayName == "192.0.2.2")
+        #expect(registry.distinguishingAddress(for: home) == nil)
+        test.name = "Sandbox"
+        registry.entries = [studio, test, home]
+        #expect(test.displayName == "Sandbox")
+        #expect(registry.compactName(for: studio) == "tidal-vireo")
+        #expect(registry.distinguishingAddress(for: studio) == nil)
     }
 
     @Test func `offline cold open uses saved focus without claiming it is online`() {
@@ -61,7 +88,7 @@ struct SidebarGatewayPickerTests {
             state: .disconnected)
 
         #expect(presentation.focusedEntry == entry)
-        #expect(presentation.rowTitle(entry) == "Studio — Offline")
+        #expect(presentation.rowSubtitle(entry) == "Offline")
         #expect(!presentation.showsPicker)
     }
 
@@ -73,7 +100,7 @@ struct SidebarGatewayPickerTests {
             state: .error)
 
         #expect(presentation.focusedID == "current")
-        #expect(presentation.rowTitle(Self.entry("current")) == "current — Needs attention")
+        #expect(presentation.rowSubtitle(Self.entry("current")) == "Needs attention")
     }
 
     @Test func `the control shows the green dot only when online, and speaks every state`() {

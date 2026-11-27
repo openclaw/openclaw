@@ -5,12 +5,6 @@ import OpenClawProtocol
 import SwiftUI
 
 struct ChatProTab: View {
-    enum GatewayStatusTone: Equatable {
-        case success
-        case warning
-        case error
-    }
-
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -58,7 +52,6 @@ struct ChatProTab: View {
 
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
-    @State private var isGatewayStatusManuallyExpanded = false
     var childKey: String?
     var childName: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
@@ -291,6 +284,7 @@ struct ChatProTab: View {
                     viewModel.defaultFollowUpMode = OpenClawChatQueueMode(rawValue: mode)
                 }
                 .openClawChatComposerPanels(viewModel: viewModel)
+                .modifier(ChatConnectionStrip(strip: viewModel.statusStrip, input: self.connectionStripInput))
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
@@ -331,18 +325,6 @@ struct ChatProTab: View {
         }
         .accessibilityElement(children: .ignore)
         .openClawToolbarGlyphScale()
-    }
-
-    private var gatewayAvatarStatusDot: some View {
-        ZStack {
-            Circle()
-                .fill(Color(uiColor: .systemBackground))
-            Circle()
-                .fill(self.gatewayStatusColor)
-                .padding(2)
-        }
-        .frame(width: 13, height: 13)
-        .accessibilityHidden(true)
     }
 
     private var isMainChat: Bool {
@@ -482,25 +464,6 @@ struct ChatProTab: View {
         .multilineTextAlignment(.leading)
     }
 
-    private var gatewayStatusIsHealthy: Bool {
-        Self.gatewayStatusTone(state: self.gatewayDisplayState) == .success
-    }
-
-    private var expandedGatewayStatusLabel: some View {
-        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState))
-            .font(OpenClawType.subheadMedium)
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(self.gatewayStatusColor.opacity(0.12), in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(self.gatewayStatusColor.opacity(0.28), lineWidth: 1)
-            }
-    }
-
     private var headerNonMainSession: OpenClawChatSessionEntry? {
         guard let viewModel, let session = viewModel.currentSessionEntry(),
               session.isMain != true,
@@ -511,25 +474,10 @@ struct ChatProTab: View {
         return session
     }
 
-    private var showsExpandedGatewayStatus: Bool {
-        Self.gatewayStatusShouldExpand(
-            state: self.gatewayDisplayState,
-            isManuallyExpanded: self.isGatewayStatusManuallyExpanded)
-    }
-
     /// Use the same title as the sidebar and keep opaque routing keys out of the header.
     private var headerSessionTitle: String? {
         guard let session = headerNonMainSession else { return nil }
         return SessionPresentation.title(session, includesRoutingFallback: false)
-    }
-
-    private var gatewayStatusAccessibilityHint: String {
-        if !self.gatewayStatusIsHealthy {
-            return String(localized: "Opens Settings / Gateway")
-        }
-        return self.isGatewayStatusManuallyExpanded
-            ? String(localized: "Hides the gateway status label")
-            : String(localized: "Shows the full gateway status label")
     }
 
     private var headerProjectName: String? {
@@ -669,55 +617,19 @@ struct ChatProTab: View {
         !isAttachmentOwnerPinned || isCaptureInFlight
     }
 
-    private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState))"
-    }
-
-    private var gatewayStatusColor: Color {
-        switch Self.gatewayStatusTone(state: self.gatewayDisplayState) {
-        case .success:
-            OpenClawBrand.statusSuccess
-        case .warning:
-            OpenClawBrand.statusWarning
-        case .error:
-            OpenClawBrand.statusError
-        }
-    }
-
-    nonisolated static func gatewayStatusTone(state: GatewayDisplayState) -> GatewayStatusTone {
-        switch state {
-        case .connected:
-            .success
-        case .connecting, .error:
-            .warning
-        case .disconnected:
-            .error
-        }
-    }
-
-    nonisolated static func gatewayStatusShouldExpand(
-        state: GatewayDisplayState,
-        isManuallyExpanded: Bool) -> Bool
-    {
-        isManuallyExpanded || self.gatewayStatusTone(state: state) != .success
-    }
-
-    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState) -> String {
-        switch state {
-        case .connected:
-            "Connected"
-        case .connecting:
-            "Connecting"
-        case .error:
-            "Attention"
-        case .disconnected:
-            "Offline"
-        }
-    }
-
+    /// The strip above the composer says why it can't send, so the field keeps its usual prompt.
     private var messagePlaceholder: String {
         if self.childKey != nil { return String(localized: "Message subagent") }
         return String(format: String(localized: "Message %@"), self.agentDisplayName)
+    }
+
+    private var connectionStripInput: ChatConnectionStatus.Input {
+        ChatConnectionStatus.Input(
+            state: self.gatewayDisplayState,
+            problem: self.appModel.lastGatewayProblem,
+            approvalFailedUnreachable: self.appModel.pendingExecApprovalFailedUnreachable,
+            isFirstSetup: self.startFirstGatewaySetup != nil,
+            isTalkActive: self.appModel.talkMode.isEnabled)
     }
 
     private var canQueueOffline: Bool {
@@ -892,28 +804,6 @@ struct ChatVoiceAvatar<Avatar: View>: View {
                 speechActive: self.talkMode.isUserSpeechDetected)
         }
         return .idle
-    }
-}
-
-@available(iOS 27.1, *)
-private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
-    @Environment(\.toolbarVerticalEdge) private var verticalEdge
-    @Binding var isExpanded: Bool
-    let status: Status
-
-    func body(content: Content) -> some View {
-        content.popover(isPresented: self.isPresented) {
-            self.status
-                .padding(16)
-                .accessibilityIdentifier("chat-gateway-status-details")
-                .presentationCompactAdaptation(.popover)
-        }
-    }
-
-    private var isPresented: Binding<Bool> {
-        Binding(
-            get: { self.verticalEdge != nil && self.isExpanded },
-            set: { self.isExpanded = $0 })
     }
 }
 

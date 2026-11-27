@@ -467,10 +467,12 @@ struct RootSidebar: View {
                     cornerRadius: OpenClawProMetric.controlRadius,
                     style: .continuous))
                 .accessibilityAddTraits(isGatewaySelected ? .isSelected : [])
+                .layoutPriority(1)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
 
                 self.newChatButton
+                    .frame(minWidth: 44)
             }
         }
         .padding(.horizontal, 10)

@@ -95,6 +95,9 @@ extension SettingsProTab {
             ToolbarItem(placement: .principal) {
                 Text(title(for: route))
                     .font(OpenClawType.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("Settings.Title.\(route)")
                     .foregroundStyle(.primary)
             }
             if let headerSidebarAction {
@@ -582,11 +585,7 @@ extension SettingsProTab {
                 }
             }
         } header: {
-            Text("Paired Gateways")
-                .font(OpenClawType.subheadSemiBold)
-        } footer: {
-            Text("Keep multiple gateways connected and switch which one is in focus.")
-                .font(OpenClawType.footnote)
+            SettingsSectionTitle("Saved connections")
         }
     }
 
@@ -597,18 +596,26 @@ extension SettingsProTab {
         let keepsConnected = self.gatewayRegistry.connectedStableIDs.contains {
             GatewayStableIdentifier.matches($0, entry.stableID)
         }
+        let endpoint = self.gatewayEndpointSummary(entry)
         return HStack(spacing: 12) {
             Button {
                 guard !isActive else { return }
                 Task { await self.switchGateway(to: entry) }
             } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(.primary)
-                    Text(self.gatewayEndpointSummary(entry))
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: entry.displayName)
+                        .font(SettingsType.label)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .caseInsensitiveCompare(endpoint) != .orderedSame
+                    {
+                        Text(verbatim: endpoint)
+                            .font(SettingsType.description)
+                            .foregroundStyle(SettingsInk.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
                 Spacer(minLength: 8)
             }
@@ -622,23 +629,43 @@ extension SettingsProTab {
                 Image(systemName: "checkmark")
                     .font(SettingsType.label.weight(.semibold))
                     .foregroundStyle(.primary)
-                    .accessibilityLabel("Focused Gateway")
-            } else {
-                Button {
-                    if self.gatewayController.setGatewayConnectionEnabled(
-                        stableID: entry.stableID,
-                        enabled: !keepsConnected)
-                    {
-                        self.refreshGatewayRegistry()
-                    }
-                } label: {
-                    Image(systemName: keepsConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(keepsConnected ? OpenClawBrand.accent : .secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(keepsConnected ? "Disconnect Gateway" : "Keep Gateway Connected")
+                    .accessibilityLabel("Selected connection")
             }
+            Menu {
+                Button {
+                    self.gatewayNameDraft = entry.displayName
+                    self.renamingGateway = entry
+                } label: {
+                    Label { Text("Rename").font(OpenClawType.body) } icon: { Image(systemName: "pencil") }
+                }
+                if !isActive {
+                    Button {
+                        if self.gatewayController.setGatewayConnectionEnabled(
+                            stableID: entry.stableID,
+                            enabled: !keepsConnected)
+                        {
+                            self.refreshGatewayRegistry()
+                        }
+                    } label: {
+                        Text(keepsConnected ? "Disconnect" : "Keep connected").font(OpenClawType.body)
+                    }
+                }
+                Button(role: .destructive) {
+                    self.pendingForgetGateway = entry
+                } label: {
+                    Label { Text("Forget").font(OpenClawType.body) } icon: { Image(systemName: "trash") }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(SettingsType.label.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(String(
+                format: String(localized: "Options for %@"),
+                self.gatewayRegistry.compactName(for: entry)))
         }
         .contentShape(Rectangle())
         .swipeActions {
@@ -648,18 +675,6 @@ extension SettingsProTab {
                 Label {
                     Text("Forget")
                         .font(OpenClawType.captionSemiBold)
-                } icon: {
-                    Image(systemName: "trash")
-                }
-            }
-        }
-        .contextMenu {
-            Button(role: .destructive) {
-                self.pendingForgetGateway = entry
-            } label: {
-                Label {
-                    Text("Forget Gateway")
-                        .font(OpenClawType.body)
                 } icon: {
                     Image(systemName: "trash")
                 }

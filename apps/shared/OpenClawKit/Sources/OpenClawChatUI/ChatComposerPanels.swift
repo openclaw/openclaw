@@ -56,6 +56,10 @@ enum ChatComposerPanel: Equatable {
 @Observable
 final class ChatComposerPanelController {
     private(set) var panel: ChatComposerPanel?
+    /// The open effort bar's height, so the status strip can sit above it.
+    var effortBarHeight: CGFloat = 0
+    /// The status strip's surface in global coordinates, kept clear of the bar's tap-outside area.
+    var statusStripFrame: CGRect?
     /// Bumped when the composer should take focus back after the picker closes.
     private(set) var focusRequest = 0
     /// The model sheet opens on Provider accounts; it holds until the sheet is gone.
@@ -71,6 +75,12 @@ final class ChatComposerPanelController {
         self.returnsFocus = panel == .model && composerFocused
         self.opensAccounts = false
         self.panel = panel
+    }
+
+    /// Opens the effort bar on the strip's behalf ("Change" on a lowered effort).
+    func openEffortBar() {
+        self.returnsFocus = false
+        self.panel = .effort
     }
 
     func dismiss() {
@@ -165,22 +175,43 @@ struct ChatComposerPanelHost: ViewModifier {
         let gap = ChatComposerPanelMetrics.gap
         // The overlay may start under the status bar or below it; either way the bar stays clear of it.
         let top = max(0, proxy.safeAreaInsets.top - origin) + gap
-        Color.clear
-            .contentShape(Rectangle())
-            .frame(width: width, height: max(0, composer.minY + origin))
-            .position(x: width / 2, y: (composer.minY - origin) / 2)
-            .onTapGesture { self.controller.dismiss() }
-            .accessibilityHidden(true)
+        // A tap outside the bar closes it, except on the status strip, whose action stays usable.
+        let strip = self.controller.statusStripFrame.map { $0.offsetBy(dx: 0, dy: -origin) }
+        ForEach(Self.tapOutsideBands(from: -origin, to: composer.minY, sparing: strip), id: \.lowerBound) { band in
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: width, height: band.upperBound - band.lowerBound)
+                .position(x: width / 2, y: (band.lowerBound + band.upperBound) / 2)
+                .onTapGesture { self.controller.dismiss() }
+                .accessibilityHidden(true)
+        }
         let room = max(0, composer.minY - gap - top)
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             ChatEffortBar(viewModel: self.viewModel)
                 // VoiceOver's two-finger scrub closes the bar and returns to the effort chip.
                     .accessibilityAction(.escape) { self.controller.escapeEffortBar() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        self.controller.effortBarHeight = $0
+                    }
         }
         .frame(width: composer.width, height: room)
         .position(x: composer.midX, y: top + room / 2)
         .transition(.opacity.combined(with: .offset(y: 6)))
+    }
+
+    /// The vertical bands above the composer that close the bar on a tap, leaving out the strip's row.
+    static func tapOutsideBands(
+        from top: CGFloat,
+        to bottom: CGFloat,
+        sparing strip: CGRect?) -> [ClosedRange<CGFloat>]
+    {
+        let bands: [(CGFloat, CGFloat)] = if let strip, strip.minY < bottom, strip.maxY > top {
+            [(top, strip.minY), (strip.maxY, bottom)]
+        } else {
+            [(top, bottom)]
+        }
+        return bands.filter { $0.1 > $0.0 }.map { $0.0...$0.1 }
     }
 }
 

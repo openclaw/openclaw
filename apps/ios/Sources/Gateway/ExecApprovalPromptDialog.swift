@@ -19,7 +19,9 @@ struct ChatSessionApproval: View {
                 prompt: item.prompt,
                 agentName: self.agentName,
                 isResolving: self.submitting || (isSelected && self.appModel.pendingExecApprovalPromptResolving),
-                error: isSelected ? self.appModel.pendingExecApprovalPromptErrorText : nil,
+                // A failure for lack of connection is the strip's ("Can’t reach …"); the card only re-enables.
+                error: isSelected && !self.appModel.pendingExecApprovalFailedUnreachable
+                    ? self.appModel.pendingExecApprovalPromptErrorText : nil,
                 outcome: outcome,
                 decide: { decision in
                     guard !self.submitting else { return }

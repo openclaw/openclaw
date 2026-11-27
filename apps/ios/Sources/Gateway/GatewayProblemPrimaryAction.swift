@@ -2,6 +2,22 @@ import OpenClawKit
 import UIKit
 
 enum GatewayProblemPrimaryAction {
+    /// What the primary action does for a problem, in the order the banner's handler checks.
+    enum Route: Equatable {
+        case resetOnboarding
+        case trustCertificate
+        case protocolMismatch
+        case retry
+        case openSettings
+    }
+
+    static func route(for problem: GatewayConnectionProblem) -> Route {
+        if problem.suggestsOnboardingReset { return .resetOnboarding }
+        if problem.canTrustRotatedCertificate { return .trustCertificate }
+        if problem.kind == .protocolMismatch { return .protocolMismatch }
+        return problem.retryable ? .retry : .openSettings
+    }
+
     static func title(
         for problem: GatewayConnectionProblem,
         retryTitle: String,

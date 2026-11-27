@@ -90,6 +90,7 @@ extension OpenClawChatViewModel {
         guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
         isSendingAttachmentDraft = !draft.attachments.isEmpty || !draft.preparationIDs.isEmpty
+        self.statusStrip.didSend()
         self.showOptimisticSend(draft)
         let task = Task { await self.performSend(draft) }
         self.composerDraftSync.send = task

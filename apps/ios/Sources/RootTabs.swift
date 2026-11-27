@@ -398,6 +398,9 @@ struct RootTabs: View {
                               chat.sessionKey == previous.key else { return }
                         chat.switchSession(to: previous.parent)
                     }
+                    // The strip above the composer offers the same recovery as the top banner.
+                    .environment(\.gatewayProblemRecovery, GatewayProblemRecovery(
+                        perform: { self.handleGatewayProblemPrimaryAction($0, reportsRetryFailure: false) }))
         case let .dashboard(path):
             DashboardPageScreen(
                 path: path,
@@ -576,6 +579,12 @@ struct RootTabs: View {
         guard let problem = appModel.gatewayProblemForToast,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
+        // In a chat, the strip above the composer carries the problem and its action; one place, not two.
+        if self.selectedSidebarDestination == .chat, !self.hasNeverHadGateway,
+           ChatConnectionStatus.carries(problem, chatState: GatewayStatusBuilder.buildChat(appModel: self.appModel))
+        {
+            return nil
+        }
         return problem
     }
 
@@ -1020,7 +1029,11 @@ extension RootTabs {
             nonRetryableTitle: "Open Settings")
     }
 
-    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+    /// `reportsRetryFailure` is off for the chat's strip, which keeps showing the problem itself.
+    private func handleGatewayProblemPrimaryAction(
+        _ problem: GatewayConnectionProblem,
+        reportsRetryFailure: Bool = true)
+    {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
@@ -1034,7 +1047,9 @@ extension RootTabs {
         } else if problem.retryable {
             self.gatewayRetryFailure = nil
             Task {
-                if case let .failed(message) = await self.gatewayController.retryGatewayConnection() {
+                if case let .failed(message) = await self.gatewayController.retryGatewayConnection(),
+                   reportsRetryFailure
+                {
                     self.gatewayRetryFailure = message
                 }
             }

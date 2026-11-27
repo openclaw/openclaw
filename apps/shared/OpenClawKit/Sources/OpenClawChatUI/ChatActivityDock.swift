@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The composer dock's activity, right above the approval card it also holds: the pill row when there is
-/// any, and the sheet each pill opens. Order from the transcript down: pills, approval card, composer.
+/// any, and the sheet each pill opens. Order from the transcript down: status strip, pills, approval card,
+/// composer.
 struct ChatActivityDock: View {
     let viewModel: OpenClawChatViewModel
     let accessory: AnyView?
@@ -49,6 +50,19 @@ struct ChatActivityDock: View {
             if case let .pullRequest(id) = pill.kind { return !hidden.contains(id.lowercased()) }
             return true
         }
+        // The connection's status strip opens the dock, above the pills and the approval card: it grows the
+        // dock upward, so the pills and the card under it never move when it comes or goes. It keeps 8 pt
+        // from the pills' faces (whose row starts 6 pt above them), the card, or the composer.
+        ChatStatusStripView(
+            strip: self.viewModel.statusStrip,
+            spaceBelow: !pills.isEmpty
+                ? ChatStatusStripMetrics.cardGap - ChatActivityPillMetrics.dockTop - ChatActivityPillMetrics.hitOutset
+                : self.approvalShown ? ChatStatusStripMetrics.cardGap : ChatStatusStripMetrics.composerGap)
+            .chatColumn(self.column)
+            .onChange(of: self.viewModel.sessionKey) { _, _ in self.viewModel.statusStrip.chatDidChange() }
+            .task(id: childRequest) {
+                if let childRequest { await self.viewModel.loadActivityChildren(childRequest) }
+            }
         if !pills.isEmpty {
             ChatActivityPillRow(
                 pills: pills,
@@ -74,15 +88,16 @@ struct ChatActivityDock: View {
                 })
                 .chatColumn(self.column)
                 .padding(.top, ChatActivityPillMetrics.dockTop)
-                .padding(.bottom, ChatActivityPillMetrics.dockBottom)
+                // The card has no top inset; only the composer supplies its own spacing.
+                .padding(
+                    .bottom,
+                    self.approvalShown
+                        ? ChatStatusStripMetrics.cardGap - ChatActivityPillMetrics.hitOutset
+                        : ChatActivityPillMetrics.dockBottom)
         }
         self.accessory?.chatColumn(self.column).modifier(ChatComposerPanelsYield())
             .onGeometryChange(for: Bool.self) { $0.size.height > 0 } action: { self.approvalShown = $0 }
-        // The approval card can be absent, so an empty view loads the children and holds the sheet.
-        Color.clear.frame(height: 0)
-            .task(id: childRequest) {
-                if let childRequest { await self.viewModel.loadActivityChildren(childRequest) }
-            }
+            .padding(.bottom, self.approvalShown ? ChatStatusStripMetrics.composerGap : 0)
             .sheet(item: self.$sheet, onDismiss: self.openSelectedChild) { sheet in
                 ChatActivitySheetView(
                     viewModel: self.viewModel,
