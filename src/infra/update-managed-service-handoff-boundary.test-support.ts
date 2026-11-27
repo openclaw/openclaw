@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import * as handoffArtifacts from "./update-managed-service-handoff-artifacts.test-support.js";
@@ -54,6 +55,7 @@ import {
 import {
   createManagedServiceActivationScript,
   pathExists,
+  readSavedFailure,
 } from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
@@ -334,6 +336,12 @@ export function createManagedServiceManagerBoundary({
           },
           env,
         );
+      }
+      if (options?.recordedFailure) {
+        await writeTriageUpdateFailure(options.recordedFailure, {
+          env,
+          outputPath: String(generated.triageContextPath),
+        });
       }
       const spawnFixture = await prepareManagedServiceSpawn(root, scriptPath, childEnv, options, {
         recoveryCommandArgv: commandFixture.recoveryCommandArgv,
@@ -663,6 +671,7 @@ export function createManagedServiceManagerBoundary({
           : readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
         ...(await spawnFixture.readCommandDeadlines()),
+        savedFailure: await readSavedFailure(String(generated.triageContextPath)),
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))
         ).every((exists) => !exists),

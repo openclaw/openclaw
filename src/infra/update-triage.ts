@@ -10,7 +10,7 @@ import {
   stripGatewayServiceMarkerEnv,
   withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
-import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -131,6 +131,7 @@ async function runPreparedUpdateFailureTriage(
       ? "Update failed. Entering triage..."
       : "Preparing triage diagnostics...",
   );
+  let contextPath: string | undefined;
   try {
     let stdout = "";
     if (prepared.mode === "interactive") {
@@ -175,9 +176,14 @@ async function runPreparedUpdateFailureTriage(
         }
       });
     } else {
+      contextPath = await writeTriageUpdateFailure(params.failure, { env: targetEnv });
+      if (!isCurrent()) {
+        return { status: "cancelled" };
+      }
+      log(`Saved failure diagnostics: ${contextPath}`);
       log(
         `To start a repair agent, run ${formatInstallationTargetCommand(
-          ["openclaw", "triage", "--run"],
+          ["openclaw", "triage", "--run", "--update-result", contextPath],
           installationTarget,
           { env: targetEnv },
         )}`,
@@ -190,7 +196,12 @@ async function runPreparedUpdateFailureTriage(
       if (!entryPath) {
         throw new Error("The installed OpenClaw entrypoint is unavailable.");
       }
-      const args = ["triage", prepared.mode === "json" ? "--json" : "--non-interactive"];
+      const args = [
+        "triage",
+        "--update-result",
+        contextPath,
+        prepared.mode === "json" ? "--json" : "--non-interactive",
+      ];
       const nodeRunner = params.target.nodeRunner ?? process.execPath;
       const invocation = resolveOpenClawCliInvocation({
         execPath: nodeRunner,
@@ -252,11 +263,16 @@ async function runPreparedUpdateFailureTriage(
         : formatErrorMessage(error);
     const reason = scrubDoctorErrorMessage(redactSupportString(detail, redaction));
     const message = `Triage could not complete: ${reason}`;
-    const command = formatInstallationTargetCommand(["openclaw", "triage"], installationTarget, {
-      env: targetEnv,
-    });
+    const command = formatInstallationTargetCommand(
+      ["openclaw", "triage", ...(contextPath ? ["--update-result", contextPath] : [])],
+      installationTarget,
+      { env: targetEnv },
+    );
     const guidance = `On the Gateway host, run ${command} after resolving the diagnostic error.`;
     logError(message);
+    if (contextPath) {
+      log(`Saved update failure: ${contextPath}`);
+    }
     log(guidance);
     return {
       status: "failed",

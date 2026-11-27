@@ -66,6 +66,7 @@ it.each([
   const artifact = path.join(diagnosticDir, "update-failure.json");
   const previous = '{"retained":"original diagnostic"}\n';
   await fs.writeFile(artifact, previous, { mode: 0o600 });
+  const priorStat = await fs.stat(artifact);
   await writeFixtureJson(metadata, {
     version: 1,
     meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
@@ -126,6 +127,8 @@ it.each([
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const human = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    // Observe publication through the real filesystem.
+    const renamed = vi.spyOn(fs, "rename");
     const result = resultFixture(undefined, {
       status: "error",
       root,
@@ -177,6 +180,11 @@ it.each([
         });
       }),
     ).catch((error: unknown) => error);
+    const after = await fs.readFile(artifact, "utf8");
+    const afterStat = await fs.stat(artifact);
+    const artifactRenames = renamed.mock.calls.filter(
+      ([, destination]) => String(destination) === artifact,
+    ).length;
     const recorded = getUpdateRun(run.runId, { env });
     expect(exit).toBeInstanceOf(ExitError);
     const unsettled = trial.revoked || trial.releaseDenied;
@@ -208,6 +216,15 @@ it.each([
         ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
         : { owner: trial.revoked ? "replacement-owner" : owner },
     });
+    expect(artifactRenames).toBe(unsettled ? 0 : 1);
+    if (unsettled) {
+      expect(after).toBe(previous);
+      expect(afterStat).toMatchObject({ ino: priorStat.ino, mtimeMs: priorStat.mtimeMs });
+    } else {
+      expect(JSON.parse(after)).toMatchObject({
+        result: { status: "error", reason: result.reason },
+      });
+    }
   } finally {
     if (helper?.connected) {
       helper.send("release");

@@ -159,7 +159,9 @@ describe("update triage child lifecycle", () => {
       // Command settlement includes its process-tree cleanup join.
       expect(isPidAlive(pid)).toBe(false);
       expect(runtime.log).toHaveBeenCalledWith("Preparing triage diagnostics...");
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw triage --run"));
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw triage --run --update-result"),
+      );
       expect(runtime.log).not.toHaveBeenCalledWith(
         "Triage diagnostics saved; no repair agent was started.",
       );
@@ -213,11 +215,15 @@ describe("update triage child lifecycle", () => {
       expect(result.hint).not.toContain(target.root);
       expect(result.hint.split("\n")[0]?.length).toBeLessThan(284);
       const args = runCommand.mock.calls[0]![0];
-      expect(args.slice(-2)).toEqual(["triage", "--json"]);
-      expect(guidance).toContain("& openclaw triage");
+      expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
+      const contextPath = args.at(-2)!;
+      expect(guidance).toContain(
+        `& openclaw triage --update-result '${contextPath.replaceAll("'", "''")}'`,
+      );
       for (const selector of [targetEnv.OPENCLAW_STATE_DIR, configPath, workspaceDir]) {
         expect(guidance).toContain(`'${selector.replaceAll("'", "''")}'`);
       }
+      await expect(fs.stat(contextPath)).resolves.toMatchObject({ size: expect.any(Number) });
     }
   });
 });

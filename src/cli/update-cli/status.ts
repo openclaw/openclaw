@@ -38,8 +38,11 @@ import {
   formatGitInstallLabel,
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
+import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
 import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
+import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
 import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -453,6 +456,15 @@ async function inspectUpdateStatus(
     return;
   }
 
+  const displayedRun = activeRun ?? ("lastRun" in runStatus ? runStatus.lastRun : undefined);
+  const currentRunHealth =
+    displayedRun?.status === "failed"
+      ? await inspect(
+          "Gateway health",
+          () => readUpdateRunReportHealth(displayedRun.verification, { timeoutMs: remainingMs() }),
+          undefined,
+        )
+      : undefined;
   const gitLabel = formatGitInstallLabel(update);
   const updateLine =
     releaseStatus?.notice ??
@@ -615,22 +627,34 @@ async function inspectUpdateStatus(
           `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
-      // This recovery inspection verifies the service before suggesting another restart.
-      const refusedRestartRecovery = await inspect(
-        "refused restart recovery",
-        () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
-        undefined,
-      );
+      // A refused restart on a Gateway that is not responding has a recovery verified against
+      // the live service just now; name it as the next step, not as saved triage advice.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "unavailable"
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
+            )
+          : undefined;
       const summary = renderUpdateRunSummary(
         refusedRestartRecovery
           ? { ...run, origin: { ...run.origin, nextAction: refusedRestartRecovery } }
           : run,
       );
+      const historical =
+        currentRunHealth?.kind === "responding"
+          ? projectUpdateRunHistory(run, currentRunHealth)
+          : null;
       if (!abandonedRun && !staleRun) {
-        defaultRuntime.log(summary);
+        defaultRuntime.log(historical ?? summary);
       }
       for (const warning of updateRunWarningMessages(run.steps)) {
         printWarning(safeMessage(`Warning: ${warning}`));
+      }
+      const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
+      for (const line of historical && omission ? [omission] : []) {
+        defaultRuntime.log(line);
       }
       defaultRuntime.log("");
     }

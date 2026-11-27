@@ -312,7 +312,9 @@ After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
 sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
-read-only request before issue creation. The report is prepared from the failed
+read-only request, then searches for the exact report before creating an issue.
+If a matching issue is found, OpenClaw returns its URL instead.
+The report is prepared from the failed
 update's recorded outcome and steps; no separate report file or publication receipt
 is saved. If the CLI is missing, authentication is unavailable, or GitHub rejects
 the upload, OpenClaw returns to the previous action menu.
@@ -1097,7 +1099,7 @@ a step is running. Updates, verification, and rollback do not
 require inference or model authentication. Model-auth findings remain warnings.
 Unattended updates (`--yes`, `--json`, or no TTY) never start a repair agent.
 After a failed outcome and update cleanup, they save triage diagnostics and print
-`openclaw triage --run` for explicit opt-in repair. Managed
+`openclaw triage --run --update-result <path>` for explicit opt-in repair. Managed
 handoffs and foreground `gateway run` startup failures also collect diagnostics
 only. Interactive updates retain the **Diagnose update failure** menu and consent
 prompt. Triage does not change the recorded update outcome. Reports from older updaters can still contain a `repairing` phase.

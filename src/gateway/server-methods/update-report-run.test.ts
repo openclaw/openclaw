@@ -265,7 +265,9 @@ beforeEach(async () => {
   mocks.sentinel.mockReset().mockResolvedValue(null);
   mocks.runGh
     .mockReset()
-    .mockImplementation(async (args) => ghResult(args[0] === "auth" ? "" : issueUrl));
+    .mockImplementation(async (args) =>
+      ghResult(args[0] === "auth" ? "" : args[0] === "issue" ? "[]" : issueUrl),
+    );
 });
 afterEach(async () => {
   await home.restore();
@@ -567,7 +569,7 @@ describe("Report action from the authoritative update ledger", () => {
     connection.abort();
     resume.resolve();
     const respond = await submitting;
-    expect(ghPhases()).toEqual(["auth", "api"]);
+    expect(ghPhases()).toEqual(["auth", "issue", "api"]);
     expect(respond).not.toHaveBeenCalled();
     expect(await reportFiles()).toEqual([]);
   });
@@ -603,7 +605,7 @@ describe("Report action from the authoritative update ledger", () => {
         await releaseResponse.promise;
         return ghResult(issueUrl);
       }
-      return ghResult();
+      return ghResult(args[0] === "issue" ? "[]" : "");
     });
     const params = submitParams(previewDigest);
     const submitting = invoke(
@@ -648,7 +650,7 @@ describe("Report action from the authoritative update ledger", () => {
     }
     expect(close).toHaveBeenCalledOnce();
     expect(closeError).not.toHaveBeenCalled();
-    expect(ghPhases()).toEqual(["auth", "api"]);
+    expect(ghPhases()).toEqual(["auth", "issue", "api"]);
     expect(await reportFiles()).toEqual([]);
   });
 
@@ -661,6 +663,9 @@ describe("Report action from the authoritative update ledger", () => {
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "api") {
           return ghResult(issueUrl);
+        }
+        if (args[0] === "issue") {
+          return ghResult("[]");
         }
         expect(args[0]).toBe("auth");
         if (change === "duplicate-finalization") {
@@ -684,7 +689,7 @@ describe("Report action from the authoritative update ledger", () => {
       });
       const respond = await submit(previewDigest);
       expectPartialReply(respond, { status: "created", url: issueUrl });
-      expect(ghPhases()).toEqual(["auth", "api"]);
+      expect(ghPhases()).toEqual(["auth", "issue", "api"]);
       expect(await reportFiles()).toEqual([]);
     },
   );

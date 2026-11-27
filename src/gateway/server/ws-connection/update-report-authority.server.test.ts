@@ -215,6 +215,9 @@ describe("update report live authority boundary", () => {
           await released.promise;
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
         }
+        if (args[0] === "issue") {
+          return { started: true, status: 0, stdout: Buffer.from("[]") };
+        }
         expect(args).toContain("POST");
         expect(validateAuthority(identity)).toBe(true);
         return {
@@ -244,7 +247,7 @@ describe("update report live authority boundary", () => {
         expect(validateAuthority(identity)).toBe(true);
         expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
 
-        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
+        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "issue", "api"]);
         const response = await harness.awaitResponseFrame("runtime-submit");
         expect(response).toMatchObject(createdResponse);
         expect(harness.close).not.toHaveBeenCalled();

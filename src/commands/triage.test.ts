@@ -329,7 +329,7 @@ describe("triageCommand", () => {
     expect(prompt).not.toContain(secret);
     expect(prompt).not.toContain(stateDir);
     const output = runtime.log.mock.calls;
-    expect(JSON.stringify(output)).toContain("openclaw triage --run");
+    expect(JSON.stringify(output)).toContain("--update-result");
     expect(JSON.stringify(output)).not.toContain(secret);
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();

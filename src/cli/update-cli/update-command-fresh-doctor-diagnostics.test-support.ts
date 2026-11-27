@@ -7,7 +7,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readTriageUpdateFailure, writeTriageUpdateFailure } from "../../commands/triage-update.js";
+import { readReleasedTriageUpdateFailure } from "../../commands/triage-update.released-reader.test-support.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../../infra/update-doctor-result.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -212,7 +215,7 @@ export function registerFreshDoctorDiagnosticTests({
     expect(onDoctorStep.mock.calls[0]?.[0].diagnostics).toBeUndefined();
   });
 
-  it("captures an explicitly reported missing-module failure after long warnings", async () => {
+  it("captures an explicitly reported missing-module failure after long warnings for current and released readers", async () => {
     const root = tempDirs.make("post-plugin-validation-command-");
     const stateDir = path.join(root, "state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -252,6 +255,48 @@ export function registerFreshDoctorDiagnosticTests({
     expect(result.failureFacts?.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(JSON.stringify(result)).not.toContain(root);
+    const updateResult: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      durationMs: 0,
+      reason: "post-update-plugins",
+      postUpdate: { plugins: result },
+      steps: [
+        {
+          name: "plugin-convergence",
+          command: "config validate --json",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 1,
+          failureFacts: result.failureFacts,
+        },
+      ],
+    };
+    const outputPath = await writeTriageUpdateFailure(
+      { result: updateResult },
+      { env: process.env, outputPath: path.join(root, "failure.json") },
+    );
+    for (const read of [readTriageUpdateFailure, readReleasedTriageUpdateFailure]) {
+      const failure = await read(outputPath, { env: process.env, stateDir });
+      expect(failure).toMatchObject({
+        result: {
+          reason: "post-update-plugins",
+          postUpdate: {
+            plugins: {
+              reason: "post-plugin-config-validation-execution-failed",
+              warnings: [
+                expect.objectContaining({
+                  reason: expect.stringContaining("ERR_MODULE_NOT_FOUND"),
+                  message: "Config validation could not complete; refusing to restart.",
+                }),
+              ],
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+      expect(JSON.stringify(failure)).not.toContain("doctor --fix");
+    }
     expect(mocks.runUtf8).not.toHaveBeenCalled();
   });
 

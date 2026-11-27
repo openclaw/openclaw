@@ -9,11 +9,11 @@ import {
   readTriageUpdateFailure,
   sanitizeTriageUpdateFailure,
   updateFailureSchema,
-  type TriageUpdateFailure,
+  writeTriageUpdateFailure,
 } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type Failure = TriageUpdateFailure;
+type Failure = Parameters<typeof writeTriageUpdateFailure>[0];
 type Result = Extract<Failure, { result: unknown }>["result"];
 type Plugins = NonNullable<NonNullable<Result["postUpdate"]>["plugins"]>;
 
@@ -26,19 +26,22 @@ describe("update failure triage diagnostics", () => {
     stateDir = path.join(home, ".openclaw");
     env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
   });
-  const sanitize = (result: Partial<Result>, error?: string) => {
-    const failure = sanitizeTriageUpdateFailure(
+  const write = async (result: Partial<Result>, error?: string) => {
+    const outputPath = await writeTriageUpdateFailure(
       { result: { status: "error", mode: "npm", steps: [], ...result }, error },
-      { env, stateDir },
-      "artifact",
+      { env },
     );
-    return { raw: JSON.stringify(failure), failure };
+    return {
+      outputPath,
+      raw: await fs.readFile(outputPath, "utf8"),
+      failure: await readTriageUpdateFailure(outputPath, { env, stateDir }),
+    };
   };
-  const sanitizePlugins = (plugins: Plugins) =>
-    sanitize({ reason: "post-update-plugins", postUpdate: { plugins } });
+  const writePlugins = (plugins: Plugins) =>
+    write({ reason: "post-update-plugins", postUpdate: { plugins } });
 
   it("omits whole words when bounding the swap cause and recovery advice", async () => {
-    const { raw, failure } = sanitize({
+    const { raw, failure } = await write({
       steps: [
         {
           name: "global install swap",
@@ -90,7 +93,7 @@ describe("update failure triage diagnostics", () => {
     },
   );
 
-  it("bounds and sanitizes failure evidence without changing the result", () => {
+  it("writes bounded sanitized failure evidence without changing the result", async () => {
     const secret = "sk-test-update-triage-secret-1234567890";
     const result: UpdateRunResult = {
       runId: "10000000-0000-4000-8000-000000000001",
@@ -129,7 +132,9 @@ describe("update failure triage diagnostics", () => {
       })),
     };
 
-    const { raw, failure } = sanitize(result);
+    const { outputPath, raw, failure } = await write(result);
+
+    expect(outputPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
     expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
     for (const excluded of [secret, home, "unredacted-command", "\uFFFD", "step-4"]) {
       expect(raw).not.toContain(excluded);
@@ -156,6 +161,9 @@ describe("update failure triage diagnostics", () => {
     }
     expect(result.steps).toHaveLength(5);
     expect(result.steps[0]?.command).toContain(secret);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
+    }
   });
 
   const failedStep = (name: string, details: Partial<Result["steps"][number]> = {}) => ({
@@ -186,7 +194,7 @@ describe("update failure triage diagnostics", () => {
       "Unrelated trailing diagnostics.\n".repeat(100),
       "Installation recovery is unverified; preserve backups.",
     ].join("\n");
-    const { raw, failure } = sanitize({
+    const { raw, failure } = await write({
       steps: [failedStep("openclaw doctor", { stderrTail, termination: "exit" })],
     });
     const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
@@ -231,7 +239,7 @@ describe("update failure triage diagnostics", () => {
       `    at checkpoint (${home}/${'🦞 "context" '.repeat(1000)}/state.mjs:51:10)`,
       "    at laterFrame (state.mjs:53:128)",
     ].join("\n");
-    const { raw, failure } = sanitize({
+    const { raw, failure } = await write({
       steps: [failedStep("openclaw doctor", { stderrTail })],
     });
     const prompt = sanitizeTriageUpdateFailure(failure, { env, stateDir });
@@ -250,7 +258,7 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("keeps the failure that started recovery when recovery steps also fail", async () => {
-    const { failure } = sanitize({
+    const { failure } = await write({
       reason: "state-migrated-no-rollback",
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [
@@ -354,7 +362,7 @@ describe("update failure triage diagnostics", () => {
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [],
     };
-    const { failure: recorded } = sanitize(
+    const { failure: recorded } = await write(
       result,
       `Gateway activation failed ${"intermediate context ".repeat(100)}terminal recovery cause`,
     );
@@ -364,7 +372,7 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
-    const { raw, failure } = sanitizePlugins({
+    const { raw, failure } = await writePlugins({
       status: "error",
       sync: { errors: ["Plugin sync failed"] },
       npm: {
@@ -383,7 +391,7 @@ describe("update failure triage diagnostics", () => {
 
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {
     const errors = ["Earlier failure one", "Earlier failure two", "Earlier failure three"];
-    const { failure: recorded } = sanitizePlugins({
+    const { failure: recorded } = await writePlugins({
       status: "error",
       sync: { errors },
       warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],

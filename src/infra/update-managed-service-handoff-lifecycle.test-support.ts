@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -70,6 +71,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   triageExitCode?: number;
   triageHang?: boolean;
   triageMissing?: boolean;
+  recordedFailure?: TriageUpdateFailure;
   helperExitCode?: number;
   updaterResult?: unknown;
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
@@ -98,6 +100,7 @@ export type ManagedServiceManagerBoundaryResult = {
   commandTimings: ManagedServiceCommandTiming[];
   recoveryDeadline?: { requestedMs: number; descendantPid?: number };
   triageDeadline?: { requestedMs: number; descendantPid: number };
+  savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
   parkAdmitted?: boolean;
   stopSettlement?: {
