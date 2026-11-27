@@ -49,23 +49,6 @@ export function sessionEntrySnapshotColumnsForKeys(
 
 export const sessionEntrySnapshotColumns = sessionEntrySnapshotColumnsForKeys();
 
-// Deep equality ignores object member order. Reuse stored bytes only when the
-// submitted JSON has the same ordering and the comparison used detached values.
-function preservesStoredJsonOrder(value: unknown, stored: unknown): boolean {
-  if (typeof value !== "object" || value === null) {
-    return true;
-  }
-  if (typeof stored !== "object" || stored === null || value === stored || "toJSON" in value) {
-    return false;
-  }
-  const keys = Object.keys(stored);
-  return Object.keys(value).every(
-    (key, index) =>
-      key === keys[index] &&
-      preservesStoredJsonOrder(Reflect.get(value, key), Reflect.get(stored, key)),
-  );
-}
-
 export function splitSessionEntrySnapshots(
   entry: SessionEntry | Record<string, unknown>,
   mode:
@@ -84,34 +67,24 @@ export function splitSessionEntrySnapshots(
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
   const previous = mode === "complete" ? undefined : mode;
-  const changedFields = snapshotColumns.filter(
-    ([field]) =>
-      !previous ||
-      (values[field] !== previous.previousEntry?.[field] &&
-        !isDeepStrictEqual(values[field], previous.previousEntry?.[field])),
-  );
-  const snapshotsChanged = changedFields.length > 0;
+  const snapshotsChanged =
+    !previous ||
+    snapshotColumns.some(
+      ([field]) =>
+        values[field] !== previous.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], previous.previousEntry?.[field]),
+    );
   const snapshots: SessionEntrySnapshot[] = [];
   const snapshotUpserts: SessionEntrySnapshot[] = [];
-  for (const column of snapshotsChanged ? snapshotColumns : []) {
-    const [field, alias] = column;
-    // Keep the complete persisted image for publication and removal. Only a current
-    // side-table value can spare an UPSERT; resident actors deliberately omit those bytes.
-    if (values[field] === undefined) {
-      continue;
-    }
-    const stored = previous?.previousRow?.[alias];
-    const retained =
-      stored != null &&
-      !changedFields.includes(column) &&
-      preservesStoredJsonOrder(values[field], previous?.previousEntry?.[field])
-        ? stored
-        : undefined;
-    const valueJson = retained ?? JSON.stringify(values[field]);
+  for (const [field, alias] of snapshotsChanged ? snapshotColumns : []) {
+    const valueJson = JSON.stringify(values[field]);
     if (valueJson !== undefined) {
+      // Publication and removals need every field. The database only needs bytes
+      // that differ from this transaction’s canonical side-table row.
+      const stored = previous?.previousRow?.[alias];
       const snapshot = { field, valueJson };
       snapshots.push(snapshot);
-      if (retained == null) {
+      if (valueJson !== stored) {
         snapshotUpserts.push(snapshot);
       }
     }

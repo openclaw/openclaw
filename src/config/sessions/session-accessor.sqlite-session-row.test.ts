@@ -81,7 +81,7 @@ it("updates maintenance and retained-reference predicates with the canonical ent
   expect(references().has("previous")).toBe(false);
 });
 
-it("updates the prompt report without encoding or binding the unchanged skill snapshot", () => {
+it("updates the prompt report without rebinding the unchanged skill snapshot", () => {
   const skillsSnapshot = {
     prompt: "retained skill ".repeat(4096),
     skills: [
@@ -99,7 +99,6 @@ it("updates the prompt report without encoding or binding the unchanged skill sn
     CREATE TEMP TRIGGER capture_snapshot_bind BEFORE INSERT ON session_entry_snapshots
     BEGIN INSERT INTO snapshot_binds VALUES (NEW.field, length(CAST(NEW.value_json AS BLOB))); END;
   `);
-  const stringify = vi.spyOn(JSON, "stringify");
   const updates = 8;
   for (let i = 1; i <= updates; i++) {
     replaceSessionEntrySync(scope, {
@@ -108,10 +107,6 @@ it("updates the prompt report without encoding or binding the unchanged skill sn
       systemPromptReport: promptReport(i + 1, 1, 0),
     });
   }
-  const encodings = stringify.mock.calls.filter(
-    ([value]) => value?.prompt === skillsSnapshot.prompt,
-  ).length;
-  stringify.mockRestore();
   const binds = database.db
     .prepare(
       "SELECT field, count(*) AS calls, sum(bytes) AS bytes FROM snapshot_binds GROUP BY field ORDER BY field",
@@ -122,10 +117,9 @@ it("updates the prompt report without encoding or binding the unchanged skill sn
     skillsSnapshot,
     systemPromptReport: { generatedAt: updates + 1 },
   });
-  expect({ encodings, binds }).toEqual({
-    encodings: 0,
-    binds: [{ field: "systemPromptReport", calls: updates, bytes: expect.any(Number) }],
-  });
+  expect(binds).toEqual([
+    { field: "systemPromptReport", calls: updates, bytes: expect.any(Number) },
+  ]);
 });
 
 it("keeps submitted member order during a mixed write and removes a cleared snapshot", () => {
