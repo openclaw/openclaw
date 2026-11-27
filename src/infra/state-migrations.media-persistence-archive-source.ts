@@ -46,7 +46,7 @@ export function transcriptArchiveNeedsMigration(filePath: string): boolean {
   return readTranscriptArchiveMigration(filePath).transformed.changed;
 }
 
-export function migrateTranscriptArchive(filePath: string): boolean {
+function migrateTranscriptArchive(filePath: string): boolean {
   const { source, compressed, transformed } = readTranscriptArchiveMigration(filePath);
   if (!transformed.changed) {
     return false;

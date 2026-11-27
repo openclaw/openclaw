@@ -3,14 +3,20 @@ import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
 
 const OPTIMIZE_ALL_TABLES_SQLITE_VERSION = "3.46.0";
+// From 3.51.0 the row estimate counts each interior page's children (cells + 1).
+const ROW_ESTIMATE_COUNTS_CHILDREN_SQLITE_VERSION = "3.51.0";
 // SQLite's `PRAGMA optimize` reanalyzes a table whose estimated row count left a
 // 10x band (LogEst +/-33) around its recorded count; LogEst(1048576) is a fresh table's estimate.
 const OPTIMIZE_SIZE_RANGE = 33;
 const DEFAULT_TABLE_ROW_LOG_EST = 200;
 
-function hasOptimizeAllTables(): boolean {
+function runtimeIsAtLeast(minimum: string): boolean {
   const version = captureSqliteNativeRuntimeAdmission()?.version;
-  return !version || (compareValidSemver(version, OPTIMIZE_ALL_TABLES_SQLITE_VERSION) ?? 0) >= 0;
+  return !version || (compareValidSemver(version, minimum) ?? 0) >= 0;
+}
+
+function hasOptimizeAllTables(): boolean {
+  return runtimeIsAtLeast(OPTIMIZE_ALL_TABLES_SQLITE_VERSION);
 }
 
 /** The caller owns writer admission; sampling is bounded per index, not by elapsed time. */
@@ -53,10 +59,11 @@ function sqliteLogEst(value: number): number {
 }
 
 /**
- * The row estimate SQLite's optimize compares (sqlite3BtreeRowCountEst): the cell
- * counts multiplied along the leftmost root-to-leaf path, or -1 for an empty table.
+ * The row estimate SQLite's optimize compares (sqlite3BtreeRowCountEst): the leftmost
+ * leaf's cells times each interior page's fanout on the path to it, or -1 when empty.
  */
 function readTableRowLogEst(database: DatabaseSync, table: string): number {
+  const childCount = runtimeIsAtLeast(ROW_ESTIMATE_COUNTS_CHILDREN_SQLITE_VERSION) ? 1 : 0;
   // dbstat walks pages depth-first, so the leftmost path ends at the first leaf row.
   const pages = database // sqlite-allow-raw -- Read-only planner estimate.
     .prepare("SELECT pagetype, ncell FROM dbstat WHERE name = ? AND aggregate = FALSE")
@@ -66,10 +73,11 @@ function readTableRowLogEst(database: DatabaseSync, table: string): number {
     if (page.pagetype === "overflow") {
       continue;
     }
-    estimate *= page.ncell;
     if (page.pagetype === "leaf") {
+      estimate *= page.ncell;
       return estimate === 0 ? -1 : sqliteLogEst(estimate);
     }
+    estimate *= page.ncell + childCount;
   }
   return -1;
 }

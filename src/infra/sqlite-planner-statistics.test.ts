@@ -134,11 +134,28 @@ describe("SQLite planner maintenance", () => {
     observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
     observe("emptied table with statistics", "DELETE FROM plain;");
     observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    // Two short-row leaves under a one-cell root: the estimate counts the root's two
+    // children, so a recorded count of 15 sits just outside optimize's 10x band.
+    observe(
+      "small fanout near the threshold",
+      `CREATE TABLE fan (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       CREATE INDEX fan_value ON fan(value);
+       WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 220)
+       INSERT INTO fan SELECT v, printf('%020d', v) FROM n;
+       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       UPDATE sqlite_stat1 SET stat = '15 1' WHERE tbl = 'fan';
+       ANALYZE sqlite_schema;`,
+    );
     writer.close();
 
     expect(observations.map(({ step, readOnly }) => ({ step, readOnly }))).toEqual(
       observations.map(({ step, sqlite }) => ({ step, readOnly: sqlite })),
     );
+    expect(
+      observations.find(({ step }) => step === "small fanout near the threshold"),
+    ).toMatchObject({
+      sqlite: true,
+    });
     // The fixture reaches both answers, so agreement is not vacuous.
     expect(new Set(observations.map(({ sqlite }) => sqlite))).toEqual(new Set([true, false]));
   });

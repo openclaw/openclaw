@@ -11,7 +11,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
-import { decideDoctorPendingFromLiveStores } from "../commands/doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
@@ -38,7 +37,6 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveSchemaMigrationIntegrityCheck } from "../state/schema-migration-backup-scope.js";
 import { isTruthyEnvValue } from "./env.js";
 import { findCanonicalSqliteIndexDrift } from "./sqlite-index-schema.js";
@@ -65,14 +63,14 @@ import {
 } from "./state-migrations.transcript-directives-archives.js";
 
 /** Inventory decisions taken once, before any database is visited. */
-export type AgentDatabaseDiscoveryCondition =
+type AgentDatabaseDiscoveryCondition =
   /** Registry removals, pending deletions, held stores, failures or warnings. */
   | "discovery"
   /** A locator selects a database another agent owns (`recoverMisplacedAgentDatabaseCopies`). */
   | "misplaced-copies";
 
 /** Per-database decisions, in the order the writing pass reaches them. */
-export type AgentDatabaseCondition =
+type AgentDatabaseCondition =
   /** PostgreSQL stores and update-in-progress runs take their own paths. */
   | "engine"
   /** user_version and ownership metadata below, above or out of step with this build. */
@@ -110,7 +108,7 @@ export type AgentDatabaseCondition =
   /** Cold archives without retained navigation (`migrateSessionColdNavigation`). */
   | "cold-navigation";
 
-export type AgentDatabaseMaintenancePlan = {
+type AgentDatabaseMaintenancePlan = {
   agentId: string;
   path: string;
   realPath: string;
@@ -124,10 +122,12 @@ export type AgentDatabaseMigrationPlan = {
   pending: DoctorMaintenancePending;
 };
 
-/** Conditions owned by the media pass; the cold navigation pass owns only its own. */
-const COLD_NAVIGATION_CONDITIONS: readonly AgentDatabaseCondition[] = ["cold-navigation"];
+/** The cold navigation pass owns this condition; the media pass owns every other. */
+const COLD_NAVIGATION_CONDITIONS: ReadonlySet<string> = new Set<AgentDatabaseCondition>([
+  "cold-navigation",
+]);
 
-export function combineAgentDatabasePending(
+function combineAgentDatabasePending(
   answers: Iterable<DoctorMaintenancePending | undefined>,
 ): DoctorMaintenancePending {
   let combined: DoctorMaintenancePending = "none";
@@ -143,11 +143,11 @@ export function combineAgentDatabasePending(
 }
 
 /** Whether the media pass may leave this database untouched (every condition but its own none). */
-export function agentDatabaseMediaPassIsNoop(plan: AgentDatabaseMaintenancePlan): boolean {
+function agentDatabaseMediaPassIsNoop(plan: AgentDatabaseMaintenancePlan): boolean {
   return (
     combineAgentDatabasePending(
       Object.entries(plan.conditions)
-        .filter(([condition]) => !COLD_NAVIGATION_CONDITIONS.includes(condition as never))
+        .filter(([condition]) => !COLD_NAVIGATION_CONDITIONS.has(condition))
         .map(([, answer]) => answer),
     ) === "none"
   );
@@ -198,7 +198,7 @@ function readRegisteredAgentDatabases(env: NodeJS.ProcessEnv) {
 }
 
 /** Plan one discovered database. Missing, deleted and incognito stores are undecidable. */
-export async function planAgentDatabaseMaintenance(
+async function planAgentDatabaseMaintenance(
   target: AgentDatabaseMigrationTarget,
   context: {
     env: NodeJS.ProcessEnv;
@@ -449,37 +449,6 @@ export async function planAgentDatabaseMigration(params: {
       ...databases.map((database) => database.pending),
     ]),
   };
-}
-
-/**
- * The plan as a Doctor `pending` input: every store is read live and read-only, never
- * copied. A store no connection holds open is undecidable, because a read-only open
- * would create its WAL sidecars.
- */
-export async function checkAgentDatabaseMigrationPending(params: {
-  env?: NodeJS.ProcessEnv;
-  configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
-  integrityCheck?: "quick" | "full";
-}): Promise<DoctorMaintenancePending> {
-  const env = params.env ?? process.env;
-  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], async () => {
-    const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
-      env,
-      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets,
-    });
-    return decideDoctorPendingFromLiveStores(
-      preparedDiscovery.discovery.targets.map((target) => target.path),
-      async () =>
-        (
-          await planAgentDatabaseMigration({
-            env,
-            configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets,
-            preparedDiscovery,
-            integrityCheck: params.integrityCheck,
-          })
-        ).pending,
-    );
-  });
 }
 
 /**

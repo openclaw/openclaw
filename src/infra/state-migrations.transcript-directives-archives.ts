@@ -490,6 +490,8 @@ export async function migrateCanonicalTranscriptArchives(
       const filesCurrent = batch.map((planned) => {
         current = planned;
         if (params.verifyOnly && planned.changed) {
+          // The writing pass rewrites this blob and its file.
+          verifyPending = true;
           return false;
         }
         const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);

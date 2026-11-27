@@ -12,11 +12,7 @@ import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
-import {
-  planAgentDatabaseMaintenance,
-  planAgentDatabaseMigration,
-  type AgentDatabaseCondition,
-} from "./state-migrations.agent-database-plan.js";
+import { planAgentDatabaseMigration } from "./state-migrations.agent-database-plan.js";
 import { migrateLegacyMediaPersistence as migrate } from "./state-migrations.media-persistence.js";
 import {
   cleanupMediaPersistenceFixtures,
@@ -25,6 +21,10 @@ import {
   writeArchive,
 } from "./state-migrations.media-persistence.test-support.js";
 import { MEDIA_ARCHIVE_VERIFICATION_KEY } from "./state-migrations.transcript-directives-archives.js";
+
+type AgentDatabaseCondition = keyof Awaited<
+  ReturnType<typeof planAgentDatabaseMigration>
+>["databases"][number]["conditions"];
 
 const tempDirs: string[] = [];
 
@@ -206,10 +206,12 @@ describe("agent database migration plan", () => {
           db.exec("DELETE FROM sqlite_stat1");
         }),
       repaired: ({ databasePath }) =>
-        Number(
-          (readOne(databasePath, "SELECT count(*) AS n FROM sqlite_stat1") as { n: number }).n,
-        ) > 0,
-      expected: true,
+        (
+          readOne(databasePath, "SELECT count(*) > 0 AS analyzed FROM sqlite_stat1") as {
+            analyzed: number;
+          }
+        ).analyzed,
+      expected: 1,
     },
     {
       condition: "schema-metadata",
@@ -362,35 +364,35 @@ describe("agent database migration plan", () => {
 
   it("answers undecidable for a store the read-only reader cannot vouch for", async () => {
     const { env, databasePath } = await healthyInstall();
-    const target = {
-      agentId: "main",
-      path: databasePath,
-      realPath: databasePath,
-      source: "disk" as const,
-    };
-    // An incognito store at its sentinel locator is never read as a durable database.
-    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-    fs.copyFileSync(databasePath, incognitoPath);
-    const incognito = await planAgentDatabaseMaintenance(
-      { ...target, path: incognitoPath, realPath: incognitoPath },
-      { env },
-    );
-    expect(incognito.conditions["schema-version"]).toBe("undecidable");
-
     // A store whose agent was deleted in this process reads as missing.
     installDeletedAgentDatabaseFences([[path.resolve(databasePath), "main"]]);
     try {
-      const deleted = await planAgentDatabaseMaintenance(target, { env });
-      expect(deleted.conditions["schema-version"]).toBe("undecidable");
-      expect(deleted.pending).toBe("undecidable");
+      const { plan, conditions } = await conditionsOf(env);
+      expect(conditions["schema-version"]).toBe("undecidable");
+      expect(plan.pending).toBe("undecidable");
     } finally {
       installDeletedAgentDatabaseFences([]);
     }
 
-    fs.rmSync(databasePath);
-    const missing = await planAgentDatabaseMaintenance(target, { env });
-    expect(missing.conditions["schema-version"]).toBe("undecidable");
-    expect(missing.pending).not.toBe("none");
+    // A configured incognito store is a target, but the reader never vouches for it.
+    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    fs.copyFileSync(databasePath, incognitoPath);
+    const configured = await planAgentDatabaseMigration({
+      env,
+      configuredAgentDatabaseTargets: [{ agentId: "main", path: incognitoPath }],
+    });
+    expect(
+      configured.databases.map(({ path: pathname, conditions }) => [
+        pathname,
+        conditions["schema-version"],
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        [incognitoPath, "undecidable"],
+        [databasePath, "none"],
+      ]),
+    );
+    expect(configured.pending).not.toBe("none");
   });
 });
 
