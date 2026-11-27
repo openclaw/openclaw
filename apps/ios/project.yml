@@ -444,6 +444,8 @@ targets:
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/DeepLinksSecurityTests.swift
+        group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatSessionsCodingTests.swift
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ToolResultIngestionTransport.swift

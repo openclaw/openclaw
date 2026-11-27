@@ -18,6 +18,7 @@ import { ProviderBrandIcon, ProviderFallbackIcon } from "../components/solid/pro
 import type { SettingsSegmentedProps } from "../components/solid/settings-ui.tsx";
 import * as settings from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
+import { Switch } from "../components/solid/switch.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
 
 const options = [
@@ -154,7 +155,7 @@ function Controls() {
         <settings.SettingsRow
           title="Rejected toggle"
           control={
-            <settings.SettingsToggle
+            <Switch
               ariaLabel="Rejected toggle"
               checked={false}
               onChange={() => {

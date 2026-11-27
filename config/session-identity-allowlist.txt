@@ -634,7 +634,6 @@ src/cli/gateway-cli/run-loop-startup-failure.ts	1
 src/cli/gateway-cli/systemd-activation.ts	2
 src/cli/local-state-owner.ts	1
 src/cli/update-cli/shared.ts	1
-src/cli/update-cli/status.ts	2
 src/cli/update-cli/update-command-admitted.ts	2
 src/cli/update-cli/update-command-cohort.ts	8
 src/cli/update-cli/update-command-convergence.ts	1

@@ -393,6 +393,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
       sourceTool: "sessions_send",
+      hideInput: true,
     });
     expect(stepInput.message).toContain("sessions_send delivery to");
     expect(stepInput.message).toContain("target run failed after delivery acceptance");
@@ -413,6 +414,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     });
 
     const stepInput = deliveredStep();
+    expect(stepInput.hideInput).toBe(true);
     expect(stepInput.message).toContain(wait.error);
     expect(stepInput.message).toContain("final reply was already delivered");
     expect(stepInput.message).toContain("Do not resend");

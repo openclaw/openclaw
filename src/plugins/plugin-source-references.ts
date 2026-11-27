@@ -226,7 +226,7 @@ export function inspectPluginTypeScriptExecutionFacts(
   return {
     hasComputedImport,
     staticImports: [...staticImports].map(([specifier, sideEffect]) => ({
-      specifier,
+      specifier: copySourceReference(specifier),
       sideEffect,
     })),
   };
@@ -448,13 +448,21 @@ function parseTransformedPluginSource(source: string, code: string): Program {
   }
 }
 
+// Parser literals may be slices of a whole module. Only the selected UTF-16 code
+// units belong to a generation's retained import, dependency and asset facts.
+function copySourceReference(value: string): string {
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
+
 /** Visit literal module and explicit asset inputs without evaluating plugin code. */
 export function visitPluginSourceReferences(
   source: string,
   sourceText: string,
   getResolver: () => ReturnType<typeof createJiti>,
-  visitReference: (reference: string, kind: "asset" | "import" | "require") => void,
+  onReference: (reference: string, kind: "asset" | "import" | "require") => void,
 ): ReadonlySet<string> {
+  const visitReference: typeof onReference = (reference, kind) =>
+    onReference(copySourceReference(reference), kind);
   const authoredStaticImports = new Set<string>();
   const visitDirectoryAsset = (name: string, parts: readonly (string | undefined)[]) => {
     if (
@@ -498,7 +506,7 @@ export function visitPluginSourceReferences(
                           (specifier.type === "ExportSpecifier" && specifier.exportKind === "type"),
                       )
                     ) {
-                      authoredStaticImports.add(node.source.value);
+                      authoredStaticImports.add(copySourceReference(node.source.value));
                     }
                   },
                   MemberExpression(member) {
@@ -551,7 +559,7 @@ export function visitPluginSourceReferences(
                   >,
                 ) {
                   if (declaration.node.source) {
-                    authoredStaticImports.add(declaration.node.source.value);
+                    authoredStaticImports.add(copySourceReference(declaration.node.source.value));
                   }
                 },
               },
@@ -569,15 +577,16 @@ export function visitPluginSourceReferences(
       statement.source
     ) {
       const reference = staticString(statement.source);
-      if (reference !== undefined) {
-        staticImports.add(reference);
-        authoredStaticImports.add(reference);
+      if (reference !== undefined && !staticImports.has(reference)) {
+        const owned = copySourceReference(reference);
+        staticImports.add(owned);
+        authoredStaticImports.add(owned);
       }
     }
   }
   // Jiti hoists and deduplicates static module sources before the executable body.
   for (const reference of staticImports) {
-    visitReference(reference, "import");
+    onReference(reference, "import");
   }
   const visit = (node: AnyNode, discardedResult = false) => {
     if (node.type === "ImportExpression") {

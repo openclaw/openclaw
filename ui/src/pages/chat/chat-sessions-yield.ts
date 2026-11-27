@@ -3,6 +3,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { readMcpConnectAction } from "../../../../src/agents/mcp-connect-action.js";
+import { stripOpenClawMcpToolPrefix } from "../../../../src/agents/tool-display-call.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -39,9 +40,19 @@ function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
   return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
 }
 
+// Claude CLI history keeps the loopback MCP name (mcp__openclaw__sessions_yield);
+// recognize the gateway tool it calls without changing the invocation.
+function handoffToolName(name: unknown): unknown {
+  return typeof name === "string" ? stripOpenClawMcpToolPrefix(name) : name;
+}
+
+function isSessionsYieldTool(name: unknown): boolean {
+  return handoffToolName(name) === "sessions_yield";
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
-    card.name === "sessions_yield" &&
+    isSessionsYieldTool(card.name) &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
@@ -50,11 +61,12 @@ function isConfirmedYield(card: ToolCard): boolean {
 }
 
 function isPublicHandoffTool(name: unknown): boolean {
+  const tool = handoffToolName(name);
   return (
-    name === "github_publish" ||
-    name === "image_generate" ||
-    name === "video_generate" ||
-    name === "music_generate"
+    tool === "github_publish" ||
+    tool === "image_generate" ||
+    tool === "video_generate" ||
+    tool === "music_generate"
   );
 }
 
@@ -73,7 +85,7 @@ function isConfirmedPublicHandoff(card: ToolCard): boolean {
   return (
     receipt?.status === "started" &&
     receipt.async === true &&
-    (card.name === "github_publish"
+    (handoffToolName(card.name) === "github_publish"
       ? receipt.yielded === true
       : typeof receipt.taskId === "string" && receipt.taskId.length > 0)
   );
@@ -82,7 +94,7 @@ function isConfirmedPublicHandoff(card: ToolCard): boolean {
 /** Keep handoff-capable calls and results until the projection can pair them. */
 export function hasHandoffToolCall(message: unknown): boolean {
   return extractToolCardsCached(message).some(
-    (card) => card.name === "sessions_yield" || isPublicHandoffTool(card.name),
+    (card) => isSessionsYieldTool(card.name) || isPublicHandoffTool(card.name),
   );
 }
 
@@ -171,7 +183,7 @@ function scanSessionsYieldItems(
     const item = items[index]!;
     const message = item.kind === "message" ? asRecord(item.message) : null;
     const cards = message ? extractToolCardsCached(message) : [];
-    const yieldCards = cards.filter((card) => card.name === "sessions_yield");
+    const yieldCards = cards.filter((card) => isSessionsYieldTool(card.name));
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
@@ -293,11 +305,11 @@ function scanSessionsYieldItems(
         // Live inputs can precede the sanitized history row. Yield context is never a tool detail.
         if (
           isToolCallContentType(raw.type) &&
-          (id ? yieldIds.has(id) : raw.name === "sessions_yield")
+          (id ? yieldIds.has(id) : isSessionsYieldTool(raw.name))
         ) {
           return false;
         }
-        return id ? !ids.has(id) : !(yields.length > 0 && raw.name === "sessions_yield");
+        return id ? !ids.has(id) : !(yields.length > 0 && isSessionsYieldTool(raw.name));
       });
       remaining = content.length
         ? [

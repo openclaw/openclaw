@@ -555,6 +555,12 @@ untracked files and operator-staged changes remain outside the backup commit,
 even inside a backup scope. Already-committed unrelated files remain in Git;
 backup creation does not scrub their history or remove them from later trees.
 
+Repository Git hooks still run. Before reporting success or pushing, OpenClaw checks
+that the committed tree matches the prepared snapshot. If a hook unstages or
+changes an artifact, creation fails and the backup run is recorded as failed.
+The commit remains in the local repository for inspection; OpenClaw does not
+rewrite history. Correct the hook and create a new backup before relying on it.
+
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 
 <Warning>

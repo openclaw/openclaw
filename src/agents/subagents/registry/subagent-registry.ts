@@ -55,6 +55,7 @@ import {
   isRequesterRetirementCustodyCurrent,
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
@@ -297,7 +298,7 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
     entry.requesterSettleWake &&
     typeof entry.execution.endedAt === "number" &&
     (!yieldedWakeWaitingForDelivery ||
-      (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake.pauseNotice))
+      (isSubagentPausedByYield(entry) && entry.requesterSettleWake.pauseNotice))
   ) {
     resumeRequesterSettleWake(runId, entry);
     return;
@@ -314,7 +315,7 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
   }
   // Yielded runs stay paused until explicitly steered, except orchestrators
   // waiting on descendants: their settle retry must reach the wake path.
-  if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
+  if (isSubagentPausedByYield(entry) && entry.wakeOnDescendantSettle !== true) {
     return;
   }
   if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {

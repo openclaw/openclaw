@@ -187,7 +187,7 @@ class GatewaySessionInvokeTest {
           }
         val harness =
           createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
-            GatewaySession.InvokeResult.ok("{}")
+            InvokeResult.ok("{}")
           }
         try {
           connectNodeSession(harness.session, server.port)
@@ -215,7 +215,7 @@ class GatewaySessionInvokeTest {
             socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"try later","retryable":true,"retryAfterMs":1750}}""")
           }
         }
-      val harness = createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+      val harness = createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) { InvokeResult.ok("{}") }
       try {
         connectNodeSession(harness.session, server.port)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
@@ -256,7 +256,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -285,7 +285,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -440,7 +440,7 @@ class GatewaySessionInvokeTest {
       }
     val harness =
       createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
-        GatewaySession.InvokeResult.ok("""{"handled":true}""")
+        InvokeResult.ok("""{"handled":true}""")
       }
 
     try {
@@ -492,7 +492,7 @@ class GatewaySessionInvokeTest {
             webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"pluginSurfaceUrls":{"canvas":"${advertised.get()}"}}}""")
           }
         }
-      val harness = createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok(null) }
+      val harness = createNodeHarness(connected, lastDisconnect) { InvokeResult.ok(null) }
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
@@ -544,7 +544,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -570,7 +570,7 @@ class GatewaySessionInvokeTest {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
       val slowRequestSeen = CompletableDeferred<Unit>()
-      val requestResult = CompletableDeferred<Result<GatewaySession.RpcResult>>()
+      val requestResult = CompletableDeferred<Result<RpcResult>>()
       val lastDisconnect = AtomicReference("")
       val serverWebSocket = AtomicReference<WebSocket?>(null)
       val server =
@@ -591,7 +591,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
       var requestJob: Job? = null
 
       try {
@@ -633,7 +633,7 @@ class GatewaySessionInvokeTest {
         val json = testJson()
         val connected = CompletableDeferred<Unit>()
         val requestSeen = CompletableDeferred<Pair<WebSocket, String>>()
-        val errors = CopyOnWriteArrayList<GatewaySession.ErrorShape>()
+        val errors = CopyOnWriteArrayList<ErrorShape>()
         val entryGate = RpcCallbackEntryGate()
         val responsePumpHeld = CompletableDeferred<Job?>()
         val releaseResponsePump = CountDownLatch(1)
@@ -659,7 +659,7 @@ class GatewaySessionInvokeTest {
                 responsePumpReleased.complete(releaseResponsePump.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
               }
             },
-          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+          ) { InvokeResult.ok("""{"handled":true}""") }
         try {
           connectNodeSession(harness.session, server.port)
           awaitConnectedOrThrow(connected, lastDisconnect, server)
@@ -753,7 +753,7 @@ class GatewaySessionInvokeTest {
               secondEventHandled.complete(Unit)
             }
           },
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -800,7 +800,7 @@ class GatewaySessionInvokeTest {
           onEvent = { event, payload ->
             if (event == GatewayEvent.Health.rawValue) eventPayload.complete(payload)
           },
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -839,7 +839,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(
@@ -882,7 +882,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
@@ -926,7 +926,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
@@ -984,7 +984,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(
@@ -1093,7 +1093,7 @@ class GatewaySessionInvokeTest {
             connected = connected,
             lastDisconnect = lastDisconnect,
             onConnectFailure = { _, pauseReconnect -> authFailure.complete(pauseReconnect) },
-          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+          ) { InvokeResult.ok("""{"handled":true}""") }
 
         try {
           val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
@@ -1155,7 +1155,7 @@ class GatewaySessionInvokeTest {
           createNodeHarness(
             connected = connected,
             lastDisconnect = lastDisconnect,
-          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+          ) { InvokeResult.ok("""{"handled":true}""") }
 
         try {
           val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
@@ -1211,7 +1211,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(
@@ -1284,8 +1284,8 @@ class GatewaySessionInvokeTest {
         assertTrue(operatorHelloToken, store.saveToken(gatewayId, deviceId, "operator", "old-operator", listOf("operator.read")))
         prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
         val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
-        val operator = createNodeHarness(operatorConnected, operatorDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
-        val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val operator = createNodeHarness(operatorConnected, operatorDisconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
+        val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
         try {
           connectNodeSession(operator.session, server.port, token = null, role = "operator", scopes = listOf("operator.read"))
           val params = withTimeout(TEST_TIMEOUT_MS) { operatorConnect.await() }
@@ -1365,8 +1365,8 @@ class GatewaySessionInvokeTest {
           onConnectFailure = { error, _ ->
             if (error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH") retryRejected.complete(Unit)
           },
-        ) { GatewaySession.InvokeResult.ok(null) }
-      val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        ) { InvokeResult.ok(null) }
+      val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
       try {
         connectNodeSession(operator.session, server.port, token = "shared-token", role = "operator", scopes = listOf("operator.read"))
         val firstAuth = withTimeout(TEST_TIMEOUT_MS) { operatorAuthFrames.receive() }
@@ -1423,7 +1423,7 @@ class GatewaySessionInvokeTest {
         repeat(2) { launch ->
           val connected = CompletableDeferred<Unit>()
           val disconnected = AtomicReference("")
-          val current = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+          val current = createNodeHarness(connected, disconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
           harness = current
           val bootstrap = prefs.loadGatewayCredentials(gatewayId).bootstrapToken
           connectNodeSession(
@@ -1488,7 +1488,7 @@ class GatewaySessionInvokeTest {
         store.saveResult = { role, token -> role != failure && token != "failed-operator" }
         prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
         val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
-        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
         try {
           connectNodeSession(harness.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
           withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
@@ -1532,7 +1532,7 @@ class GatewaySessionInvokeTest {
         val gatewayId = gatewayIdForPort(server.port)
         prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
         val oldHandoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
-        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
         store.saveResult = { role, _ ->
           if (role == "operator") {
             if (replacement) {
@@ -1598,7 +1598,7 @@ class GatewaySessionInvokeTest {
         if (hasOperator) store.saveToken(gatewayId, deviceId, "operator", "old-operator")
         prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
         val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", !explicit)
-        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { InvokeResult.ok(null) }
         try {
           connectNodeSession(harness.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
           assertEquals("setup", withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }["bootstrapToken"]?.jsonPrimitive?.content)
@@ -1643,7 +1643,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(
@@ -1674,7 +1674,7 @@ class GatewaySessionInvokeTest {
             """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-1","nodeId":"node-1","command":"debug.ping","paramsJSON":"{\"ping\":\"pong\"}","timeoutMs":5000}}""",
           onHandshake = { request -> handshakeOrigin.compareAndSet(null, request.getHeader("Origin")) },
         ) {
-          GatewaySession.InvokeResult.ok("""{"handled":true}""")
+          InvokeResult.ok("""{"handled":true}""")
         }
 
       assertEquals("invoke-1", result.request.id)
@@ -1710,7 +1710,7 @@ class GatewaySessionInvokeTest {
           invokeEventFrame =
             """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-2","nodeId":"node-2","command":"debug.raw","paramsJSON":"{\"raw\":true}","params":{"ignored":1},"timeoutMs":5000}}""",
         ) {
-          GatewaySession.InvokeResult.ok("""{"handled":true}""")
+          InvokeResult.ok("""{"handled":true}""")
         }
 
       assertEquals("invoke-2", result.request.id)
@@ -1853,7 +1853,7 @@ class GatewaySessionInvokeTest {
         ) {
           try {
             check(releaseHandler.await(5, TimeUnit.SECONDS)) { "blocking handler was not released" }
-            GatewaySession.InvokeResult.ok(null)
+            InvokeResult.ok(null)
           } finally {
             handlerFinished.complete(Unit)
           }
@@ -1952,7 +1952,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -2003,7 +2003,7 @@ class GatewaySessionInvokeTest {
           }
         }
       val harness =
-        createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+        createNodeHarness(connected, lastDisconnect) { InvokeResult.ok("{}") }
       val payloadJson =
         NodeHostStatsReporter.makePayloadJson(
           NodeHostStatsReporter.Sample(8, 8_000_000_000, 3_000_000_000, 128_000_000_000, 64_000_000_000),
@@ -2046,7 +2046,7 @@ class GatewaySessionInvokeTest {
             }
           }
         val harness =
-          createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+          createNodeHarness(connected, lastDisconnect) { InvokeResult.ok("{}") }
 
         fun failureLogs(): Int =
           ShadowLog.getLogsForTag("OpenClawGateway").count {
@@ -2124,7 +2124,7 @@ class GatewaySessionInvokeTest {
               responsePumpReleased.complete(releaseResponsePump.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
             }
           },
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -2203,7 +2203,7 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        ) { InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
@@ -2250,8 +2250,8 @@ class GatewaySessionInvokeTest {
     onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
     extraContext: CoroutineContext = EmptyCoroutineContext,
     deviceAuthStore: DeviceAuthTokenStore = InMemoryDeviceAuthStore(),
-    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
+    onConnectFailure: (ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -2351,7 +2351,7 @@ class GatewaySessionInvokeTest {
     invokeEventFrame: String,
     onHandshake: ((RecordedRequest) -> Unit)? = null,
     afterResult: suspend (InvokeScenarioResult) -> Unit = {},
-    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> InvokeResult,
   ): InvokeScenarioResult {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
