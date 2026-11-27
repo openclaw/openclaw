@@ -329,19 +329,19 @@ type McpDirectoryLayout = {
 
 /**
  * The compact input signature tool_search already returns, for a row the model can dispatch
- * without tool_describe. A partial signature (`unknown` or elided `...` parts) or markup-like
- * text is omitted, never repaired: that row keeps the describe-first rule.
+ * without tool_describe. A partial signature (`unknown` or elided `...` parts), or one this
+ * one-line row could not carry exactly, is omitted: that row keeps the describe-first rule.
  */
 function mcpDirectoryInputSignature(entry: ToolSearchCatalogEntry): string | undefined {
   const hint = compactToolInputHint(entry.parameters);
-  const normalized = hint
-    .normalize("NFKC")
-    .replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}]/gu, " ")
-    .replace(/[\s\p{Z}]+/gu, " ")
-    .trim();
-  // Generic types (`Array<string>`) and comparators in bounds stay; tag-like text and code
-  // fences do not.
-  return /\bunknown\b|\.\.\.|`|(?<!\w)<[A-Za-z/!?]/u.test(normalized) ? undefined : normalized;
+  // Keys and literals must reach the model exactly: text that normalization or a one-line
+  // row would alter (controls, invisible or compatibility characters, runs of whitespace)
+  // omits the signature instead of rewriting it. Generic types (`Array<string>`) and
+  // comparators in bounds stay; tag-like text and code fences do not.
+  const unsafe =
+    hint !== hint.normalize("NFKC") ||
+    /[\p{Cc}\p{Cf}\p{Co}\p{Cs}]|[^\S ]| {2}|\bunknown\b|\.\.\.|`|(?<!\w)<[A-Za-z/!?]/u.test(hint);
+  return unsafe ? undefined : hint;
 }
 
 /**
