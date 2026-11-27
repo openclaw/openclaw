@@ -3,6 +3,10 @@ import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
+enum IOSChatPreferences {
+    static let showsAssistantTraceKey = "openclaw.webchat.showAssistantTrace"
+}
+
 enum ChatActionMenuMetric {
     static let horizontalPadding: CGFloat = 14
     static let iconWidth: CGFloat = 24

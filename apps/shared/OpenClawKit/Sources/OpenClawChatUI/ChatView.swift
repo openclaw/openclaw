@@ -248,7 +248,8 @@ extension OpenClawChatView {
         #if os(iOS)
         .modifier(ChatSafeAreaBar(edge: .bottom) {
             if self.usesFloatingComposer {
-                self.composerDock(column: column, bottom: composerBottom)
+                self.composerDock(column: column, bottom: ChatColumnLayout.keyboardPadding(
+                    style: self.style, chrome: self.composerChrome, visible: self.isKeyboardVisible))
                     .disabled(self.interactionsDisabled)
             }
         })
@@ -292,11 +293,10 @@ extension OpenClawChatView {
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
+                let inset = OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
                 self.composer
                     .chatBehaviorProbe(.composer)
-                    .chatColumn(
-                        column,
-                        inset: OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome))
+                    .chatColumn(column, inset: inset)
                     .padding(.top, Layout.stackSpacing)
                     .padding(.bottom, bottom)
             }

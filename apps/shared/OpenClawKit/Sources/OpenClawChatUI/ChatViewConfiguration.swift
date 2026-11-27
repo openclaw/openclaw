@@ -161,6 +161,18 @@ func chatErrorPresentation(
 /// measured pane width, shared by transcript rows, cards and the composer.
 struct ChatColumnLayout: Equatable {
     static let maxColumnWidth: CGFloat = 768
+    private static let compactMargin: CGFloat = 16
+
+    #if os(iOS)
+    /// The safe-area bar travels with the keyboard; count the surface's inset toward the gap.
+    @MainActor static func keyboardPadding(
+        style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome, visible: Bool) -> CGFloat
+    {
+        guard visible, UIDevice.current.userInterfaceIdiom == .phone else { return 0 }
+        let inset = OpenClawChatComposer.surfaceInset(style: style, chrome: chrome)
+        return max(0, Self.compactMargin / 2 - inset)
+    }
+    #endif
 
     let margin: CGFloat
     let columnWidth: CGFloat
@@ -168,7 +180,7 @@ struct ChatColumnLayout: Equatable {
     /// An unmeasured pane (width 0, before its first layout) assumes the widest column.
     init(paneWidth: CGFloat) {
         let width = paneWidth > 0 ? paneWidth : .infinity
-        self.margin = width < 700 ? 16 : 24
+        self.margin = width < 700 ? Self.compactMargin : 24
         self.columnWidth = max(0, min(Self.maxColumnWidth, width - 2 * self.margin))
     }
 
