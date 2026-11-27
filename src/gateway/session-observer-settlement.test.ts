@@ -22,16 +22,11 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
   const pending = createDeferred<Message>();
   const completeModel = vi
     .fn()
-    .mockImplementationOnce((params: { timeoutMs: number }) => {
-      const expired = new Promise<void>((resolve) => {
-        setTimeout(resolve, params.timeoutMs);
-      });
-      return expired
-        .then(() => pending.promise)
-        .then(() => {
-          throw new Error("candidate timed out");
-        });
-    })
+    .mockImplementationOnce(() =>
+      pending.promise.then(() => {
+        throw new Error("candidate timed out");
+      }),
+    )
     .mockResolvedValue(message("Current digest"));
   const harness = createHarness({ completeModel });
   const published = createDeferred();
