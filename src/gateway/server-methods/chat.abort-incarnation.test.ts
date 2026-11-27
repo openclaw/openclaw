@@ -236,7 +236,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
 );
 
 it.each(["child", "ancestor"])(
-  "retained durable intent prevents queued dispatch when the %s identity owner closes",
+  "durable cancellation prevents queued dispatch when the %s identity owner closes",
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
@@ -330,9 +330,17 @@ it.each(["child", "ancestor"])(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
         ).toBe("bad-session");
       }
-      expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toMatchObject({
-        reason: "killed",
-      });
+      const persisted = loadSubagentRegistryFromSqlite().get("bad");
+      if (faultOwner === "ancestor") {
+        // The child's admitted claim can finish after its ancestor owner closes.
+        expect(persisted).toMatchObject({
+          execution: { status: "terminal" },
+          endedReason: "subagent-killed",
+          killReconciliation: { taskCancellationAccepted: true },
+        });
+      } else {
+        expect(persisted?.killIntent).toMatchObject({ reason: "killed" });
+      }
       expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
       expect(releaseSwarmRun(capacityOwner)).toBe(true);
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
