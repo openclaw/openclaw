@@ -333,6 +333,13 @@ export function groupPreparedChatMessages(
       if (currentSource) {
         item.replyCurrentSource = currentSource;
       }
+      // A completion receipt keeps its place in the turn without answering the prompt.
+      if (
+        shared &&
+        item.messages.every((entry) => messageSubagentCompletions(entry.message).length > 0)
+      ) {
+        continue;
+      }
     } else if (item.kind !== "stream") {
       continue;
     }
