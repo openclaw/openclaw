@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveLinkedDirectPeerId,
+} from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
+import { listRouteBindings } from "../bindings.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionsCleanupFailure,
@@ -93,15 +100,54 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (parts[0] === "agent") {
     return false;
   }
-  return (
-    (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
-    (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||
-    (parts.length === 4 &&
-      Boolean(parts[0]) &&
-      Boolean(parts[1]) &&
-      parts[2] === "direct" &&
-      Boolean(parts[3]))
-  );
+  const dmScope =
+    parts.length === 2 && parts[0] === "direct" && parts[1]
+      ? "per-peer"
+      : parts.length === 3 && parts[0] && parts[1] === "direct" && parts[2]
+        ? "per-channel-peer"
+        : parts.length === 4 && parts[0] && parts[1] && parts[2] === "direct" && parts[3]
+          ? "per-account-channel-peer"
+          : undefined;
+  if (!dmScope) {
+    return false;
+  }
+  const peerId = parts.at(-1)!;
+  const hasMatchingBinding = listRouteBindings(params.cfg).some((binding) => {
+    if (
+      binding.session?.dmScope !== dmScope ||
+      normalizeAgentId(binding.agentId) !== normalizeAgentId(params.targetAgentId)
+    ) {
+      return false;
+    }
+    const peer = binding.match.peer;
+    if (peer) {
+      const normalizedPeerId = normalizeLowercaseStringOrEmpty(peer.id);
+      const linkedPeerId = resolveLinkedDirectPeerId({
+        identityLinks: params.cfg.session?.identityLinks,
+        channel: binding.match.channel,
+        peerId: peer.id,
+      });
+      if (
+        peer.kind !== "direct" ||
+        (normalizedPeerId !== "*" &&
+          normalizeLowercaseStringOrEmpty(linkedPeerId ?? peer.id) !== peerId)
+      ) {
+        return false;
+      }
+    }
+    if (dmScope === "per-peer") {
+      return true;
+    }
+    if (normalizeLowercaseStringOrEmpty(binding.match.channel) !== parts[0]) {
+      return false;
+    }
+    return (
+      dmScope !== "per-account-channel-peer" ||
+      binding.match.accountId?.trim() === "*" ||
+      normalizeAccountId(binding.match.accountId) === parts[1]
+    );
+  });
+  return !hasMatchingBinding;
 }
 
 function retireMainScopeDirectSessionEntries(params: {
