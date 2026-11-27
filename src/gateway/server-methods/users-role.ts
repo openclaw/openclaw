@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   type UsersListParams,
@@ -41,26 +40,27 @@ const INVITED_ORDER = ["read", "suggest", "send"];
 /**
  * Session permissions only narrow along their order: none < view < suggest < write, and
  * none < invited < write, where an invitation narrows when its access ceiling drops. Invited and
- * view or suggest are not comparable, so a change between them counts as a loss.
+ * view or suggest are not comparable, so a change between them counts as a loss. Invited tool
+ * and permission limits apply to the next request.
  */
 function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
-  if (isDeepStrictEqual(before, after) || before.others === "none" || after.others === "write") {
+  if (before.others === "none" || after.others === "write") {
     return false;
   }
-  if (before.others !== "invited" && after.others !== "invited") {
-    return OTHERS_ORDER.indexOf(after.others) < OTHERS_ORDER.indexOf(before.others);
+  if (before.others === "invited" && after.others === "invited") {
+    const was = before.maxInvitedAccess;
+    const now = after.maxInvitedAccess;
+    return (
+      was !== now &&
+      (was === undefined ||
+        now === undefined ||
+        INVITED_ORDER.indexOf(now) < INVITED_ORDER.indexOf(was))
+    );
   }
-  if (before.others !== "invited" || after.others !== "invited") {
+  if (before.others === "invited" || after.others === "invited") {
     return true;
   }
-  const { maxInvitedAccess: beforeCeiling, ...beforeRest } = before;
-  const { maxInvitedAccess: afterCeiling, ...afterRest } = after;
-  return (
-    !isDeepStrictEqual(beforeRest, afterRest) ||
-    beforeCeiling === undefined ||
-    afterCeiling === undefined ||
-    INVITED_ORDER.indexOf(afterCeiling) < INVITED_ORDER.indexOf(beforeCeiling)
-  );
+  return OTHERS_ORDER.indexOf(after.others) < OTHERS_ORDER.indexOf(before.others);
 }
 
 /**
