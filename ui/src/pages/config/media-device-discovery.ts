@@ -3,9 +3,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  realtimeTalkDeviceIssueMessage,
-} from "../chat/talk/input.ts";
+} from "../chat/talk/input-discovery.ts";
+import { observeRealtimeTalkDevices, realtimeTalkDeviceIssueMessage } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { createMediaDeviceState } from "./view-state.ts";
 

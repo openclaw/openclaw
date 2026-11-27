@@ -184,15 +184,13 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         ? t("chat.composer.dictationStopAndKeep")
         : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip = () =>
-    correctionPending()
-      ? correctionPendingReason()
-      : props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
+    correctionPending() || active()
+      ? label()
+      : props.readDictation && !startsDictationDirectly() && !finalizing()
         ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
             .filter(Boolean)
             .join(" · ")
-        : active()
-          ? label()
-          : (props.submitDisabledReason ?? label());
+        : (props.submitDisabledReason ?? label());
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
@@ -216,11 +214,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
                 ],
           ]}
           type="button"
-          onPointerDown={(event: PointerEvent) => {
-            if (!correctionPending()) {
-              props.onDictationPointerDown?.(event);
-            }
-          }}
+          onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           onClick={(event: MouseEvent) => {
             if (correctionPending()) {
               event.preventDefault();

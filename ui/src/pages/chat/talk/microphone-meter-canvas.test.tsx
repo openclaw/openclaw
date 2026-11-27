@@ -32,6 +32,7 @@ it("keeps silence in CSS and preserves the first level transition when activity 
     expect(renderer.create).not.toHaveBeenCalled();
     const host = view.container.querySelector("openclaw-microphone-activity");
 
+    await waitForSolid(() => expect(host?.querySelector("canvas")).not.toBeNull());
     source.set(0.6);
     expect(renderer.create).toHaveBeenCalledOnce();
     const active = expectDefined(renderer.create.mock.results[0], "active renderer").value;

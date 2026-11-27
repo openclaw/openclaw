@@ -15,7 +15,7 @@ import {
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
-import * as realtimeTalkInput from "./talk/input.ts";
+import * as realtimeTalkInput from "./talk/input-discovery.ts";
 
 const discover = vi.fn();
 const { navigateToModelProvider } = vi.hoisted(() => ({ navigateToModelProvider: vi.fn() }));

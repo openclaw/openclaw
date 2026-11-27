@@ -2,13 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { formatUiError } from "../../../lib/format-error.ts";
-import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  openRealtimeTalkCamera,
-  RealtimeTalkInputOwner,
-} from "./input.ts";
+import { openRealtimeTalkCamera, RealtimeTalkInputOwner } from "./input-capture.ts";
+import { discoverRealtimeTalkCameras, discoverRealtimeTalkInputs } from "./input-discovery.ts";
+import { observeRealtimeTalkDevices } from "./input.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;

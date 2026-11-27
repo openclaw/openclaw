@@ -14,8 +14,9 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
+import { RealtimeTalkInputOwner } from "./talk/input-capture.ts";
+import * as realtimeTalkInput from "./talk/input-discovery.ts";
 import { MockDictationAudioContext } from "./talk/input.test-support.ts";
-import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();
@@ -180,9 +181,7 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
-    openMicrophoneMock,
-  );
+  vi.spyOn(RealtimeTalkInputOwner.prototype, "open").mockImplementation(openMicrophoneMock);
 });
 
 afterEach(async () => {
@@ -243,7 +242,7 @@ it("shows actionable connecting guidance in a visible status region", () => {
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
   // Exercise the pending microphone phase with both lazy dictation modules already loaded.
   await import("./components/composer-dictation-status.tsx");
-  await import("./composer-dictation-session.ts");
+  await import("./composer-dictation-capture.ts");
   openMicrophoneMock.mockReturnValue(new Promise(() => {}));
   const dismissRecovery = vi.fn();
   const { container, query } = await mountTalk(

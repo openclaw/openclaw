@@ -142,7 +142,7 @@ it.each([true, false])(
 );
 
 it("keeps recognized text recoverable by keyboard when the optional review fails", async () => {
-  const { ComposerCorrectionRecovery } = await import("../composer-dictation-capture.ts");
+  const { ComposerCorrectionRecovery } = await import("./composer-correction-recovery.tsx");
   await page.viewport(390, 900);
   document.documentElement.dataset.themeMode = "dark";
   const props = reviewProps();

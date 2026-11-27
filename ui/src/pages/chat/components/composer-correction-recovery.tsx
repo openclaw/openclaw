@@ -1,5 +1,7 @@
+import { lazy } from "solid-js";
 import { registerChatCorrectionReviewEnglish } from "../../../i18n/locales/en-chat-correction-review.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { ComposerCorrectionReviewProps } from "./composer-correction-review.tsx";
 
 registerEnglishCatalog(registerChatCorrectionReviewEnglish);
@@ -35,5 +37,38 @@ export function ComposerCorrectionRecovery(
         </button>
       </div>
     </section>
+  );
+}
+
+// The recovery surface is already loaded with capture; only the full view needs another fetch.
+const ComposerCorrectionReview = lazy(() => import("./composer-correction-review.tsx"), {
+  export: "ComposerCorrectionReview",
+});
+
+export function ComposerCorrectionPresentation(props: {
+  review: { original: string; canKeepOriginal: boolean; invalidated: boolean };
+  resolve: (choice: "original" | "cancel") => void;
+}) {
+  const onKeepOriginal = () => props.resolve("original");
+  const onCancel = () => props.resolve("cancel");
+  return (
+    <ChatLazyBoundary
+      recovery={
+        <ComposerCorrectionRecovery
+          original={props.review.original}
+          canKeepOriginal={props.review.canKeepOriginal}
+          onKeepOriginal={onKeepOriginal}
+          onCancel={onCancel}
+        />
+      }
+    >
+      <ComposerCorrectionReview
+        original={props.review.original}
+        reason={props.review.invalidated ? "source-changed" : "corrections-unavailable"}
+        canKeepOriginal={props.review.canKeepOriginal}
+        onKeepOriginal={onKeepOriginal}
+        onCancel={onCancel}
+      />
+    </ChatLazyBoundary>
   );
 }

@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
-import * as realtimeTalkInput from "./talk/input.ts";
+import * as realtimeTalkInput from "./talk/input-discovery.ts";
 
 const catalog = (ready: boolean) => ({ realtime: { ready }, transcription: { ready } });
 type Request = (method: string) => Promise<unknown>;
@@ -169,7 +169,7 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs");
     picker = new ComposerMicrophoneOwner();
     picker.handleOpen();
-    expect(enumerateDevices).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledOnce());
     expect(getUserMedia).not.toHaveBeenCalled();
     if (transition === "dispose") {
       picker.dispose();
@@ -183,6 +183,7 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     await discovery.mock.results[0]!.value;
     const staleProbes = getUserMedia.mock.calls.length;
     if (transition === "replace") {
+      await vi.waitFor(() => expect(discovery).toHaveBeenCalledTimes(2));
       replacement.resolve([]);
       await discovery.mock.results[1]!.value;
     }
