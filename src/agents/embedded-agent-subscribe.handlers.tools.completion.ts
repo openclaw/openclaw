@@ -311,6 +311,19 @@ export async function prepareToolExecutionEnd(
   const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
   const confirmedMessageTarget =
     messageTarget && extractMessagingToolSendResult(messageTarget, extractionResult);
+  const sentToCurrentSource =
+    didDeliverMessagingResult &&
+    isDeliveredMessagingToolSendToCurrentSource({
+      send: confirmedMessageTarget,
+      config: ctx.params.config,
+      currentProvider: ctx.params.messageChannel,
+      currentAccountId: ctx.params.currentAccountId,
+      currentChannelId: ctx.params.currentChannelId,
+      currentMessagingTarget: ctx.params.currentMessagingTarget,
+      currentThreadId: ctx.params.currentThreadId,
+      sessionKey: ctx.params.sessionKey,
+      deliveredPayload: extractionResult,
+    });
   const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
@@ -320,17 +333,7 @@ export async function prepareToolExecutionEnd(
       result,
       hookResult: toolSendReceiptResult,
       isError: isToolError,
-      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
-        send: confirmedMessageTarget,
-        config: ctx.params.config,
-        currentProvider: ctx.params.messageChannel,
-        currentAccountId: ctx.params.currentAccountId,
-        currentChannelId: ctx.params.currentChannelId,
-        currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId: ctx.params.currentThreadId,
-        sessionKey: ctx.params.sessionKey,
-        deliveredPayload: extractionResult,
-      }),
+      allowExplicitSourceRoute: sentToCurrentSource,
       deliveryConfirmed: didDeliverMessagingResult,
     });
   const deliveredCurrentSourceReply =
@@ -366,6 +369,10 @@ export async function prepareToolExecutionEnd(
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     });
+    ctx.trimMessagingToolSent();
+  }
+  if (sentToCurrentSource && committedMediaUrls.length > 0) {
+    ctx.state.currentSourceMessagingToolSentMediaUrls.push(...committedMediaUrls);
     ctx.trimMessagingToolSent();
   }
   if (deliveredCurrentSourceReply) {

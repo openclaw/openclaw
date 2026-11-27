@@ -15,7 +15,7 @@ type PendingToolMediaState = Pick<
   | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
 > &
-  Partial<Pick<EmbeddedAgentSubscribeState, "messagingToolSentMediaUrls">>;
+  Partial<Pick<EmbeddedAgentSubscribeState, "currentSourceMessagingToolSentMediaUrls">>;
 
 export function hasReplyDirectiveMetadata(
   parsed: ReplyDirectiveParseResult | null | undefined,
@@ -110,16 +110,13 @@ export function restorePendingToolMediaReply(
   state.pendingToolMediaDeliveryFailed = true;
 }
 
-/** Reads queued tool media without clearing it. */
+/** Reads queued tool media without clearing it, omitting media already sent to this source route. */
 export function readPendingToolMediaReply(state: PendingToolMediaState): BlockReplyPayload | null {
   if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
     return null;
   }
-  // A message tool may directly deliver the same artifact whose media reference
-  // is also present in its result. That reference is still queued for assistant
-  // auto-delivery unless we filter it using the confirmed send evidence.
   const sentMedia = new Set(
-    (state.messagingToolSentMediaUrls ?? [])
+    (state.currentSourceMessagingToolSentMediaUrls ?? [])
       .map(normalizeMediaReferenceForComparison)
       .filter(Boolean),
   );

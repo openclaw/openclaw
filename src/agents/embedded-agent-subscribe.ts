@@ -117,6 +117,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     }
     for (const history of [
       state.currentSourceMessagingToolSentTextsNormalized,
+      state.currentSourceMessagingToolSentMediaUrls,
       messagingToolSentTargets,
       messagingToolSentMediaUrls,
       messagingToolSourceReplyPayloads,
@@ -296,6 +297,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     state.currentSourceMessagingToolSentTextsNormalized.length = 0;
+    state.currentSourceMessagingToolSentMediaUrls.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
     state.pendingToolMediaUrls = [];

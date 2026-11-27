@@ -156,6 +156,68 @@ const generatedMedia = {
 const voiceMedia = { mediaUrls: ["/tmp/reply.opus"], audioAsVoice: true };
 const voiceResult = { details: { media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true } } };
 
+it.each([
+  ["same source route", "chat123", true],
+  ["another route", "chat456", false],
+] as const)(
+  "dedupes queued media only after a confirmed send to the %s",
+  async (_label, target, sameRoute) => {
+    const h = setup({
+      builtinToolNames: new Set(["message", "tts"]),
+      sessionKey: "agent:main:main",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentMessagingTarget: "chat123",
+    });
+    h.emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "direct-media-send",
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: "account-1",
+        target,
+        message: "Already sent directly.",
+        media: "/tmp/reply.opus",
+      },
+    });
+    h.emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "direct-media-send",
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    await h.drain();
+    expect(h.subscription.getMessagingToolSentTargets()).toContainEqual(
+      expect.objectContaining({
+        provider: "test-channel",
+        to: target,
+        accountId: "account-1",
+        mediaUrls: ["/tmp/reply.opus"],
+      }),
+    );
+    h.tool("tts", voiceResult);
+    await h.drain();
+    const pendingMedia = h.subscription.getPendingToolMediaReply();
+    if (sameRoute) {
+      expect(pendingMedia).toBeNull();
+    } else {
+      expect(pendingMedia).toMatchObject({ mediaUrls: ["/tmp/reply.opus"] });
+    }
+    h.message(answer("Here is the audio."), false);
+    await h.finish();
+
+    const mediaReplies = h
+      .replies()
+      .filter((payload) => payload.mediaUrls?.includes("/tmp/reply.opus"));
+    expect(mediaReplies).toHaveLength(sameRoute ? 0 : 1);
+    expect(h.subscription.getPendingToolMediaReply()).toBeNull();
+  },
+);
+
 it.each(["suppress", "reject"] as const)(
   "joins the pending gate and handles %s",
   async (decision) => {
