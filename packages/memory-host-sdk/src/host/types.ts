@@ -396,8 +396,9 @@ export function resolveMemorySearchStaleness(
     return status.dirty
       ? {
           stale: true,
-          warning: "Memory index has pending updates. Results use the last published index.",
-          action: `Retry after background indexing, or run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+          warning:
+            "Memory index checks or updates are pending. Results use the last published index.",
+          action: "Retry the search after background indexing completes.",
         }
       : null;
   }

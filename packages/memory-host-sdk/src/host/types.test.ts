@@ -30,9 +30,8 @@ describe("memory search staleness", () => {
     };
     expect(staleness(status, "support")).toMatchObject({
       stale: true,
-      warning: expect.stringContaining("pending updates"),
-      action:
-        "Retry after background indexing, or run: openclaw memory status --index --agent support. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+      warning: "Memory index checks or updates are pending. Results use the last published index.",
+      action: "Retry the search after background indexing completes.",
     });
   });
 
