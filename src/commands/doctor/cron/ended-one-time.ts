@@ -40,6 +40,7 @@ export function planEndedOneTimeCronRepair(jobs: readonly Record<string, unknown
       schedule.kind === "at" &&
       job.enabled === false &&
       job.deleteAfterRun !== false &&
+      job.pluginDeleteAfterRun === undefined &&
       at !== null &&
       typeof state.lastRunAtMs === "number" &&
       Number.isSafeInteger(state.lastRunAtMs) &&

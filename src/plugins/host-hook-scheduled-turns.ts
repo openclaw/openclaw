@@ -202,6 +202,10 @@ export async function schedulePluginSessionTurn(params: {
     logSchedulingFailure("unsupported deliveryMode");
     return undefined;
   }
+  if (cronSchedule.kind === "cron" && params.schedule.deleteAfterRun === true) {
+    logSchedulingFailure("deleteAfterRun requires a one-shot schedule");
+    return undefined;
+  }
   const { tag, invalid: invalidTag } = resolvePluginSessionTurnTag(params.schedule.tag);
   if (invalidTag) {
     logSchedulingFailure('tag contains reserved delimiter ":"');
@@ -228,19 +232,24 @@ export async function schedulePluginSessionTurn(params: {
   };
   let result: Awaited<ReturnType<CronServiceContract["add"]>>;
   try {
-    result = await cron.add({
-      name: cronJobName,
-      enabled: true,
-      schedule: cronSchedule,
-      sessionTarget: `session:${sessionKey}`,
-      payload: cronPayload,
-      ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
-      wakeMode: "now",
-      delivery: {
-        mode: cronDeliveryMode,
-        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
+    result = await cron.add(
+      {
+        name: cronJobName,
+        enabled: true,
+        schedule: cronSchedule,
+        sessionTarget: `session:${sessionKey}`,
+        payload: cronPayload,
+        ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
+        wakeMode: "now",
+        delivery: {
+          mode: cronDeliveryMode,
+          ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
+        },
       },
-    });
+      cronSchedule.kind === "at" && params.schedule.deleteAfterRun !== undefined
+        ? { pluginDeleteAfterRun: params.schedule.deleteAfterRun }
+        : undefined,
+    );
   } catch (error) {
     logSchedulingFailure(formatErrorMessage(error), cronJobName);
     return undefined;

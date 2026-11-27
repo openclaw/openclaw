@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { deletePluginSessionSchedulerJob } from "../plugins/host-hook-runtime.js";
+import { schedulePluginSessionTurn } from "../plugins/host-hook-scheduled-turns.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -90,6 +92,48 @@ async function fixture(
     },
   };
 }
+
+it.each([
+  [false, "ok", true],
+  [true, "error", true],
+  [true, "ok", false],
+] as const)(
+  "preserves explicit SDK deleteAfterRun=%s on %s across restart",
+  async (deleteAfterRun, status, retained) => {
+    await using f = await fixture({
+      nowMs: () => atMs,
+      runSessionEvent: async () => ({ status }),
+    });
+    const pluginId = "scheduled-turn-contract";
+    const handle = await schedulePluginSessionTurn({
+      pluginId,
+      origin: "bundled",
+      cron: f.cron,
+      schedule: {
+        sessionKey: "agent:main:main",
+        message: "Check status",
+        at: atMs,
+        deliveryMode: "none",
+        deleteAfterRun,
+      },
+    });
+    if (!handle) {
+      throw new Error("Plugin did not schedule its turn");
+    }
+    try {
+      await f.tick(atMs);
+      await f.restart();
+      if (retained) {
+        expect(f.cron.getJob(handle.id)).toMatchObject({ enabled: false });
+      } else {
+        expect(f.cron.getJob(handle.id)).toBeUndefined();
+      }
+      expect(f.history(handle.id)).toMatchObject([{ status }]);
+    } finally {
+      deletePluginSessionSchedulerJob({ pluginId, jobId: handle.id });
+    }
+  },
+);
 
 it.each([
   ["default delivery failure", undefined, false, undefined, "failed"],

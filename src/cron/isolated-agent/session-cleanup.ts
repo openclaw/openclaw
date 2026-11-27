@@ -3,7 +3,7 @@ import { listRunningSessions } from "../../agents/bash-process-registry.js";
 import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/tools/in-process-gateway.js"),
@@ -42,7 +42,7 @@ export async function deleteCronSessionViaGateway(params: {
 }
 
 export async function cleanupCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "schedule" | "sessionTarget">;
+  job: Pick<CronStoredJob, "schedule" | "sessionTarget" | "pluginDeleteAfterRun">;
   agentSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;
@@ -74,10 +74,11 @@ export async function cleanupCronRunSessionAfterRun(params: {
 }
 
 function shouldDeleteCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "schedule" | "sessionTarget">;
+  job: Pick<CronStoredJob, "schedule" | "sessionTarget" | "pluginDeleteAfterRun">;
   agentSessionKey: string;
 }): boolean {
   return (
+    params.job.pluginDeleteAfterRun !== false &&
     (params.job.schedule.kind === "at" || params.job.schedule.kind === "on-exit") &&
     isCronSessionKey(params.agentSessionKey) &&
     !listRunningSessions().some(

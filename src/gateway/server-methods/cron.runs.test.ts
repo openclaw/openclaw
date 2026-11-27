@@ -77,7 +77,8 @@ it("retries an ended one-time definition only for an administrator without expos
       cronStorePath: storePath,
       getRuntimeConfig: () => ({}),
     });
-    const admin = { connect: { scopes: ["operator.admin"] } } as GatewayClient;
+    const scopes = ["operator.admin"];
+    const admin = { connect: { scopes } } as GatewayClient;
     const selection = { id: job.id, retryRunId: entry.runId };
     try {
       const history = await invokeCron(
@@ -93,9 +94,32 @@ it("retries an ended one-time definition only for an administrator without expos
         }),
       );
       expect(JSON.stringify(history.mock.calls)).not.toContain("archivedJob");
-      expect((await invokeCron(context, "cron.run", selection)).mock.calls[0]?.[0]).toBe(false);
+      const stale = await invokeCron(
+        context,
+        "cron.run",
+        {
+          ...selection,
+          expectedProcessInstanceId: "previous-process",
+        },
+        { client: admin },
+      );
+      expectError(
+        stale,
+        expect.objectContaining({ message: expect.stringContaining("Gateway process changed") }),
+      );
+      // A later request reads the new scopes. This one has already been admitted.
+      const readJob = cron.readJob.bind(cron);
+      vi.spyOn(cron, "readJob").mockImplementationOnce(async (id) => {
+        const loaded = await readJob(id);
+        scopes.length = 0;
+        return loaded;
+      });
       const retried = await invokeCron(context, "cron.run", selection, { client: admin });
       expect(retried.mock.calls[0]?.[0], JSON.stringify(retried.mock.calls[0])).toBe(true);
+      expectError(
+        await invokeCron(context, "cron.run", selection, { client: admin }),
+        expect.objectContaining({ message: expect.stringContaining("retry this automation") }),
+      );
       expect(await cron.list({ includeDisabled: true })).toMatchObject([
         { name: job.name, enabled: true, payload: job.payload },
       ]);

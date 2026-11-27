@@ -373,7 +373,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         entries: [{ runId: run.runId, status: "error", completionStatus: "failed" }],
       });
       await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       const probe = await restarted.request<{ id: string }>("cron.add", {
         name: "after-in-process-restart",
@@ -545,7 +545,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         ]),
       );
       await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       await expectStoredCronOneShotComplete(client, quoteIdentifier(anchor.namespace), job.id);
       await disconnectGatewayClient(restarted);
@@ -694,7 +694,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       resources.defer(() => disconnectGatewayClient(restarted));
       await expect(restarted.request("cron.status", {})).resolves.toMatchObject({ enabled: true });
       await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       await expect(
         restarted.request("cron.runs", { id: job.id, limit: 10 }),
@@ -787,7 +787,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         entries: [{ runId: run.runId, status: "ok", completionStatus: "succeeded", summary }],
       });
       await expect(gateway.request("cron.get", { id: job.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
       const readOwner = () =>
@@ -911,7 +911,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         entries: [{ status: "ok", completionStatus: "succeeded", summary }],
       });
       await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       const history = await restarted.request<{ entries: unknown[] }>("cron.runs", {
         id: job.id,
@@ -922,7 +922,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ]);
       const interruptedError = "cron: job interrupted by gateway restart";
       await expect(restarted.request("cron.get", { id: unfinishedJob.id })).rejects.toThrow(
-        "unknown cron job id",
+        "cron job not found",
       );
       const interruptedHistory = await restarted.request<{ entries: unknown[] }>("cron.runs", {
         id: unfinishedJob.id,

@@ -10,6 +10,7 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { readGatewayRequestAdmission } from "../operator-admission.js";
 import {
   cronJobMatchesCallerScope,
   cronTrustedJobOwnedByCaller,
@@ -33,8 +34,8 @@ export function canRetryCronHistory(
   context: GatewayRequestHandlerOptions["context"],
 ): boolean {
   return (
-    client?.connect?.scopes?.includes("operator.admin") === true &&
-    !client.internal?.agentRuntimeIdentity &&
+    !client?.internal?.agentRuntimeIdentity &&
+    readGatewayRequestAdmission(client).grant.owner &&
     !createCronSessionVisibility(client, context).resolve()
   );
 }
@@ -189,22 +190,34 @@ type ScopedCronMethod =
   | "cron.remove"
   | "cron.run";
 
+type ScopedCronJobCallback<P extends CronJobIdParams> = (
+  options: Omit<GatewayRequestHandlerOptions, "params"> & {
+    params: P;
+  },
+  loaded: { jobId: string; callerScope: CronCallerScope | undefined; job: CronJob },
+) => ReturnType<GatewayRequestHandler>;
+
+type CronJobAccessOptions = {
+  allowCurrentJob?: boolean;
+  checkVisibility?: boolean;
+  preserveCronGetWireMessage?: boolean;
+};
+
 export function scopedCronJobHandler<P extends CronJobIdParams>(
   method: ScopedCronMethod,
   validate: Validator<P>,
-  run: (
-    options: Omit<GatewayRequestHandlerOptions, "params"> & {
-      params: P;
-    },
-    loaded: { jobId: string; callerScope: CronCallerScope | undefined; job: CronJob },
-  ) => ReturnType<GatewayRequestHandler>,
-  scope: {
-    allowCurrentJob?: boolean;
-    checkVisibility?: boolean;
-    preserveCronGetWireMessage?: boolean;
-  } = {},
+  run: ScopedCronJobCallback<P>,
+  scope: CronJobAccessOptions = {},
 ): GatewayRequestHandler {
-  return defineValidatedGatewayHandler(method, validate, async (options) => {
+  return defineValidatedGatewayHandler(method, validate, withScopedCronJob(method, run, scope));
+}
+
+export function withScopedCronJob<P extends CronJobIdParams>(
+  method: ScopedCronMethod,
+  run: ScopedCronJobCallback<P>,
+  scope: CronJobAccessOptions = {},
+) {
+  return async (options: Omit<GatewayRequestHandlerOptions, "params"> & { params: P }) => {
     const { params, respond, client, context } = options;
     const jobId = resolveCronJobId(params);
     if (!jobId) {
@@ -244,5 +257,5 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
     }
     // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
     return await run(options, { jobId, callerScope, job });
-  });
+  };
 }

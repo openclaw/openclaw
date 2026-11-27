@@ -4,6 +4,7 @@ import type { CronJob, CronStoredJob } from "./types.js";
 export function toPublicCronJob(job: CronStoredJob): CronJob {
   const {
     deleteAfterRun: _deleteAfterRun,
+    pluginDeleteAfterRun: _pluginDeleteAfterRun,
     pluginCommand: _pluginCommand,
     operatorSource: _operatorSource,
     inferenceBinding: _inferenceBinding,

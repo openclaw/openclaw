@@ -215,15 +215,6 @@ export function applyJobResult(
   const preserveOneShotSchedule =
     opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
   const ownsSchedule = opts.scheduleOwnership !== "stale";
-  const oneShotNextCheck =
-    ownsSchedule &&
-    !preserveOneShotSchedule &&
-    !opts.replaySchedule &&
-    isJobEnabled(job) &&
-    isCronOneShotContinuationJob(job) &&
-    result.status === "ok"
-      ? result.nextCheck
-      : undefined;
   const restartRetryAtMs = result.interruptedByRestart
     ? resolveCronRestartRetryAtMs(job, result.startedAt, result.endedAt)
     : undefined;
@@ -250,6 +241,8 @@ export function applyJobResult(
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
     const shouldDelete =
+      (job.pluginDeleteAfterRun === undefined ||
+        (job.pluginDeleteAfterRun && completionStatus === "succeeded")) &&
       ownsSchedule &&
       !preserveOneShotSchedule &&
       (job.schedule.kind === "at" ||
@@ -321,6 +314,14 @@ export function applyJobResult(
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
   } else {
+    const oneShotNextCheck =
+      !preserveOneShotSchedule &&
+      !opts.replaySchedule &&
+      isJobEnabled(job) &&
+      isCronOneShotContinuationJob(job) &&
+      result.status === "ok"
+        ? result.nextCheck
+        : undefined;
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&

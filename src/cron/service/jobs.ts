@@ -325,6 +325,9 @@ export function applyJobPatch(
     job.enabled = patch.enabled;
   }
   if (patch.schedule) {
+    if (patch.schedule.kind !== "at") {
+      delete job.pluginDeleteAfterRun;
+    }
     job.schedule = normalizeJobSchedule(patch.schedule, { kind: "patch", previous: job.schedule });
   }
   if ("trigger" in patch) {

@@ -22,7 +22,7 @@ import {
   restoreFinalizedStartupRun,
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
 import {
   archiveCronRunDefinitionInDatabase,
@@ -41,7 +41,7 @@ function recordInterruptedRun(params: {
   storeKey: string;
   interrupted: InterruptedStartupRun;
   nowMs: number;
-  job?: CronJob;
+  job?: CronStoredJob;
   archive?: boolean;
   receipt?: CronRunReceipt;
   taskRunId?: string;
@@ -93,7 +93,10 @@ export function recoverCronJobInDatabase(
     database: OpenClawStateDatabase;
     receiptSchema: CronRunReceiptWriteSchema;
     notifications: DeferredCronNotifications;
-  } & ({ job: CronJob; receipt?: CronRunReceipt } | { job?: undefined; receipt: CronRunReceipt }),
+  } & (
+    | { job: CronStoredJob; receipt?: CronRunReceipt }
+    | { job?: undefined; receipt: CronRunReceipt }
+  ),
 ): { removed?: true; interrupted?: InterruptedStartupRun; skipStartupCatchup?: true } {
   const { state, database, storeKey, job, receipt, notifications } = params;
   const nowMs = state.deps.nowMs();
@@ -219,6 +222,7 @@ export function recoverCronJobInDatabase(
       })
     : undefined;
   let interrupted: InterruptedStartupRun | undefined;
+  let retireInterrupted = false;
   if (!restored) {
     interrupted = markInterruptedStartupRun({
       state,
@@ -238,6 +242,13 @@ export function recoverCronJobInDatabase(
     if (job.enabled && job.state.nextRunAtMs === undefined) {
       recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });
     }
+    retireInterrupted =
+      job.pluginDeleteAfterRun === undefined &&
+      previousEnabled &&
+      job.schedule.kind === "at" &&
+      interrupted.replacementAtMs === undefined &&
+      !job.state.runningScheduleChangeId &&
+      job.state.nextRunAtMs === undefined;
     interrupted = recordInterruptedRun({
       database: database.db,
       storeKey,
@@ -246,12 +257,7 @@ export function recoverCronJobInDatabase(
       taskRunId: task.taskRunId,
       interrupted,
       nowMs,
-      archive:
-        previousEnabled &&
-        job.schedule.kind === "at" &&
-        interrupted.replacementAtMs === undefined &&
-        !job.state.runningScheduleChangeId &&
-        job.state.nextRunAtMs === undefined,
+      archive: retireInterrupted,
     });
   }
   finishReceipt(
@@ -287,13 +293,7 @@ export function recoverCronJobInDatabase(
     deleteCronJobRowInDatabase(database.db, storeKey, job.id);
     return { removed: true, skipStartupCatchup: true };
   }
-  if (
-    interrupted &&
-    previousEnabled &&
-    job.schedule.kind === "at" &&
-    interrupted.replacementAtMs === undefined &&
-    job.state.nextRunAtMs === undefined
-  ) {
+  if (retireInterrupted) {
     deleteCronJobRowInDatabase(database.db, storeKey, job.id);
     return { interrupted, removed: true, skipStartupCatchup: true };
   }

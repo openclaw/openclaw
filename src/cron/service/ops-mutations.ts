@@ -136,6 +136,7 @@ export async function add(
         : undefined,
       options: {
         pluginCommand: opts?.pluginCommand,
+        pluginDeleteAfterRun: opts?.pluginDeleteAfterRun,
         pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
         streamOperatorSource: opts?.streamOperatorSource,
