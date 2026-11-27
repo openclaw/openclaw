@@ -298,14 +298,11 @@ export async function ensureOpenClawModelsJsonWithInput(
       }),
     );
 
+    const rootChanged = plan.action === "write" && existingModelsFile.raw !== plan.contents;
     if (plan.action === "write") {
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-      if (existingModelsFile.raw !== plan.contents) {
+      if (rootChanged) {
         await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
-        // Logged once per rewrite, not per catalog load, so the skip stays visible without repeating.
-        for (const reason of plan.skippedProviders ?? []) {
-          log.warn(`models.json omits a provider the model registry cannot load: ${reason}`);
-        }
       }
     }
     publishModelsJsonCostSource(
@@ -329,6 +326,12 @@ export async function ensureOpenClawModelsJsonWithInput(
           plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
         pluginCatalogs: publication.catalogs,
       };
+    }
+    // Logged once per catalog change, not per catalog load, so the skip stays visible without repeating.
+    if (plan.action === "write" && (rootChanged || publication?.changed)) {
+      for (const reason of plan.skippedProviders ?? []) {
+        log.warn(`Model catalog omits a provider the model registry cannot load: ${reason}`);
+      }
     }
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);
