@@ -41,7 +41,8 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 
 type JournalDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 
-function readRecoverySource(database: JournalDatabase) {
+/** The journal rows quarantine preserves; read-only, shared with Doctor's pending check. */
+export function readAgentDeletionJournalRecoverySource(database: JournalDatabase) {
   // Recovery must inspect the damaged catalog instead of the runtime's admitted shape.
   const db = database.db;
   const postgres = isPostgresSqlConnection(db);
@@ -95,7 +96,7 @@ export async function quarantineAgentDeletionJournal(params: {
   const signal = resolveSqliteInspectionSignal();
   signal?.throwIfAborted();
   const source = (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-    readRecoverySource,
+    readAgentDeletionJournalRecoverySource,
     { env },
   )) ?? {
     missing: true,
@@ -246,7 +247,7 @@ export async function quarantineAgentDeletionJournal(params: {
   const remaining = runOpenClawStateWriteTransaction(
     (database) => {
       assertCurrent();
-      if (!isDeepStrictEqual(readRecoverySource(database), source)) {
+      if (!isDeepStrictEqual(readAgentDeletionJournalRecoverySource(database), source)) {
         throw new Error(
           "Agent deletion journal changed before quarantine; stores were left untouched.",
         );

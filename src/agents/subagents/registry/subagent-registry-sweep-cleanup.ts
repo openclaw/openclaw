@@ -18,6 +18,7 @@ import {
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
@@ -83,7 +84,7 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
-  entry.pauseReason === "sessions_yield" ||
+  isSubagentPausedByYield(entry) ||
   entry.delivery?.status === "in_progress" ||
   (entry.delivery?.status === "pending" &&
     (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined));

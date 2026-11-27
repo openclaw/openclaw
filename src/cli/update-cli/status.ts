@@ -131,7 +131,9 @@ async function inspectUpdateStatus(
     return retainedRunStatus;
   };
   const deadline = performance.now() + timeoutMs;
-  const remainingMs = () => Math.max(1, deadline - performance.now());
+  // RPC and child-process timeouts require integer milliseconds; a fractional
+  // remainder is rejected by the channels.status schema (`at /timeoutMs: must be integer`).
+  const remainingMs = () => Math.max(1, Math.ceil(deadline - performance.now()));
   const inspect = async <T>(
     section: string,
     operation: () => T | Promise<T>,

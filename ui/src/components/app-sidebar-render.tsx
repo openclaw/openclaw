@@ -31,11 +31,7 @@ import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  renderSessionUnreadBadge,
-  SessionGlyph,
-  SessionRowBadges,
-} from "./solid/session-presentation.tsx";
+import { renderSessionUnreadBadge, SessionGlyph } from "./solid/session-presentation.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -497,26 +493,19 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             <Show when={home()} fallback={<Icon name="home" />}>
               {(session) => {
                 const running = () =>
-                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
-                  session().runningChildCount > 0;
+                  ((session().isRunVisuallyActive ?? session().hasActiveRun) &&
+                    session().status !== "queued") ||
+                  session().hasRunningDescendant === true;
                 return (
-                  <>
-                    {/* Home is navigation, not an interactive session-attention target. */}
-                    <SessionGlyph
-                      content={<Icon name="home" />}
-                      running={running()}
-                      queued={session().status === "queued" && session().runningChildCount === 0}
-                      badge={
-                        <Show when={session().unread && !running()}>
-                          {renderSessionUnreadBadge()}
-                        </Show>
-                      }
-                    />
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  </>
+                  <SessionGlyph
+                    content={<Icon name="home" />}
+                    running={running()}
+                    badge={
+                      <Show when={session().unread && !running()}>
+                        {renderSessionUnreadBadge()}
+                      </Show>
+                    }
+                  />
                 );
               }}
             </Show>
