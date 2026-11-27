@@ -476,7 +476,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     mark,
     read: (id) => rows.get(id),
     store: (path) => stores.get(path),
-    refresh(id, retained, fenceRecall = false) {
+    refresh(id, retained) {
       const row = rows.get(id);
       if (!row || (isCold(row) && !row.pendingDatabaseFacts)) {
         return;
@@ -484,11 +484,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       epoch++;
       // Transcript-only refreshes publish presentation facts without fencing the sharing
       // revision: disclosure, lifecycle, and owner changes invalidate through
-      // materialized/replace/remove/mark instead. Destructive transcript rewrites rotate
-      // the generation and still fence stale recall hits.
-      if (fenceRecall) {
-        revisions.invalidate();
-      }
+      // materialized/replace/remove/mark, and destructive transcript rewrites fence
+      // through the transcript owner's fence callback.
       records.invalidateDatabaseFacts(row, retained);
       // Certified transcript facts refresh summaries and previews without replacing the row.
       if (retained && records.ready(row) && !dirty.has(id) && row.facts) {
@@ -501,6 +498,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       revisions.publishFacts(row);
       void ensureMaterialized().catch(() => {});
     },
+    fence: () => revisions.invalidate(),
   });
   const generationMutations = createSessionRowGenerationMutations({
     stores: () => stores,

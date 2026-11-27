@@ -27,7 +27,9 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
   store: (path: string) => SessionRowStore | undefined;
-  refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts, fenceRecall?: boolean) => void;
+  refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts) => void;
+  /** Invalidate the sharing revision even when presentation refreshes are throttled. */
+  fence: () => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
   let disposed = false;
@@ -105,6 +107,10 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       if (!fact || fact.kind === "unchanged") {
         return;
       }
+      // Only a certified postimage names a new transcript generation. `unknown` settlement and
+      // `absent` rows carry no value, so they keep conservative invalidation below instead of
+      // reading a generation that was never published.
+      const postimage = fact.kind === "postimage" ? fact.value : undefined;
       const source = readPreparedSessionEntryPublicationSource(change);
       for (const row of params.matching({ ...change, key: change.sessionKey })) {
         if (source.identity !== params.store(row.storeTarget.storePath)?.identity) {
@@ -114,32 +120,42 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
         const facts = row.retainedDatabaseFacts ?? row.pendingDatabaseFacts;
         const retained =
           !change.factsInvalidated &&
-          fact.kind === "postimage" &&
-          fact.value.sessionId === facts?.entry?.sessionId &&
+          postimage !== undefined &&
+          postimage.sessionId === facts?.entry?.sessionId &&
           isPreparedSessionRowDatabaseFacts(facts)
             ? {
                 ...facts,
                 activitySummaryWatermark: {
-                  generation: fact.value.generation,
-                  maxSeq: fact.value.rawSeq,
+                  generation: postimage.generation,
+                  maxSeq: postimage.rawSeq,
                 },
-                transcriptPreview: fact.value.lastMessagePreview,
-                transcriptHasMessages: fact.value.hasMessages,
+                transcriptPreview: postimage.lastMessagePreview,
+                transcriptHasMessages: postimage.hasMessages,
                 transcriptAssistantMessage:
-                  fact.value.lastAssistantMessage === "unchanged"
+                  postimage.lastAssistantMessage === "unchanged"
                     ? facts.transcriptAssistantMessage
-                    : fact.value.lastAssistantMessage === undefined
+                    : postimage.lastAssistantMessage === undefined
                       ? "unknown"
-                      : fact.value.lastAssistantMessage,
-                transcriptTerminalModel: fact.value.terminalModel,
+                      : postimage.lastAssistantMessage,
+                transcriptTerminalModel: postimage.terminalModel,
               }
             : undefined;
         // Pure appends preserve the transcript generation; destructive rewrites rotate it
-        // and must fence recall reads that captured the old sharing revision. Rows without
-        // a certified watermark keep the transcript-only tolerance for first events.
+        // and must fence recall reads that captured the old sharing revision. The watermark
+        // is only certified for rows carrying an activity summary, so a row without one
+        // classifies a clear by its content: it held messages and the postimage now reports
+        // an empty transcript. Unknown or absent receipts cannot be proven appends and keep
+        // conservative invalidation.
         const previousGeneration = facts?.activitySummaryWatermark?.generation;
-        const transcriptGenerationRotated =
-          previousGeneration !== undefined && previousGeneration !== fact.value.generation;
+        const fenceRecall =
+          postimage === undefined ||
+          (previousGeneration !== undefined
+            ? previousGeneration !== postimage.generation
+            : facts?.transcriptHasMessages === true &&
+              (postimage.rawSeq === null || postimage.hasMessages === false));
+        if (fenceRecall) {
+          params.fence();
+        }
         row.retainedDatabaseFacts = retained;
         if (
           !retained ||
@@ -147,7 +163,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
           retained.transcriptPreview !== undefined ||
           readSessionActivitySummary(facts?.entry)
         ) {
-          params.refresh(identity(row), retained, transcriptGenerationRotated);
+          params.refresh(identity(row), retained);
         } else {
           row.databaseFactsRevision++;
         }

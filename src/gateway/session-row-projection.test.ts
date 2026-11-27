@@ -22,10 +22,16 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import { publishCommittedSessionTranscriptReceipts } from "../config/sessions/session-transcript-authority.js";
+import type { SessionTranscriptAuthority } from "../config/sessions/session-transcript-authority.types.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import {
+  createSqliteCommitReceipt,
+  type SqliteCommittedFact,
+} from "../infra/sqlite-commit-receipt.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -34,6 +40,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
@@ -157,13 +164,34 @@ it("keeps the sharing revision stable across transcript-only refreshes", () =>
     // Transcript activity refreshes presentation facts, not the disclosure scope.
     await appendProjectionMessages(seeded.scope, { role: "user", content: "unrelated chatter" });
     expect(projection.sharingRevision).toBe(revision);
+    // An indeterminate worker settlement carries no postimage; it must fence recall
+    // without reading a generation that was never published.
+    const source = readOpenClawAgentDatabaseIdentity(
+      openOpenClawAgentDatabase({ agentId: "main" }),
+    );
+    publishCommittedSessionTranscriptReceipts([
+      createSqliteCommitReceipt({
+        source: {
+          identity: source.identity,
+          incarnation: source.incarnation,
+          birthtime: source.birthtime,
+          filename: source.filename,
+        },
+        domain: "session-transcript-context",
+        keys: [seeded.query.key],
+        readFact: (): SqliteCommittedFact<SessionTranscriptAuthority> => ({ kind: "unknown" }),
+      }),
+    ]);
+    const fenced = projection.sharingRevision;
+    expect(fenced).not.toBe(revision);
+    await projection.ensureMaterialized();
     // Real sharing changes still fence concurrent readers.
     addSessionMember(
       { agentId: "main", sessionKey: seeded.query.key },
       { identityId: "fixture-viewer", addedBy: "fixture-owner" },
     );
     await projection.ensureMaterialized();
-    expect(projection.sharingRevision).not.toBe(revision);
+    expect(projection.sharingRevision).not.toBe(fenced);
   }, true));
 
 function write(key: string, entry: SessionEntry, agentId = "main", storePath?: string) {

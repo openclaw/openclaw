@@ -855,56 +855,69 @@ test("recall tolerates transcript-only activity on unrelated rows during its wor
   });
 });
 
-test("recall discards hits when a destructive transcript rewrite lands during its worker read", async () => {
-  await withSearchState(async () => {
-    const owner = ensureProfileForEmail("recall-rewrite@example.test").id;
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = await seed("main", "rewrite-target", owner, "needle", {
-      activitySummary: {
-        version: 1,
-        text: "needle discussion",
-        updatedAt: Date.now(),
-        sessionId: "main-rewrite-target",
-        generation: null,
-        maxSeq: null,
-        leafEntryId: null,
-        coveredMessages: 1,
-        totalMessages: 1,
-        omittedContent: false,
-      },
-    });
-    const read = transcriptSearch.searchSessionTranscripts;
-    let rewritten = false;
-    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
-      const result = await read(...args);
-      if (!rewritten) {
-        rewritten = true;
-        runOpenClawAgentWriteTransaction(
-          (database) => {
-            replaceSqliteTranscriptEventsInTransaction(
-              database,
-              resolveSqliteTranscriptScope({
-                agentId: "main",
-                sessionKey: key,
+// Activity summaries are optional: existing transcripts without one still hold recall hits, so
+// rewrite fencing must not depend on a certified summary watermark.
+test.each([true, false])(
+  "recall discards hits when a destructive transcript rewrite lands during its worker read (activity summary: %s)",
+  async (withActivitySummary) => {
+    await withSearchState(async () => {
+      const owner = ensureProfileForEmail("recall-rewrite@example.test").id;
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const key = await seed(
+        "main",
+        "rewrite-target",
+        owner,
+        "needle",
+        withActivitySummary
+          ? {
+              activitySummary: {
+                version: 1,
+                text: "needle discussion",
+                updatedAt: Date.now(),
                 sessionId: "main-rewrite-target",
-              }),
-              [],
-            );
-          },
-          { agentId: "main" },
-        );
-      }
-      return result;
+                generation: null,
+                maxSeq: null,
+                leafEntryId: null,
+                coveredMessages: 1,
+                totalMessages: 1,
+                omittedContent: false,
+              },
+            }
+          : {},
+      );
+      const read = transcriptSearch.searchSessionTranscripts;
+      let rewritten = false;
+      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
+        const result = await read(...args);
+        if (!rewritten) {
+          rewritten = true;
+          runOpenClawAgentWriteTransaction(
+            (database) => {
+              replaceSqliteTranscriptEventsInTransaction(
+                database,
+                resolveSqliteTranscriptScope({
+                  agentId: "main",
+                  sessionKey: key,
+                  sessionId: "main-rewrite-target",
+                }),
+                [],
+              );
+            },
+            { agentId: "main" },
+          );
+        }
+        return result;
+      });
+      const result = await search(requestContext(cfg), identifiedClient(owner), {
+        query: "needle",
+        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload?.results).toEqual([]);
     });
-    const result = await search(requestContext(cfg), identifiedClient(owner), {
-      query: "needle",
-      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
-    });
-    expect(result.ok, result.error?.message).toBe(true);
-    expect(result.payload?.results).toEqual([]);
-  });
-});
+  },
+);
 
 test("recall still fails when the disclosure scope keeps changing during both read attempts", async () => {
   await withSearchState(async () => {
