@@ -214,8 +214,7 @@ export class CommandPaletteState {
     event,
   ) => {
     const invalidation = modelCatalogEventInvalidation(event);
-    const snapshot = this.context?.gateway.snapshot;
-    const cron = snapshot && isCronInventoryInvalidation(event, snapshot);
+    const cron = this.context && isCronInventoryInvalidation(event);
     if (invalidation === "clear") {
       this.settledModels = this.modelReader.snapshot;
       this.modelItems = getCommandPaletteModelItems(this.settledModels);

@@ -19,6 +19,7 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -119,12 +120,7 @@ const observer = new PerformanceObserver((list) => collect(list.getEntries()));
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (values.sample) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const hostLoad = loadavg();
 const cpu = process.threadCpuUsage();

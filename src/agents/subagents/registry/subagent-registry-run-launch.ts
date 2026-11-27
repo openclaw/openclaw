@@ -17,6 +17,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -25,6 +26,7 @@ import {
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
@@ -220,7 +222,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext(undefined, {
+        retainRequester: true,
+      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -365,7 +369,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 subagentRuns.bindCompletionAuthority(
                   entry,
                   authority,
-                  options.requesterRunInstance,
+                  options.requesterRunInstance ??
+                    getGatewayToolCallerIdentity()?.operationalRunInstance,
+                  options.requesterRunInstance
+                    ? { runId: options.requesterRunInstance.runId }
+                    : undefined,
                 );
                 custodyTransferred = true;
               }
@@ -421,8 +429,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
           !current ||
           !ownsSession() ||
-          current.killIntent ||
-          current.killReconciliation ||
+          hasSubagentKill(current) ||
           getGatewayContextResolver(current) !== gatewayContextResolver ||
           (gatewayContextResolver &&
             (!gatewayContext || gatewayContextResolver() !== gatewayContext))
@@ -516,8 +523,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         const terminalBeforeAcceptance =
           current.collectorCompletion !== undefined && current.swarmLaunchPending === true;
         if (
-          current.killIntent ||
-          current.killReconciliation ||
+          hasSubagentKill(current) ||
           waitForPendingSubagentKillClaim(current, context.admission) ||
           (current.swarmLaunchPending === true &&
             typeof current.execution.endedAt === "number" &&

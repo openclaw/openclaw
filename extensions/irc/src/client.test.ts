@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ircPlugin } from "./channel.js";
 import { connectIrcClient, type IrcClientOptions } from "./client.js";
 import { onIrcTestLine, startIrcTestServer as startServer } from "./irc-server.test-support.js";
+import { probeIrc } from "./probe.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -171,6 +172,60 @@ describe("irc client readiness timeout", () => {
 });
 
 describe("irc client fallback nick", () => {
+  it("probes a connected account when NICKLEN=9 arrives after registration", async () => {
+    const nicks = new Set<string>();
+    const rejectedNicks: string[] = [];
+    const probeClosed = createDeferred<void>();
+    const server = await startIrcTestServer((socket) => {
+      let nick = "";
+      let userReceived = false;
+      socket.on("close", () => {
+        nicks.delete(nick);
+        if (nick !== "openclaw9") {
+          probeClosed.resolve();
+        }
+      });
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("NICK ")) {
+          const candidate = line.slice("NICK ".length);
+          if (candidate.length > 9) {
+            rejectedNicks.push(candidate);
+            socket.write(`:server 432 * ${candidate} :Nickname too long\r\n`);
+            return;
+          }
+          if (nicks.has(candidate)) {
+            socket.write(`:server 433 * ${candidate} :Nickname in use\r\n`);
+            return;
+          }
+          nick = candidate;
+          nicks.add(nick);
+        } else if (line.startsWith("USER ")) {
+          userReceived = true;
+        } else if (line === "QUIT :probe") {
+          socket.end();
+          return;
+        }
+        if (nick && userReceived) {
+          socket.write(`:server 001 ${nick} :welcome\r\n`);
+          socket.write(`:server 005 ${nick} NICKLEN=9 :are supported\r\n`);
+        }
+      });
+    });
+    const existing = await connectTestClient(server, { nick: "openclaw9" });
+    const result = await probeIrc({
+      channels: {
+        irc: { host: "127.0.0.1", port: server.port, tls: false, nick: existing.nick },
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(rejectedNicks.length).toBeGreaterThan(0);
+    await withTimeout(probeClosed.promise, 1000, "IRC probe close");
+    expect(existing.isReady()).toBe(true);
+    expect(nicks).toEqual(new Set(["openclaw9"]));
+    expect(server.openSocketCount()).toBe(1);
+  });
+
   it("produces unique fallback nicks across sequential collisions", async () => {
     const first = await connectAfterNickCollision("bot");
     const second = await connectAfterNickCollision("bot");

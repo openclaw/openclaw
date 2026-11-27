@@ -47,7 +47,7 @@ export function formatApprovalRequest(approval: PendingApproval): string {
       if (approval.clubId !== undefined) {
         const permission =
           approval.type === "club" && approval.clubMode === "once"
-            ? "Approving enables this club for automatic replies, including future messages."
+            ? "Approving enables this club for automatic replies, including future messages. Ships invited to this club later may also trigger the agent."
             : "Approving permits this saved message only; it does not enable future messages.";
         const replayLine = approval.originalMessage
           ? "The reply goes to the club, using its own conversation."

@@ -217,9 +217,7 @@ it.each(promptUpdateCases)(
         runtimeInfo: { channel },
       });
       const action = expectDefined(
-        prompt.match(
-          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
-        )?.[1],
+        prompt.match(/`gateway`\s+([\w.]+)\s+only for built-in-updater installs/u)?.[1],
         "prompt-advertised built-in update action",
       );
       expect(action).toBe("update.run");
@@ -369,7 +367,7 @@ it.each([true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nNext: Updates from chat are disabled (commands.restart=false). Use the OpenClaw app or ask the Gateway operator to update OpenClaw.",
       }),
       expect.any(Object),
     );

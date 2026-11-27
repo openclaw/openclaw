@@ -160,6 +160,44 @@ suite.define(() => {
     );
   });
 
+  it("shows the full expanded session name without pushing its badges out of the phone drawer", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const row = sessionRow(
+        "agent:main:dashboard:77d49b41-7f39-496e-987d-19c8ab47be60",
+        "Release readiness for the international observatory calibration workspaces",
+        10,
+      );
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            sessions: [row],
+            count: 1,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            path: "",
+            ts: 10,
+          },
+          "sessions.describe": { session: row },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const drawer = page.locator("openclaw-sessions-page .session-details-panel");
+      await page.locator(".session-data-row .session-details-toggle").click();
+      await drawer.waitFor();
+      const heading = drawer.locator(".session-details-panel__title");
+      const fullHeading = await heading.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return Array.from(range.getClientRects()).every(
+          (rect) => rect.right <= el.getBoundingClientRect().right + 1,
+        );
+      });
+      expect(fullHeading).toBe(true);
+      const badges = await drawer.locator(".session-details-panel__badges").boundingBox();
+      const panel = await drawer.boundingBox();
+      expect(badges!.x + badges!.width).toBeLessThanOrEqual(panel!.x + panel!.width);
+    });
+  });
+
   it("groups by displayed kind while keeping the scan table compact", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const sessions = [
@@ -168,18 +206,15 @@ suite.define(() => {
         sessionRow("agent:main:beta", "Beta conversation", 4),
         sessionRow("agent:main:room", "Project room", 3, { kind: "group" }),
         sessionRow("cron:weekly", "Weekly check", 2),
-        sessionRow("agent:main:pinned", "Pinned conversation", 1, { pinned: true, pinnedAt: 100 }),
+        sessionRow("agent:main:pinned", "Pinned conversation", 1),
       ];
       await installMockGateway(page, {
         sessionKey: "unknown",
-        methodResponses: {
-          "sessions.list": {
-            count: sessions.length,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
-            path: "",
-            sessions,
-            ts: 10,
-          },
+        sessions,
+        presenceUsers: [{ id: "reader", self: true }],
+        bootstrapPreferences: {
+          profileId: "reader",
+          entries: { "ui.railShortcuts": ["session:agent:main:pinned"] },
         },
       });
       await page.goto(`${suite.server.baseUrl}sessions`);

@@ -1,4 +1,5 @@
 import { usageDailyModelIdentity, usageModelIdentity } from "../shared/usage-aggregates.js";
+import { includesUsageDay } from "../shared/usage-calendar.js";
 import {
   addCostUsageTotals,
   cloneCostUsageTotals,
@@ -16,6 +17,7 @@ import type {
   SessionUtcQuarterHourMessageCounts,
   SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
+  UsageCivilDays,
 } from "./session-cost-usage.types.js";
 
 const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
@@ -558,6 +560,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   endMs: number;
   includeUntimestamped: boolean;
   formatDay: UsageDayKeyFormatter;
+  civilDays?: UsageCivilDays;
 }): SessionCostSummary {
   const totals = createEmptyCostUsageTotals();
   const messageCounts = emptyMessageCounts();
@@ -578,6 +581,9 @@ export function buildSessionCostSummaryFromRollup(params: {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.firstTimestampMs ?? bucket.timestampMs);
     const dayKey = params.formatDay(date);
+    if (!includesUsageDay(dayKey, params.civilDays)) {
+      continue;
+    }
     const quarter = getUtcQuarterHourBucketKey(date);
     firstActivity ??= bucket.firstTimestampMs ?? bucket.timestampMs;
     lastActivity = bucket.lastTimestampMs ?? bucket.timestampMs;
@@ -657,11 +663,15 @@ export function addRollupToCostUsageSummary(params: {
   startMs: number;
   endMs: number;
   formatDay: UsageDayKeyFormatter;
+  civilDays?: UsageCivilDays;
   daily: Map<string, CostUsageTotals>;
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
+    if (!includesUsageDay(dayKey, params.civilDays)) {
+      continue;
+    }
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

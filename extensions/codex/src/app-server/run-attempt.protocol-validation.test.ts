@@ -10,11 +10,10 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartParams, JsonObject } from "./protocol.js";
-import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import { turnCompleted } from "./protocol.test-helpers.js";
 import {
   assistantMessage,
   bindProductionHarnessHostCapabilitiesForTest,
@@ -225,55 +224,6 @@ it.each([false, true])(
     expect(inputText?.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
   },
 );
-it("drains bound command output without one macrotask per notification", async () => {
-  const harness = createStartedThreadHarness();
-  const params = createTestParams();
-  const command = {
-    ...nativeCommandItem("cmd-burst", "completed", 20),
-    cwd: params.workspaceDir,
-    aggregatedOutput: null,
-  };
-  const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
-  await harness.notify(
-    itemNotification("item/started", {
-      ...command,
-      status: "inProgress",
-      exitCode: null,
-      durationMs: null,
-    }),
-  );
-
-  const notificationCount = 128;
-  const handledOrder: number[] = [];
-  const notifications = Array.from({ length: notificationCount }, (_, index) =>
-    harness
-      .notify({
-        method: "item/commandExecution/outputDelta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "cmd-burst",
-          delta: `${index.toString().padStart(3, "0")}:${"x".repeat(8_188)}`,
-        },
-      })
-      .then(() => {
-        handledOrder.push(index);
-      }),
-  );
-
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  expect(handledOrder).toHaveLength(notificationCount);
-  await Promise.all(notifications);
-  expect(handledOrder).toEqual(Array.from({ length: notificationCount }, (_, index) => index));
-
-  await harness.notify(itemNotification("item/completed", { ...command, processId: 42 }));
-  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-  const result = await run;
-  expect(JSON.stringify(result.messagesSnapshot)).toContain('"toolCallId":"cmd-burst"');
-});
 it.each<{ label: string; turn: JsonObject }>([
   { label: "nonterminal status", turn: { status: "inProgress", items: [] } },
   {

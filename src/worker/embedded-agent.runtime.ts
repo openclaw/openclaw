@@ -55,6 +55,7 @@ import type { createWorkerInferenceStreamAdapter } from "./inference-stream.runt
 import type { WorkerLaunchPlan } from "./launch-descriptor.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
 import type { NativeRuntimeResolved } from "./native-runtime.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 import { createWorkerLocalMcpTool, type WorkerLocalMcpCall } from "./worker-local-mcp.js";
@@ -78,6 +79,7 @@ type RunWorkerEmbeddedTurnParams = Omit<
   workerContainmentRoot: string;
   stateDir: string;
   github?: PreparedGitHubToolEnvironment;
+  nodeExecution?: NodeExecutionContext;
   sessionId: string;
   sessionKey: string;
   inference: { stream: ReturnType<typeof createWorkerInferenceStreamAdapter> };
@@ -341,7 +343,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 runId: params.runId,
-                requester: { senderIsOwner: true },
               }),
               toolSignal,
             ),

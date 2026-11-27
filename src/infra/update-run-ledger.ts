@@ -57,8 +57,6 @@ import {
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
-import { inspectRecoveryRows } from "./update-run-recovery-store.js";
 import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
@@ -480,9 +478,7 @@ export function reconcilePackageOwnerRefusal(
           db,
           query.select("run_id").where("status", "=", "running").limit(1),
         ) ||
-        inspectRecoveryRows(db).some(
-          ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
-        )
+        hasStoredUpdateRecovery(db, expected.runId)
       ) {
         return false;
       }
@@ -518,11 +514,7 @@ function finishInterruptedRunInTransaction(
   status: "skipped" | "failed",
   options: LedgerOptions,
 ): UpdateRunRecord | undefined {
-  if (
-    inspectRecoveryRows(db).some(
-      ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
-    )
-  ) {
+  if (hasStoredUpdateRecovery(db, expected.runId)) {
     return undefined;
   }
   return mutateRunInTransaction(

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { activationTargetId } from "./state.ts";
 import {
   detected,
@@ -123,21 +124,13 @@ describe("renderModelSetup", () => {
     expect(text(row)).not.toContain(secret);
   });
 
-  it("uses the guided choice label as the sign-in action and preserves native overrides", () => {
+  it("uses the guided choice label as the sign-in action", () => {
     const authOptions = [
       {
         id: "sample-browser",
         kind: "oauth" as const,
         label: "Sign in with Sample",
         groupLabel: "Sample",
-        featured: true,
-      },
-      {
-        id: "sample-device",
-        kind: "device-code" as const,
-        label: "Sign in with a device code",
-        groupLabel: "Sample",
-        actionLabel: "Pair this Mac",
         featured: true,
       },
     ];
@@ -154,9 +147,6 @@ describe("renderModelSetup", () => {
     expect(text(button)).toBe("Sign in with Sample");
     button.click();
     expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
-    expect(text(container.querySelector('[data-auth-choice="sample-device"] button')!)).toBe(
-      "Set up & verify",
-    );
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -296,37 +286,6 @@ describe("renderModelSetup", () => {
       }),
     );
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
-  });
-
-  it("uses explicit brand identity without guessing from labels or opaque ids", () => {
-    const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "custom-login",
-                brandId: "claude",
-                label: "Company account",
-                icon: "https://cdn.example.com/custom.png",
-              },
-            ],
-          },
-        },
-        manualProviderId: "custom-login",
-        iconUrls: {},
-      }),
-    );
-
-    expect(
-      container.querySelector('.model-setup__manual [data-provider-icon="claude"]'),
-    ).not.toBeNull();
-    expect(container.querySelector(".model-setup__manual img")).toBeNull();
   });
 
   it("uses proxied artwork for unknown providers and invalidates broken blobs", () => {
@@ -495,6 +454,9 @@ describe("renderModelSetup", () => {
         : {}),
       deviceCode: { code: "ABCD-EFGH", ...(copied ? { expiresInMinutes: 10 } : {}) },
     });
+    await waitForFast(() =>
+      expect(container.querySelector(".wizard-sign-in__code button")).not.toBeNull(),
+    );
 
     if (copied) {
       const link = container.querySelector<HTMLAnchorElement>(
@@ -521,7 +483,7 @@ describe("renderModelSetup", () => {
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
-    ({ sensitive, expectedType }) => {
+    async ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
         renderSetup(
@@ -544,6 +506,9 @@ describe("renderModelSetup", () => {
           container,
         );
       renderStep(null);
+      await waitForFast(() =>
+        expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+      );
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',

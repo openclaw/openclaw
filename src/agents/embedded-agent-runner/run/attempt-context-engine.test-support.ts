@@ -10,7 +10,7 @@ import {
   resetEmbeddedAttemptHarness,
 } from "./attempt-spawn-workspace.test-support.js";
 
-export type ContextEngineAttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
+type ContextEngineAttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
 
 export function useContextEngineAttemptHarness(sessionKey: string) {
   const hoisted = getHoisted();

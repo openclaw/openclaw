@@ -44,10 +44,16 @@ async function borrowSessionRowProjection() {
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
+  if (params.pinned !== undefined) {
+    throw new Error(
+      "To filter personal pins, run sessions_list from your signed-in Gateway chat. Embedded runs have no personal sidebar.",
+    );
+  }
   const rt = await getRuntime();
   return rt.listProjectedSessions({
     projection: await borrowSessionRowProjection(),
     opts: params as SessionsListParams,
+    personalPins: null,
   });
 }
 
@@ -100,7 +106,9 @@ async function handleSessionsDescribe(params: Record<string, unknown>) {
           "Session projection changed while describing the session; retry the request",
         );
       }
-      const { row } = rt.prepareProjectedSessionPresentation(read).snapshot(query(read.state.cfg));
+      const { row } = rt
+        .prepareProjectedSessionPresentation(read)
+        .snapshot(query(read.state.cfg), { personalPins: null });
       return { session: row };
     },
   );

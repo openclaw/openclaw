@@ -7,6 +7,11 @@ import {
   controlUiBundledSettingsStorageKey,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createCronJob,
+  cronJobsListResponse,
+  cronListResponseFixture,
+} from "../test-helpers/cron.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { navigationAgents } from "./new-session-page.navigation-fixtures.test-support.ts";
@@ -52,7 +57,9 @@ suite.define(() => {
         featureMethods: ["cron.list"],
         methodResponses: {
           ...scenario.methodResponses,
-          "cron.list": { jobs: [{ id: "catalog-ready", name: "Catalog ready" }] },
+          "cron.list": cronListResponseFixture(
+            cronJobsListResponse([createCronJob("catalog-ready", "Catalog ready")]),
+          ),
         },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=alpha`);

@@ -546,21 +546,45 @@ describe("cli session history", () => {
     },
   );
 
-  it("does not reuse a text-consumed local row for image deduplication", () => {
+  it("does not claim a native media turn with only a positional placeholder", () => {
+    const id = "text-row";
+    const local = user("text only", 1, { id, media: [null] });
+    const imported = user(imagePrompt(id), 2, cliMeta("actual-image"));
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      expect(
+        mergeImportedChatHistoryMessages(
+          { localMessages: [local], importedMessages: [imported] },
+          new Index(),
+        ),
+      ).toEqual([local, imported]);
+    }
+  });
+
+  it("keeps the earlier native caption separate from the image turn that owns the upload", () => {
     const localEntryId = "local-image-row";
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     const localMessage = imageTurn(localEntryId, "look at this", timestamp, "a");
-    const textImport = user("look at this", timestamp, cliMeta("text-import"));
+    const textImport = user("look at this", timestamp - 15_000, cliMeta("text-import"));
     const imageImport = user(
       `look at this\n\n${imagePrompt(localEntryId)}`,
       timestamp + 1,
       cliMeta("image-import"),
     );
 
-    expect(merge([localMessage], [textImport, imageImport])).toMatchObject([
-      { __openclaw: { externalId: "text-import" } },
-      { __openclaw: { externalId: "image-import" } },
-    ]);
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      expect(
+        mergeImportedChatHistoryMessages(
+          { localMessages: [localMessage], importedMessages: [textImport, imageImport] },
+          new Index(),
+        ),
+      ).toEqual([
+        textImport,
+        {
+          ...localMessage,
+          __openclaw: { ...localMessage["__openclaw"], ...imageImport["__openclaw"] },
+        },
+      ]);
+    }
   });
 
   it.each([
@@ -605,6 +629,48 @@ describe("cli session history", () => {
       }
     },
   );
+
+  it("gives native rows the run of the local turn whose prompt they answer", async () => {
+    const toolTurn = (id: string) => [
+      {
+        type: "assistant",
+        uuid: `${id}-call`,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id, name: "mcp__openclaw__sessions_yield", input: {} }],
+        },
+      },
+      {
+        type: "user",
+        uuid: `${id}-result`,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: id, content: "{}" }],
+        },
+      },
+    ];
+    const { messages } = await readBoundHistory(
+      [
+        { type: "user", uuid: "prompt", message: { role: "user", content: "Spawn and yield" } },
+        // Skill context arrives as a meta row inside the same turn.
+        claudeUser("Base directory for this skill", {
+          isMeta: true,
+          sourceToolUseID: "toolu_skill",
+        }),
+        ...toolTurn("asked"),
+        // A synthetic wake opens a turn no local row owns.
+        { type: "user", uuid: "wake", isMeta: true, message: { role: "user", content: "Woke" } },
+        ...toolTurn("woken"),
+      ],
+      [user("Spawn and yield", undefined, { idempotencyKey: "run-1:user" })],
+    );
+    expect(messages.map((message) => readRecord(message)["__openclaw"])).toEqual([
+      expect.objectContaining({ idempotencyKey: "run-1:user", externalId: "prompt" }),
+      expect.objectContaining({ externalId: "asked-call", runId: "run-1" }),
+      expect.not.objectContaining({ runId: expect.anything() }),
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("turnExternalId");
+  });
 });
 
 it("keeps lone surrogates distinct from replacement characters in SQLite match keys", () => {

@@ -134,7 +134,7 @@ export function verifyWebhook(params: {
   body: Buffer;
   secrets: readonly string[];
   now: number;
-}): string {
+}): void {
   const id = params.headers["webhook-id"];
   const timestamp = params.headers["webhook-timestamp"];
   const signatures = params.headers["webhook-signature"];
@@ -172,12 +172,11 @@ export function verifyWebhook(params: {
   if (!matched) {
     throw new CallbackError(401, "Invalid webhook authentication");
   }
-  return id;
 }
 
+/** `webhook-id` names the delivered message, not the event, so it is never compared with `eventId` (SEP-3415). */
 export function parseCallback(
   body: Buffer,
-  webhookId: string,
   definition: EventDefinition,
 ): { kind: "verification"; challenge: string } | { kind: "event"; event: ApplicationEvent } {
   let value: Record<string, unknown> | undefined;
@@ -195,7 +194,7 @@ export function parseCallback(
     }
     return { kind: "verification", challenge: value.challenge };
   }
-  if (value.eventId !== webhookId || !(value.cursor === null || isCursor(value.cursor))) {
+  if (!(value.cursor === null || isCursor(value.cursor))) {
     throw new CallbackError(400, "Invalid event envelope");
   }
   return { kind: "event", event: parseOccurrence(value, definition, value.cursor) };

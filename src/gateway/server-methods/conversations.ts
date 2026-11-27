@@ -17,7 +17,7 @@ import {
 import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { readGatewayRequestAdmission } from "../operator-admission.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -111,7 +111,7 @@ async function handleConversationWrite(
         config,
         readCurrentConfig,
         agentId: request.agentId,
-        senderIsOwner: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+        senderIsOwner: readGatewayRequestAdmission(client).grant.owner,
         ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
         conversationRef: request.conversationRef,
         message: request.message,

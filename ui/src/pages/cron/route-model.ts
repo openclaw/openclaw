@@ -1,9 +1,11 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createCronExecutionId } from "../../../../src/cron/run-id.js";
 import type { CronJob } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
@@ -63,7 +65,10 @@ export function createCronRouteSelection() {
     } catch (error) {
       if (ownsSelection()) {
         selection.target = null;
-        state.cronError = formatUiError(error);
+        state.cronError =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "UNAVAILABLE"
+            ? t("cron.linkUnavailable")
+            : formatUiError(error);
       }
     }
   }

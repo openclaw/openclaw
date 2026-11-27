@@ -35,6 +35,33 @@ export const TemplatesDraftsCreateParamsSchema = closedObject({
   sourceSessionKey: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
 });
 export const TemplatesDraftsReadParamsSchema = closedObject(Target);
+const SignInTarget = { ...Target, sourceSessionKey: Type.String({ minLength: 1, maxLength: 512 }) };
+export const TemplatesDraftsSignInParamsSchema = Type.Union([
+  closedObject({ ...SignInTarget, action: Type.Literal("status") }),
+  closedObject({ ...SignInTarget, action: Type.Literal("start") }),
+  closedObject({ ...SignInTarget, action: Type.Literal("poll"), requestId: DraftId }),
+  closedObject({ ...SignInTarget, action: Type.Literal("cancel"), requestId: DraftId }),
+]);
+export type TemplatesDraftsSignInParams = Static<typeof TemplatesDraftsSignInParamsSchema>;
+export type TemplatesDraftsSignInResult =
+  | {
+      status:
+        | "connected"
+        | "required"
+        | "expired"
+        | "denied"
+        | "cancelled"
+        | "failed"
+        | "finishing";
+    }
+  | {
+      status: "pending";
+      requestId: string;
+      verificationUrl: string;
+      userCode: string;
+      expiresAt: number;
+      pollAfterMs: number;
+    };
 export const TemplatesDraftsSaveParamsSchema = closedObject({
   ...Target,
   content: Type.String({ maxLength: 1_000_000 }),

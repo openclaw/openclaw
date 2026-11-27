@@ -310,6 +310,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         expect(result.error).toContain(
           "openclaw automations edit <jobId> --model openai/gpt-4o@claude-cli:personal",
         );
+        expect(result.errorClassification).toEqual({ kind: "permanent" });
+        expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-unrecorded" });
         expect(h.runCliAgentMock).not.toHaveBeenCalled();
       } else {
         expect(result.status, result.error).toBe("ok");
@@ -1078,6 +1080,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(result.status).toBe("error");
       expect(result.error).toContain(
         `runs on account ${claudeProfile}, which was removed or signed out`,
+      );
+      expect(result.error).toContain("list accounts: openclaw gateway call models.authStatus");
+      expect(result.error).toContain(
+        "To use a key in the environment or provider config instead: openclaw automations edit test-job --model <provider/model>.",
       );
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();

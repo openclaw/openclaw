@@ -109,22 +109,6 @@ extension OnboardingOpenClawIDStep {
     }
 }
 
-struct UnavailableOnboardingOpenClawIDService: OnboardingOpenClawIDService {
-    var unavailableReason: String? {
-        "Native OpenClaw ID setup is not available in this build. You can continue without it."
-    }
-
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
-        throw CocoaError(.featureUnsupported)
-    }
-
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
-        throw CocoaError(.featureUnsupported)
-    }
-
-    func cancel() {}
-}
-
 @MainActor
 @Observable
 final class OnboardingOpenClawIDModel {

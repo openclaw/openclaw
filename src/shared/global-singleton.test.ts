@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState as drain,
   readGlobalSingleton,
@@ -65,13 +65,19 @@ describe("resolveGlobalSingleton", () => {
     register(() => held);
     register(siblingReset, TEST_MAP_KEY);
 
-    const pending = drain();
+    let settled = false;
+    const pending = drain().then(() => {
+      settled = true;
+    });
     try {
       expect(siblingReset).toHaveBeenCalledOnce();
+      await nextEventLoopTurn();
+      expect(settled).toBe(false);
     } finally {
       release();
       await pending;
     }
+    expect(settled).toBe(true);
   });
 
   it("runs every registered reset before reporting failures", async () => {
@@ -88,6 +94,40 @@ describe("resolveGlobalSingleton", () => {
       register(() => {});
     }
   });
+
+  it.each(["close", "restart"] as const)(
+    "joins execution owners before native cleanup during %s, including failures",
+    async (event) => {
+      const { promise: held, resolve: release } = createDeferred();
+      const failure = new Error("execution owner cleanup failed");
+      const nativeFailure = new Error("native cleanup retained");
+      const nativeReset = vi.fn(() => {
+        throw nativeFailure;
+      });
+      resolveGlobalSingleton(TEST_KEY, () => ({}), nativeReset, "native-workers");
+      register(async () => {
+        await held;
+        throw failure;
+      }, TEST_MAP_KEY);
+      const pending = drain(event);
+      const outcome = expect(pending).rejects.toMatchObject({
+        errors: expect.arrayContaining([failure, nativeFailure]),
+      });
+      try {
+        await nextEventLoopTurn();
+        expect(nativeReset).not.toHaveBeenCalled();
+      } finally {
+        release();
+        try {
+          await outcome;
+        } finally {
+          register(() => {});
+          register(() => {}, TEST_MAP_KEY);
+        }
+      }
+      expect(nativeReset).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retains shared state for terminal persistence after other owners close", async () => {
     const shared = mapFor<string, string>(TEST_KEY, "shared-state");

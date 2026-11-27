@@ -403,6 +403,9 @@ describe("createGatewayKernel", () => {
       await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
         "chat.send unavailable during gateway startup",
       );
+      await expect(dispatch("models.authStatus", { agentId: "main" })).rejects.toThrow(
+        "models.authStatus unavailable during gateway startup",
+      );
 
       kernel.dedupe.set(`chat:${runId}`, {
         ts: Date.now(),

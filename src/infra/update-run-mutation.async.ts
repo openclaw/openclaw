@@ -14,13 +14,10 @@ import type { UpdateResultPayload } from "./update-result-payload.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunWriteCommand, UpdateRunWriteInput } from "./update-run-mutation.types.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { readUpdateRecoveryAdmissionFactsAsync } from "./update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import { loadPluginCohortRecoveryAsync } from "./update-run-recovery-store.js";
 import type { PluginCohortRecoveryContinuation } from "./update-run-recovery-types.js";
-import {
-  assertUpdateRecoveryAdmissionFacts,
-  assertPluginCohortRecoveryContinuation,
-} from "./update-run-recovery.js";
+import { assertPluginCohortRecoveryContinuation } from "./update-run-recovery.js";
 import { isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
@@ -77,15 +74,12 @@ export async function recordUpdateRunMutationAsync(
       redactPaths: captured.redactPaths,
     }),
   );
-  // Retain the accepted receipt before the metadata read yields; settlement owns
-  // both the reader and the write that rechecks recovery in its transaction.
+  // Retain the accepted receipt before reading the current pair; settlement owns
+  // both that read and the write that rechecks its named transaction.
   const pending = (async () => {
     if (continuation) {
       const selected = { env: captured.env, path: context.admission.databasePath };
-      cohortPair = assertUpdateRecoveryAdmissionFacts(
-        await readUpdateRecoveryAdmissionFactsAsync(selected),
-        { ...selected, pluginCohort: continuation },
-      );
+      cohortPair = await loadPluginCohortRecoveryAsync(continuation.runId, selected);
     }
     assertCurrent();
     const pluginCohort = cohortPair

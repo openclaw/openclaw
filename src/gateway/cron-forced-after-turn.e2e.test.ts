@@ -44,6 +44,12 @@ it(
           }
           calls++;
           if (calls === 1) {
+            // User-triggered automation creation declares its slots before the first add.
+            writeToolCall(response, AUTOMATIONS_TOOL_NAME, {
+              action: "plan",
+              names: ["After-turn proof"],
+            });
+          } else if (calls === 2) {
             writeToolCall(response, AUTOMATIONS_TOOL_NAME, {
               action: "add",
               job: {
@@ -59,7 +65,7 @@ it(
                 delivery: { mode: "none" },
               },
             });
-          } else if (calls === 2) {
+          } else if (calls === 3) {
             const match = body.match(/\\?"id\\?"\s*:\s*\\?"([a-f0-9-]{36})/);
             expect(match, body).not.toBeNull();
             jobId = match![1]!;
@@ -69,7 +75,7 @@ it(
               runMode: "force",
               timeoutMs: 1000,
             });
-          } else if (calls === 3) {
+          } else if (calls === 4) {
             expect(body).toContain("enqueued");
             expect(body).toContain("starts after this turn");
             if (disabled) {
@@ -104,7 +110,7 @@ it(
             expect(outcome, JSON.stringify({ outcome, history, calls })).toMatchObject({
               status: disabled ? "skipped" : "ok",
             });
-            expect(calls).toBe(disabled ? 3 : 4);
+            expect(calls).toBe(disabled ? 4 : 5);
             if (disabled) {
               expect(outcome.error).toContain("disabled");
               await withinTest(notice.promise, signal);

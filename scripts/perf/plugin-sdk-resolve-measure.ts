@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getPluginCache } from "../../src/plugins/plugin-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "../../src/plugins/plugin-sdk-native-resolver.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -141,12 +142,7 @@ try {
   Reflect.deleteProperty(contexts, "values");
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const batches = [];

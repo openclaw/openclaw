@@ -159,6 +159,15 @@ suite.define(() => {
               response: { path: WORKSPACE, home: "/home/peter", entries: [] },
             },
             {
+              match: { path: "/recorded" },
+              response: {
+                path: "/recorded",
+                parent: "/",
+                home: "/home/peter",
+                entries: [{ name: "openclaw", path: repoRoot }],
+              },
+            },
+            {
               match: { path: repoRoot },
               response: { path: repoRoot, parent: "/recorded", home: "/home/peter", entries: [] },
             },
@@ -176,6 +185,7 @@ suite.define(() => {
     await place.getByRole("button", { name: "Browse folders" }).click();
     const pathInput = page.locator("input.new-session-page__browser-path");
     await pathInput.fill(repoRoot);
+    await place.getByRole("option", { name: "openclaw", exact: true }).waitFor();
     await pathInput.press("Enter");
     const register = place.getByRole("button", { name: "Register as project" });
     await register.waitFor();

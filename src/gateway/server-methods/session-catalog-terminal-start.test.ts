@@ -131,7 +131,7 @@ describe("sessions.catalog.startTerminal", () => {
         },
       ],
       ErrorCodes.FORBIDDEN,
-      expect.stringContaining('cannot create sessions for agent "main"'),
+      expect.stringContaining('I did not start a session with agent "main"'),
     ],
     [
       "refuses sandboxed agents before requesting a terminal plan",

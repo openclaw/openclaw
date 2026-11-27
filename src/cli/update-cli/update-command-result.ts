@@ -36,12 +36,10 @@ import {
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { resolveUpdateRunVerifiedServingVersion } from "../../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import {
-  resolveUpdateRunVerifiedServingVersion,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -396,11 +394,6 @@ export async function resolveMutableUpdateFailure(params: {
   };
 }
 
-type UpdateAdmissionReportHints = Pick<
-  NonNullable<Parameters<typeof printResult>[2]>,
-  "writeArtifacts"
->;
-
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
   constructor(
@@ -443,10 +436,8 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
 export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
-  reportHints: UpdateAdmissionReportHints = {},
 ): Promise<never> {
   await printResult(error.result, opts, {
-    ...reportHints,
     readHistory: false,
     nextAction: error.detail,
   });

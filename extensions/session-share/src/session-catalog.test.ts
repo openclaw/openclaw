@@ -45,6 +45,11 @@ afterEach(async () => {
 });
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
+const federatedRow = <T>(session: T) => ({
+  ...session,
+  exportPolicy: { origin: "federated", automatic: false },
+});
+
 const nativeSession: SessionCatalogSession = {
   threadId: "agent:main:shared",
   name: "Shared session",
@@ -127,7 +132,7 @@ async function catalogFixture() {
     host: async (query: CatalogQuery = {}) => (await readList(query))[0],
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
     expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) =>
-      expect((await readList(query))[0]?.sessions).toEqual(sessions),
+      expect((await readList(query))[0]?.sessions).toEqual(sessions.map(federatedRow)),
     watch: async (query: CatalogQuery = {}) => {
       const publications: Promise<void>[] = [];
       const onHost = vi.fn();
@@ -280,7 +285,7 @@ it.each([
   expect((await f.begin({ profileRelation }))[0]?.pending).toBe(true);
   await advance(35_005);
   const first = (await f.host({ limitPerHost: 100, profileRelation }))!;
-  expect(first.sessions).toEqual(sessions.slice(0, 100));
+  expect(first.sessions).toEqual(sessions.slice(0, 100).map(federatedRow));
   expect(first.error).toBeUndefined();
   await f.expectSessions(sessions.slice(100, 200), {
     limitPerHost: 100,
@@ -531,7 +536,7 @@ it("preserves eligible host order and separates offline and failed sources", asy
     { hostId: "node:offline", error: { code: "NODE_OFFLINE" } },
     { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
   ]);
-  expect(hosts[0]?.sessions).toEqual([nativeSession]);
+  expect(hosts[0]?.sessions).toEqual([federatedRow(nativeSession)]);
   expect(f.invoke).toHaveBeenCalledTimes(4);
   expect(f.catalog.continueSession).toBeUndefined();
   expect(f.catalog.archive).toBeUndefined();
@@ -740,7 +745,10 @@ describe("catalog pair and optional original links", () => {
       f.list.mockResolvedValue({ nodes: [linkedNode] });
       f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
       expect((await f.host({ profileRelation }))?.sessions).toEqual([
-        { ...nativeSession, originalUrl: "https://source.example/control/chat/main/shared" },
+        {
+          ...federatedRow(nativeSession),
+          originalUrl: "https://source.example/control/chat/main/shared",
+        },
       ]);
       expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({

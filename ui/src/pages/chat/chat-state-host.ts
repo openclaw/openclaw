@@ -50,7 +50,6 @@ export type ChatPageHost = ChatHost &
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
     accessPreferences?: DraftPreferenceState;
-    accessPreferenceRevision?: number;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;

@@ -218,7 +218,9 @@ ${source.replace(
           const returnAnchor = sharedDelivery
             ? "      return projected;"
             : "      return {\n        payload: wirePayload,";
-          const payload = sharedDelivery ? "projected.payload" : "wirePayload";
+          const payload = sharedDelivery
+            ? "projected.payload ?? projected.serializePayload"
+            : "wirePayload";
           const replacements = [
             [
               "    const audiences = new Map<",

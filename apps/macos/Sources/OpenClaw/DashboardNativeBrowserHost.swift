@@ -151,8 +151,8 @@ final class DashboardNativeBrowserHost {
         browser.webView.appearance = self.readingAppearance
         browser.webView.navigationDelegate = self.navigationDelegate
         browser.webView.uiDelegate = self.uiDelegate
-        browser.webView.isHidden = true
-        container.addSubview(browser.presentationView, positioned: .above, relativeTo: dashboardWebView)
+        browser.isHidden = true
+        container.addSubview(browser, positioned: .above, relativeTo: dashboardWebView)
         self.tabs.append(Tab(
             id: tabId, sessionKey: sessionKey, browser: browser, openedBy: openedBy, openerTabId: openerTabId))
         browser.observeNavigationState { [weak self, weak browser] in
@@ -428,17 +428,17 @@ final class DashboardNativeBrowserHost {
             // Releasing it restores the older scope if that scope is still visible.
             let presentation = self.presentation(for: tab.id)?.value
             guard let presentation else {
-                tab.browser.webView.isHidden = true
+                tab.browser.isHidden = true
                 continue
             }
             let frame = Self.mappedFrame(rect: presentation.rect, dashboardFrame: dashboardWebView.frame)
-            let view = tab.browser.presentationView
-            if view.frame != frame {
-                view.frame = frame
-                tab.browser.webView.frame = view.bounds
+            let browser = tab.browser
+            if browser.frame != frame {
+                browser.frame = frame
+                browser.findBarViewDidChangeHeight()
             }
-            view.applyCutouts(self.overlayCutouts, dashboardFrame: dashboardWebView.frame)
-            tab.browser.webView.isHidden = frame.isEmpty
+            browser.applyCutouts(self.overlayCutouts, dashboardFrame: dashboardWebView.frame)
+            browser.isHidden = frame.isEmpty
         }
     }
 

@@ -65,6 +65,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  createGatewayExecDenial,
   buildGatewayExecAllowlistDeniedMessage,
   publishGatewayGuardianReview,
   buildGatewayExecApprovalDeniedToolResult,
@@ -85,6 +86,7 @@ import {
 import { inlineEvalFact, opaqueProgramAsk } from "./bash-tools.exec-interpreter-approval.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
+import { hasObservedExit, isShellCleanupCertain } from "./shell-call-receipt.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -112,14 +114,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const deny = (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
-    deniedResult: buildGatewayExecApprovalDeniedToolResult({
-      approvalId,
-      deniedReason,
-      command: params.command,
-      cwd: params.workdir,
-    }),
-  });
+  const deny = createGatewayExecDenial(params);
   const { approvals, hostSecurity, hostAsk, askFallback } = await resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
@@ -170,6 +165,9 @@ export async function processGatewayAllowlist(
     hostSecurity === "allowlist" &&
     (!analysisOk || !allowlistSatisfied) &&
     !durableApprovalSatisfied;
+  if (params.participationDenyMisses && hasAllowlistMiss) {
+    return deny("participant-allowlist-miss");
+  }
   function emitApprovalEvent(event: {
     action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
     outcome: "success" | "denied" | "error";
@@ -1022,11 +1020,17 @@ export async function processGatewayAllowlist(
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget(params, approvalId);
-    const sendDeniedFollowup = (reason: string) =>
-      sendExecApprovalFollowupResult(
+    const recordOutcome = await params.admitShellDispatch?.();
+    let gatewayInvocationStarted = false;
+    const sendDeniedFollowup = async (reason: string) => {
+      if (!gatewayInvocationStarted) {
+        await recordOutcome?.({ kind: "not-dispatched" });
+      }
+      return sendExecApprovalFollowupResult(
         followupTarget,
         `Exec denied (gateway id=${approvalId}, ${reason}): ${params.command}`,
       );
+    };
     const denyApprovalStateWriteFailure = async () => {
       emitApprovalEvent({
         action: "exec.approval.denied",
@@ -1041,7 +1045,6 @@ export async function processGatewayAllowlist(
         await sendDeniedFollowup("approval-request-failed");
       }
     };
-    let gatewayInvocationStarted = false;
 
     void (async () => {
       const approvalDecision = await resolveApprovalForExecution(sendApprovalRequestFailedFollowup);
@@ -1156,6 +1159,7 @@ export async function processGatewayAllowlist(
         return;
       }
       if (admitted.status === "operand-drift") {
+        await recordOutcome?.({ kind: "not-dispatched" });
         await sendExecApprovalFollowupResult(followupTarget, admitted.message);
         return;
       }
@@ -1167,6 +1171,9 @@ export async function processGatewayAllowlist(
       const { run } = admitted;
 
       const outcome = await run.promise;
+      if (!outcome.timedOut && isShellCleanupCertain(run.session) && hasObservedExit(outcome)) {
+        await recordOutcome?.({ kind: "exited", exitCode: outcome.exitCode });
+      }
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
         approvalFollowup: params.approvalFollowup,
         approvalId,

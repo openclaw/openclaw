@@ -28,6 +28,11 @@ import { buildSlackChannelIdCandidates } from "../group-policy.js";
 import { getOptionalSlackRuntime } from "../runtime.js";
 import { renameSlackSession, setSlackSessionStatus } from "../session-status.js";
 import type { SlackMessageEvent } from "../types.js";
+import {
+  readCachedSlackUserProfile,
+  resetSlackUserProfileCache,
+  resolveSlackUserProfile,
+} from "../user-profiles.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
@@ -141,7 +146,6 @@ type SlackSessionTitleParams = Omit<SlackSessionStatusParams, "status"> & {
 type SlackUserInfo = { name?: string; imageUrl?: string; error?: unknown };
 
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
-const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
 const SLACK_AVATAR_CACHE_MAX_ENTRIES = 128;
 const SLACK_AVATAR_MAX_BYTES = 256 * 1024;
 const SLACK_AVATAR_SSRF_POLICY = {
@@ -177,7 +181,7 @@ function createSlackMonitorContextFields(
   let identity = { teamId: params.teamId, apiAppId: params.apiAppId };
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<string, SlackChannelCacheEntry>();
-  const userCache = new Map<string, { name?: string; imageUrl?: string }>();
+  resetSlackUserProfileCache(params.accountId);
   const avatarCache = new Map<string, string>();
   const pendingAvatars = new Set<string>();
   // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
@@ -436,25 +440,16 @@ function createSlackMonitorContextFields(
     userId: string,
     eventScope?: SlackEventScope,
   ): Promise<SlackUserInfo> => {
-    const cacheKey = scopedKey(userId, eventScope);
-    const cached = readLruMapEntry(userCache, cacheKey);
-    if (cached) {
-      return cached;
-    }
     try {
-      const info = await (eventScope?.client ?? params.app.client).users.info({
+      const profile = await resolveSlackUserProfile({
+        accountId: params.accountId,
+        teamId: eventScope?.teamId,
+        userId,
+        client: eventScope?.client ?? params.app.client,
         token: params.botToken,
-        user: userId,
       });
-      const profile = info.user?.profile;
-      const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
-      const imageUrl =
-        normalizeOptionalString(profile?.image_192) ??
-        normalizeOptionalString(profile?.image_512) ??
-        normalizeOptionalString(profile?.image_72);
-      const entry = { name, imageUrl };
-      writeLruMapEntry(userCache, cacheKey, entry, SLACK_USER_CACHE_MAX_ENTRIES);
-      return entry;
+      const name = profile.displayName || profile.realName || profile.handle;
+      return { name, imageUrl: profile.imageUrl };
     } catch (error) {
       return { error };
     }
@@ -465,7 +460,10 @@ function createSlackMonitorContextFields(
     if (isGovSlackClient(client)) {
       return undefined;
     }
-    const imageUrl = readLruMapEntry(userCache, scopedKey(userId, eventScope))?.imageUrl;
+    const imageUrl = readCachedSlackUserProfile(
+      { accountId: params.accountId, teamId: eventScope?.teamId, token: params.botToken },
+      userId,
+    )?.imageUrl;
     if (!imageUrl) {
       return undefined;
     }

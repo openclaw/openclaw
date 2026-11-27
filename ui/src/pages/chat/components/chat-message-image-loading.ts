@@ -1,4 +1,7 @@
-import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-image-renditions.js";
+import {
+  CHAT_IMAGE_RENDITION_VERSION,
+  type ChatImageRenditionWidth,
+} from "../../../../../src/shared/chat-image-renditions.js";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
@@ -178,7 +181,7 @@ function buildManagedOutgoingImageVariantUrl(
     parsed.pathname = parsed.pathname.replace(/\/(?:full|thumbnail)$/u, `/${variant}`);
     if (variant === "thumbnail") {
       // Thumbnails are immutable in HTTP caches; replace pre-byte-limit renditions.
-      parsed.searchParams.set("v", "4");
+      parsed.searchParams.set("v", CHAT_IMAGE_RENDITION_VERSION);
       parsed.searchParams.set("width", String(previewWidth));
     }
     if (/^https?:\/\//iu.test(source)) {
