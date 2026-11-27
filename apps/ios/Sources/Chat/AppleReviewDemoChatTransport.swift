@@ -157,64 +157,6 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
         return try await self.store.mutateGoal(mutation)
     }
 
-    var supportsComposerCapabilities: Bool {
-        true
-    }
-
-    func loadComposerCapabilityCatalog(
-        sessionKey _: String,
-        agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
-    {
-        OpenClawChatComposerCapabilityCatalog(
-            sessionSettingsAvailable: true,
-            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
-            effortMutationAvailable: true,
-            verboseMutationAvailable: true,
-            webSearchBaseEnabled: true,
-            webSearchAvailable: true,
-            skills: [
-                OpenClawChatComposerSkill(
-                    key: "autoreview",
-                    name: "Auto Review",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "release",
-                    name: "Release OpenClaw",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "disabled-fixture",
-                    name: "Disabled Skill",
-                    baseEnabled: false,
-                    missingDependencies: false,
-                    blocked: false),
-            ],
-            connectors: [
-                OpenClawChatComposerConnector(
-                    name: "GitHub",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_code", label: "Search code"),
-                        OpenClawChatComposerTool(name: "create_issue", label: "Create issue"),
-                    ]),
-                OpenClawChatComposerConnector(
-                    name: "Linear",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_issues", label: "Search issues"),
-                    ]),
-            ],
-            skillsAvailable: true,
-            connectorsAvailable: true,
-            toolAccessAvailable: true,
-            permissionMutationAvailable: true,
-            toolOverrideMutationAvailable: true,
-            canSelectFullPermission: true)
-    }
-
     private let fixture: LocalChatFixture
     private let store: LocalFixtureChatStore
     private let reactionsRouteID = UUID()

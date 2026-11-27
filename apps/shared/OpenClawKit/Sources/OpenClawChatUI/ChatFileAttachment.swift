@@ -40,6 +40,7 @@ struct ChatFileAttachment: View {
     let artifactId: String
     let label: String
     let fileName: String
+    let mimeType: String
     let resolverReady: Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
 
@@ -53,7 +54,11 @@ struct ChatFileAttachment: View {
             self.requestID = UUID()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "doc")
+                #if os(iOS)
+                OpenClawChatPickerAttachmentMetadata.glyph(mimeType: self.mimeType, fileName: self.fileName)
+                #else
+                Image(systemName: "doc").accessibilityHidden(true)
+                #endif
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.label)
                         .font(OpenClawChatTypography.footnote)
