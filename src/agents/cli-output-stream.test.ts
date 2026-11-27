@@ -32,6 +32,39 @@ function init(sessionId: string) {
 }
 const messageStart = claudeStreamEvent({ type: "message_start" });
 const messageStop = claudeStreamEvent({ type: "message_stop" });
+
+it("keeps the running parent call separate from child usage and whole-turn billing", () => {
+  const parser = createClaudeParser();
+  const parentUsage = { input_tokens: 10, cache_read_input_tokens: 19_288, output_tokens: 4 };
+  parser.push(
+    joinJsonlFrames(
+      claudeStreamEvent({ type: "message_start", message: { id: "parent", usage: parentUsage } }),
+      claudeTextDelta("Working"),
+      "",
+    ),
+  );
+  expect(parser.hasTerminalResult()).toBe(false);
+  expect.soft(parser.getOutput()?.usage).toMatchObject({ input: 10, cacheRead: 19_288, output: 4 });
+
+  finishFrames(
+    parser,
+    { type: "assistant", message: { id: "parent", usage: parentUsage, content: [] } },
+    {
+      type: "assistant",
+      parent_tool_use_id: "tool-1",
+      message: {
+        id: "child",
+        usage: { input_tokens: 950, output_tokens: 7 },
+        content: [],
+      },
+    },
+    result("Done", { usage: { input_tokens: 960, output_tokens: 11 } }),
+  );
+  expect(parser.getOutput()).toMatchObject({
+    usage: { input: 10, cacheRead: 19_288, output: 4 },
+    diagnosticUsage: { input: 960, output: 11 },
+  });
+});
 function message(text: string) {
   return [messageStart, claudeTextDelta(text)];
 }
