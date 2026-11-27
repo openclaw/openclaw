@@ -363,19 +363,23 @@ describe("usage-ranked MCP directory", () => {
     expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
     const rows = directory.split("\n").slice(1);
     expect(rows).toEqual(rows.toSorted());
-    expect(rows).toContain(`- mcp:alpha:alpha__tool_039: ${longDescription}`);
-    expect(rows).toContain(`- mcp:alpha:alpha__tool_007: ${longDescription}`);
+    // Selected rows carry their input with the description, so they need no tool_describe.
+    expect(rows).toContain(`- mcp:alpha:alpha__tool_039 {}: ${longDescription}`);
+    expect(rows).toContain(`- mcp:alpha:alpha__tool_007 {}: ${longDescription}`);
     // Unscored descriptions fill the remainder by id; later ones keep only names.
-    expect(rows).toContain(`- mcp:alpha:alpha__tool_000: ${longDescription}`);
+    expect(rows).toContain(`- mcp:alpha:alpha__tool_000 {}: ${longDescription}`);
     expect(rows).toContain("- mcp:alpha:alpha__tool_038");
     expect(rows).toContain("- mcp:alpha:alpha__tool_099");
     // Every name survives while descriptions are partial; nothing is counted as omitted.
     expect(rows.filter((row) => row.startsWith("- mcp:alpha:"))).toHaveLength(101);
     expect(directory).not.toContain("names omitted");
-    const hostileRow = rows.find((row) => row.startsWith("- mcp:alpha:alpha__hostile: "))!;
-    expect(hostileRow.length).toBeLessThanOrEqual("- mcp:alpha:alpha__hostile: ".length + 96);
+    const hostileRow = rows.find((row) => row.startsWith("- mcp:alpha:alpha__hostile {}: "))!;
+    expect(hostileRow.length).toBeLessThanOrEqual("- mcp:alpha:alpha__hostile {}: ".length + 96);
     expect(hostileRow).not.toMatch(/[\p{Cc}<>`\u202c\u202e]/u);
     expect(hostileRow).toMatch(/\.\.\.$/u);
+    expect(directory.split("\n")[0]).toContain(
+      "For a name listed without input, call tool_describe first.",
+    );
   });
 
   it("keeps the highest-scored names when a server collapses, with every server counted", () => {

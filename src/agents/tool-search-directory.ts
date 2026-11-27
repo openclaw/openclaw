@@ -555,8 +555,9 @@ function formatUsageRankedMcpToolDirectory(
   const rows = servers.flatMap((server) => server.rows);
   const selected = new Set<string>();
   const isSelected = (row: McpDirectoryRow) => selected.has(row.id);
+  // When every name fits, the highest-scored rows gain their input and description together.
   const layout: McpDirectoryLayout = namesFit
-    ? { expanded: all, described: isSelected }
+    ? { expanded: all, signed: isSelected, described: isSelected }
     : {
         expanded: (server) => server.rows.some(isSelected),
         listed: isSelected,
@@ -572,7 +573,9 @@ function formatUsageRankedMcpToolDirectory(
     rows.map((row) => ({
       id: row.id,
       pinned: false,
-      line: namesFit ? `${row.label}: ${row.description || "No description."}` : row.label,
+      line: namesFit
+        ? `${row.label}${row.input ? ` ${row.input}` : ""}: ${row.description || "No description."}`
+        : row.label,
     })),
     usageRanking,
     MAX_MCP_TOOL_DIRECTORY_BYTES,
