@@ -61,7 +61,7 @@ const tokenjuiceUrl = pathToFileURL(require.resolve("tokenjuice")).href;
 const { clearRuleCache }: { clearRuleCache?: () => void } = values["first-capacity"]
   ? {}
   : await import(tokenjuiceUrl);
-const middleware = createTokenjuiceAgentToolResultMiddleware();
+const middleware = createTokenjuiceAgentToolResultMiddleware({ warn: console.warn });
 const event = (index: number): AgentToolResultMiddlewareEvent => ({
   toolCallId: "synthetic-rule-cache",
   toolName: "exec",
