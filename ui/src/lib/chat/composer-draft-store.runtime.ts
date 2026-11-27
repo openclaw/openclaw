@@ -14,6 +14,7 @@ import {
   requestResult,
   transactionComplete,
 } from "./control-ui-database.runtime.ts";
+import { hasUnreadableFileReferences } from "./file-references.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
 export type {
@@ -117,6 +118,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     revision,
     text: "",
     mentions: undefined,
+    fileReferences: undefined,
     goalMode: undefined,
     replyTarget: undefined,
     modelSelection: undefined,
@@ -396,7 +398,12 @@ export async function restoreDurableComposerRecovery(
     const original = parseStoredDraft(
       await requestResult(store.get(recordKey({ ...destination, scopeKey: source.scopeKey }))),
     );
-    const current = parseStoredDraft(await requestResult(store.get(recordKey(destination))));
+    const currentValue = await requestResult(store.get(recordKey(destination)));
+    if (hasUnreadableFileReferences(currentValue)) {
+      store.transaction.abort();
+      return { status: "conflict" };
+    }
+    const current = parseStoredDraft(currentValue);
     if (
       !isCurrent() ||
       !original ||
@@ -435,6 +442,10 @@ export async function readDurableComposerDraft(
 ): Promise<DurableComposerDraftReadResult> {
   return withDraftStore(async (store) => {
     const value = await requestResult(store.get(recordKey(scope)));
+    if (hasUnreadableFileReferences(value)) {
+      store.transaction.abort();
+      return { status: "storage-failed" };
+    }
     const record = parseStoredDraft(value);
     const now = Date.now();
     if (
@@ -473,6 +484,7 @@ export async function readDurableComposerDraft(
         writeId: current.writeId,
         text: current.text,
         ...(current.mentions?.length ? { mentions: current.mentions } : {}),
+        ...(current.fileReferences?.length ? { fileReferences: current.fileReferences } : {}),
         ...(current.goalMode ? { goalMode: current.goalMode } : {}),
         ...(current.replyTarget ? { replyTarget: current.replyTarget } : {}),
         ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
@@ -516,7 +528,12 @@ export async function writeDurableComposerDraft(
   }
   return withDraftStore(async (store) => {
     const key = recordKey(scope);
-    const current = parseStoredDraft(await requestResult(store.get(key)));
+    const currentValue = await requestResult(store.get(key));
+    if (hasUnreadableFileReferences(currentValue)) {
+      store.transaction.abort();
+      return { status: "conflict" };
+    }
+    const current = parseStoredDraft(currentValue);
     if (current?.revision === draft.revision) {
       store.transaction.abort();
       return current.writeId === options.writeId
@@ -545,6 +562,7 @@ export async function writeDurableComposerDraft(
         : {}),
       text: draft.text,
       ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
+      ...(draft.fileReferences?.length ? { fileReferences: draft.fileReferences } : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
       ...(draft.replyTarget ? { replyTarget: draft.replyTarget } : {}),
       ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
@@ -614,7 +632,11 @@ async function retireDurableDraftInStore(
     );
   }
   const key = recordKey(scope);
-  const current = parseStoredDraft(await requestResult(store.get(key)));
+  const currentValue = await requestResult(store.get(key));
+  if (retireBeforeRevision !== undefined && hasUnreadableFileReferences(currentValue)) {
+    return { status: "conflict" };
+  }
+  const current = parseStoredDraft(currentValue);
   if (retireBeforeRevision !== undefined && (current?.revision ?? 0) >= retireBeforeRevision) {
     return { status: "conflict" };
   }

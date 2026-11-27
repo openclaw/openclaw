@@ -17,6 +17,7 @@ type SessionFilesOperation =
   | "list"
   | "get"
   | "stat"
+  | "references"
   | "download"
   | "assets"
   | "preview"

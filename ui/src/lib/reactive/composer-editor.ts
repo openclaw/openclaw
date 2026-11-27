@@ -1,4 +1,6 @@
 import type { HumanMention } from "../chat/chat-types.ts";
+import { registerFileReferenceDestinationPreparation } from "../chat/file-reference-destination.ts";
+import { readComposerFileReferences, type ComposerFileReference } from "../chat/file-references.ts";
 import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
@@ -10,6 +12,7 @@ import { listen } from "./listener.ts";
 export function createMentionComposerBinding(
   getMentions: () => readonly HumanMention[],
   avatarUrls?: ReadonlyMap<string, string>,
+  getFileReferences: () => readonly ComposerFileReference[] = () => [],
 ) {
   const application = useOptionalApplication();
   return elementRef<HTMLTextAreaElement>((node) => {
@@ -23,12 +26,13 @@ export function createMentionComposerBinding(
       | undefined;
     let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    const files = () => readComposerFileReferences(node.value, getFileReferences()) ?? [];
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
       if (
         !native.signal.aborted &&
         !composing &&
-        (forTransfer || mentions().length) &&
+        (forTransfer || mentions().length || files().length) &&
         mountEditor
       ) {
         editor = mountEditor(
@@ -37,6 +41,7 @@ export function createMentionComposerBinding(
           application,
           forTransfer ? undefined : entryHistory,
           avatarUrls,
+          getFileReferences,
         );
         entryHistory = undefined;
         // Retire only after a successful handoff; a failed mount keeps native editing.
@@ -84,7 +89,7 @@ export function createMentionComposerBinding(
     const observer = new MutationObserver(() => {
       if (editor) {
         editor.sync();
-      } else if (!composing && mentions().length) {
+      } else if (!composing && (mentions().length || files().length)) {
         // The load callback fires once; a later mention must still activate.
         void loader.load().then(
           () => activate(),
@@ -171,7 +176,14 @@ export function createMentionComposerBinding(
       },
       { signal: native.signal },
     );
-    if (mentions().length) {
+    const unregisterPreparation = registerFileReferenceDestinationPreparation(node, async () => {
+      if (editor || node.disabled || node.readOnly || composing) {
+        return;
+      }
+      await loader.load();
+      activate(true);
+    });
+    if (mentions().length || files().length) {
       void loader.load().then(
         () => activate(),
         () => undefined,
@@ -179,6 +191,7 @@ export function createMentionComposerBinding(
     }
     return () => {
       native.abort();
+      unregisterPreparation();
       observer.disconnect();
       editor?.destroy();
       loader.dispose();

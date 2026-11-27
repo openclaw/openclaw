@@ -20,6 +20,7 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["openclaw.setup.options", "system-agent", "operator.admin", "2026.11"],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["sessions.files.references", "sessions-files", "operator.read", "2026.11"],
   ["skills.categories", "skills", "operator.read", "2026.11"],
   [
     "projects.moveSessionOptions",

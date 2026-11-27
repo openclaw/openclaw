@@ -1,5 +1,6 @@
 import { createMemo, lazy, Show } from "solid-js";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../../lib/chat/file-references.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ComposerPluginPrompt = lazy(() => import("./chat-composer-plugin-prompt.tsx"), {
@@ -10,10 +11,13 @@ const ComposerPluginPrompt = lazy(() => import("./chat-composer-plugin-prompt.ts
 export function ComposerPluginPromptSlot(props: {
   text: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   disabled: boolean;
 }) {
   const prefix = createMemo(() =>
-    props.disabled || props.mentions?.some((mention) => mention.start === 0)
+    props.disabled ||
+    props.mentions?.some((mention) => mention.start === 0) ||
+    props.fileReferences?.some((reference) => reference.start === 0)
       ? undefined
       : /^@([A-Za-z0-9][A-Za-z0-9._/-]*)(?=\s)/u.exec(props.text)?.[1],
   );

@@ -12,6 +12,7 @@ import type {
   ChatGoalDraftMode,
   ChatReplyTarget,
 } from "../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../lib/chat/file-references.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
@@ -98,6 +99,7 @@ export type ApplicationChatAttachmentHandoff = {
       goalMode?: ChatGoalDraftMode | null;
       replyTarget?: ChatReplyTarget | null;
       mentions?: readonly HumanMention[];
+      fileReferences?: readonly ComposerFileReference[];
       newSessionDraft?: NewSessionDraftHandoff;
       incognito?: boolean;
       reviewPrivateDraft: typeof reviewPrivateComposerDraft;
@@ -111,6 +113,7 @@ export type ApplicationChatAttachmentHandoff = {
     goalMode?: ChatGoalDraftMode | null;
     replyTarget?: ChatReplyTarget | null;
     mentions?: readonly HumanMention[];
+    fileReferences?: readonly ComposerFileReference[];
     newSessionDraft?: NewSessionDraftHandoff;
   } | null;
   retainedAttachmentIds(attachments: readonly ChatAttachment[]): ReadonlySet<string>;

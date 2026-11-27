@@ -2,6 +2,10 @@ import { createSignal, createStore } from "solid-js";
 import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
 import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
 import { loadComposerTasksRuntime } from "../../../lib/chat/composer-tasks.ts";
+import {
+  readComposerFileReferenceEdit,
+  type ComposerFileReference,
+} from "../../../lib/chat/file-references.ts";
 import { withoutMemberInvitations } from "../../../lib/chat/human-mentions.ts";
 import {
   adjustTextareaHeight,
@@ -47,6 +51,7 @@ function createChatComposerState(): ChatComposerState {
     stopRunFromEscape: null,
     sendDraft: null,
     dictation: null,
+    fileReferences: null,
     composerDraftScope: null,
     dictationSelection: null,
     tasks,
@@ -73,6 +78,7 @@ export function presentComposerTasks(state: ChatComposerState) {
     if (state.taskPresenters === 0) {
       // The next editor has fresh history, so the Undo receipt cannot restore anything.
       state.tasks()?.dismiss();
+      state.fileReferences?.cancel();
     }
   };
 }
@@ -98,18 +104,29 @@ export function commitComposerDraft(
   props: ChatComposerProps,
   value: string,
   mentions?: readonly HumanMention[],
+  fileReferences?: readonly ComposerFileReference[],
 ): void {
   const currentDraft = props.getDraft ? props.getDraft() : props.draft;
   const currentMentions = props.getMentions?.() ?? props.mentions;
+  const references = fileReferences ?? readComposerFileReferenceEdit(value);
   const selected = withoutMemberInvitations(
     mentions ?? (currentDraft === value ? currentMentions : undefined),
     props.mentionDirectory?.members,
   );
-  if (currentDraft === value && mentions === undefined && selected === currentMentions) {
+  if (
+    currentDraft === value &&
+    mentions === undefined &&
+    references === undefined &&
+    selected === currentMentions
+  ) {
     return;
   }
   getChatComposerState(props.paneId).editRevision += 1;
-  props.onDraftChange(value, selected);
+  if (references === undefined) {
+    props.onDraftChange(value, selected);
+  } else {
+    props.onDraftChange(value, selected, references);
+  }
 }
 
 /** Enter before the session is ready submits this exact draft once the composer can. */
@@ -168,6 +185,7 @@ function disposeChatComposerState(state: ChatComposerState) {
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();
+  state.fileReferences?.dispose();
   state.microphonePicker?.dispose();
   if (state.composerInput) {
     disconnectComposerPopoverAnchorObserver(state.composerInput);

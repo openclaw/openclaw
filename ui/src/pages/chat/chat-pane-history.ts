@@ -544,6 +544,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
         agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
         draft: editorText,
         mentions: [],
+        fileReferences: [],
         replyTarget: null,
       });
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
@@ -575,7 +576,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (!state) {
       return;
     }
-    state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `);
+    state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `, [], []);
   };
 
   protected announceCommandPaletteTarget(

@@ -656,6 +656,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
           mentions: state.chatMentions,
+          fileReferences: state.chatFileReferences,
           goalMode: state.chatGoalDraftMode,
           replyTarget: state.chatReplyTarget,
           attachments: state.chatAttachments,
@@ -692,7 +693,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
     state.chatReplyTarget = handoff.replyTarget ?? null;
-    state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
+    state.handleChatDraftChange(
+      handoff.draft,
+      handoff.mentions ?? [],
+      handoff.fileReferences ?? [],
+    );
     state.composerDraftChanged?.();
     if (handoff.send) {
       const composer = getChatComposerState(this.presentationId);
@@ -706,6 +711,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const sessions = state.sessions;
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
+        const fileReferences = state.chatFileReferences;
         const goalMode = state.chatGoalDraftMode;
         const replyTarget = state.chatReplyTarget;
         const presentationOwner = this.headerOutcomeOwner;
@@ -722,6 +728,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&
+          state.chatFileReferences === fileReferences &&
           state.chatGoalDraftMode === goalMode &&
           state.chatReplyTarget === replyTarget;
         if (!isCurrent()) {

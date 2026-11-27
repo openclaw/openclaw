@@ -30,7 +30,7 @@ type PendingChatAttachmentHandoff = NonNullable<
 const hasInput = (
   draft: Pick<
     PendingChatAttachmentHandoff,
-    "message" | "attachments" | "goalMode" | "mentions" | "replyTarget"
+    "message" | "attachments" | "goalMode" | "mentions" | "fileReferences" | "replyTarget"
   >,
 ) =>
   Boolean(
@@ -38,7 +38,8 @@ const hasInput = (
     draft.attachments.length ||
     draft.goalMode ||
     draft.replyTarget ||
-    draft.mentions?.length,
+    draft.mentions?.length ||
+    draft.fileReferences?.length,
   );
 
 export function createChatAttachmentHandoff(
@@ -159,6 +160,7 @@ export function createChatAttachmentHandoff(
         entry.goalMode = null;
         entry.replyTarget = null;
         entry.mentions = [];
+        entry.fileReferences = [];
       }
       if (
         !entry.message &&
@@ -206,6 +208,7 @@ export function createChatAttachmentHandoff(
       goalMode,
       replyTarget,
       mentions,
+      fileReferences,
       newSessionDraft,
       incognito,
       reviewPrivateDraft,
@@ -248,6 +251,7 @@ export function createChatAttachmentHandoff(
         ...(goalMode ? { goalMode } : {}),
         ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
         ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
+        ...(fileReferences?.length ? { fileReferences } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
             fallbackKey,
@@ -278,6 +282,7 @@ export function createChatAttachmentHandoff(
           ...(match.goalMode ? { goalMode: match.goalMode } : {}),
           ...(match.replyTarget ? { replyTarget: match.replyTarget } : {}),
           ...(match.mentions ? { mentions: match.mentions } : {}),
+          ...(match.fileReferences ? { fileReferences: match.fileReferences } : {}),
         };
       }
       releaseHandoff(match);

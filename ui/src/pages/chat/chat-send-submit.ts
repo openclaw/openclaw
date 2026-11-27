@@ -48,6 +48,7 @@ import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,
+  refuseUnsupportedFileReferenceSend,
   waitForPendingChatSettings,
 } from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
@@ -103,7 +104,7 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
-  if (host.isRouteSessionPending?.()) {
+  if (refuseUnsupportedFileReferenceSend(host, messageOverride) || host.isRouteSessionPending?.()) {
     return undefined;
   }
   if (
@@ -114,14 +115,12 @@ export async function handleSendChat(
     return undefined;
   }
   if (
-    isInitialChatHistoryUnavailable(host) &&
-    (opts?.intent ||
-      (!opts?.resumeQueuedMessageEditId &&
-        !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage)))
+    (isInitialChatHistoryUnavailable(host) &&
+      (opts?.intent ||
+        (!opts?.resumeQueuedMessageEditId &&
+          !canSubmitBeforeChatHistory(messageOverride ?? host.chatMessage)))) ||
+    (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason)
   ) {
-    return undefined;
-  }
-  if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
     return undefined;
   }
   const previousDraft = host.chatMessage;
@@ -409,6 +408,7 @@ export async function handleSendChat(
             if (messageOverride == null) {
               host.chatMessage = previousDraft;
               host.chatMentions = previousMentions ?? [];
+              host.chatFileReferences = [];
               host.chatReplyTarget = previousReplyTarget;
               host.chatAttachments = attachmentsToSend;
               host.composerDraftChanged?.();

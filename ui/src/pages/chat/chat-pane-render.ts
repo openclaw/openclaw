@@ -478,6 +478,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       registerHumanMentionAccess: this.registerHumanMentionAccess,
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
+      fileReferences: state.chatFileReferences,
+      getFileReferences: () => state.chatFileReferences ?? [],
       mentionsUnsupported,
       mentionDirectory:
         state.connected && state.client && !mentionsUnsupported && !sessionParticipationBlocked

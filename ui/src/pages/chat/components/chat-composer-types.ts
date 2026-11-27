@@ -23,6 +23,7 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../../lib/chat/composer-draft-changes.ts";
 import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
+import type { ComposerFileReference } from "../../../lib/chat/file-references.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { PresentationBinding } from "../../../lib/presentation.ts";
@@ -34,6 +35,7 @@ import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import type { ComposerFileReferenceOwner } from "../composer-file-references.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -168,6 +170,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     active: boolean;
     gateway: Pick<ApplicationGateway, "subscribeEvents">;
   };
+  fileReferences?: readonly ComposerFileReference[];
+  getFileReferences?: () => readonly ComposerFileReference[];
   mentions?: readonly HumanMention[];
   getMentions?: () => readonly HumanMention[];
   mentionDirectory?: HumanMentionDirectory;
@@ -228,7 +232,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     | null;
   notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
-  onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
+  onDraftChange: (
+    next: string,
+    mentions?: readonly HumanMention[],
+    fileReferences?: readonly ComposerFileReference[],
+  ) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
@@ -305,6 +313,7 @@ export type ChatComposerState = {
   // The mounted composer's send, as Enter; false when it cannot send now.
   sendDraft: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
+  fileReferences: ComposerFileReferenceOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
   /** Plugin composer tasks and proposals; null until the first plugin composer action loads it. */

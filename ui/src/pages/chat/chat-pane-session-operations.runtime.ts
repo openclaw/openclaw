@@ -125,6 +125,7 @@ export async function createCapturedChatSession({
   preparePaneSessionHandoff(context, paneId, nextSessionKey, {
     attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
     draft: state.chatMessage,
+    ...(state.chatFileReferences?.length ? { fileReferences: state.chatFileReferences } : {}),
     ...(state.chatMentions?.length
       ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
       : {}),

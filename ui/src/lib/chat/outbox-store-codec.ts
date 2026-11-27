@@ -16,6 +16,8 @@ import type {
   ChatQueueItem,
   HumanMention,
 } from "./chat-types.ts";
+import { hasUnreadableFileReferences, readComposerFileReferences } from "./file-references.ts";
+import type { ComposerFileReference } from "./file-references.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
@@ -36,7 +38,7 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.";
 
 export type StoredComposerState = {
-  version: 4;
+  version: 4 | 5;
   gatewayOwner: string;
   sessions: Record<string, StoredComposerSession>;
   recovery: Record<string, StoredComposerRecovery>;
@@ -54,6 +56,7 @@ export type StoredComposerSession = {
   awaitingDefaults?: true;
   draft?: string;
   draftMentions?: readonly HumanMention[];
+  draftFileReferences?: readonly ComposerFileReference[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   draftRevision?: number;
@@ -72,6 +75,7 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
     JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
     stableStringify(left.appContext) === stableStringify(right.appContext) &&
     JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
+    JSON.stringify(left.fileReferences ?? []) === JSON.stringify(right.fileReferences ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
     left.sendState === right.sendState &&
@@ -134,7 +138,16 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
         .map(normalizeChatAttachment)
         .filter((item): item is ChatAttachment => item !== null)
     : [];
-  const item: ChatQueueItem = { id, text, createdAt };
+  const fileReferences = readComposerFileReferences(text, entry.fileReferences);
+  if (entry.fileReferences !== undefined && !fileReferences) {
+    return null;
+  }
+  const item: ChatQueueItem = {
+    id,
+    text,
+    createdAt,
+    ...(fileReferences?.length ? { fileReferences } : {}),
+  };
   const storageScope = normalizeOptionalString(entry.storageScope);
   if (storageScope) {
     item.storageScope = storageScope;
@@ -314,6 +327,10 @@ export function normalizeStoredSession(entry: unknown): StoredComposerSession | 
   }
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
+  const draftFileReferences = readComposerFileReferences(draft ?? "", entry.draftFileReferences);
+  if (entry.draftFileReferences !== undefined && !draftFileReferences) {
+    return null;
+  }
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
     return null;
   }
@@ -323,7 +340,10 @@ export function normalizeStoredSession(entry: unknown): StoredComposerSession | 
   }
   const replyTarget = entry.replyTarget;
   // Reject oversize input as a whole; migration keeps its source bytes intact.
-  if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
+  if (
+    Array.isArray(entry.queue) &&
+    (entry.queue.length > MAX_RETAINED_QUEUE_ITEMS || entry.queue.some(hasUnreadableFileReferences))
+  ) {
     return null;
   }
   const normalizedQueue = Array.isArray(entry.queue)
@@ -361,6 +381,7 @@ export function normalizeStoredSession(entry: unknown): StoredComposerSession | 
     ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
     ...(draftMentions ? { draftMentions } : {}),
+    ...(draftFileReferences?.length ? { draftFileReferences } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(replyTarget ? { replyTarget } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),

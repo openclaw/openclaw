@@ -1586,3 +1586,31 @@
     padding-block: 2px;
   }
 }
+
+.composer-file-references {
+  padding: 6px 12px;
+}
+
+.composer-file-references__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.composer-file-references__review {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.composer-file-references__path {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-composer-file-reference {
+  padding-inline: 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-accent);
+  unicode-bidi: isolate;
+}

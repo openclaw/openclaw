@@ -187,7 +187,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (!state || !this.active || !this.presented) {
         return;
       }
-      state.handleChatDraftChange(draft, []);
+      state.handleChatDraftChange(draft, [], []);
     });
   }
 
@@ -406,7 +406,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
     }
     if (this.draft !== undefined) {
-      this.state.handleChatDraftChange(this.draft, []);
+      this.state.handleChatDraftChange(this.draft, [], []);
     }
     // Admit the initial history read before installing secondary observers.
     // Its replies run after this task, when all subscriptions below are in place.
@@ -632,7 +632,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.state &&
       this.draft !== this.state.chatMessage
     ) {
-      this.state.handleChatDraftChange(this.draft, []);
+      this.state.handleChatDraftChange(this.draft, [], []);
     }
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());

@@ -77,16 +77,23 @@ export class ComposerDictationCommits {
   /** Delivers once earlier recordings settle; a retired recording resolves false. */
   add(
     session: ComposerDictationSession,
-    deliver: (transcript: string) => boolean,
+    deliver: (transcript: string, final: boolean) => boolean,
+    requireFinality = false,
   ): Promise<boolean> {
     const previous = this.tail;
     this.sessions.add(session);
+    if (requireFinality) {
+      session.trackFinality();
+    }
     const settled = session
       .finish(true)
       .catch(() => "")
       .then(async (transcript) => {
+        // Keep the session owned until its close receipt settles, so cancellation
+        // and disconnect still reach it while a final transcript is already here.
+        const final = requireFinality ? await session.finalized() : false;
         await previous;
-        return this.sessions.delete(session) && deliver(transcript);
+        return this.sessions.delete(session) && deliver(transcript, final);
       })
       .catch(() => false);
     this.tail = settled;
@@ -107,16 +114,14 @@ export class ComposerDictationCommits {
   }
 }
 
-type DictationSelection = { start: number; end: number; value: string };
-
 function insertComposerDictation(
   { value, start: selectionStart, end: selectionEnd }: DictationSelection,
   transcript: string,
   maxLength = -1,
-): { value: string; caret: number } {
+): { value: string; caret: number; from: number; to: number } {
   const spoken = transcript.trim();
   if (!spoken) {
-    return { value, caret: selectionEnd };
+    return { value, caret: selectionEnd, from: selectionEnd, to: selectionEnd };
   }
   const start = Math.max(0, Math.min(selectionStart, value.length));
   const end = Math.max(start, Math.min(selectionEnd, value.length));
@@ -133,8 +138,12 @@ function insertComposerDictation(
   return {
     value: `${before}${inserted}${after}`,
     caret: before.length + inserted.length,
+    from: before.length + Math.min(leadingSpace.length, inserted.length),
+    to: before.length + Math.min(leadingSpace.length + spoken.length, inserted.length),
   };
 }
+
+type DictationSelection = { start: number; end: number; value: string };
 
 /**
  * Places a transcript in a draft. The captured selection holds unless a late final
@@ -147,12 +156,21 @@ export function placeComposerDictation(
   live: DictationSelection & { maxLength?: number },
   late?: true,
   preservePreview?: true,
-): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
+): {
+  value: string;
+  caret: number;
+  from: number;
+  to: number;
+  previousValue: string;
+  changed: boolean;
+  captured: DictationSelection | null;
+} {
   const selection =
     captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
   const insertion = insertComposerDictation(selection, transcript, live.maxLength);
   return {
     ...insertion,
+    previousValue: selection.value,
     changed: insertion.value !== selection.value,
     captured: preservePreview
       ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
@@ -192,6 +210,14 @@ export class ComposerDictationSession {
   private discarded = false;
   private failed = false;
   private gatewayDisconnected = false;
+  private providerFinal = false;
+  private completedClose = false;
+  private closeAcknowledged = false;
+  private unfinishedPartial = false;
+  private finalityInterrupted = false;
+  private retainFinalityListener = false;
+  private finalityUnsubscribe: (() => void) | undefined;
+  private interruptFinalityWait: (() => void) | undefined;
   private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
   private pauseFinalDrain: (() => void) | null = null;
   private resumeFinalDrain: (() => void) | null = null;
@@ -264,9 +290,12 @@ export class ComposerDictationSession {
         const text = payload.text.trim();
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
+          this.unfinishedPartial = true;
         } else if (text) {
           this.finalTranscripts.push(text);
           this.currentPartial = "";
+          this.providerFinal = true;
+          this.unfinishedPartial = false;
         }
         this.callbacks.onTranscriptChange();
         return;
@@ -282,6 +311,8 @@ export class ComposerDictationSession {
       }
       if (payload.type === "close" && payload.reason === "error") {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
+      } else if (payload.type === "close" && payload.reason === "completed") {
+        this.completedClose = true;
       }
     });
     const media = await this.input.open(inputDeviceId);
@@ -311,6 +342,37 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
+  /** Observe finality through the close acknowledgement, including events after close. */
+  trackFinality(): void {
+    this.retainFinalityListener = true;
+  }
+
+  /** Rich-reference review requires provider finality and the successful close receipt. */
+  async finalized(): Promise<boolean> {
+    if (!this.discarded && !this.gatewayDisconnected && !this.failed) {
+      await Promise.race([
+        this.closeRequest?.promise,
+        new Promise<void>((resolve) => {
+          this.interruptFinalityWait = resolve;
+        }),
+      ]);
+    }
+    this.finalityUnsubscribe?.();
+    this.finalityUnsubscribe = undefined;
+    this.retainFinalityListener = false;
+    this.interruptFinalityWait = undefined;
+    return (
+      this.providerFinal &&
+      this.completedClose &&
+      this.closeAcknowledged &&
+      !this.unfinishedPartial &&
+      !this.finalityInterrupted &&
+      !this.failed &&
+      !this.gatewayDisconnected &&
+      !this.discarded
+    );
+  }
+
   async finish(requireTranscript?: true): Promise<string> {
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
@@ -333,6 +395,10 @@ export class ComposerDictationSession {
 
   async cancel(): Promise<void> {
     this.discarded = true;
+    this.retainFinalityListener = false;
+    this.finalityUnsubscribe?.();
+    this.finalityUnsubscribe = undefined;
+    this.interruptFinalityWait?.();
     this.settleLateFinalDrain?.(true);
     await this.stopAndClose(false);
   }
@@ -355,6 +421,7 @@ export class ComposerDictationSession {
 
   markGatewayDisconnected(): boolean {
     this.gatewayDisconnected = true;
+    this.interruptFinalityWait?.();
     this.settleLateFinalDrain?.(false);
     return this.hasTranscript();
   }
@@ -436,8 +503,12 @@ export class ComposerDictationSession {
           { sessionId: this.sessionId, ...(discard ? { discard } : {}) },
           { timeoutMs: null },
         )
-        .then(() => undefined)
-        .catch(() => undefined)
+        .then(() => {
+          this.closeAcknowledged = !discard;
+        })
+        .catch(() => {
+          this.closeAcknowledged = false;
+        })
         .finally(() => this.resumeFinalDrain?.());
       this.closeRequest = { discard, promise };
     }
@@ -451,9 +522,20 @@ export class ComposerDictationSession {
       let partial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
+      let settled = false;
       const finish = (text: string) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         globalThis.clearTimeout(timer);
-        unsubscribe();
+        if (this.retainFinalityListener) {
+          // The same drain owner watches for invalidation until close acknowledges.
+          // Text settles once; later events can only revoke rich-reference eligibility.
+          this.finalityUnsubscribe = unsubscribe;
+        } else {
+          unsubscribe();
+        }
         this.settleLateFinalDrain = null;
         this.pauseFinalDrain = null;
         this.resumeFinalDrain = null;
@@ -471,6 +553,17 @@ export class ComposerDictationSession {
           return;
         }
         if (
+          this.retainFinalityListener &&
+          (payload.type === "error" ||
+            (payload.type === "close" && payload.reason !== "completed") ||
+            (this.completedClose && (payload.type === "partial" || payload.type === "transcript")))
+        ) {
+          this.finalityInterrupted = true;
+        }
+        if (settled) {
+          return;
+        }
+        if (
           payload.type === "transcript" &&
           payload.final === true &&
           typeof payload.text === "string" &&
@@ -478,6 +571,13 @@ export class ComposerDictationSession {
         ) {
           transcripts.push(payload.text.trim());
           partial = "";
+          this.providerFinal = true;
+          this.unfinishedPartial = false;
+        } else if (
+          payload.type === "partial" ||
+          (payload.type === "transcript" && payload.final !== true)
+        ) {
+          this.unfinishedPartial = true;
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -487,6 +587,7 @@ export class ComposerDictationSession {
               ),
             );
           } else {
+            this.completedClose = payload.reason === "completed";
             finish(transcript());
           }
         }

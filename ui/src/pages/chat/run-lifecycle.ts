@@ -419,6 +419,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
     host.chatMentions = [];
+    host.chatFileReferences = [];
     host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
     host.composerDraftChanged?.();

@@ -93,7 +93,11 @@ type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
 type RewindChatHistoryState = ChatHistoryHost &
   Parameters<typeof persistChatComposerState>[0] &
   Parameters<typeof scheduleChatScroll>[0] & {
-    handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]) => void;
+    handleChatDraftChange: (
+      next: string,
+      mentions?: ChatState["chatMentions"],
+      fileReferences?: ChatState["chatFileReferences"],
+    ) => void;
     sessions: Pick<SessionCapability, "rewind">;
   };
 
@@ -267,6 +271,7 @@ export async function rewindChatHistory(
       state.chatGoalDraftMode,
       state.chatMentions,
       state.chatReplyTarget,
+      state.chatFileReferences,
     );
   const composerSignature = readComposer();
   const attachmentReadSignal = attachmentReads.readSignal;
@@ -300,6 +305,7 @@ export async function rewindChatHistory(
       agentId: agentParams.agentId,
       draft: editorText,
       mentions: [],
+      fileReferences: [],
       goalMode: null,
       replyTarget: null,
       expectedDraftRevision: loadChatComposerState(state, sessionKey, agentParams.agentId).revisions
@@ -315,7 +321,7 @@ export async function rewindChatHistory(
       state.chatAttachments,
       result.editorAttachments,
     );
-    state.handleChatDraftChange(editorText, []);
+    state.handleChatDraftChange(editorText, [], []);
     // Publish the complete restored draft before cancellation notifies the pane.
     if (attachmentReads.readSignal === attachmentReadSignal) {
       attachmentReads.abortReads();

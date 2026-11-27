@@ -14,6 +14,9 @@ How the chat pane behaves: session controls, the composer, and how the transcrip
 
 Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Starting suggested tasks requires admin access; reconnect first if the Gateway is disconnected. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
 
+The experimental [dictated file-reference flow](/web/control-ui/dictated-file-references)
+lets you review authorized local file identities in an unsent draft.
+
 ## Goals, questions, and recovery
 
 A goal belongs to a session. Saving an edited goal does not start a reply. Replacing

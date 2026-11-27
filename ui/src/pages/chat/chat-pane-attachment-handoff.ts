@@ -128,6 +128,7 @@ export class ChatPaneComposerHandoff {
     if (transfer.claimDraft()) {
       state.chatMessage = transfer.draft;
       state.chatMentions = transfer.mentions;
+      state.chatFileReferences = [];
       state.chatAttachments = transfer.attachments;
       this.host.adoptAttachmentReads(transfer.reads);
     }
@@ -259,6 +260,7 @@ export class ChatPaneComposerHandoff {
     );
     targetState.chatMessage = sourceState.chatMessage;
     targetState.chatMentions = sourceState.chatMentions;
+    targetState.chatFileReferences = sourceState.chatFileReferences;
     targetState.chatGoalDraftMode = sourceState.chatGoalDraftMode;
     targetState.chatReplyTarget = sourceState.chatReplyTarget;
     targetState.chatQueuedEdit = sourceState.chatQueuedEdit;
@@ -266,6 +268,7 @@ export class ChatPaneComposerHandoff {
     targetState.chatComposerFallbackByScope = fallbacks;
     sourceState.chatMessage = "";
     sourceState.chatMentions = [];
+    sourceState.chatFileReferences = [];
     sourceState.chatGoalDraftMode = null;
     sourceState.chatReplyTarget = null;
     sourceState.chatQueuedEdit = null;
@@ -310,6 +313,7 @@ export function restorePaneStagedAttachments(
   if (current && restored.draftRevision !== undefined) {
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;
+    state.chatFileReferences = restored.fileReferences;
     state.chatGoalDraftMode = restored.goalMode ?? null;
     state.chatReplyTarget = restored.replyTarget ?? null;
   }
@@ -366,6 +370,7 @@ export function preparePaneStagedAttachments(
     fallbacks: state.chatComposerFallbackByScope,
     message: state.chatMessage,
     mentions: state.chatMentions,
+    fileReferences: state.chatFileReferences,
     goalMode: state.chatGoalDraftMode,
     replyTarget: state.chatReplyTarget,
     draftRevision,

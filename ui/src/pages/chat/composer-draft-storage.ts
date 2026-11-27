@@ -1,4 +1,5 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { readComposerFileReferences } from "../../lib/chat/file-references.ts";
 import { readHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
@@ -99,6 +100,7 @@ export function loadCapturedChatComposerState(
           ? { attachmentVersion: session.draftAttachmentVersion }
           : {}),
         ...(session.draftMentions ? { mentions: session.draftMentions } : {}),
+        ...(session.draftFileReferences ? { fileReferences: session.draftFileReferences } : {}),
         ...(session.goalMode ? { goalMode: session.goalMode } : {}),
         ...(session.replyTarget ? { replyTarget: session.replyTarget } : {}),
         queue: (session.queue ?? [])
@@ -193,10 +195,15 @@ export function persistCapturedChatComposerStateResult(
       draft,
       Object.hasOwn(options, "mentions") ? options.mentions : state.chatMentions,
     );
+    const fileReferences = readComposerFileReferences(
+      draft,
+      Object.hasOwn(options, "fileReferences") ? options.fileReferences : state.chatFileReferences,
+    );
     const attachmentVersion = incognito ? undefined : options.attachmentVersion;
     const matchesDraftMetadata = (saved: typeof session) =>
       saved?.draftAttachmentVersion === attachmentVersion &&
       JSON.stringify(saved?.draftMentions ?? []) === JSON.stringify(mentions ?? []) &&
+      JSON.stringify(saved?.draftFileReferences ?? []) === JSON.stringify(fileReferences ?? []) &&
       JSON.stringify(saved?.goalMode ?? null) === JSON.stringify(goalMode ?? null) &&
       JSON.stringify(saved?.replyTarget ?? null) === JSON.stringify(replyTarget ?? null);
     const storedDraftRevision = session?.draftRevision;
@@ -232,6 +239,7 @@ export function persistCapturedChatComposerStateResult(
       ...(captured.awaitingDefaults ? { awaitingDefaults: true as const } : {}),
       ...(draft ? { draft } : {}),
       ...(mentions ? { draftMentions: mentions } : {}),
+      ...(fileReferences?.length ? { draftFileReferences: fileReferences } : {}),
       ...(goalMode ? { goalMode } : {}),
       ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
       draftRevision,

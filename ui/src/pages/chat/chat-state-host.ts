@@ -13,6 +13,7 @@ import type {
   ChatGuardianNotice,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 import type { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
@@ -114,7 +115,11 @@ export type ChatPageHost = ChatHost &
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     loadAssistantIdentity: () => Promise<void>;
     handleChatScroll: (event: Event) => void;
-    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
+    handleChatDraftChange: (
+      next: string,
+      mentions?: readonly HumanMention[],
+      fileReferences?: readonly ComposerFileReference[],
+    ) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,

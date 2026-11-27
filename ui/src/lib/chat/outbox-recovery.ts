@@ -9,6 +9,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "./chat-types.ts";
+import { hasUnreadableFileReferences, type ComposerFileReference } from "./file-references.ts";
 import { findChatSubmissionMessage } from "./history-message-identity.ts";
 import { outboxPayloadCanRecover } from "./outbox-payload-store.runtime.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
@@ -40,6 +41,7 @@ type RecoveryHost = ChatComposerScope & {
   connectionEpoch?: number;
   chatMessage?: string;
   chatMentions?: readonly HumanMention[];
+  chatFileReferences?: readonly ComposerFileReference[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
   chatReplyTarget?: ChatReplyTarget | null;
   chatAttachments?: readonly ChatAttachment[];
@@ -227,6 +229,7 @@ export function captureChatOutboxRecoveryDestination(
       state.connectionEpoch,
       state.chatMessage,
       state.chatMentions,
+      state.chatFileReferences,
       state.chatGoalDraftMode,
       state.chatReplyTarget,
       state.chatAttachments,
@@ -339,6 +342,11 @@ function consumeChatOutboxRecovery(
       storageTargetForComposer(state).key === target.key;
     if (
       !isCurrent() ||
+      (destination &&
+        hasUnreadableFileReferences({
+          text: entry.session.draft ?? "",
+          fileReferences: entry.session.draftFileReferences,
+        })) ||
       !(entry.session.queue ?? []).every((item) => outboxPayloadCanRecover(state, item)) ||
       (destination &&
         JSON.stringify(captureChatOutboxRecoveryDestination(state, destination.scope)) !==

@@ -1,4 +1,6 @@
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { updateComposerFileReferences } from "../../lib/chat/file-references.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 
@@ -14,6 +16,7 @@ export type ChatInputHistoryState = {
   chatLoading: boolean;
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
+  chatFileReferences?: readonly ComposerFileReference[];
   chatMessages: unknown[];
   chatLocalInputHistoryBySession: Record<string, ChatLocalInputHistoryEntry[]>;
   chatInputHistorySessionKey: string | null;
@@ -21,6 +24,7 @@ export type ChatInputHistoryState = {
   chatInputHistoryIndex: number;
   chatDraftBeforeHistory: string | null;
   chatMentionsBeforeHistory?: readonly HumanMention[];
+  chatFileReferencesBeforeHistory?: readonly ComposerFileReference[];
 };
 
 export type ChatInputHistoryKeyInput = {
@@ -62,13 +66,18 @@ export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {
   state.chatInputHistoryIndex = -1;
   state.chatDraftBeforeHistory = null;
   state.chatMentionsBeforeHistory = undefined;
+  state.chatFileReferencesBeforeHistory = undefined;
 }
 
 export function handleChatDraftChange(
   state: ChatInputHistoryState,
   next: string,
   mentions?: readonly HumanMention[],
+  fileReferences?: readonly ComposerFileReference[],
 ) {
+  state.chatFileReferences =
+    fileReferences ??
+    updateComposerFileReferences(state.chatMessage, next, state.chatFileReferences);
   state.chatMentions = mentions ?? updateHumanMentions(state.chatMessage, next, state.chatMentions);
   state.chatMessage = next;
   resetChatInputHistoryNavigation(state);
@@ -113,6 +122,7 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
   state.chatInputHistoryIndex = -1;
   state.chatDraftBeforeHistory = state.chatMessage;
   state.chatMentionsBeforeHistory = state.chatMentions;
+  state.chatFileReferencesBeforeHistory = state.chatFileReferences;
   return items;
 }
 
@@ -132,6 +142,7 @@ function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" 
       ? (state.chatDraftBeforeHistory ?? "")
       : (items[nextIndex] ?? state.chatMessage);
   state.chatMentions = nextIndex === -1 ? state.chatMentionsBeforeHistory : [];
+  state.chatFileReferences = nextIndex === -1 ? state.chatFileReferencesBeforeHistory : [];
   return true;
 }
 

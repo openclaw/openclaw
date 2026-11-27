@@ -9,6 +9,7 @@ import type {
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatFileReferencesEnglish } from "../../i18n/locales/en-chat-file-references.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -37,6 +38,7 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 
 registerChatSessionEnglish();
+registerChatFileReferencesEnglish();
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -289,6 +291,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     ) {
       return;
     }
+    if (scope.state.chatFileReferences?.length) {
+      scope.state.setRecoverableChatError(
+        t("chat.fileReferences.sendUnsupported"),
+        EXPECTED_CHAT_REFUSAL,
+      );
+      return;
+    }
     if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
       scope.state.setRecoverableChatError(
         t(
@@ -319,8 +328,12 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         return;
       }
-      if (scope.state.chatMessage === text && !scope.state.chatMentions?.length) {
-        scope.state.handleChatDraftChange("", []);
+      if (
+        scope.state.chatMessage === text &&
+        !scope.state.chatMentions?.length &&
+        !scope.state.chatFileReferences?.length
+      ) {
+        scope.state.handleChatDraftChange("", [], []);
       }
       this.collaboration.suggestions = [
         ...this.collaboration.suggestions.filter((item) => item.id !== result.suggestion.id),
@@ -364,6 +377,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         ? {
             text: scope.state.chatMessage,
             mentions: scope.state.chatMentions?.map((mention) => ({ ...mention })),
+            fileReferences: scope.state.chatFileReferences,
           }
         : undefined;
     const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
@@ -372,7 +386,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.collaboration.busyIds = new Set(this.collaboration.busyIds).add(suggestion.id);
     if (resolution === "edit") {
-      scope.state.handleChatDraftChange(suggestion.text, []);
+      scope.state.handleChatDraftChange(suggestion.text, [], []);
       // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
         focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
@@ -407,11 +421,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           error instanceof GatewayRequestError &&
           previousEditDraft !== undefined &&
           scope.state.chatMessage === suggestion.text &&
-          !scope.state.chatMentions?.length
+          !scope.state.chatMentions?.length &&
+          !scope.state.chatFileReferences?.length
         ) {
           scope.state.handleChatDraftChange(
             previousEditDraft.text,
             previousEditDraft.mentions ?? [],
+            previousEditDraft.fileReferences ?? [],
           );
         }
         scope.state.setRecoverableChatError(formatUiError(error), error);
@@ -659,7 +675,10 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         return;
       }
-      const draftPreview = typing && preview ? typingDraftPreview(preview, cursor) : undefined;
+      const draftPreview =
+        typing && preview && !scope.state.chatFileReferences?.length
+          ? typingDraftPreview(preview, cursor)
+          : undefined;
       this.typingRequestSentAt = typing ? Date.now() : undefined;
       void scope.client
         .request("session.typing", {

@@ -1,10 +1,12 @@
 import { createChangeListeners, notifyListeners } from "../../../../src/shared/listeners.js";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
+import type { ComposerFileReference } from "./file-references.ts";
 
 export type ComposerDraftSource = {
   read(): {
     draft: string;
     mentions: readonly HumanMention[];
+    fileReferences?: readonly ComposerFileReference[];
     attachments: ChatAttachment[];
     pendingAttachmentReads: number;
     attachmentReadRevision?: number;

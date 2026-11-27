@@ -30,6 +30,7 @@ import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
 import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import { ComposerFileReferences } from "./chat-composer-file-references.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
@@ -278,6 +279,7 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
+          <ComposerFileReferences composer={props} state={state} />
           <ComposerTaskSlot
             state={state}
             draft={context().visibleDraft}
