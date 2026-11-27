@@ -373,8 +373,8 @@ export async function buildDynamicTools(
     let persistentWebSearchAllowed = webSearchPresent;
     let webSearchRequested = webSearchPresent;
     if (
-      (input.onPersistentWebSearchPolicyResolved || 
-         input.onWebSearchRequestedResolved ||
+      (input.onPersistentWebSearchPolicyResolved ||
+        input.onWebSearchRequestedResolved ||
         (webSearchPlan.kind === "native-hosted" &&
           (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
       !webSearchPresent &&
