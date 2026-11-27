@@ -4,6 +4,13 @@ import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "../agents/harness/builtin-openclaw-metadata.js";
+import { runAgentHarnessLifecycleAttempt } from "../agents/harness/lifecycle.js";
+import {
+  createAttemptParams,
+  createAttemptResult,
+  createLifecycleHarness,
+} from "../agents/harness/lifecycle.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -476,16 +483,36 @@ describe("user turn transcript persistence", () => {
       const [replacement] = await readMessages();
       expect(replacement).toMatchObject({ content: "new turn" });
       expect(readModelPromptProjection(replacement)).toBeUndefined();
+    });
 
-      // A turn dispatched without a projection stays frozen as its transcript text.
+    // Every harness attempt runs through the lifecycle owner, which records its declaration.
+    it.each([
+      ["built-in embedded", BUILTIN_AGENT_HARNESS_METADATA.promptProjection],
+      ["undeclared plugin", undefined],
+    ] as const)("holds a %s harness to its prompt projection declaration", async (_, kind) => {
       const sent = record({ text: "already sent" });
       await sent.persistApproved();
-      sent.markSentToProvider?.();
-      const unchanged = await sent.captureModelPromptProjection!("too late", () => {});
-      expect(unchanged).toMatchObject({ content: "already sent" });
-      expect(readModelPromptProjection(unchanged)).toBeUndefined();
+      const harness = createLifecycleHarness({
+        promptProjection: kind,
+        runAttempt: async (params) => {
+          params.userTurnTranscriptRecorder?.markSentToProvider?.();
+          return createAttemptResult();
+        },
+      });
+      await runAgentHarnessLifecycleAttempt(harness, {
+        ...createAttemptParams(),
+        userTurnTranscriptRecorder: sent,
+      });
+      const capture = sent.captureModelPromptProjection!("too late", () => {});
+      if (kind === "captures") {
+        // A capturing harness can never have sent this turn without a projection.
+        await expect(capture).rejects.toThrow("before provider dispatch");
+      } else {
+        // An external runtime built its own prompt: the turn stays at its transcript text.
+        await expect(capture).resolves.toMatchObject({ content: "already sent" });
+        expect(await sent.prepareModelPromptProjection!("too late", () => {})).toBeUndefined();
+      }
       expect(readModelPromptProjection(sent.getPersistedMessage?.())).toBeUndefined();
-      expect(await sent.prepareModelPromptProjection!("too late", () => {})).toBeUndefined();
     });
 
     it("persists fallback user turns only once", async () => {

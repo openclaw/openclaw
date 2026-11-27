@@ -365,6 +365,12 @@ export async function runAgentHarnessLifecycleAttempt(
   const diagnostics = createAgentHarnessLifecycleDiagnostics(harness, params);
   try {
     assertAgentHarnessContextEngineSupport(harness, params);
+    // Every harness attempt dispatches through here; its declaration governs late captures.
+    if (params.userTurnTranscriptRecorder) {
+      getUserTurnTranscriptAdmissionOwner(
+        params.userTurnTranscriptRecorder,
+      )?.declarePromptProjection(harness.promptProjection ?? "external");
+    }
     diagnostics.startAgentRun();
     const runAndClassify = async () => {
       diagnostics.setPhase("send");

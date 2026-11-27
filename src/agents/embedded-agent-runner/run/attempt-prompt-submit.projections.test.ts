@@ -802,18 +802,15 @@ describe("durable model prompt projection at provider dispatch", () => {
             JSON.stringify(requests[0]).split(RESTART_RECOVERY_INTERRUPTION_NOTE),
           ).toHaveLength(2);
           expect(JSON.stringify(requests[1])).not.toContain(RESTART_RECOVERY_INTERRUPTION_NOTE);
-          expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
-        } else {
-          expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-            "modelPromptProjection",
-          );
         }
+        // The embedded harness freezes the dispatched envelope, so no fallback can re-capture it.
+        expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
       });
     },
   );
 
-  // A harness that does not capture (or an unchanged inter-session prompt) sent the turn, then
-  // failed; an embedded fallback must not fail the turn trying to freeze its own hook text.
+  // An external harness (its runtime builds the prompt) sent the turn without a projection,
+  // then failed; an embedded fallback keeps the transcript text instead of failing the turn.
   it("sends the transcript text when an earlier candidate dispatched without a projection", async () => {
     await withOpenClawTestState({ label: "dispatched-fallback-projection" }, async (state) => {
       const target = {
