@@ -45,7 +45,7 @@ type RunwayTaskDetailResponse = {
 type RunwaySourceAsset = Pick<VideoGenerationSourceAsset, "buffer" | "mimeType" | "url">;
 
 const VEO_MODELS = new Set(["veo3.1", "veo3.1_fast", "veo3"]);
-const VEO_DURATION_SECONDS = new Set([4, 6, 8]);
+const VEO_31_DURATION_SECONDS = new Set([4, 6, 8]);
 const TEXT_ONLY_MODELS = new Set(["gen4.5", ...VEO_MODELS]);
 const IMAGE_MODELS = new Set(["gen4.5", "gen4_turbo", "gen3a_turbo", ...VEO_MODELS]);
 const VIDEO_MODELS = new Set(["gen4_aleph"]);
@@ -123,8 +123,13 @@ function buildCreateBody(
     normalizedDuration === undefined || !Number.isSafeInteger(req.durationSeconds)
       ? 5
       : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
-  if (VEO_MODELS.has(model)) {
-    if (req.durationSeconds !== undefined && !VEO_DURATION_SECONDS.has(req.durationSeconds)) {
+  if (model === "veo3") {
+    if (req.durationSeconds !== undefined && req.durationSeconds !== 8) {
+      throw new Error("Runway veo3 requires durationSeconds to be 8.");
+    }
+    duration = 8;
+  } else if (VEO_MODELS.has(model)) {
+    if (req.durationSeconds !== undefined && !VEO_31_DURATION_SECONDS.has(req.durationSeconds)) {
       throw new Error(`Runway ${model} requires durationSeconds to be 4, 6, or 8.`);
     }
     duration = req.durationSeconds ?? 4;

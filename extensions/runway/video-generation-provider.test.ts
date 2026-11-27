@@ -159,27 +159,41 @@ it.each<[string, Request, Record<string, unknown>]>([
   }
 });
 
-it.each(["veo3.1", "veo3.1_fast", "veo3", "gen4.5", "gen4_turbo", "gen3a_turbo"])(
-  "uses a valid model-specific default for %s",
-  async (model) => {
+it.each([
+  ["veo3.1", 4],
+  ["veo3.1_fast", 4],
+  ["veo3", 8],
+  ["gen4.5", 5],
+  ["gen4_turbo", 5],
+  ["gen3a_turbo", 5],
+] as const)("defaults %s image requests to %i seconds", async (model, duration) => {
+  mockSuccessfulTask();
+  await generateVideo({
+    model,
+    inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+  });
+  const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway");
+  expect(request.body).toMatchObject({ model, duration });
+});
+
+it.each([
+  ["veo3.1", undefined, 4],
+  ["veo3.1", 4, 4],
+  ["veo3.1", 6, 6],
+  ["veo3.1", 8, 8],
+  ["veo3", undefined, 8],
+  ["veo3", 8, 8],
+] as const)(
+  "submits %s text duration %s as %i seconds",
+  async (model, durationSeconds, duration) => {
     mockSuccessfulTask();
-    await generateVideo({
+    await generateVideo({ model, durationSeconds });
+    expect(requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway").body).toMatchObject({
       model,
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      duration,
     });
-    const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway");
-    expect(request.body).toMatchObject({ model, duration: model.startsWith("veo") ? 4 : 5 });
   },
 );
-
-it.each([undefined, 4, 6, 8])("submits supported Veo text duration %s", async (durationSeconds) => {
-  mockSuccessfulTask();
-  await generateVideo({ model: "veo3.1", durationSeconds });
-  expect(requireFirstPostJsonRecordRequest(postJsonRequestMock, "Runway").body).toMatchObject({
-    model: "veo3.1",
-    duration: durationSeconds ?? 4,
-  });
-});
 
 it.each([3, 5, 7, 9, 4.5])(
   "rejects unsupported Veo duration %s before egress",
@@ -189,6 +203,12 @@ it.each([3, 5, 7, 9, 4.5])(
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   },
 );
+
+it.each([4, 6])("rejects %i seconds for legacy veo3 before egress", async (durationSeconds) => {
+  await expect(generateVideo({ model: "veo3", durationSeconds })).rejects.toThrow("to be 8");
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+  expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+});
 
 it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
   const sourceConfig = providerConfig({ source: "file", provider: "x", id: "/runway" });

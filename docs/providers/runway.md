@@ -49,11 +49,13 @@ The provider exposes seven Runway models split across three modes. The same mode
 
 Local image and video references are supported via data URIs.
 
-Runway's `veo3.1`, `veo3.1_fast`, and `veo3` requests default to four seconds.
-OpenClaw rounds fractional durations to whole seconds, so a request for 5.9
-seconds becomes 6 seconds. The Runway provider accepts 4, 6, or 8 seconds and
-rejects other normalized values before submission. Other Runway models retain
-their existing duration defaults and normalization.
+For `veo3.1` and `veo3.1_fast`, OpenClaw defaults to 4 seconds and accepts
+4, 6, or 8 seconds. It rounds fractional durations before checking them, so a
+request for 5.9 seconds becomes 6 seconds.
+
+OpenClaw also recognizes the legacy `veo3` setting, which defaults to 8 seconds
+and accepts only 8. For new requests, use a model in
+[Runway's current catalog](https://docs.dev.runwayml.com/guides/models/).
 
 | Aspect ratios         | Allowed values                              |
 | --------------------- | ------------------------------------------- |
