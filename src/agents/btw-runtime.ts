@@ -300,7 +300,7 @@ export function createBtwNativeRequestGate(input: {
   };
 }
 
-export async function toSimpleContextMessages(params: {
+async function toSimpleContextMessages(params: {
   messages: unknown[];
   imageLimits: ImageSanitizationLimits;
 }): Promise<Message[]> {
