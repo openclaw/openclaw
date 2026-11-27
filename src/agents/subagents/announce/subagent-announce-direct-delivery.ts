@@ -48,7 +48,6 @@ import {
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
-  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   createDirectAnnounceResponseClassifier,
@@ -73,13 +72,8 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return runOutsideAdmittedTurnScopes(() =>
-    withSubagentRequesterDelivery(
-      params.targetRequesterSessionKey,
-      params,
-      sendSubagentAnnounceDirectlyBound,
-    ),
-  );
+  // deliverSubagentAnnouncement already retains the requester for either transport.
+  return runOutsideAdmittedTurnScopes(() => sendSubagentAnnounceDirectlyBound(params));
 }
 
 async function sendSubagentAnnounceDirectlyBound(
@@ -440,8 +434,7 @@ async function sendSubagentAnnounceDirectlyBound(
               params.settleWakeSourceSessionKeys?.length &&
               params.isSourceSessionEffectsAllowed)) &&
           params.sourceSessionKey &&
-          requesterActivity.sessionId &&
-          params.isSourceSessionEffectsAllowed?.() !== false
+          requesterActivity.sessionId
             ? {
                 sourceSessionKey: params.sourceSessionKey,
                 ...(trustedCompletionEvent?.childSessionId
@@ -509,8 +502,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
     }
 
-    const classified = directFailure ?? classifyResponse(directAnnounceResponse);
-    return classified instanceof Promise ? await classified : classified;
+    return await (directFailure ?? classifyResponse(directAnnounceResponse));
   } catch (err) {
     // A failed dispatch receipt has not admitted any delivery; its owner retries preparation.
     if (!dispatchPrepared) {
