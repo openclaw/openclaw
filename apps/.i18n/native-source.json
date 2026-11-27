@@ -1391,6 +1391,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-call","surface":"apple","id":"native.apple.3675b60797fc7a74","source":"React"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.86e8f0ba2fa275bf","source":"%@ and %lld others"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.20c201d2df839778","source":"%@ reacted with %@"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5c808c70af433bc1","source":"Current reactions"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.42da4efce24f4f57","source":"Enter one emoji."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.e3aba039388d7422","source":"Type or paste one emoji."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.08d2a68e51753488","source":"You"},
