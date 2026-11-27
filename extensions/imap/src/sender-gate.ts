@@ -57,6 +57,17 @@ function mailboxDomainKey(domain: string): string {
   }
 }
 
+// An RFC 5322 local part that is a quoted string holding only dot-atom characters names
+// the same mailbox as its unquoted spelling. mailparser drops these optional quotes while
+// mailauth keeps them, so both sides are compared without them. Quotes hiding anything a
+// local part cannot carry unquoted (spaces, "@", escapes) stay as they are written.
+const QUOTED_DOT_ATOM =
+  /^"([A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*)"$/u;
+
+function unquotedLocalPart(local: string): string {
+  return QUOTED_DOT_ATOM.exec(local)?.[1] ?? local;
+}
+
 function authenticatesSenderMailbox(result: AuthenticateResult, sender: string): boolean {
   const [mailbox] = result.dkim.headerFrom;
   if (mailbox === undefined || result.dkim.headerFrom.length !== 1) {
@@ -69,7 +80,8 @@ function authenticatesSenderMailbox(result: AuthenticateResult, sender: string):
   return (
     mailboxAt > 0 &&
     senderAt > 0 &&
-    mailbox.slice(0, mailboxAt) === sender.slice(0, senderAt) &&
+    unquotedLocalPart(mailbox.slice(0, mailboxAt)) ===
+      unquotedLocalPart(sender.slice(0, senderAt)) &&
     mailboxDomainKey(mailbox.slice(mailboxAt + 1)) === mailboxDomainKey(sender.slice(senderAt + 1))
   );
 }
