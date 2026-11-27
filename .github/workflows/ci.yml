@@ -6940,8 +6940,7 @@ jobs:
         run: |
           set -euo pipefail
           pnpm clean:dist
-          pnpm build:ci-artifacts
-          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 pnpm build
           package_dir="${RUNNER_TEMP}/docker-seed-package"
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir "$package_dir" \

@@ -44,6 +44,35 @@ private func setDraftWritesFail(_ fail: Bool, table: String, in databases: OpenC
     }
 }
 
+private actor ReconnectingDraftTransport: OpenClawChatTransport {
+    let healthGate = OutboxTestGate()
+    private(set) var sent: [String] = []
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        await self.healthGate.wait()
+        return true
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message: String,
+        thinking _: String,
+        idempotencyKey: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        self.sent.append(message)
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
+    }
+
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        OpenClawChatHistoryPayload(sessionKey: sessionKey, sessionId: "session", messages: [], thinkingLevel: "off")
+    }
+
+    nonisolated func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+}
+
 extension ChatViewModelOutboxTests {
     @Test @MainActor func `draft and attachment survive a rebuilt view model over the same database`() async throws {
         let (store, databases, databaseDirectory) = try makeOutboxStore()
@@ -90,6 +119,49 @@ extension ChatViewModelOutboxTests {
 
         #expect(vm.input.isEmpty)
         #expect(await store.loadComposerDraft(key: "agent:main:main") == .empty)
+    }
+
+    @Test @MainActor func `a live send preserves a newer identical draft typed during reconnect`() async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = "agent:main:main"
+        let transport = ReconnectingDraftTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: key,
+            transport: transport,
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main",
+            outbox: store)
+        await settleComposerDraft(vm)
+        await vm.restoreOutboxMessages(session: vm.currentSessionSnapshot())?.value
+        vm.input = "a"
+        let send = try #require(vm.send())
+
+        await transport.healthGate.waitUntilStarted()
+        vm.input = "ax"
+        vm.input = "a"
+        await vm.persistComposerDraft()
+        let edited = await store.loadComposerDraft(key: key)
+        await transport.healthGate.release()
+        await send.value
+        await settleComposerDraft(vm)
+
+        #expect(edited?.text == "a")
+        #expect(edited?.revision == 3)
+        #expect(await transport.sent == ["a"])
+        #expect(vm.input == "a")
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let reopenedStore = reopened.store(gatewayID: store.gatewayID)
+        #expect(await reopenedStore.loadComposerDraft(key: key) == edited)
+        let restored = await composerDraftModel(reopenedStore)
+        defer { restored.detachTransport() }
+        await settleComposerDraft(restored)
+        #expect(restored.input == "a")
     }
 
     @Test @MainActor func `a send captured before its draft loads clears the composer`() async throws {
@@ -183,6 +255,82 @@ extension ChatViewModelOutboxTests {
         #expect(rebuilt.input == "stored draft\n\ntyped before load")
     }
 
+    @Test(arguments: [false, true], [("é", "e\u{301}"), ("e\u{301}", "é")])
+    @MainActor
+    func `a draft keeps the latest Unicode spelling across a database reopen`(
+        editBeforeLoad: Bool,
+        spellings: (String, String)) async throws
+    {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (original, replacement) = spellings
+        await saveDraftThroughComposer(original, in: store)
+
+        let routing = "per-sender|main|main"
+        let vm = await composerDraftModel(store, sessionRoutingContract: editBeforeLoad ? nil : routing)
+        await settleComposerDraft(vm)
+        vm.input = replacement
+        if editBeforeLoad {
+            vm.syncSessionRoutingContract(routing)
+            await settleComposerDraft(vm)
+        }
+        await vm.persistComposerDraft()
+        let saved = try #require(await store.loadComposerDraft(key: "agent:main:main"))
+        #expect(Data(saved.text.utf8) == Data(replacement.utf8))
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let rebuilt = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { rebuilt.detachTransport() }
+        await settleComposerDraft(rebuilt)
+        #expect(Data(rebuilt.input.utf8) == Data(replacement.utf8))
+    }
+
+    @Test(arguments: [
+        ("é", "e\u{301}", true),
+        ("e\u{301}", "é", true),
+        ("é", "é", false),
+        ("é", "x", true),
+    ])
+    @MainActor
+    func editingRecalledSpellingSurvivesSessionSwitch(spellings: (String, String, Bool)) async throws {
+        let (recalled, typed, leavesRecall) = spellings
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = "agent:main:main"
+        let vm = await composerDraftModel(store)
+        await settleComposerDraft(vm)
+        vm.recordSuccessfulInput(recalled, sessionKey: vm.visibleComposerKey)
+        vm.input = "working draft"
+        await vm.persistComposerDraft()
+        try #require(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(Data(vm.input.utf8) == Data(recalled.utf8))
+
+        vm.input = typed
+        await vm.persistComposerDraft()
+        let expected = Data((leavesRecall ? typed : "working draft").utf8)
+        let saved = try #require(await store.loadComposerDraft(key: key))
+        #expect(Data(saved.text.utf8) == expected)
+        vm.switchSession(to: "agent:main:other")
+        await settleComposerDraft(vm)
+        vm.switchSession(to: key)
+        await settleComposerDraft(vm)
+        #expect(Data(vm.input.utf8) == expected)
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let restored = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { restored.detachTransport() }
+        await settleComposerDraft(restored)
+        #expect(Data(restored.input.utf8) == expected)
+    }
+
     @Test @MainActor func `cold launch waits for the agent and routing before touching the draft`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -203,6 +351,57 @@ extension ChatViewModelOutboxTests {
         await settleComposerDraft(vm)
         #expect(vm.input == "stored draft\n\ntyped offline")
         #expect(await store.loadComposerDraft(key: "agent:main:main")?.text == "stored draft\n\ntyped offline")
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    @MainActor
+    func acceptedSendRetiresOnlyTheSubmittedRecallStash(edited: Bool, exitWithDown: Bool) async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = ReconnectingDraftTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: "agent:main:main",
+            transport: transport,
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main",
+            outbox: store)
+        await settleComposerDraft(vm)
+        await vm.restoreOutboxMessages(session: vm.currentSessionSnapshot())?.value
+        vm.recordSuccessfulInput("older", sessionKey: vm.visibleComposerKey)
+        vm.input = "a"
+
+        let send = try #require(vm.send())
+        await transport.healthGate.waitUntilStarted()
+        if edited {
+            vm.input = "ax"
+            vm.input = "a"
+        }
+        #expect(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(vm.input == "older")
+        await transport.healthGate.release()
+        await send.value
+        #expect(await transport.sent == ["a"])
+
+        if exitWithDown {
+            try #require(vm.recallNextInput())
+            #expect(vm.input == "a")
+            try #require(vm.recallNextInput())
+        } else {
+            try #require(vm.cancelInputRecall())
+        }
+        let expected = edited ? "a" : ""
+        #expect(vm.input == expected)
+        await vm.persistComposerDraft()
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let restored = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { restored.detachTransport() }
+        await settleComposerDraft(restored)
+        #expect(restored.input == expected)
     }
 
     @Test @MainActor func `attachments stay with their session draft across switches`() async throws {

@@ -85,6 +85,18 @@ An inconclusive readiness check is reported separately from current serving heal
 This recovery repair is supplied by the candidate CLI; older updaters using
 `gateway restart --preserve-definition` can use it without an updater upgrade.
 
+For a Linux system service, run maintenance as the account in its `User=` setting
+with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
+uses root's selectors; it does not automatically adopt the service account.
+
+For an administrator-managed global npm package, replace the package with
+`sudo npm install -g openclaw@latest`, then restart the existing system unit with
+`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
+its service configuration and file ownership unchanged. Direct Gateway startup
+already migrates old configuration and database schemas in the selected state
+directory; no separate state copy or account adoption is needed.
+
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. The official
@@ -201,15 +213,6 @@ the update through Control UI or `openclaw update`. If it cannot accept the
 requested update over RPC, local preparation refuses visibly rather than
 claiming an unidentified installation. Stop the Gateway through its existing
 owner, then rerun the update. A stopped Gateway remains updatable.
-
-Early Git source-updater recovery is a compatibility exception. Its separate CLI
-worker never enters Gateway startup. It opens a repair run after the first
-readiness check and finishes rebuilding and cleanup after the second. Neither
-startup can report that repair complete; a failed release may not reach readiness
-at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
-not in any published release. Retire `update-early-release-recovery*.ts` and its
-early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
-already-started recovery's retained code until that recovery finishes.
 
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
@@ -521,6 +524,12 @@ and service ownership revalidation finish. At activation, the legacy
 existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
+
+Git preparation carries forward an existing host OpenClaw ID binding when its
+native crate still matches the target. If the binding needs rebuilding, that
+build must succeed in the prepared release before it can replace the serving
+Gateway. Checkouts without a host binding still skip the opt-in build. The
+installed updater must contain this change.
 
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
@@ -1513,9 +1522,11 @@ transaction-local verification.
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
-its table during a routine upgrade. Structural corruption anywhere in the
-database and corruption in the migration's affected tables still refuse the
-migration; quarantine and rollback behavior are unchanged.
+its table during a routine upgrade. An agent database version step checks only the
+schema catalog and the tables it declares, so upgrade downtime does not grow with
+unrelated agent history; the next Gateway start checks the whole database in the
+background. Other structural corruption and corruption in the migration's affected
+tables still refuse the migration; quarantine and rollback behavior are unchanged.
 Historical upgrades use the same default even when recovery requires a full-file
 backup. Automatic original-state captures and disposable update rehearsals also
 honor the requested check, including same-version Doctor repairs. Automatic rollback

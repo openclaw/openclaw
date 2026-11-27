@@ -21,6 +21,7 @@ import {
   theme,
   type ResolvedSkillsWorkspace,
 } from "openclaw/plugin-sdk/skill-workshop-host-cli";
+import { WORKSHOP_CHANGES_MAX_LIMIT } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { displayPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   archiveWorkshopSkill,
@@ -44,17 +45,17 @@ function resolveAgentOption(command: Command | undefined): string | undefined {
   return undefined;
 }
 
-function parseStrictPositiveIntOption(value: string, flag: string): number {
+function parseChangesLimit(value: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
     // Commander recognizes parser failures by code; keep its import type-only.
-    throw Object.assign(new Error(`${flag} must be a positive integer.`), {
+    throw Object.assign(new Error("--limit must be a positive integer."), {
       name: "InvalidArgumentError",
       code: "commander.invalidArgument",
       exitCode: 1,
     });
   }
-  return parsed;
+  return Math.min(parsed, WORKSHOP_CHANGES_MAX_LIMIT);
 }
 
 function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
@@ -165,7 +166,7 @@ function registerSkillsWorkshopCommands(skills: Command): void {
   workshop
     .command("changes")
     .description("Show recent learned-skill changes")
-    .option("--limit <n>", "Max changes", (value) => parseStrictPositiveIntOption(value, "--limit"))
+    .option("--limit <n>", "Max changes", parseChangesLimit)
     .option("--json", "Output as JSON", false)
     .action((opts: { limit?: number; json?: boolean; agent?: string }, command: Command) =>
       runWorkshopAction(
