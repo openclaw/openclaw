@@ -64,8 +64,16 @@ export async function runDoctorStartupReadinessSteps(params: {
     countRepairableGatewayMaintenanceStartupFailures,
     repairGatewayMaintenanceStartupFailures,
   } = await import("../infra/gateway-boot-lifecycle.js");
-  await traceDoctorMaintenancePending("boot-lifecycle", async () =>
-    (await countRepairableGatewayMaintenanceStartupFailures()) > 0 ? "work" : "none",
+  const [{ decideDoctorPendingFromLiveStores }, { resolveOpenClawStateSqlitePath }] =
+    await Promise.all([
+      import("../commands/doctor-live-store-pending.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
+  // Boot lifecycle records live in the state database.
+  await traceDoctorMaintenancePending("boot-lifecycle", () =>
+    decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], async () =>
+      (await countRepairableGatewayMaintenanceStartupFailures()) > 0 ? "work" : "none",
+    ),
   );
   repairGatewayMaintenanceStartupFailures();
   return { sqliteReclamationAgents };

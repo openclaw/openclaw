@@ -5,8 +5,28 @@ import {
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
+import { createNonExitingRuntime } from "../runtime.js";
 
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
+
+/** Built-in login shares the local TUI's state owner and publishes into its embedded runtime. */
+export async function runLocalProviderLogin(provider: string | undefined, signal: AbortSignal) {
+  const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
+  await modelsAuthLoginCommand(
+    {
+      provider,
+      signal,
+      // A queued credential write checks this after acquiring the profile lock.
+      assertCurrent: () => signal.throwIfAborted(),
+      refreshAfterLogin: async () => {
+        const { refreshActiveProviderAuthRuntimeSnapshot } = await import("../secrets/runtime.js");
+        // A session's first turn prepares its own snapshot.
+        await refreshActiveProviderAuthRuntimeSnapshot();
+      },
+    },
+    createNonExitingRuntime(),
+  );
+}
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export async function resolveCodexCliBin(): Promise<string | null> {

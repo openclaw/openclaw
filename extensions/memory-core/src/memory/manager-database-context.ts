@@ -209,6 +209,7 @@ export class MemoryIndexDatabase {
     invalidatedSources: [],
     hasVectorTable: false,
     vectorState: { state: "empty" },
+    embeddingRefusal: null,
   };
   searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
   vectorDegradedWriteWarningShown = false;

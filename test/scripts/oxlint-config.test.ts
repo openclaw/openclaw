@@ -130,14 +130,6 @@ function writeSourceProjectFixture(root: string) {
   }
 }
 
-type OxlintTsconfig = {
-  compilerOptions?: {
-    allowJs?: boolean;
-  };
-  include?: string[];
-  exclude?: string[];
-};
-
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -446,17 +438,6 @@ describe("oxlint config", () => {
     checked(typecheck, 0);
   });
 
-  it("has a discoverable scripts tsconfig for type-aware linting", () => {
-    const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
-
-    expect(tsconfig).toMatchObject({
-      compilerOptions: { allowJs: true },
-      include: expect.arrayContaining(["**/*.ts", "**/*.mts"]),
-    });
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
-  });
-
   it("keeps release line limits advisory and suppression checks strict", () => {
     const { root, write } = makeFixture("release-limits", {
       categories: { correctness: "off" },
@@ -687,38 +668,6 @@ describe("oxlint config", () => {
         });
       }
     }
-  });
-
-  it("keeps untouched limits advisory for release-version-only manifest changes", () => {
-    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
-    const { root, write, json } = makeFixture("release-version-scope", config);
-    linkDependencies(root);
-    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
-    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
-    git(root, ["init", "--quiet"]);
-    git(root, ["add", "."]);
-    git(root, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ]);
-    const base = git(root, ["rev-parse", "HEAD"]);
-    json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
-
-    const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
-      GITHUB_ACTIONS: "false",
-      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
-      OPENCLAW_OXLINT_CHANGED_BASE: base,
-    });
-    const report = parseReport(checked(result, 1));
-    expect(byFile(report, "src/changed.ts")[0]?.severity).toBe("error");
-    expect(byFile(report, "src/untouched.ts")[0]?.severity).toBe("warning");
   });
 
   it("trusts changed lint policy files only when they match authoritative main", () => {

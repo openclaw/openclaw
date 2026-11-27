@@ -3856,6 +3856,27 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it.each([false, true])(
+    "keeps Node checks for update test changes (production=%s)",
+    (production) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        changedPaths: [
+          "src/update/prepare-iroh.test-support.ts",
+          ...(production ? ["src/update/prepare-git.ts"] : []),
+        ],
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_docker_seed_e2e).toBe(String(production));
+      expect(result.outputs.docker_seed_lanes).toBe(production ? "release-update-survivor" : "");
+      expect(result.outputs.run_checks_node_core_nondist).toBe("true");
+      expect(
+        readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include.length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
   it.each<{
     eventName: "pull_request" | "push" | "workflow_dispatch";
     production: boolean;

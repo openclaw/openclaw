@@ -5,7 +5,6 @@ import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync,
-  recordUpdateRunPhaseAsync,
   recordUpdateRunStepAsync,
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
@@ -16,6 +15,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import type { LegacyTrial } from "./legacy-trial-record.js";
 import {
+  collectReleases,
   readTrial,
   readUpdateLock,
   releaseUpdateLock,
@@ -29,7 +29,7 @@ const log = createSubsystemLogger("gateway/update-run");
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
 async function maintainTrialPlugins(
   trial: Pick<Trial, "runId" | "acceptCapabilities">,
-): Promise<{ nextAction?: string } | undefined> {
+): Promise<void> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -93,10 +93,9 @@ async function maintainTrialPlugins(
     getAsyncWorkSignal()?.throwIfAborted();
     step.endedAtMs = Date.now();
     await recordUpdateRunStepAsync(trial.runId, step);
-    return result;
   } catch (error) {
     if (getAsyncWorkSignal()?.aborted) {
-      return undefined;
+      return;
     }
     const nextAction =
       pluginIds.length > 0
@@ -116,7 +115,6 @@ async function maintainTrialPlugins(
       detail,
     };
     await recordUpdateRunStepAsync(trial.runId, step);
-    return { nextAction };
   }
 }
 
@@ -202,10 +200,9 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
   process.channel?.unref();
 }
 
-export async function settleRunFromTrial(
-  trial: Trial | null,
-  prefix = resolvePrefix(),
-): Promise<void> {
+async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix()): Promise<void> {
+  // Ready releases prune by owned path; stale updater records do not gate preparation.
+  void collectReleases(prefix).catch(() => undefined);
   if (
     trial?.outcome &&
     trial.runId &&
@@ -225,12 +222,6 @@ export async function settleRunFromTrial(
     const preparationLock = await readUpdateLock(prefix);
     if (preparationLock?.dead) {
       await releaseUpdateLock(prefix);
-    }
-    if (outcome.status === "succeeded") {
-      await recordUpdateRunPhaseAsync(trial.runId, "verifying", {
-        after: { version: VERSION, ...(buildId ? { buildId } : {}) },
-        step: { step: "plugins", status: "in_progress", startedAtMs: Date.now() },
-      });
     }
     await recordUpdateRunVerificationAsync(trial.runId, {
       runningVersion: VERSION,
@@ -256,54 +247,23 @@ export async function settleRunFromTrial(
         stderrTail,
       });
     }
-    const finish = async (nextAction?: string) => {
-      const finished = await finishUpdateRunAsync(
-        trial.runId,
-        outcome.status === "succeeded"
-          ? {
-              status: "succeeded",
-              after: { version: VERSION, buildId },
-              ...(nextAction ? { nextAction } : {}),
-            }
-          : {
-              status: "failed",
-              reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
-            },
-      );
-      if (
-        finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")
-      ) {
-        const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
-        await (
-          await createUpdateRunNotifier(finished)
-        )(finished, "finished");
-      }
-    };
+    const finished = await finishUpdateRunAsync(
+      trial.runId,
+      outcome.status === "succeeded"
+        ? { status: "succeeded", after: { version: VERSION, buildId } }
+        : {
+            status: "failed",
+            reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
+          },
+    );
     if (outcome.status === "succeeded") {
-      // The launcher committed already; only the aggregate result waits for required plugins.
-      const accepted = wakeUpdateRunWatcher(trial.runId, () =>
-        withCommandProcessScope(async () => {
-          const plugins = await maintainTrialPlugins(trial);
-          if (getAsyncWorkSignal()?.aborted || !plugins) {
-            return;
-          }
-          await finish(plugins.nextAction);
-          await runPostUpdateInspections(trial.runId);
-        }, getAsyncWorkSignal()),
-      );
-      if (!accepted) {
-        const nextAction = "openclaw plugins update --all";
-        const step: UpdateRunStep = {
-          step: "plugins",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail: `Plugin activation did not run because the Gateway update watcher is unavailable. Run \`${nextAction}\`.`,
-        };
-        await recordUpdateRunStepAsync(trial.runId, step);
-        await finish(nextAction);
-      }
-    } else {
-      await finish();
+      schedulePostUpdateMaintenance(trial);
+    }
+    if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
+      const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
+      await (
+        await createUpdateRunNotifier(finished)
+      )(finished, "finished");
     }
     return;
   }
@@ -359,8 +319,9 @@ export async function announceReady(buildId: string | null): Promise<void> {
       resolve(message.trial as Trial | null);
     }
   };
+  const onDisconnect = () => resolve(null);
   process.on("message", onMessage);
-  const timer = setTimeout(() => resolve(null), 2000);
+  process.once("disconnect", onDisconnect);
   try {
     process.send({ type: "openclaw.ready", buildId }, (error) => {
       if (error) {
@@ -370,7 +331,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
     const confirmed = await promise;
     await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
-    clearTimeout(timer);
     process.off("message", onMessage);
+    process.off("disconnect", onDisconnect);
   }
 }

@@ -4,6 +4,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -78,9 +79,7 @@ export async function claimSubagentYieldInRuns(params: {
       matchesSubagentChildSessionOwner(entry, params.sessionKey, params.agentId) &&
       !entry.collect &&
       entry.execution.status === "running" &&
-      !entry.killIntent &&
-      !entry.killReconciliation &&
-      !entry.suppressCompletionDelivery &&
+      !isSubagentCompletionCancelled(entry) &&
       // A separate admitted follow-up shares the session, not this logical task.
       isSameSubagentRunOwner(
         entry,

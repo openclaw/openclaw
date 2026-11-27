@@ -89,7 +89,7 @@ function hasNewResumeInput(body: Record<string, unknown>): boolean {
     );
 }
 
-async function providerFixture(signal: AbortSignal) {
+async function providerFixture(signal: AbortSignal, childTimer = false) {
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const ready = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -195,6 +195,23 @@ async function providerFixture(signal: AbortSignal) {
           });
           if (name === "child") {
             gate(`child:${cycle}`).resolve();
+            if (childTimer && !issued.has(`child-timer:${cycle}`)) {
+              issued.add(`child-timer:${cycle}`);
+              const script = `fetch(${JSON.stringify(`${origin}/timer`)},{method:'POST',body:'{}'}).then(()=>setInterval(()=>{},1000))`;
+              const args = {
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+                yieldMs: 120_000,
+                timeoutSeconds: 600,
+              };
+              const wireName = tools.includes("exec") ? "exec" : "dispatch_action";
+              writeRestartToolCall(
+                response,
+                "child",
+                wireName,
+                wireName === "exec" ? args : { id: "exec", args },
+                requestOrdinal,
+              );
+            }
             // The parent resumes; its child settles quietly instead of being adopted.
             return;
           }
@@ -362,6 +379,114 @@ async function providerFixture(signal: AbortSignal) {
       ),
   };
 }
+
+it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
+  "settles a timer child and tells its yielded parent after %s",
+  { timeout: 180_000 },
+  async (killSignal, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal, true);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-child-crash",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(buildMockOpenAiResponsesProvider(provider.baseUrl)),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(instance.logs());
+    });
+    const sessionKey = key(0, "parent");
+    let client: GatewayClient | undefined;
+    const storedChild = () => {
+      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), { readOnly: true });
+      try {
+        const row = db
+          .prepare("SELECT run_id, payload_json FROM subagent_runs WHERE requester_session_key = ?")
+          .get(sessionKey);
+        assert(row && typeof row.payload_json === "string", "Spawn must persist the child");
+        const payload = asRecord(JSON.parse(row.payload_json));
+        return { runId: row.run_id, ...asRecord(payload.parentCompletion ?? payload) };
+      } finally {
+        db.close();
+      }
+    };
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", {
+          key: sessionKey,
+          agentId: "main",
+          permissionMode: "full",
+        });
+        await client.request("chat.send", {
+          sessionKey,
+          message: marker(0, "parent"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("/timer");
+        await provider.wait("ready:0:parent");
+        const parent = readRestartSession(instance.state.agentDir(), sessionKey);
+        assert(parent?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+        expect(
+          await client.request("agent.wait", { runId: parent.lifecycleRunId, timeoutMs: 30_000 }),
+        ).toMatchObject({ status: "ok", yielded: true });
+        const original = storedChild();
+        expect(original).toMatchObject({
+          execution: { status: "running" },
+          delivery: { status: "pending" },
+        });
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const pid = child.pid;
+        const closed = once(child, "close");
+        expect(child.kill(killSignal)).toBe(true);
+        await closed;
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        expect(storedChild()).toMatchObject({
+          runId: original.runId,
+          execution: { status: killSignal === "SIGKILL" ? "running" : "terminal" },
+        });
+        provider.restart();
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(pid);
+        client = await connectRestartClient(instance, {}, signal);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.request<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            expect(storedChild()).toMatchObject({
+              runId: original.runId,
+              execution: { status: "terminal", outcome: { status: "error" } },
+              delivery: { status: "delivered" },
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        const notices = provider.calls.filter(
+          (call) =>
+            call.name === "parent" &&
+            call.current.includes(
+              killSignal === "SIGKILL"
+                ? "Its run did not survive the restart"
+                : "status: error: Gateway stopped",
+            ),
+        );
+        expect(notices).toHaveLength(1);
+        expect(provider.calls.filter((call) => call.name === "child")).toHaveLength(1);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",

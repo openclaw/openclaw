@@ -10,7 +10,6 @@ import { prepareSessionEventTargetForHost } from "../auto-reply/reply/session-ev
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { publishSessionParticipationMemberChange } from "../config/sessions/session-participation-source.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -24,6 +23,7 @@ import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
 import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -132,13 +132,6 @@ it("restores every child turn from its original invitation and accepts reinvitat
     first.release();
     const second = (await f.prepare())!;
     setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
-    publishSessionParticipationMemberChange(f.source.agentId, f.source.sessionKey, {
-      sessionId: "root-id",
-      identityId: f.profileId,
-      present: false,
-    });
-    expect(second.authority.signal?.aborted).toBe(true);
-    expect(() => second.authority.signal?.throwIfAborted()).toThrow();
     await expect(f.prepare()).rejects.toThrow();
     second.release();
     removeSessionMember(f.source, f.profileId);
@@ -211,7 +204,7 @@ it("refuses missing child envelopes and changed original agent, incarnation, cre
   });
 });
 
-it("admits only an exact host-bound child launch, keeping generic agent unavailable", async () => {
+it("admits only a host-bound child and keeps its started run after membership downgrade", async () => {
   await withFixture(async (f) => {
     f.role.sandbox = "required";
     setRuntimeConfigSnapshot(f.cfg);
@@ -250,9 +243,17 @@ it("admits only an exact host-bound child launch, keeping generic agent unavaila
     expect(result.authorization?.participationCeiling?.source).toEqual(f.ceiling.source);
     const run = result.authorization?.retainForRun?.();
     result.authorization?.release?.();
+    const invocation = expectDefined(
+      await prepareGatewayOperatorRunAuthority({
+        client: f.client,
+        context: f.context,
+        invocationAuthority: run,
+      }),
+      "participant run authority",
+    );
+    onTestFinished(invocation.release);
     expect(run?.participationAuthority?.scopes).toEqual(["operator.sessions.read"]);
     run?.assertCurrent();
-    run?.release();
     await expect(
       withPluginRuntimeGatewayRequestScope(
         { context: f.context, isWebchatConnect: () => false },
@@ -265,6 +266,10 @@ it("admits only an exact host-bound child launch, keeping generic agent unavaila
           }),
       ),
     ).resolves.toBeUndefined();
+    setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
+    expect(invocation.authority.signal?.aborted).toBe(false);
+    expect(() => run!.assertCurrent()).not.toThrow();
+    await expect(f.prepare()).rejects.toThrow();
   });
 });
 
@@ -386,15 +391,6 @@ it("binds participant publication to the current native child without scope or o
               readParticipantPublicationAuthority("sessions.github.publish", invalid),
             ).toThrow("Participating GitHub");
           }
-          setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
-          publishSessionParticipationMemberChange(f.source.agentId, f.source.sessionKey, {
-            sessionId: "root-id",
-            identityId: f.profileId,
-            present: false,
-          });
-          expect(() =>
-            readParticipantPublicationAuthority("sessions.github.publish", request),
-          ).toThrow();
         },
       );
     },
