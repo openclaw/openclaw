@@ -133,4 +133,17 @@ describe("Signal formatting", () => {
       "> word word word word",
     ]);
   });
+
+  it("keeps the quote prefix when a transcript-role header starts a chunk", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`> > padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.includes(header));
+
+    expect(roleChunk?.text).toBe(`> > ${header}`);
+    expect(roleChunk?.styles).toContainEqual({
+      start: "> > ".length,
+      length: header.length,
+      style: "MONOSPACE",
+    });
+  });
 });
