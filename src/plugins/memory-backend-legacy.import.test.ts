@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { MemoryProviderOpenParams } from "./memory-provider-types.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 
+// mock-isolation: evaluating the real authority module would hide an eager registration import.
 vi.mock("./memory-audience.js", () => {
   throw new Error("legacy memory registration loaded session audience authority");
 });
