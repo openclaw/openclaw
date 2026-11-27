@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { detectToolCallShapedText, isPlainTextToolCallAttempt } from "./attempt.js";
+import { detectToolCallShapedText, resolvePlainTextToolCallAttemptName } from "./attempt.js";
 
 const hasToolName = (name: string) => name === "write" || name === "read";
 const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
@@ -10,7 +10,8 @@ const wrappedXml =
   "<tool_call><function=read><parameter=path>proof.txt</parameter></function></tool_call>";
 const react = 'Action: read\nAction Input: {"path":"proof.txt"}';
 const legacy = '[TOOL_CALL]{tool => "read", args => {"path":"proof.txt"}}[/TOOL_CALL]';
-const detects = (text: string) => isPlainTextToolCallAttempt(text, hasToolName);
+const detects = (text: string) =>
+  resolvePlainTextToolCallAttemptName(text, hasToolName) !== undefined;
 
 it.each([
   call,
@@ -69,12 +70,14 @@ it.each([
 ])("preserves prose, examples, and unknown tools: %s", (text) => expect(detects(text)).toBe(false));
 
 it("uses only the current offered tool names", () => {
-  expect(isPlainTextToolCallAttempt(fenced, (name) => name === "read")).toBe(false);
+  expect(resolvePlainTextToolCallAttemptName(fenced, (name) => name === "read")).toBeUndefined();
 });
 
 it("keeps explanatory prefixes literal even with permissive name matching", () => {
   const matches = (name: string) => name === "write" || name.endsWith(".write");
-  expect(isPlainTextToolCallAttempt(`Example of functions.write\n${fenced}`, matches)).toBe(false);
+  expect(
+    resolvePlainTextToolCallAttemptName(`Example of functions.write\n${fenced}`, matches),
+  ).toBeUndefined();
 });
 
 it.each([
@@ -117,4 +120,17 @@ it.each([
   const started = performance.now();
   expect(run()).toBe(expected);
   expect(performance.now() - started).toBeLessThan(500);
+});
+
+it.each([
+  [call, "write"],
+  [fenced, "write"],
+  [`I'll call read now.\n${fenced}`, "write"],
+  [`read\n${fenced}`, "write"],
+  [wrappedXml, "read"],
+  [react, "read"],
+  [legacy, "read"],
+  [`[{"name":"unknown","arguments":{}},${call}]`, "write"],
+])("identifies the accepted call rather than its announcement: %s", (text, name) => {
+  expect(resolvePlainTextToolCallAttemptName(text, hasToolName)).toBe(name);
 });
