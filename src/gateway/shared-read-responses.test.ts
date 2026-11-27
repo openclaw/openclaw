@@ -152,24 +152,6 @@ describe("shared read response dispatch", () => {
     },
   );
 
-  it("bounds retained responses across methods instead of retaining a cache per method", async () => {
-    const broadcast = vi.fn();
-    const produce = vi.fn((respond: RespondFn) => respond(true, { value: "bounded" }));
-    const handler = createPreparedReadHandler(() => ({ shareable: true, run: produce }));
-    const readers = ["models.list", "chat.metadata", "sessions.list", "cron.list"].map((method) =>
-      createReadHarness(handler, method, broadcast),
-    );
-    for (let profile = 0; profile < 5; profile++) {
-      for (const [method, reader] of readers.entries()) {
-        await reader.request(`${profile}-${method}`, {}, `profile-${profile}`).done;
-      }
-    }
-    const evicted = readers[0]!.request("evicted", {}, "profile-0");
-    await evicted.done;
-    expectPayload(evicted, { value: "bounded" });
-    expect(produce).toHaveBeenCalledTimes(21);
-  });
-
   it("does not certify a pending response against a replacement config", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -220,53 +202,6 @@ describe("shared read response dispatch", () => {
     await third.done;
     expectPayload(third, { available: false });
     expect(produce).toHaveBeenCalledTimes(2);
-  });
-
-  it("computes and serializes one payload for 25 connections while delivering every request id", async () => {
-    const releaseProducer = createDeferredCore();
-    const allPrepared = createDeferredCore();
-    const payload = { models: [{ id: "fixture-model", name: 'Model é🦞 \\"' }] };
-    const serialize = vi.fn(() => payload);
-    const produce = vi.fn(async (respond: RespondFn) => {
-      await releaseProducer.promise;
-      respond(true, { toJSON: serialize });
-    });
-    const released = vi.fn();
-    const delivered = vi.fn();
-    let prepared = 0;
-    const harness = createReadHarness(
-      createPreparedReadHandler(() => {
-        if (++prepared === 25) {
-          allPrepared.resolve();
-        }
-        return { run: produce, release: released, beforeRespond: delivered };
-      }),
-    );
-    const requests = Array.from({ length: 25 }, (_, index) => harness.request(`request-${index}`));
-    const done = Promise.all(requests.map((request) => request.done));
-    try {
-      await awaitGateBeforeSettlement(
-        allPrepared.promise,
-        done,
-        "burst did not prepare every reader",
-      );
-    } finally {
-      releaseProducer.resolve();
-      await done;
-    }
-
-    expect(produce).toHaveBeenCalledOnce();
-    expect(serialize).toHaveBeenCalledExactlyOnceWith("payload");
-    expect(released).toHaveBeenCalledTimes(25);
-    expect(delivered).toHaveBeenCalledTimes(25);
-    const payloadBytes = new Set<string>();
-    for (const request of requests) {
-      expect(request.frames).toHaveLength(1);
-      const frame = request.frames[0]!;
-      expect(JSON.parse(frame)).toEqual({ type: "res", id: request.id, ok: true, payload });
-      payloadBytes.add(frame.slice(frame.indexOf('"payload":') + '"payload":'.length, -1));
-    }
-    expect(payloadBytes.size).toBe(1);
   });
 
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {

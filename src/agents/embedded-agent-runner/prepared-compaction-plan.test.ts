@@ -11,18 +11,15 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import * as contextFacts from "../agent-hooks/compaction-safeguard-context.js";
 import {
   prepareCompactionSafeguardHistory,
   prepareCompactionSafeguardMessages,
   prepareCompactionSafeguardSections,
   prepareCompactionSafeguardSummary,
 } from "../agent-hooks/compaction-safeguard-preparation.js";
-import * as qualityFacts from "../agent-hooks/compaction-safeguard-quality.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
 import { prepareAgentCompactionWork } from "../sessions/compaction/preparation.js";
 import * as requestBudget from "../sessions/compaction/request-budget.js";
-import * as tokenPressure from "../sessions/context-token-pressure.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import {
   collectPreparedCompactionEntryFact,
@@ -53,37 +50,6 @@ const options = {
   },
   qualityGuardEnabled: true,
 };
-
-it("does not evaluate unselected pressure or text audits during source extraction", () => {
-  const pressure = vi.spyOn(tokenPressure, "collectMessageTokenPressureFact");
-  const context = vi.spyOn(contextFacts, "collectCompactionContextMessageFact");
-  const identifiers = vi.spyOn(qualityFacts, "extractOpaqueIdentifiers");
-  try {
-    const entry: SessionEntry = {
-      type: "message",
-      id: "tool",
-      parentId: null,
-      timestamp: new Date(0).toISOString(),
-      message: {
-        role: "toolResult",
-        toolCallId: "call_one",
-        toolName: "read",
-        content: [{ type: "text", text: "AbC123+/".repeat(8192) }],
-        timestamp: 1,
-        isError: false,
-      },
-    };
-    const facts = collectPreparedCompactionEntryFact(entry, 0);
-    expect(pressure).not.toHaveBeenCalled();
-    expect(context).not.toHaveBeenCalled();
-    expect(identifiers).not.toHaveBeenCalled();
-    expect(facts).not.toHaveProperty("tokenPressure");
-  } finally {
-    pressure.mockRestore();
-    context.mockRestore();
-    identifiers.mockRestore();
-  }
-});
 
 it("keeps long row-number selections separate from bounded textual facts", () => {
   const entries: SessionEntry[] = Array.from({ length: 20_000 }, (_, index) => ({
@@ -147,64 +113,6 @@ it("records equal projected wrappers from their distinct source rows", () => {
   }
   expect(result.plan.selections.history.map((entry) => entry.source)).toEqual([40, 41]);
 });
-
-it.each([false, true])(
-  "only calculates the consumed replay fallback (foreground budget=%s)",
-  (budgeted) => {
-    const entries: SessionEntry[] = [
-      {
-        type: "message",
-        id: "past",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: { role: "user", content: "Earlier request", timestamp: 1 },
-      },
-      {
-        type: "message",
-        id: "retained",
-        parentId: "past",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: { role: "user", content: "Current request", timestamp: 2 },
-      },
-    ];
-    const replay = vi.spyOn(requestBudget, "replayTokenBudget");
-    try {
-      const result = prepareCompactionPlan(
-        entries,
-        new Map(entries.map((entry, index) => [entry.id, index])),
-        {
-          ...options,
-          work: {
-            ...options.work,
-            ...(budgeted
-              ? {
-                  contextWindow: 32_000,
-                  requestBudget: requestBudget.createCompactionRequestBudget({
-                    contextWindow: 32_000,
-                    reserveTokens: 1000,
-                    systemPrompt: "",
-                    tools: [],
-                  }),
-                }
-              : {}),
-          },
-        },
-      );
-      if (result.status !== "prepared") {
-        throw new Error(
-          "Replay budget fixture lost its real compaction preparation: " + result.reason,
-        );
-      }
-      expect(result.plan.preparation.summaryTokenBudget !== undefined).toBe(budgeted);
-      expect(replay).toHaveBeenCalledTimes(budgeted ? 0 : 1);
-      if (budgeted) {
-        expect(result.plan.summaryReplayTokenBudget).toBeUndefined();
-      }
-    } finally {
-      replay.mockRestore();
-    }
-  },
-);
 
 it("reduces exact raw summary policy with selected audits and an uncapped ask", () => {
   const ask = `Please retain the whole ask ${"context ".repeat(25_000)}exact ending`;

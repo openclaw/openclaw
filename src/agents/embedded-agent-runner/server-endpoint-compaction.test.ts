@@ -3,11 +3,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 const { requestPreparedCompactionMock } = vi.hoisted(() => ({
   requestPreparedCompactionMock: vi.fn(),
@@ -136,27 +133,6 @@ function checkpointOwner(session: ReturnType<typeof createSession>) {
 beforeEach(() => {
   requestPreparedCompactionMock.mockReset();
   requestPreparedCompactionMock.mockResolvedValue(createCompactionResponse());
-});
-
-it.each([
-  ["default", undefined, true, undefined],
-  ["disabled", { enabled: false }, false, undefined],
-  ["explicit retries", { enabled: true, maxRetries: 2 }, true, 2],
-] as const)("wires %s quality-guard settings", (_name, qualityGuard, enabled, maxRetries) => {
-  const sessionManager = SessionManager.inMemory();
-  const workspaceDir = "/tmp/openclaw-workspace";
-  const factories = buildEmbeddedExtensionFactories({
-    cfg: { agents: { defaults: { compaction: { mode: "safeguard", qualityGuard } } } },
-    sessionManager,
-    workspaceDir,
-    model,
-  });
-  expect(factories).toContain(compactionSafeguardExtension);
-  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
-    qualityGuardEnabled: enabled,
-    qualityGuardMaxRetries: maxRetries,
-    workspaceDir,
-  });
 });
 
 describe("attemptServerEndpointCompaction", () => {

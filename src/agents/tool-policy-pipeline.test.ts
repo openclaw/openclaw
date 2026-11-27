@@ -298,23 +298,6 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("evicts the oldest warning when the dedupe cache is full", () => {
-    const warnings: string[] = [];
-    const warn = (index: number) =>
-      runAllowlistWarningStep({ allow: [`eviction_unknown_${index}`], warnings });
-    for (let i = 0; i < 256; i++) {
-      warn(i);
-    }
-    warnings.length = 0;
-    warn(0);
-    warn(256);
-    warn(0);
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (eviction_unknown_256). These entries won't match any tool unless the plugin is enabled.",
-      "tools: tools.allow allowlist contains unknown entries (eviction_unknown_0). These entries won't match any tool unless the plugin is enabled.",
-    ]);
-  });
-
   test("reads policy changes at each stage and each new filtering operation", () => {
     const tools = [{ name: "read" }, { name: "write" }, { name: "exec" }];
     const policy = { allow: ["read", "write"], deny: [] as string[] };

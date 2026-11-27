@@ -230,6 +230,10 @@ suite.define(() => {
             runId: "synthetic-initial-run",
             text: "Initial task finished.",
           });
+          await page
+            .locator(".chat-group.assistant .chat-bubble")
+            .getByText("Initial task finished.", { exact: true })
+            .waitFor();
           for (const [index, message] of followers.entries()) {
             const request = await gateway.waitForRequest("chat.send", { after: index });
             const send = createParams(request);

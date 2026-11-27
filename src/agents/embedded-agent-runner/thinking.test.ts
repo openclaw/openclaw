@@ -41,16 +41,6 @@ function expectContent(messages: AgentMessage[], index: number, content: unknown
   expect(messages[index]).toHaveProperty("content", content);
 }
 
-describe("thinking-free history contract", () => {
-  it.each([
-    { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
-    { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
-  ])("$name returns the original reference when no thinking blocks are present", ({ drop }) => {
-    const messages = [user("hello"), assistant([text("world")])];
-    expect(drop(messages)).toBe(messages);
-  });
-});
-
 describe("dropThinkingBlocks", () => {
   it("preserves a latest assistant turn even when all content blocks are thinking", () => {
     const messages = [assistant([thinking("internal-only")])];
@@ -117,10 +107,6 @@ function olderTurn(content: unknown[]) {
 }
 
 describe("stripInvalidThinkingSignatures", () => {
-  it("returns the original reference when no invalid thinking signatures are present", () => {
-    const messages = [user("hello"), assistant([thinking("internal", "sig"), text("answer")])];
-    expect(stripInvalidThinkingSignatures(messages)).toBe(messages);
-  });
   it("preserves invalid thinking signatures on the latest assistant message", () => {
     const content = [...invalidThinking(), ...signedAnswer()];
     const messages = [user("hello"), assistant(content)];

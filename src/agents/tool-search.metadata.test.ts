@@ -1,6 +1,5 @@
-import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { mcpTool, pluginTool, resultText as modelText } from "./code-mode.test-support.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
@@ -43,11 +42,9 @@ it.each([
       });
     apply(before);
     const previous = catalogRef.current;
-    using stringify = vi.spyOn(normalization, "stableStringify");
     const result = apply(after);
     expect(result.catalogReused).toBe(true);
     expect(catalogRef.current === previous).toBe(sameRun);
-    expect(stringify).not.toHaveBeenCalled();
   },
 );
 

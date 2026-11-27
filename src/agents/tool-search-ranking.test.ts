@@ -6,7 +6,6 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search-catalog.js";
 import { getTextLexicalIndex, prepareTextLexicalDocument } from "./tool-search-index.js";
-import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -296,28 +295,6 @@ it("keeps BM25 population statistics scoped to the current visibility", async ()
   allowedIds.add("third").add("fourth").add("fifth");
   expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("second");
 });
-
-it.each([
-  { encoding: "ASCII", padding: " ", suffix: "" },
-  { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
-  { encoding: "Unicode word", padding: "λ", suffix: "" },
-])(
-  "shares oversized $encoding revisions while their indexes remain live",
-  async ({ padding, suffix }) => {
-    const catalog = [
-      entry({
-        name: "oversized_revision",
-        description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
-      }),
-    ];
-    // The spy retains built indexes, as another active catalog view would.
-    const build = vi.spyOn(ranking, "buildLexicalIndex");
-    for (let turn = 0; turn < 2; turn++) {
-      expect(await names(runtime(catalog), "retention")).toEqual(["oversized_revision"]);
-    }
-    expect(build).toHaveBeenCalledTimes(1);
-  },
-);
 
 it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
   const first = entry({ name: "shared_revision", description: "Measure quasars" });

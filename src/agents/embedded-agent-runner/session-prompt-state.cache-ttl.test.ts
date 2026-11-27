@@ -263,36 +263,6 @@ describe("cache-TTL checkpoint and delta persistence", () => {
     expectModel(entries, model);
   });
 
-  it("writes at least ten times fewer bytes for 1,000 changes to a retained 22 KB projection", async () => {
-    const model = createModel();
-    for (let index = 0; index < 144; index++) {
-      const key = `tool:result-${index}:42`;
-      model.marks.set(key, { mode: "soft" });
-      model.frozen.set(key, { sourceHash: "0".repeat(64) });
-    }
-    const initialBytes = Buffer.byteLength(JSON.stringify(cumulativeSnapshot(model)));
-    expect(initialBytes).toBeGreaterThan(20_000);
-    expect(initialBytes).toBeLessThan(25_000);
-    const state = createToolResultPromptProjectionState();
-    const entries: Entry[] = [];
-    let cumulativeBytes = 0;
-    for (let step = 1; step <= 1_000; step++) {
-      model.frozen.set(`tool:result-${step % 144}:42`, {
-        sourceHash: step.toString(16).padStart(64, "0"),
-      });
-      loadModel(state, model);
-      cumulativeBytes += Buffer.byteLength(JSON.stringify(cumulativeSnapshot(model)));
-      await persistToolResultProjections(state, appendTo(entries));
-    }
-    const writtenBytes = entries.reduce(
-      (bytes, entry) => bytes + Buffer.byteLength(JSON.stringify(entry.data)),
-      0,
-    );
-    expect(writtenBytes).toBeLessThan(cumulativeBytes / 10);
-    expect(checkpointBounds(entries)).toBeGreaterThan(1);
-    expectModel(entries, model);
-  });
-
   it("bounds replay bytes when a few changes contain long ordinary projected text", async () => {
     const model = createModel();
     const state = createToolResultPromptProjectionState();

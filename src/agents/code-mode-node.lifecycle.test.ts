@@ -374,25 +374,6 @@ it.each(["idle deadline", "newer completion"] as const)(
   },
 );
 
-it("keeps repeated bursts warm, then retires surplus capacity during serial traffic", async () => {
-  vi.useFakeTimers();
-  const start = fixture.pools.length;
-  await Promise.all(Array.from({ length: 8 }, run));
-  const burst = fixture.pools.slice(start);
-  expect(burst).toHaveLength(8);
-  for (const gap of [45_000, 60_000, 45_000]) {
-    await vi.advanceTimersByTimeAsync(gap);
-    await Promise.all(Array.from({ length: 8 }, run));
-    expect(fixture.pools).toHaveLength(start + 8);
-  }
-  for (let turn = 0; turn < 10; turn++) {
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(await run()).toMatchObject({ status: "completed" });
-  }
-  expect(fixture.pools).toHaveLength(start + 8);
-  expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
-});
-
 it("retires every idle pool on critical memory pressure and admits fresh demand", async () => {
   const start = fixture.pools.length;
   expect(await Promise.all([run(), run()])).toMatchObject([

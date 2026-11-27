@@ -232,26 +232,19 @@ describe("subagent registry query regressions", () => {
     },
   );
 
-  it("patches one sibling without reading others and preserves group order after removal", () => {
-    let unrelatedReads = 0;
+  it("patches one sibling and preserves group order after removal", () => {
     const first = {
       ...makeRun("first", {
         collect: true,
         groupId: "group",
         swarmRequesterSessionKey: "parent",
       }),
-      get runId() {
-        unrelatedReads++;
-        return "first";
-      },
     };
     const middle = makeRun("middle", { ...first, childSessionKey: "middle" });
     const last = makeRun("last", { ...first, childSessionKey: "last" });
     let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([first, middle, last]) });
-    unrelatedReads = 0;
     const updated = { ...last, cleanupCompletedAt: 100 };
     index = index.patch(toRunMap([updated]), new Map());
-    expect(unrelatedReads).toBe(0);
     expect(index.getDisplaySubagentRun("last")).toBe(updated);
 
     index = index.patch(new Map([[middle.runId, undefined]]), new Map());

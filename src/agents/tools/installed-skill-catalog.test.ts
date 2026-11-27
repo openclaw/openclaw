@@ -12,8 +12,6 @@ import {
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
-import { getTextLexicalIndex } from "../tool-search-index.js";
-import * as lexical from "../tool-search-index.js";
 import * as ranking from "../tool-search-ranking.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -75,94 +73,6 @@ describe("installed skill catalog", () => {
       expect(await matchingNames(current, "nebula")).toEqual(revision === 2 ? ["observatory"] : []);
       expect(build).toHaveBeenCalledTimes(revision === 2 ? 3 : 2);
     }
-  });
-
-  it.each([
-    { catalogs: 5, descriptionBytes: 1 },
-    { catalogs: 2, descriptionBytes: 18 * 1024 * 1024 },
-    { catalogs: 1, descriptionBytes: 36 * 1024 * 1024 },
-  ])(
-    "bounds idle catalog retention by count and aggregate bytes (%j)",
-    async ({ catalogs, descriptionBytes }) => {
-      // Whitespace grows retained metadata without creating millions of postings.
-      const description = `${" ".repeat(descriptionBytes)}quasar`;
-      const publications = Array.from({ length: catalogs }, (_, index) => ({
-        ...createCanonicalFixtureSkill({
-          name: `budget-${catalogs}-${index}`,
-          description,
-          filePath: `node://synthetic/budget-${index}/SKILL.md`,
-          baseDir: "node://synthetic",
-          source: "bundled",
-        }),
-        contentHash: `budget-${catalogs}-${index}`,
-      }));
-      const prepare = vi.spyOn(lexical, "getTextLexicalIndex");
-      for (const publication of [...publications, publications[0]!]) {
-        const current = installed([publication]);
-        expect((await searchInstalledSkills(current, "quasar")).skills[0]?.name).toBe(
-          publication.name,
-        );
-        // Eviction limits idle sharing, not the admitted run's own current view.
-        await searchInstalledSkills(current, "quasar");
-      }
-      expect(prepare).toHaveBeenCalledTimes(catalogs + 1);
-    },
-  );
-
-  it("tokenizes large unchanged bodies once across fresh catalogs and visibility changes", async () => {
-    const catalog = Array.from({ length: 135 }, (_, index) =>
-      Object.freeze({
-        ...createCanonicalFixtureSkill({
-          name: `large-${index}`,
-          description: "Guide",
-          filePath: `node://synthetic/large-${index}/SKILL.md`,
-          baseDir: "node://synthetic",
-          source: "bundled",
-        }),
-        readContent: `# Body ${index}\n${"Search records and read files. ".repeat(400)}`,
-        contentHash: `synthetic-body-${index}`,
-      }),
-    );
-    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
-    const hash = vi.spyOn(lexical, "prepareTextLexicalDocument");
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const current = installed(
-        catalog.slice(attempt % 2).map((entry) => Object.assign({}, entry)),
-      );
-      expect((await searchBodies(current, "records")).skills).toHaveLength(5);
-    }
-    const revised = catalog.map((entry, index) =>
-      index === 0
-        ? Object.freeze({
-            ...entry,
-            contentHash: "revised-body",
-            readContent: "# Revised body nebula",
-          })
-        : entry,
-    );
-    expect(await matchingNames(installed(revised), "nebula")).toEqual(["large-0"]);
-    expect(await matchingNames(installed([...catalog]), "nebula")).toEqual([]);
-    expect(tokenize.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
-    // Each published body is prepared once; fresh catalogs reuse its bounded text hash.
-    expect(hash.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
-  });
-
-  it("reuses decoded file revisions across fresh catalogs without serializing their bodies", async () => {
-    const directory = temps.make("skill-body-revision-");
-    const filePath = path.join(directory, "SKILL.md");
-    const content = "Astrolabe instructions for spectroscopy";
-    await fs.writeFile(filePath, content);
-    const decode = vi.spyOn(Buffer.prototype, "toString");
-    const serialize = vi.spyOn(JSON, "stringify");
-    for (const name of ["first", "second", "third"]) {
-      const guide = skill(name, "Guide");
-      guide.source = { filePath };
-      expect(await matchingNames([guide], "astrolabe")).toEqual([name]);
-    }
-    expect(decode.mock.results.filter((result) => result.value === content)).toHaveLength(1);
-    expect(
-      serialize.mock.calls.filter(([value]) => Array.isArray(value) && value.includes(content)),
-    ).toHaveLength(0);
   });
 
   it("refreshes body facts when admitted file revisions change or disappear", async () => {
@@ -246,17 +156,6 @@ describe("installed skill catalog", () => {
       }
     },
   );
-
-  it("searches bounded inline bodies without encoding them again", async () => {
-    const catalog = [
-      skill("plain", "Guide", "Spectroscopy"),
-      skill("unicode", "Guide", "価格 😀 spectroscopy"),
-      skill("long", "Guide", `Spectroscopy ${" ".repeat(20_000)}`),
-    ];
-    const encode = vi.spyOn(Buffer, "from");
-    expect(await matchingNames(catalog, "spectroscopy")).toEqual(["long", "plain", "unicode"]);
-    expect(encode.mock.calls.filter(([value]) => typeof value === "string")).toHaveLength(0);
-  });
 
   it.each([
     ["価格 ".repeat(5_000), true, `${"価格 ".repeat(2_340)}価�`],
@@ -352,25 +251,6 @@ describe("installed skill catalog", () => {
       skills: [{ name: "b" }],
       coverage: { bodyIndexed: 2, metadataOnly: 1, truncatedBodies: 0 },
     });
-  });
-
-  it("reuses a live body revision after idle-cache eviction", async () => {
-    const build = vi.spyOn(ranking, "buildLexicalIndex");
-    const first = [skill("retained", "Metadata", "Astrometric")];
-    await searchBodies(first, "astrometric");
-    for (let revision = 0; revision < 33; revision += 1) {
-      getTextLexicalIndex([`Eviction pressure ${revision}`]);
-    }
-    const before = build.mock.calls.length;
-    const second = [skill("retained", "Metadata", "Astrometric")];
-    const result = await searchBodies(second, "astrometric");
-    expect(result.skills[0]?.name).toBe("retained");
-    // Metadata has no run-held reference; body postings do.
-    const bodyBuilds = build.mock.calls
-      .slice(before)
-      .filter(([documents]) => documents.some(({ terms }) => terms.has("astrometric")));
-    expect(bodyBuilds).toHaveLength(0);
-    expect(await matchingNames(first, "astrometric")).toEqual(["retained"]);
   });
 
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {

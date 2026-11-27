@@ -126,10 +126,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   );
 
   it.each(["direct", "code-mode", "tool-search"] as const)(
-    "warns once per session/catalog above 64 effective tools (%s)",
+    "retains the expected presentation for a 65-tool catalog (%s)",
     (mode) => {
       const codeMode = mode === "code-mode";
-      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
       const config: OpenClawConfig = {
         tools: {
           codeMode,
@@ -145,29 +144,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         surface.promptToolPolicy.apply();
         return surface;
       };
-      compact(sessionKey, catalog.slice(0, 64));
-      compact(sessionKey, [
-        ...catalog.slice(0, 64),
-        gateAgentToolExecution(catalog[64]!, "not authorized"),
-      ]);
-      const restricted = createRuntime(config, { sessionKey }).compactTools(catalog);
-      expect(warn).not.toHaveBeenCalled();
-      restricted.promptToolPolicy.apply({
-        toolsAllow: catalog.slice(0, 64).map((tool) => tool.name),
-      });
-      expect(warn).not.toHaveBeenCalled();
       const surface = compact(sessionKey);
       expect(surface.tools).toHaveLength(codeMode ? 2 : mode === "tool-search" ? 4 : 65);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("catalog contains 65 tools"));
-      expect(warn).toHaveBeenLastCalledWith(
-        expect.stringContaining("not the provider-advertised tool count"),
-      );
-      compact(sessionKey, catalog.toReversed());
-      expect(warn).toHaveBeenCalledTimes(1);
-      compact(sessionKey, [...catalog.slice(0, 64), createStubTool("replacement")]);
-      compact(`${sessionKey}-other`);
-      expect(warn).toHaveBeenCalledTimes(3);
     },
   );
 

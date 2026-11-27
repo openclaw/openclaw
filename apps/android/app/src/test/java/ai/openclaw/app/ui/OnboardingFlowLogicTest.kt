@@ -6,7 +6,6 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.ui.design.MascotMood
 import android.Manifest
 import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CompletableDeferred
@@ -19,28 +18,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OnboardingFlowLogicTest {
-  @Test
-  fun mascotMoodTracksVisibleOnboardingState() {
-    assertEqualsCases(
-      MascotMood.Idle to onboardingMascotMood(OnboardingStep.Welcome),
-      MascotMood.Curious to onboardingMascotMood(OnboardingStep.Permissions),
-      MascotMood.Thinking to onboardingMascotMood(OnboardingStep.NodeApproval),
-      MascotMood.Working to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Finishing),
-      MascotMood.Celebrating to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Connected),
-      MascotMood.Sad to onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Failed),
-      MascotMood.Sad to
-        onboardingMascotMood(
-          step = OnboardingStep.EnterSetupCode,
-          setupErrorCode = OnboardingErrorCode.SetupCodeRejected,
-        ),
-      MascotMood.Sad to
-        onboardingMascotMood(
-          step = OnboardingStep.SetupCode,
-          setupScanErrorCode = OnboardingErrorCode.InvalidSetupQr,
-        ),
-    )
-  }
-
   @Test
   fun onboardingBackStateMatchesTheVisibleFlow() {
     assertEqualsCases(

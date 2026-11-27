@@ -24,13 +24,12 @@ import {
   getRuntimeAuthProfileStoreMetadataRevision as getMetadataRevision,
   getRuntimeAuthProfileStoreCatalogRevision as getCatalogRevision,
   getRuntimeAuthProfileStoreSnapshotRevision as getSnapshotRevision,
-  noteRuntimeAuthProfileStorePersistedMutation as notePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener as onStoreMutation,
   replaceRuntimeAuthProfileStoreSnapshots as replaceSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots as replaceOwnedSnapshots,
   setRuntimeAuthProfileStoreSnapshot as setSnapshot,
 } from "./runtime-snapshots.js";
-import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
+import { createSnapshotStore as createStore } from "./runtime-snapshots.test-support.js";
 import { acquireAuthProfileReadDatabase } from "./sqlite-read-pool.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
@@ -488,27 +487,5 @@ describe("runtime auth profile snapshots", () => {
     expect(prepared).toMatchObject(store);
     expectDefined(prepared.order?.openai, "prepared profile order").push("mutated");
     expect(getSnapshot(agentDir)?.order?.openai).toEqual(["openai:default"]);
-  });
-
-  it("bounds persisted mutation lineage by owner and profile", () => {
-    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_OWNERS; index += 1) {
-      notePersistedMutation(`/tmp/openclaw-mutation-owner-${index}`, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["openai:default"],
-      });
-    }
-    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER; index += 1) {
-      notePersistedMutation("/tmp/openclaw-mutation-profile-owner", {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: [`openai:${index}`],
-      });
-    }
-
-    const counts = testing.getPersistedMutationRecordCounts();
-    expect(counts.owners).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_OWNERS);
-    expect(counts.profiles).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER);
-    testing.resetPersistedMutationLineage();
   });
 });

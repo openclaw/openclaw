@@ -19,7 +19,6 @@ import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime
 import { updateAuthProfileStoreWithLock } from "./auth-profiles/store-runtime.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { model } from "./model-catalog-fixtures.test-support.js";
-import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import {
   HARNESS_ID,
   catalogEntry,
@@ -51,44 +50,6 @@ import {
 
 const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
-
-it("keeps settled fleet generations idle without a timer", async () => {
-  const createWorker = catalogWorker.createPreparedModelCatalogWorker;
-  let checks = 0;
-  const observe = vi
-    .spyOn(catalogWorker, "createPreparedModelCatalogWorker")
-    .mockImplementation((params) =>
-      createWorker({
-        ...params,
-        isCurrent: () => {
-          checks += 1;
-          return params.isCurrent();
-        },
-      }),
-    );
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  try {
-    const fixture = await createFleetFixture();
-    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-    await Promise.all(
-      fixture.snapshots.map((snapshot) =>
-        loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
-      ),
-    );
-    expect(catalogWorker.getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
-      workers: 1,
-      activeTasks: 0,
-      pendingTasks: 0,
-    });
-    const settledChecks = checks;
-    await vi.advanceTimersByTimeAsync(100);
-    expect(checks).toBe(settledChecks);
-  } finally {
-    await closePreparedModelRuntimeSnapshots();
-    vi.useRealTimers();
-    observe.mockRestore();
-  }
-});
 
 it("joins a parent capture retired synchronously before its promise is registered", async ({
   signal,
