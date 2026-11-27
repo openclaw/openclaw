@@ -1249,6 +1249,7 @@ AFTER_CD
       existingAutoMergeMethod: "SQUASH",
       existingPr: true,
       mode: "preflight",
+      repository: "openclaw/clawgrit-reports",
     });
 
     expect(result.branchHead).toBe(result.initialBranch);

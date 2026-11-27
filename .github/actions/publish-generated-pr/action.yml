@@ -142,7 +142,7 @@ runs:
             gh api graphql \
               -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
               -f owner="${GITHUB_REPOSITORY_OWNER}" \
-              -f name="${GITHUB_REPOSITORY#*/}" \
+              -f name="${PUBLISH_REPOSITORY#*/}" \
               --jq '.data.repository.autoMergeAllowed'
         }
 
