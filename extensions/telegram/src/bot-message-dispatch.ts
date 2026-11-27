@@ -8,6 +8,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   generateConversationLabel as generateTopicLabel,
+  hasReplyRestartResume,
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -357,6 +358,19 @@ export const dispatchTelegramMessage = async (
     if (statusReactionController) {
       finalizeStatusInBackground("done", "finalize");
     }
+    return { kind: "completed" };
+  }
+
+  const deliveryError = turn.dispatchError ?? turn.finalDeliveryError;
+  if (
+    deliveryError != null &&
+    (await hasReplyRestartResume(
+      deliveryError,
+      turn.restartResumeTarget,
+      turn.transcriptMirrorRunId,
+    ))
+  ) {
+    finalizeStatusInBackground("cancelled", "restart resume");
     return { kind: "completed" };
   }
 
