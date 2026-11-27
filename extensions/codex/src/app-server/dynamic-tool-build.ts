@@ -113,6 +113,7 @@ type DynamicToolBuildParams = {
   claimYieldCompletion?: OpenClawCodingToolsOptions["claimYieldCompletion"];
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
+  onWebSearchRequestedResolved?: (requested: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
   onMessageToolTargetResolved?: (requireExplicitMessageTarget: boolean) => void;
   computerContextEpoch?: CodexComputerContextEpoch;
@@ -370,8 +371,9 @@ export async function buildDynamicTools(
     const webSearchPolicy = params.preparedWebSearchPolicy;
     let nativeWebSearchAllowed = false;
     let persistentWebSearchAllowed = webSearchPresent;
+    let webSearchRequested = webSearchPresent;
     if (
-      (input.onPersistentWebSearchPolicyResolved ||
+      (input.onPersistentWebSearchPolicyResolved || input.onWebSearchRequestedResolved ||
         (webSearchPlan.kind === "native-hosted" &&
           (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
       !webSearchPresent &&
@@ -392,6 +394,7 @@ export async function buildDynamicTools(
         (persistentHostedWebSearchEligible ||
           !webSearchPolicy.allowed ||
           isCodexMemoryFlushRun(params));
+      webSearchRequested = webSearchPolicy.persistentAllowed;
       nativeWebSearchAllowed =
         webSearchPlan.kind === "native-hosted" &&
         webSearchPolicy.allowed &&
@@ -402,6 +405,7 @@ export async function buildDynamicTools(
         !isCodexMemoryFlushRun(params);
     }
     input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
+    input.onWebSearchRequestedResolved?.(webSearchRequested);
     const filteredTools = applyEmbeddedAttemptToolsAllow(
       visionFilteredTools,
       toolRunContext.runtimeToolAllowlist,
