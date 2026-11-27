@@ -179,6 +179,8 @@ export async function settleRestartInterruptedSubagentRun(params: {
       recoveryCurrent: readScope?.completionCurrent,
       endedAt: now,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      // The dead execution cannot publish another reply; the completion owner keeps any saved one.
+      terminalReply: { disposition: "empty" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
