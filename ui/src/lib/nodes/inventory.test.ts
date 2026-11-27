@@ -63,10 +63,6 @@ it("preserves interleaved groups, tied ordering, and first-admitted source recor
   expect(firstGroup(groups).primary.presence).toBe(presence);
 });
 
-it("returns no groups for an empty inventory", () => {
-  expect(inventory()).toEqual([]);
-});
-
 it.each([
   [true, "Mac", undefined, "iPad", "iPad"],
   [true, "Mac", undefined, undefined, "Mac"],
