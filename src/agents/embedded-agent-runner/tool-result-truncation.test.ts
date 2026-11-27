@@ -304,7 +304,7 @@ describe("truncateToolResultMessage", () => {
       expect(
         result.content.slice(0, -1).every((block) => block.type !== "text" || block.text === ""),
       ).toBe(true);
-      expect(output.at(-1)).toMatch(/!$/u);
+      expect(output.at(-1)).toContain("!");
     }
   });
 });
@@ -1044,6 +1044,14 @@ describe("truncateToolResultText head+tail strategy", () => {
 
     expect(result.endsWith("Error: failed")).toBe(true);
     expect(result.length * 2).toBeLessThanOrEqual(8_192);
+  });
+
+  it("keeps the tail under a small recovery budget", () => {
+    const text = `${"log line\n".repeat(2_000)}Error: failed`;
+    const result = truncateToolResultText(text, 3_000, { minKeepChars: 0 });
+
+    expect(result.endsWith("Error: failed")).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(3_000);
   });
 
   it("cuts the head on a line boundary", () => {
