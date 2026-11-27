@@ -120,7 +120,7 @@ Other notes:
 Default operator flow:
 
 <Warning>
-The `secrets configure` step is interactive and requires a TTY; run it from a terminal rather than a non-interactive shell. Applying the migration is one-way for migrated plaintext values: the apply step scrubs them, and OpenClaw does not create rollback backups that retain those values.
+The `secrets configure` step prompts interactively and needs a TTY, so run it from a terminal; in a non-interactive shell pass `--yes`, or generate a plan with `--json --plan-out <path>` and apply it with `openclaw secrets apply --from <path>`. Applying the migration is one-way for migrated plaintext values: the apply step scrubs them, and OpenClaw does not create rollback backups that retain those values.
 </Warning>
 
 <Steps>
