@@ -1,6 +1,7 @@
 // Tests follow-up reply delivery and route preservation.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type * as ProviderRuntime from "../../plugins/provider-runtime.js";
 import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
@@ -831,6 +832,31 @@ describe("deliverFollowupDecision", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([true, false])(
+    "keeps a stranded final private when strandedReplyRecovery is off (payloads=%s)",
+    async (withPayloads) => {
+      deliveryState.enqueue.mockClear();
+      const privateFinal = "Private note: customer looks annoyed, escalate later.";
+      const turn = createTurn({ config: { messages: { strandedReplyRecovery: "off" } } });
+      turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      const decision = await decide(
+        turn,
+        createSettledExecution(privateFinal),
+        createAccounting(withPayloads ? [{ text: privateFinal }] : []),
+      );
+      expect(decision.kind).not.toBe("retry-source-delivery");
+      const payloads = decision.kind === "deliver" ? decision.payloads : [];
+      expect(payloads.some((payload) => payload.text === MISSING_REPLY_NOTICE_TEXT)).toBe(false);
+      expect(
+        payloads.some(
+          (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+        ),
+      ).toBe(false);
+      expect(deliveryState.enqueue).not.toHaveBeenCalled();
+      expect(turn.operation.result).toBeNull();
+    },
+  );
 
   it("keeps recovery diagnostics deliverable after the original queued run completes", async () => {
     const delivered = vi.fn(async (_params: { runId: string; payloads: ReplyPayload[] }) => ({

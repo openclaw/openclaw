@@ -339,7 +339,6 @@ describe("createFollowupRunner", () => {
         state.resolveDecision.mockReturnValue({
           kind: "retry-source-delivery",
           run: turn.queued,
-          finalTextLength: 300,
           resolved: { provider: "anthropic", model: "claude" },
         });
         state.deliver.mockResolvedValue({ kind: "source-retry" });

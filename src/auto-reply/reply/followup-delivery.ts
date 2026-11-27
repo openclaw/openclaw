@@ -290,6 +290,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     completion.outcome !== "missing"
       ? ({ kind: "none" } as const)
       : resolveStrandedReplyRecovery({
+          cfg: turn.config,
           base: turn.queued,
           payloads,
           finalText: assistantFinalText,
@@ -299,11 +300,20 @@ export async function resolveFollowupDeliveryDecision(params: {
           successfulSourceReplyDelivery: completedSourceDelivery,
           isRoomEvent: false,
         });
+  if (recovery.kind === "retry" || recovery.kind === "kept-private") {
+    warnPrivateMessageToolFinal({
+      sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+      channel:
+        turn.queued.originatingChannel ??
+        turn.queued.run.messageProvider ??
+        sessionDeliveryChannel(turn.session.current()),
+      finalTextLength: assistantFinalText.trim().length,
+    });
+  }
   if (recovery.kind === "retry") {
     return {
       kind: "retry-source-delivery" as const,
       run: recovery.run,
-      finalTextLength: assistantFinalText.trim().length,
       resolved: runtimeResolved,
     };
   }
@@ -313,15 +323,18 @@ export async function resolveFollowupDeliveryDecision(params: {
       ? { kind: "deliver" as const, payloads: [payload], resolved: runtimeResolved }
       : { kind: "suppress" as const, reason: "silent" as const };
   }
-  const hasTerminalPayload = payloads.some(
-    (payload) =>
-      isReplyPayloadTerminalContent(payload) &&
-      // Private terminal content is not an empty result. Source visibility is
-      // enforced below; genuine failures and yield acknowledgments still win.
-      ((!terminalRunFailed && !pendingContinuation) ||
-        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
-        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
-  );
+  // A final kept private by operator policy is an intentional outcome, not a missing answer.
+  const hasTerminalPayload =
+    recovery.kind === "kept-private" ||
+    payloads.some(
+      (payload) =>
+        isReplyPayloadTerminalContent(payload) &&
+        // Private terminal content is not an empty result. Source visibility is
+        // enforced below; genuine failures and yield acknowledgments still win.
+        ((!terminalRunFailed && !pendingContinuation) ||
+          sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
+    );
   if (!hasTerminalPayload && completion.outcome === "missing" && !turn.operation.result) {
     turn.operation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
     opts?.onAgentRunTerminalOutcome?.("failed");
@@ -436,14 +449,6 @@ export async function deliverFollowupDecision(params: {
   }
   let payloads: ReplyPayload[];
   if (decision.kind === "retry-source-delivery") {
-    warnPrivateMessageToolFinal({
-      sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-      channel:
-        turn.queued.originatingChannel ??
-        turn.queued.run.messageProvider ??
-        sessionDeliveryChannel(turn.session.current()),
-      finalTextLength: decision.finalTextLength,
-    });
     const key = turn.session.kind === "session" ? turn.session.key : turn.queued.run.sessionKey;
     const retrySourceDisposition = turn.queued.queuedFollowupReplyDisposition;
     const retryDelivery =
