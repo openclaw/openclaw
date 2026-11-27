@@ -383,12 +383,9 @@ export async function listMemoryFiles(
   return deduped;
 }
 
-async function readIndexingBuffer(
-  read: () => ReturnType<typeof readRegularFile>,
-  label: string,
-): Promise<Buffer | null> {
+async function readIndexingFile(read: () => ReturnType<typeof readRegularFile>, label: string) {
   try {
-    return (await retryTransientMemoryRead(read, label)).buffer;
+    return await retryTransientMemoryRead(read, label);
   } catch (error) {
     if (isFileMissingError(error)) {
       return null;
@@ -402,17 +399,17 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const stat = await statEnumerableMemoryFile(absPath);
-  if (!stat) {
+  const admission = await statEnumerableMemoryFile(absPath);
+  if (!admission) {
     return null;
   }
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
-  if (modality && stat.size > multimodalSettings.maxFileBytes) {
+  if (modality && admission.size > multimodalSettings.maxFileBytes) {
     return null;
   }
-  const buffer = await readIndexingBuffer(
+  const read = await readIndexingFile(
     () =>
       readRegularFile({
         filePath: absPath,
@@ -420,9 +417,11 @@ export async function buildFileEntry(
       }),
     modality ? `read multimodal memory file ${absPath}` : `read memory index file ${absPath}`,
   );
-  if (buffer === null) {
+  if (!read) {
     return null;
   }
+  // An editor can replace the admitted path before the guarded read opens it.
+  const { buffer, stat } = read;
   if (modality) {
     const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
     if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
@@ -478,13 +477,14 @@ export async function buildMultimodalChunkForIndexing(
   if (regularFile.stat.size !== entry.size) {
     return null;
   }
-  const buffer = await readIndexingBuffer(
+  const read = await readIndexingFile(
     () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
     `read multimodal indexing file ${entry.absPath}`,
   );
-  if (buffer === null) {
+  if (!read) {
     return null;
   }
+  const { buffer } = read;
   const dataHash = sha256Hex(buffer);
   if (entry.dataHash && entry.dataHash !== dataHash) {
     return null;

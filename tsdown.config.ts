@@ -1067,7 +1067,10 @@ const configs: UserConfig[] = [
         "infra/shared-worker-host.worker",
       ].includes(name),
     );
-    const bundleFsSafe = isBrokerNativeResource || bundleWorkerHelpers;
+    const bundleFsSafe =
+      isBrokerNativeResource ||
+      bundleWorkerHelpers ||
+      firstEntry === "state/openclaw-state-lease-heartbeat.worker";
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
     return nodeBuildConfig(

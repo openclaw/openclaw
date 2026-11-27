@@ -5,7 +5,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -118,7 +117,6 @@ describe.each(["HTTP", "WebSocket"] as const)(
       incognito?: boolean;
       admin?: boolean;
       system?: boolean;
-      revokeMember?: boolean;
       expectedError?: string;
     };
     const sandboxCase = (sessionKey?: string, options: RoleCase = {}): RoleCase => ({
@@ -146,12 +144,6 @@ describe.each(["HTTP", "WebSocket"] as const)(
       },
       "memory-session admin": { ...memoryCase, admin: true },
       "sessionless system call": sandboxCase("agent:blocked:missing", { system: true }),
-      "denies membership revoked during the hook": {
-        sessionKey: "agent:main:member-session",
-        stored: true,
-        revokeMember: true,
-        expectedError: "session is read-only",
-      },
     };
 
     it.each(Object.entries(cases))("%s", async (_label, testCase) => {
@@ -187,24 +179,15 @@ describe.each(["HTTP", "WebSocket"] as const)(
         }
         if (testCase.stored) {
           const sessionKey = expectDefined(testCase.sessionKey, "stored fixture session key");
-          const id = testCase.revokeMember ? "another-creator" : profile.id;
           const entry: InternalSessionEntry = {
             sessionId: "standalone-guest-session",
             updatedAt: 1,
-            visibility: testCase.revokeMember ? "read-only" : "shared",
-            createdActor: { type: "human", source: "profile", id },
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profile.id },
             sandbox: "required",
             ...(testCase.incognito ? { incognito: true } : {}),
           };
           await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-          if (testCase.revokeMember) {
-            const scope = { agentId: "main", sessionKey };
-            await addSessionMember(scope, { identityId: profile.id, addedBy: "another-creator" });
-            runtime.beforeHook.mockImplementationOnce(async ({ params }) => {
-              await removeSessionMember(scope, profile.id);
-              return { blocked: false, params };
-            });
-          }
         }
         const input = {
           name: testCase.toolName ?? "session_status",
@@ -261,7 +244,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
             expect(response).toMatchObject({ ok: true, payload: expectedOutcome });
           }
         }
-        const deniedBeforeHook = Boolean(testCase.expectedError && !testCase.revokeMember);
+        const deniedBeforeHook = Boolean(testCase.expectedError);
         expect(runtime.beforeHook).toHaveBeenCalledTimes(deniedBeforeHook ? 0 : 1);
         expect(runtime.execute).toHaveBeenCalledTimes(testCase.expectedError ? 0 : 1);
         if (!testCase.expectedError && transport === "WebSocket") {

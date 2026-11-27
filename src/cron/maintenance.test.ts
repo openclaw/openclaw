@@ -15,6 +15,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "./active-jobs.js";
 import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
@@ -54,7 +55,11 @@ it.each(["none", "process", ...(process.versions.bun ? [] : ["host"])])(
         const clock = createGatewaySchedulerClock(now);
         const wallClock = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
         const gatewayScheduler = createTestGatewayScheduler(clock.clock);
-        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+        // Simulate Linux only for the pressure check so SQLite uses the native namespace.
+        const readMemoryPressure = hostMemory.isMemoryPressureHigh;
+        const memoryPressure = vi
+          .spyOn(hostMemory, "isMemoryPressureHigh")
+          .mockImplementation(() => withMockedPlatform("linux", readMemoryPressure));
         const limit = vi
           .spyOn(process, "constrainedMemory")
           .mockReturnValue(cause === "host" ? 0 : 1024 ** 3);
@@ -153,7 +158,7 @@ it.each(["none", "process", ...(process.versions.bun ? [] : ["host"])])(
           free.mockRestore();
           available.mockRestore();
           limit.mockRestore();
-          platform.mockRestore();
+          memoryPressure.mockRestore();
           wallClock.mockRestore();
           resetConfigRuntimeState();
         }

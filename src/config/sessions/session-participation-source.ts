@@ -1,6 +1,5 @@
 import { parseAgentSessionKey } from "@openclaw/session-url-contract/session-key-normalization";
 import { z } from "zod";
-import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { resolveUserPath } from "../../utils.js";
 import { sessionCreatorProfileId, type SessionCreatedActor } from "./session-entry-provenance.js";
 
@@ -171,15 +170,7 @@ export function matchesSessionParticipationTarget(
   );
 }
 
-type ParticipationProducerTarget = Readonly<{
-  profileId: string;
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-}>;
-const producers = new Set<{ target: ParticipationProducerTarget; controller: AbortController }>();
-
-/** Match persisted queued custody and live producers against the same committed reduction. */
+/** Match persisted queued custody against a committed membership reduction. */
 export function matchesSessionParticipationRevocation(
   invitation: { profileId: string; sessionKey: string; source: SessionParticipationSource },
   target: { profileId: string; sessionKey: string; sessionId: string },
@@ -189,56 +180,4 @@ export function matchesSessionParticipationRevocation(
     invitation.sessionKey === target.sessionKey &&
     invitation.source.sessionId === target.sessionId
   );
-}
-
-export function retainSessionParticipation(target: ParticipationProducerTarget) {
-  const producer = { target: Object.freeze({ ...target }), controller: new AbortController() };
-  producers.add(producer);
-  return {
-    signal: producer.controller.signal,
-    followIncarnation: (previous: string | null, current: string) => {
-      if (producer.target.sessionId === previous && !producer.controller.signal.aborted) {
-        producer.target = Object.freeze({ ...producer.target, sessionId: current });
-      }
-    },
-    release: () => {
-      producers.delete(producer);
-    },
-  };
-}
-
-/** A re-invitation can admit new work, never revive a retained producer retired by this commit. */
-function revokeSessionParticipation(target: ParticipationProducerTarget): void {
-  for (const producer of producers) {
-    const original = producer.target;
-    if (
-      original.profileId === target.profileId &&
-      original.agentId === target.agentId &&
-      original.sessionKey === target.sessionKey &&
-      original.sessionId === target.sessionId
-    ) {
-      producer.controller.abort(new Error("Session participation was revoked."));
-    }
-  }
-}
-
-/** Consume only an acknowledged native, worker, or memory membership commit. */
-export function publishSessionParticipationMemberChange(
-  agentId: string,
-  sessionKey: string,
-  change: {
-    sessionId: string;
-    identityId: string;
-    present: boolean;
-    access?: SessionMemberPermissionLevel;
-  },
-): void {
-  if (!change.present || change.access !== "send") {
-    revokeSessionParticipation({
-      agentId,
-      sessionKey,
-      sessionId: change.sessionId,
-      profileId: change.identityId,
-    });
-  }
 }
