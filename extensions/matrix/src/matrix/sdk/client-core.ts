@@ -9,7 +9,7 @@ import { MatrixClientBase } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
 import type { MatrixMessageWireDispatch } from "./message-wire-dispatch.js";
-import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./send-currentness.js";
+import { captureMatrixSendContext, withoutMatrixSendCurrentness } from "./send-currentness.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
 import type { MatrixRawEvent, MatrixRelationsPage, MessageEventContent } from "./types.js";
 
@@ -56,7 +56,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async getTransactionScopeId(): Promise<string> {
-    captureMatrixSendCurrentness(this)?.();
+    captureMatrixSendContext(this)?.assertCurrent();
     if (this.transactionScopeId) {
       return this.transactionScopeId;
     }
@@ -181,11 +181,11 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
   ): Promise<string> {
     // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
-    const assertCurrent = captureMatrixSendCurrentness(this);
+    const assertCurrent = captureMatrixSendContext(this)?.assertCurrent;
     const wireTransactionId =
       transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
-    return await this.sendQueue.enqueue(roomId, async () => {
-      return await this.messageWireDispatchGuards.run({
+    return await this.sendQueue.enqueue(roomId, () =>
+      this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
         guard: beforeWireDispatch,
         assertCurrent,
@@ -218,8 +218,8 @@ export abstract class MatrixClientCore extends MatrixClientBase {
           );
           return sent.event_id;
         },
-      });
-    });
+      }),
+    );
   }
 
   private async withPreparedRoom<T>(
@@ -227,9 +227,9 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     content: MessageEventContent,
     send: () => Promise<T>,
   ): Promise<T> {
-    const assertCurrent = captureMatrixSendCurrentness(this);
+    const context = captureMatrixSendContext(this);
     return (await this.prepareRoomForMessageSend(roomId, content)) === "m.room.encrypted"
-      ? await this.withLiveEncryptedRoom(roomId, send, { assertCurrent })
+      ? await this.withLiveEncryptedRoom(roomId, send, context)
       : await send();
   }
 
@@ -301,7 +301,8 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    return await this.sendQueue.enqueue(roomId, async () => {
+    const queueKey = eventType === MATRIX_REACTION_EVENT_TYPE ? `reaction:${roomId}` : roomId;
+    return await this.sendQueue.enqueue(queueKey, async () => {
       // SDK encryption trusts these wire event types without inspecting their
       // payload; only SDK encryption and the dedicated redaction owner may emit them.
       if (

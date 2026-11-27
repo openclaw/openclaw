@@ -959,7 +959,7 @@ describe("MatrixClient request hardening", () => {
     });
   });
 
-  it("orders messages and events within a room without blocking other rooms", async () => {
+  it("orders messages and encryptable events within a room without blocking other rooms", async () => {
     const client = createSdkClient();
     const release = createDeferred<void>();
     const started: string[] = [];
@@ -975,8 +975,8 @@ describe("MatrixClient request hardening", () => {
       return { event_id: "$event" };
     });
     const first = client.sendMessage("!room-a:example.org", { msgtype: "m.text", body: "a" });
-    const queued = client.sendEvent("!room-a:example.org", "m.reaction", {
-      "m.relates_to": { event_id: "$target", key: "👍", rel_type: "m.annotation" },
+    const queued = client.sendEvent("!room-a:example.org", "m.poll.start", {
+      "m.text": "Lunch?",
     });
     try {
       await expect(
