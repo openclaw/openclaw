@@ -147,13 +147,15 @@ it("decides strict for each tool in one request", async () => {
   );
 });
 
-// Native OpenAI serves strict tools: its 400 is the request's own error, sent once, not learned.
-it("does not retry or learn a native OpenAI 400 as a strict-tool refusal", async () => {
+// A route that refuses strict tools gets one retry without them; the accepted retry is learned.
+it("retries a strict-tool refusal once without strict tools and records the route", async () => {
   await server.close();
-  server = await createResponsesLoopbackServer(() => ({
-    status: 400,
-    body: { error: { message: "invalid request" } },
-  }));
+  server = await createResponsesLoopbackServer((turn) => {
+    const tools = server.requests[turn - 1]?.tools as Array<{ strict?: boolean }> | undefined;
+    return tools?.some((tool) => tool.strict === true)
+      ? { status: 400, body: { error: { message: "strict is not supported" } } }
+      : completedResponseEvents();
+  });
   const recorded: unknown[] = [];
   configureAiTransportHost({
     strictToolRejections: {
@@ -170,9 +172,17 @@ it("does not retry or learn a native OpenAI 400 as a strict-tool refusal", async
 
   const result = await (await transport(responsesLoopbackModel, context, options)).result();
 
-  expect(result.stopReason).toBe("error");
+  expect(result.stopReason).toBe("stop");
   expect(server.requests.map((request) => request.tools)).toEqual([
     [wireTool("set_value", schema({ value: string }), true, "Set")],
+    [wireTool("set_value", schema({ value: string }), undefined, "Set")],
   ]);
-  expect(recorded).toEqual([]);
+  expect(recorded).toEqual([
+    {
+      provider: responsesLoopbackModel.provider,
+      api: responsesLoopbackModel.api,
+      baseUrl: responsesLoopbackModel.baseUrl,
+      model: responsesLoopbackModel.id,
+    },
+  ]);
 });

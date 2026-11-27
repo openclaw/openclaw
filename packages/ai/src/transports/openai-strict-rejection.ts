@@ -1,7 +1,6 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost, type OpenAIStrictToolRoute } from "../host.js";
-import { isNativeOpenAIEndpoint } from "./openai-completions-compat.js";
 
 // A route that declares compat.supportsStrictMode (config or provider catalog) is never second-guessed.
 function declaresStrictMode(model: Model): boolean {
@@ -27,8 +26,7 @@ export function withoutStrictTools<M extends Model>(model: M): M {
 /** An undeclared route that rejected strict tools before keeps them off. */
 export async function resolveStrictToolModel<M extends Model>(model: M): Promise<M> {
   const rejections = getAiTransportHost().strictToolRejections;
-  // Native OpenAI serves strict tools, so it never reads the learned record.
-  if (declaresStrictMode(model) || !rejections || isNativeOpenAIEndpoint(model)) {
+  if (declaresStrictMode(model) || !rejections) {
     return model;
   }
   const rejected = await rejections.has(strictToolRoute(model)).catch(() => false);
@@ -38,7 +36,6 @@ export async function resolveStrictToolModel<M extends Model>(model: M): Promise
 /**
  * True when a request that was refused before any output may be retried once without
  * strict tools: a 400 or 422 on an undeclared route whose request carried a strict tool.
- * Native OpenAI serves strict tools, so its 400s are never strict refusals and never retried.
  */
 export function isStrictToolRetryCandidate(
   model: Model,
@@ -49,7 +46,6 @@ export function isStrictToolRetryCandidate(
   return (
     (status === 400 || status === 422) &&
     !declaresStrictMode(model) &&
-    !isNativeOpenAIEndpoint(model) &&
     (tools ?? []).some(
       (tool) =>
         isRecord(tool) &&

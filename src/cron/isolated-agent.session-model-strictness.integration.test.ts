@@ -168,7 +168,10 @@ it.each<ModelCase>([
         sessionKey: "cron:session-model",
         lane: "cron",
       });
-      expect(requests).toEqual(["pinned/model-x", ...expected]);
+      // A 400 on an undeclared route with strict tools gets its one strict-off retry first.
+      const pinned =
+        failure === "billing" ? ["pinned/model-x", "pinned/model-x"] : ["pinned/model-x"];
+      expect(requests).toEqual([...pinned, ...expected]);
       expect(result.status, result.error).toBe(expected.length ? "ok" : "error");
       if (!expected.length) {
         expect(result.error).toContain("invalid_api_key");
