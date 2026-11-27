@@ -358,6 +358,7 @@ export function registerMaintenanceCommands(
     .description("Open the Control UI with your current token")
     .addHelpText("after", () => formatDocsHelp("/cli/dashboard"))
     .option("--no-open", "Print URL but do not launch a browser")
+    .option("--setup-if-needed", "Preload model setup when the default agent has no primary model")
     .option("--json", "Output dashboard connection details as JSON", false)
     .option("--yes", "Start/install the gateway without prompting when needed", false)
     .action(async (opts) => {
@@ -366,6 +367,7 @@ export function registerMaintenanceCommands(
         await dashboardCommand(defaultRuntime, {
           json: Boolean(opts.json),
           noOpen: opts.open === false,
+          setupIfNeeded: opts.setupIfNeeded === true,
           yes: Boolean(opts.yes),
         });
       });

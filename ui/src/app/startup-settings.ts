@@ -244,7 +244,11 @@ export function resolveApplicationStartupSettings(
     }
   }
 
-  let shouldCleanUrl = false;
+  const preloadModelSetup = params.get("preload") === "model-setup";
+  if (preloadModelSetup) {
+    params.delete("preload");
+  }
+  let shouldCleanCredentials = false;
   for (const source of [params, hashParams]) {
     const keys = ["token", "password", "gatewayUrl"];
     if (source === hashParams) {
@@ -253,13 +257,16 @@ export function resolveApplicationStartupSettings(
     for (const key of keys) {
       if (source.has(key)) {
         source.delete(key);
-        shouldCleanUrl = true;
+        shouldCleanCredentials = true;
       }
     }
   }
 
+  const shouldCleanUrl = preloadModelSetup || shouldCleanCredentials;
   if (shouldCleanUrl) {
     url.search = params.toString();
+  }
+  if (shouldCleanCredentials) {
     const nextHash = hashParams.toString();
     url.hash = nextHash ? `#${nextHash}` : "";
   }
@@ -272,6 +279,7 @@ export function resolveApplicationStartupSettings(
     pendingBootstrapToken,
     pendingBootstrapProfile,
     nativeClient,
+    ...(preloadModelSetup ? { preloadModelSetup: true } : {}),
     location: shouldCleanUrl
       ? {
           pathname: url.pathname,

@@ -165,11 +165,12 @@ describe("bootstrapApplication", () => {
     { pathname: "/chat/main/example-deadbeef", routeId: "chat", warmed: true },
     { pathname: "/dashboard/main/example-deadbeef", routeId: "dashboard", warmed: true },
     { pathname: "/", routeId: "chat", warmed: false },
+    { pathname: "/?preload=model-setup", routeId: "model-setup", warmed: true },
     { pathname: "/chat", routeId: "chat", warmed: false },
     { pathname: "/chat/main", routeId: "chat", warmed: false },
     { pathname: "/approve/exec%3A1", routeId: "chat", warmed: false },
   ] as const)(
-    "warms only explicit application routes during bootstrap before start: $pathname",
+    "warms the requested route module without running its loader: $pathname",
     async ({ pathname, routeId, warmed }) => {
       window.history.replaceState({}, "", pathname);
       const router = applicationRoutes.createApplicationRouter();
@@ -290,6 +291,14 @@ describe("bootstrapApplication", () => {
       expectedBootstrapToken: "",
       expectedBootstrapProfile: undefined,
       expectedToken: "shared-query",
+    },
+    {
+      name: "setup preload hint alongside a Settings fragment",
+      initialUrl: "/config?preload=model-setup#settings-general-model",
+      expectedUrl: "/config#settings-general-model",
+      expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
+      expectedToken: "",
     },
   ])("synchronously removes $name while preserving Gateway authentication", (testCase) => {
     saveSettings({

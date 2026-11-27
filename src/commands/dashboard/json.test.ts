@@ -142,6 +142,20 @@ describe("dashboardCommand --json", () => {
     mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   });
 
+  it("hints model setup for the projected default agent on a mounted dashboard", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+      gateway: { controlUi: { basePath: "/desk" } },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, sourceConfig: config, config });
+    await dashboardCommand(runtime, { json: true, setupIfNeeded: true });
+    expectJsonFields({
+      httpUrl: "http://127.0.0.1:18789/desk/",
+      wsUrl: "ws://127.0.0.1:18789/desk",
+      browserUrl: expect.stringContaining("/desk/?preload=model-setup#bootstrapToken="),
+    });
+  });
+
   it("prints one compact success object without interactive side effects", async () => {
     await dashboardCommand(runtime, { json: true, noOpen: true });
     expectJson({

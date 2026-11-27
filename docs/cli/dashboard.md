@@ -20,6 +20,7 @@ openclaw dashboard --json
 openclaw dashboard --yes
 ```
 
+- `--setup-if-needed` preloads model setup when the default agent has no primary model. The dashboard opens the appropriate page using your selected agent and the connected Gateway’s current state.
 - `--no-open`: print the URL but do not launch a browser.
 - `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.

@@ -1,6 +1,6 @@
 import { EarlyGateway } from "../api/gateway-boot.ts";
 import { GatewayBrowserClient } from "../api/gateway.ts";
-import { routeIdFromPath } from "../app-route-paths.ts";
+import { isApplicationEntryPath, routeIdFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -32,7 +32,11 @@ export function startEarlyApplicationGateway(
   if (!initial.ownsWarmBoot || initial.hasPendingGateway || startup.nativeClient) {
     return undefined;
   }
-  if (isNewSession) {
+  // A setup hint can overlap the handshake; the authenticated snapshot still owns navigation.
+  if (
+    isNewSession ||
+    (startup.preloadModelSetup && isApplicationEntryPath(applicationLocation.pathname, basePath))
+  ) {
     const transport = GatewayBrowserClient.preconnect(settings.gatewayUrl);
     if (!transport) {
       return undefined;

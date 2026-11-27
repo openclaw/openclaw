@@ -25,17 +25,30 @@ const quietRuntime: RuntimeEnv = {
 
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
-async function resolveDashboardTarget() {
+async function resolveDashboardTarget(setupIfNeeded?: boolean) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(
       `OpenClaw config is invalid: ${snapshot.path}. Run \`openclaw doctor --fix\` or \`openclaw config validate\`.`,
     );
   }
-  return await resolveControlUiHandoffTarget({
+  const target = await resolveControlUiHandoffTarget({
     config: snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {},
     env: process.env,
   });
+  let browserLinks = target.links;
+  if (setupIfNeeded && snapshot.valid) {
+    const [{ resolveGatewayAgentSelectionState }, { resolveAgentEffectiveModelPrimary }] =
+      await Promise.all([import("../gateway/agent-list.js"), import("../agents/agent-scope.js")]);
+    const { defaultId } = resolveGatewayAgentSelectionState(snapshot.config);
+    if (!resolveAgentEffectiveModelPrimary(snapshot.config, defaultId)) {
+      browserLinks = {
+        ...browserLinks,
+        httpUrl: new URL("?preload=model-setup", browserLinks.httpUrl).href,
+      };
+    }
+  }
+  return { ...target, browserLinks };
 }
 
 function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
@@ -201,12 +214,13 @@ export async function dashboardCommand(
   options: {
     json?: boolean;
     noOpen?: boolean;
+    setupIfNeeded?: boolean;
     yes?: boolean;
   } = {},
 ) {
   if (options.json) {
     try {
-      const target = await resolveDashboardTarget();
+      const target = await resolveDashboardTarget(options.setupIfNeeded);
       const readiness = await ensureDashboardTargetReady({
         target,
         runtime: quietRuntime,
@@ -238,7 +252,7 @@ export async function dashboardCommand(
         dashboardJsonFailure(runtime, document.reason);
         return;
       }
-      const browserHandoff = await issueControlUiBrowserHandoff(target.links);
+      const browserHandoff = await issueControlUiBrowserHandoff(target.browserLinks);
 
       writeRuntimeJson(
         runtime,
@@ -270,7 +284,7 @@ export async function dashboardCommand(
 
   let initialTarget: Awaited<ReturnType<typeof resolveDashboardTarget>>;
   try {
-    initialTarget = await resolveDashboardTarget();
+    initialTarget = await resolveDashboardTarget(options.setupIfNeeded);
   } catch (error) {
     runtime.error(error instanceof Error ? error.message : String(error));
     runtime.exit(1);
@@ -288,7 +302,9 @@ export async function dashboardCommand(
     return;
   }
 
-  const target = readiness.recovered ? await resolveDashboardTarget() : initialTarget;
+  const target = readiness.recovered
+    ? await resolveDashboardTarget(options.setupIfNeeded)
+    : initialTarget;
   const recoveryChangedProbe = target.probeUrl !== initialTarget.probeUrl;
   if (readiness.recovered && recoveryChangedProbe) {
     // Recovery may install or start against a changed config. Prove the final
@@ -329,7 +345,7 @@ export async function dashboardCommand(
   }
   let browserUrl: string;
   try {
-    browserUrl = (await issueControlUiBrowserHandoff(target.links)).browserUrl;
+    browserUrl = (await issueControlUiBrowserHandoff(target.browserLinks)).browserUrl;
   } catch (error) {
     runtime.error(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,

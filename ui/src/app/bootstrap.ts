@@ -149,7 +149,9 @@ export function bootstrapApplication(
   let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
   initial.prewarmChatSnapshot();
-  if (startsApplicationRouter && !firstRunDefaultLanding) {
+  if (firstRunDefaultLanding && startup.preloadModelSetup) {
+    warmApplicationRouteModule(router, locationForRoute("model-setup", basePath), basePath);
+  } else if (startsApplicationRouter && !firstRunDefaultLanding) {
     // Explicit routes download alongside snapshot reads, before shell construction.
     warmApplicationRouteModule(router, applicationLocation, basePath);
   }
