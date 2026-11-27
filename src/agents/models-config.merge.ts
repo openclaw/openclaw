@@ -391,6 +391,12 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
+    // A current entry replaces this one below (keeping its file position); only its
+    // preserved secrets are read, so its stale rows need no check.
+    if (normalizedNextProviders[key]) {
+      mergedProviders[key] = entry;
+      continue;
+    }
     const reason = findUnwritableProviderReason(key, entry);
     if (reason) {
       params.skippedProviders.add(reason);

@@ -169,7 +169,14 @@ describe("models-config planning", () => {
     const plan = await generate({
       cfg: { models: { providers: { valid: provider(), legacy: withoutApi } } },
       // Entries left only in the existing file are reported too, before catalog normalization.
-      existingParsed: { providers: { authored: withoutApi, malformed: { models: [null] } } },
+      // A stale row under a configured key is replaced, not reported.
+      existingParsed: {
+        providers: {
+          authored: withoutApi,
+          malformed: { models: [null] },
+          valid: { baseUrl: "https://stale.example/v1", api: "openai-completions", models: [null] },
+        },
+      },
     });
 
     expect(Object.keys(plan.providers)).toEqual(["valid"]);
