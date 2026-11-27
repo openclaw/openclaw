@@ -50,3 +50,40 @@ struct OpenClawChatPickerAttachmentMetadata: Equatable, Sendable {
             mimeType: contentType.preferredMIMEType ?? "image/jpeg")
     }
 }
+
+/// Names the app makes up for media that arrives without one: a Photos pick ("photo-1A2B3C4D"), a
+/// camera shot ("camera-1A2B3C4D") or a pasted image ("pasted-image-1"), each with its extension.
+/// They name nothing the person chose, so the image viewer does not show them.
+enum OpenClawChatGeneratedAttachmentName {
+    enum Source: String, CaseIterable {
+        case photo
+        case video
+        case camera
+    }
+
+    private static let pastedPrefix = "pasted-image-"
+    private static let tokenLength = 8
+
+    static func picked(_ source: Source) -> String {
+        "\(source.rawValue)-\(UUID().uuidString.prefix(self.tokenLength))"
+    }
+
+    static func pasted(index: Int) -> String {
+        "\(self.pastedPrefix)\(index + 1)"
+    }
+
+    /// Whether `fileName` is one of the names above. Processing may change the extension
+    /// ("photo-1A2B3C4D.heic" is sent as ".jpg"), so only the base name counts.
+    static func isGenerated(_ fileName: String) -> Bool {
+        let base = (fileName as NSString).deletingPathExtension
+        if base.hasPrefix(self.pastedPrefix) {
+            let index = base.dropFirst(self.pastedPrefix.count)
+            return !index.isEmpty && index.allSatisfy(\.isASCII) && index.allSatisfy(\.isNumber)
+        }
+        return Source.allCases.contains { source in
+            guard base.hasPrefix("\(source.rawValue)-") else { return false }
+            let token = base.dropFirst(source.rawValue.count + 1)
+            return token.count == self.tokenLength && token.allSatisfy { "0123456789ABCDEF".contains($0) }
+        }
+    }
+}

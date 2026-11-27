@@ -172,8 +172,8 @@ struct ChatColumnLayout: Equatable {
         self.columnWidth = max(0, min(Self.maxColumnWidth, width - 2 * self.margin))
     }
 
-    /// Phone columns give a long user message most of the line; wide ones keep a short measure.
-    var userBubbleMaxWidth: CGFloat {
+    /// User bubbles and media from either speaker leave room on the opposite side of the column.
+    var bubbleAndMediaMaxWidth: CGFloat {
         (self.columnWidth < 600 ? 0.82 : 0.68) * self.columnWidth
     }
 }
