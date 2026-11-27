@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ExecResult } from "./exec-file.js";
+import { findSystemdServiceAccountMismatch } from "./service-inspection-error.js";
 import type { SystemdServiceReadTarget } from "./service-types.js";
 
 const systemBus = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlSystem>());
@@ -333,6 +334,48 @@ describe("system-scope effective command", () => {
       }
     },
   );
+
+  it.each([
+    { name: "inline selectors", fileSpecs: false, unset: [] as string[], incomplete: false },
+    { name: "an environment file", fileSpecs: true, unset: [] as string[], incomplete: true },
+    {
+      name: "an unset selector",
+      fileSpecs: false,
+      unset: ["OPENCLAW_STATE_DIR"],
+      incomplete: true,
+    },
+  ])("names the unit, its account and its state selectors on refusal with $name", async (row) => {
+    state.serviceUser = "other";
+    state.assignments = [
+      "OPENCLAW_SERVICE_KIND=gateway",
+      "HOME=/var/lib/other",
+      "OPENCLAW_STATE_DIR=/var/lib/other/.openclaw",
+      "OPENCLAW_GATEWAY_TOKEN=fixture-secret-value",
+    ];
+    state.unset = row.unset;
+    const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
+    state.fileSpecs = row.fileSpecs ? [[protectedFile, false]] : [];
+    const reads = vi.spyOn(fs, "readFile");
+
+    const error = await readLoaded().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toMatchObject({ reason: "systemd-account-refused" });
+    const mismatch = findSystemdServiceAccountMismatch(error);
+    expect(mismatch).toEqual({
+      unitName: target.unitName,
+      unitPath: target.unitPath,
+      serviceUser: "other",
+      programArguments: ["/usr/bin/openclaw", "gateway"],
+      workingDirectory: "/home/gateway",
+      selectors: { HOME: "/var/lib/other", OPENCLAW_STATE_DIR: "/var/lib/other/.openclaw" },
+      selectorsIncomplete: row.incomplete,
+    });
+    expect(JSON.stringify(mismatch)).not.toContain("fixture-secret-value");
+    expect(reads.mock.calls.some(([file]) => file === protectedFile)).toBe(false);
+  });
 
   it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
     state.managerUid = fault === "uid" ? 2001 : 0;
