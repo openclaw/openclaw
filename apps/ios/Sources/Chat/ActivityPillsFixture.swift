@@ -3,7 +3,8 @@ import OpenClawChatUI
 import OpenClawProtocol
 
 /// `--openclaw-activity-fixture`: a chat with a Goal, a plan with steps, two working subagents and a finished
-/// one, so the activity row and every sheet have real content.
+/// one, and three linked PRs (open, merged, and one without details), so the activity row and every sheet have real
+/// content.
 /// `--openclaw-activity-fixture-failures` makes every read behind the sheets fail; `-slow` holds them.
 enum ActivityPillsFixture {
     static var isEnabled: Bool {
@@ -26,9 +27,18 @@ enum ActivityPillsFixture {
         ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-slow")
     }
 
+    /// The first PR's checks fail instead of running, for the pill's red mark.
+    static var failingChecks: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-failing-checks")
+    }
+
     /// Only the Goal, for the row's smallest state.
     static var goalOnly: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-goal-only")
+    }
+
+    static var pullRequestsOnly: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-pr-only")
     }
 
     struct Child {
@@ -202,7 +212,7 @@ enum ActivityPillsFixture {
     }
 
     static var initialGoal: OpenClawChatSessionGoal? {
-        guard self.isEnabled else { return nil }
+        guard self.isEnabled, !self.pullRequestsOnly else { return nil }
         let now = Date().timeIntervalSince1970 * 1000
         if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-controls-fixture") {
             return OpenClawChatSessionGoal(
@@ -232,7 +242,7 @@ enum ActivityPillsFixture {
         parentKey: String,
         stoppedAt: [String: Double] = [:])
     {
-        guard self.isEnabled, !self.goalOnly, !sessions.isEmpty else { return }
+        guard self.isEnabled, !self.pullRequestsOnly, !self.goalOnly, !sessions.isEmpty else { return }
         sessions[0].hasActiveSubagentRun = self.children.contains { $0.status == "running" && stoppedAt[$0.key] == nil }
         let parent = sessions[0].key
         for (index, child) in self.children.enumerated() {
@@ -274,7 +284,7 @@ enum ActivityPillsFixture {
     }
 
     static func progressCard(sessionKey: String) -> ProgressCard? {
-        guard self.isEnabled, !self.goalOnly,
+        guard self.isEnabled, !self.pullRequestsOnly, !self.goalOnly,
               self.child(forKey: sessionKey) == nil else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
@@ -437,12 +447,100 @@ enum ActivityPillsFixture {
         parentKey: String,
         stoppedAt: [String: Double] = [:]) async throws -> OpenClawChatChildSessionsResult?
     {
-        guard self.isEnabled, !self.goalOnly else { return nil }
+        guard self.isEnabled, !self.pullRequestsOnly, !self.goalOnly else { return nil }
         if self.holdsReads { try await Task.sleep(for: .seconds(120)) }
         if self.failsReads { throw URLError(.notConnectedToInternet) }
         var rows = [OpenClawChatSessionEntry(key: parentKey)]
         self.decorate(sessions: &rows, parentKey: parentKey, stoppedAt: stoppedAt)
         return OpenClawChatChildSessionsResult(rows: Array(rows.dropFirst()), isComplete: true)
+    }
+
+    static func pullRequests() -> OpenClawSessionPullRequestSnapshot {
+        if self.pullRequestsOnly {
+            let alternate = ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-pr-alternate")
+            let owner = "paper-trail"
+            let repo = "review-notes"
+            func pr(
+                _ number: Int,
+                _ state: String,
+                _ branch: String,
+                _ title: String,
+                _ checks: OpenClawSessionPullRequestSnapshot.Checks? = nil)
+                -> OpenClawSessionPullRequestSnapshot.PullRequest
+            {
+                .init(
+                    number: number,
+                    owner: owner,
+                    repo: repo,
+                    branch: branch,
+                    title: title,
+                    url: "https://github.com/\(owner)/\(repo)/pull/\(number)",
+                    state: state,
+                    additions: 86,
+                    deletions: 17,
+                    changedFiles: 3,
+                    checks: checks,
+                    author: .init(login: "paperbird"))
+            }
+            return .init(pullRequests: [
+                pr(
+                    148,
+                    "open",
+                    "fix/preserve-review-previews",
+                    "Keep preview links attached when the review branch changes",
+                    alternate
+                        ? .init(state: "pending", passed: 3, failed: 0, skipped: 0, running: 1)
+                        : .init(state: "passing", passed: 4, failed: 0, skipped: 0, running: 0)),
+                pr(32, "draft", "docs/preview-notes", "Describe the review preview"),
+                pr(
+                    7,
+                    "open",
+                    "fix/preview-title",
+                    "Restore preview titles when a reviewer switches branches and reopens an archived conversation",
+                    .init(state: "failing", passed: 2, failed: 1, skipped: 0, running: 0)),
+                pr(9, alternate ? "closed" : "merged", "fix/review-links", "Keep the original review link"),
+            ])
+        }
+        return OpenClawSessionPullRequestSnapshot(
+            pullRequests: [
+                .init(
+                    number: 4182,
+                    owner: "lisbon-trip",
+                    repo: "itinerary",
+                    branch: "trip/may-outline",
+                    title: "Add the day-by-day outline for May",
+                    url: "https://github.com/lisbon-trip/itinerary/pull/4182",
+                    state: "open",
+                    additions: 214,
+                    deletions: 18,
+                    changedFiles: 6,
+                    checks: self.failingChecks
+                        ? .init(state: "failing", passed: 11, failed: 1, skipped: 0, running: 0)
+                        : .init(state: "pending", passed: 8, failed: 0, skipped: 0, running: 4),
+                    author: .init(login: "molty")),
+                .init(
+                    number: 4170,
+                    owner: "lisbon-trip",
+                    repo: "itinerary",
+                    branch: "trip/hotel-shortlist",
+                    title: "Shortlist four quiet hotels near Alfama",
+                    url: "https://github.com/lisbon-trip/itinerary/pull/4170",
+                    state: "merged",
+                    additions: 96,
+                    deletions: 4,
+                    changedFiles: 2,
+                    author: .init(login: "molty")),
+            ],
+            // Published by a child; GitHub didn't answer for it, so it carries no details.
+            taskPullRequests: [
+                .init(
+                    url: "https://github.com/lisbon-trip/booking-notes/pull/4191",
+                    owner: "lisbon-trip",
+                    repo: "booking-notes",
+                    number: 4191,
+                    branch: "trip/booking"),
+            ],
+            status: self.failsReads ? "unavailable" : "ready")
     }
 }
 

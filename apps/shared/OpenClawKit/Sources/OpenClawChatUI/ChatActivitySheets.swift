@@ -47,6 +47,7 @@ struct ChatActivitySheetView: View {
         .presentationDetents([self.restingDetent, .large], selection: Binding(
             get: { self.detent ?? self.restingDetent },
             set: { self.detent = $0 == .large ? .large : nil }))
+        .presentationContentInteraction(self.isPullRequest ? .scrolls : .automatic)
         .presentationDragIndicator(.visible)
         // Below full height iOS draws a sheet as glass, which lets the composer's red button tint it.
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
@@ -58,7 +59,13 @@ struct ChatActivitySheetView: View {
         return ChatModelPickerSheet.listTopMargin
     }
 
+    private var isPullRequest: Bool {
+        if case .pullRequest = self.sheet { return true }
+        return false
+    }
+
     private var restingDetent: PresentationDetent {
+        if case .pullRequest = self.sheet { return .medium }
         let fitted = (self.fittedHeight ?? 0) - ChatActivitySheetMetrics.emptySpaceAfterLastGroup
         return .height(max(ChatActivitySheetMetrics.minimumHeight, fitted))
     }
@@ -75,6 +82,9 @@ struct ChatActivitySheetView: View {
             })
         case .subagents:
             ChatActivitySubagentsPage(onOpen: self.onOpenChild, viewModel: self.viewModel)
+        case let .pullRequest(id):
+            ChatActivityPullRequestPage(viewModel: self.viewModel, pullRequestID: id)
+                .modifier(ChatPRSheetActions(viewModel: self.viewModel, id: id))
         }
     }
 }

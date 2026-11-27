@@ -43,12 +43,20 @@ struct ChatActivityDock: View {
         let showsProgress = signature.map { !self.dismissedProgressCards.contains($0) } ?? false
         let childRequest = self.viewModel.healthOK ? self.viewModel.activityChildrenRequest : nil
         let input = self.viewModel.activityInput(approvalPending: self.approvalShown, showsProgress: showsProgress)
-        let pills = ChatActivityRules.pills(input)
+        let scope = self.viewModel.prVisibilityScope
+        let hidden = ChatPRVisibility.shared.hidden(in: scope)
+        let pills = ChatActivityRules.pills(input).filter { pill in
+            if case let .pullRequest(id) = pill.kind { return !hidden.contains(id.lowercased()) }
+            return true
+        }
         if !pills.isEmpty {
             ChatActivityPillRow(
                 pills: pills,
                 sheetIsOpen: self.sheet != nil,
-                onOpen: { kind in
+                pullRequests: self.viewModel.linkedPullRequests,
+                onHide: { id in
+                    ChatPRVisibility.shared.setHidden(true, ids: [id], in: scope)
+                }, onOpen: { kind in
                     switch kind {
                     case .subagents:
                         // A child can be pushed from this sheet. Don't restore the parent's keyboard
@@ -61,6 +69,7 @@ struct ChatActivityDock: View {
                         self.sheet = .subagents
                     case .goal: self.sheet = .goal
                     case .progress: self.sheet = .progress
+                    case let .pullRequest(id): self.sheet = .pullRequest(id)
                     }
                 })
                 .chatColumn(self.column)

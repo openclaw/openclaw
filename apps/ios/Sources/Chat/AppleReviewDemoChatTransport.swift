@@ -130,10 +130,22 @@ struct LocalChatFixture {
         ])
 }
 
-struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport {
+struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport, ChatPRReaderTransport {
     func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
         guard ActivityPillsFixture.isEnabled, ActivityPillsFixture.child(forKey: target.key) != nil else { return nil }
         return OpenClawChildStopAction(target: target) { try await self.store.stopChild(target) }
+    }
+
+    func pullRequestOverview(url: String, sessionKey _: String) async throws -> Data? {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard ActivityPillsFixture.isEnabled, let i = args.firstIndex(of: "--pr-reader-fixtures"), i + 1 < args.count,
+              let docs = try JSONSerialization.jsonObject(with: Data(args[i + 1].utf8)) as? [[String: Any]],
+              let doc = docs.first(where: { $0["url"] as? String == url }) else { return nil }
+        return try JSONSerialization.data(withJSONObject: doc)
+        #else
+        return nil
+        #endif
     }
 
     func goalControls() async -> (update: Bool, clear: Bool) {
@@ -263,6 +275,19 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
                 liveText: state.liveText) { return child }
         } else if let child = try await ActivityPillsFixture.history(sessionKey: sessionKey) { return child }
         return try await self.store.history(sessionKey: sessionKey)
+    }
+
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        guard ActivityPillsFixture.isEnabled, !ActivityPillsFixture.goalOnly,
+              let key = sessionKeys.first, ActivityPillsFixture.child(forKey: key) == nil else { return nil }
+        let store = self.store
+        Task {
+            // After the view model records the watch, as a Gateway's first push would arrive.
+            try? await Task.sleep(for: .milliseconds(300))
+            await store.publishPullRequests(OpenClawSessionPullRequestsChangedEvent(
+                sessions: [key: ActivityPillsFixture.pullRequests()]))
+        }
+        return true
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
@@ -881,6 +906,10 @@ actor LocalFixtureChatStore {
 
     private func removeEventContinuation(_ id: UUID) {
         self.eventContinuations[id] = nil
+    }
+
+    func publishPullRequests(_ event: OpenClawSessionPullRequestsChangedEvent) {
+        self.publish(.sessionPullRequestsChanged(event))
     }
 
     func publish(_ event: OpenClawChatTransportEvent) {

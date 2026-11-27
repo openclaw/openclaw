@@ -575,4 +575,38 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(app.buttons["chat-activity-sheet-close"].exists)
         XCTAssertTrue(app.buttons["Back"].firstMatch.isHittable)
     }
+
+    func testPullRequestPillsOpenTheirSheet() throws {
+        let checks = (1...16).map { ["name": "Check \($0)", "state": "success"] }
+        let overview = try JSONSerialization.data(withJSONObject: [[
+            "url": "https://github.com/lisbon-trip/itinerary/pull/4182", "checks": ["items": checks],
+        ]])
+        launchApp(for: Self.activityTarget, additionalArguments: [
+            "--openclaw-activity-fixture", "--pr-reader-fixtures", String(decoding: overview, as: UTF8.self),
+        ])
+        let app = try XCTUnwrap(self.app)
+        let open = self.activityPill("pr-lisbon-trip/itinerary#4182", in: app)
+        let merged = self.activityPill("pr-lisbon-trip/itinerary#4170", in: app)
+        XCTAssertTrue(open.waitForExistence(timeout: 8))
+        XCTAssertTrue(merged.exists)
+        // Open before merged, after the other pills.
+        XCTAssertLessThan(open.frame.minX, merged.frame.minX)
+        XCTAssertTrue(open.label.hasPrefix("Pull request #4182 in lisbon-trip/itinerary"))
+        open.tap()
+        XCTAssertTrue(app.staticTexts["chat-activity-pr-title"].waitForExistence(timeout: 5))
+        let action = app.buttons["chat-activity-pr-open"]
+        let rows = app.scrollViews.containing(.staticText, identifier: "Check 16").firstMatch
+        XCTAssertTrue(rows.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(rows.frame.maxY, action.frame.maxY)
+        let last = rows.staticTexts["Check 16"]
+        let frame = action.frame
+        for _ in 0..<6 where last.frame.maxY >= frame.minY {
+            rows.swipeUp()
+        }
+        XCTAssertLessThan(last.frame.maxY, frame.minY)
+        XCTAssertTrue(last.isHittable)
+        XCTAssertEqual(action.frame, frame)
+        attachScreenshot(named: "activity-sheet-pr")
+        app.buttons["chat-activity-sheet-close"].tap()
+    }
 }

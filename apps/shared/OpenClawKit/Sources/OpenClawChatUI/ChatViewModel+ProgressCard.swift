@@ -72,6 +72,7 @@ extension OpenClawChatViewModel {
                 OpenClawChatSessionTarget(sessionKey: key, agentID: owner))
         }
         self.scheduleProgressCardFetch(for: request.session)
+        self.watchSessionPullRequests()
     }
 
     func invalidateProgressCardTarget() {
