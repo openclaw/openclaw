@@ -1,3 +1,4 @@
+import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -12,6 +13,13 @@ type WorkboardAgentFilterOption = {
   label: string;
   description?: string;
 };
+
+export function workboardAgentsList(
+  agents: Pick<ControlUiHost["agents"], "defaultId" | "rows">,
+): WorkboardAgentsList | null {
+  const defaultId = agents.defaultId;
+  return defaultId === null ? null : { defaultId, agents: [...agents.rows] };
+}
 
 export function agentDisplayName(agent: WorkboardAgentRow | undefined, fallback: string): string {
   return agent?.name ?? agent?.identity?.name ?? agent?.id ?? fallback;

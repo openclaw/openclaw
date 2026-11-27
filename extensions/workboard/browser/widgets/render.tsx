@@ -6,8 +6,10 @@ import {
   matchesBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../lib/workboard/board-filter.ts";
+import { workboardBoardName } from "../lib/workboard/board-presentation.ts";
 import { groupWorkboardCardsByStatus } from "../lib/workboard/derived.ts";
 import { WORKBOARD_STATUSES } from "../lib/workboard/types.ts";
+import { workboardAgentsList } from "../pages/workboard/agent-filter.ts";
 import { workboardPageTarget } from "../pages/workboard/page-target.ts";
 import { WorkboardColumn } from "../pages/workboard/view-column.tsx";
 import type { WorkboardProps } from "../pages/workboard/view-helpers.tsx";
@@ -66,8 +68,19 @@ function isAvailable(model: WorkboardWidgetModel) {
   return model.connected && model.loaded && !model.error;
 }
 
+function boardTitle(model: WorkboardWidgetModel, boardId: string | undefined) {
+  if (!boardId) {
+    return t("workboard.allBoards");
+  }
+  return workboardBoardName(model.boards.find((board) => board.id === boardId) ?? { id: boardId });
+}
+
 export function WorkboardMiniWidget(props: WidgetProps) {
   const boardId = () => props.model.readStringProp("boardId");
+  const title = createMemo(() => {
+    void props.revision;
+    return boardTitle(props.model, boardId());
+  });
   const cards = createMemo(() => {
     void props.revision;
     return boardId()
@@ -89,7 +102,7 @@ export function WorkboardMiniWidget(props: WidgetProps) {
     <Show when={isAvailable(props.model)} fallback={<WidgetAvailability {...props} />}>
       <section class="workboard-widget-mini" data-test-id="workboard-mini-widget">
         <header>
-          <strong>{boardId() ?? t("workboard.allBoards")}</strong>
+          <strong>{title()}</strong>
           <a href={props.model.host.navigation.pageHref(workboardPageTarget(boardId()))}>
             {t("workboard.widget.openBoard")}
           </a>
@@ -228,6 +241,14 @@ export function WorkboardBoardWidget(props: WidgetProps) {
     return props.model.cards.filter((card) => matchesBoardFilter(card, filter()));
   });
   const byStatus = createMemo(() => groupWorkboardCardsByStatus(cards(), props.model.statuses));
+  const title = createMemo(() => {
+    void props.revision;
+    return boardTitle(props.model, boardId());
+  });
+  const agentsList = createMemo(() => {
+    void props.revision;
+    return workboardAgentsList(props.model.host.agents);
+  });
   const workboard: WorkboardProps = {
     get host() {
       return props.model.workboardStateHost;
@@ -245,7 +266,9 @@ export function WorkboardBoardWidget(props: WidgetProps) {
       void props.revision;
       return props.model.canMutate;
     },
-    agentsList: null,
+    get agentsList() {
+      return agentsList();
+    },
     sessions: [],
     onOpenSession: (target) => props.model.host.sessions.open(target),
     onRequestUpdate: () => props.model.runtime.notify(),
@@ -254,7 +277,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
     <Show when={isAvailable(props.model)} fallback={<WidgetAvailability {...props} />}>
       <section class="workboard-widget-board" data-test-id="workboard-board-widget">
         <header class="workboard-widget-board__header">
-          <strong>{boardId() ?? t("workboard.allBoards")}</strong>
+          <strong>{title()}</strong>
           <span>{t("workboard.widget.cardCount", { count: String(cards().length) })}</span>
           <a href={props.model.host.navigation.pageHref(workboardPageTarget(boardId()))}>
             {t("workboard.widget.openBoard")}

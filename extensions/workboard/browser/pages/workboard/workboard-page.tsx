@@ -35,6 +35,7 @@ import {
   buildAgentFilterOptions,
   normalizeActiveAgentFilter,
   matchesAgentScope,
+  workboardAgentsList,
 } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { workboardPageTarget } from "./page-target.ts";
@@ -177,10 +178,8 @@ export function createWorkboardPage(
     };
     const update = () => {
       synchronizeConnection();
-      const agents = host.agents.rows;
-      const defaultId = host.agents.defaultId;
-      const defaultAgentId = defaultId ?? host.connection.assistantAgentId;
-      const agentsList = defaultId === null ? null : { defaultId, agents: [...agents] };
+      const defaultAgentId = host.agents.defaultId ?? host.connection.assistantAgentId;
+      const agentsList = workboardAgentsList(host.agents);
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
