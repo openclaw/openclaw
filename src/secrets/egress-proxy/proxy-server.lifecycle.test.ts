@@ -12,6 +12,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -204,6 +205,60 @@ afterEach(async () => {
 });
 
 describe("secret egress registration lifecycle", () => {
+  it.each([false, true])(
+    "exports public trust with --use-openssl-ca (extra CA: %s)",
+    async (extraCa) => {
+      const leafPath = path.join(caDir, "inherited-leaf.pem");
+      fs.writeFileSync(leafPath, originLeaf.cert);
+      const workerUrl = new URL("./proxy-server.ts", import.meta.url);
+      const result = await runNodeScript(
+        (workerArgv) => [
+          "--use-openssl-ca",
+          ...workerArgv(workerUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { X509Certificate } from "node:crypto";
+          import fs from "node:fs";
+          import path from "node:path";
+          import { rootCertificates } from "node:tls";
+          import { startSecretEgressProxyServer } from ${JSON.stringify(workerUrl.href)};
+          const caDir = fs.mkdtempSync(${JSON.stringify(path.join(caDir, "startup-"))});
+          const proxy = await startSecretEgressProxyServer({ caDir, onAudit() {} });
+          try {
+            const grant = proxy.registerProcess();
+            const publicRoot = rootCertificates.find((pem) =>
+              new X509Certificate(pem).subject.includes("CN=ISRG Root X1"));
+            assert.ok(publicRoot);
+            const publicRootPath = path.join(caDir, "public-root.pem");
+            fs.writeFileSync(publicRootPath, publicRoot);
+            for (const certificate of [
+              publicRootPath,
+              ...(process.env.NODE_EXTRA_CA_CERTS ? [${JSON.stringify(leafPath)}] : []),
+            ]) {
+              execFileSync("openssl", ["verify", "-trusted", grant.env.SSL_CERT_FILE, certificate]);
+            }
+          } finally {
+            await proxy.stop();
+            fs.rmSync(caDir, { recursive: true, force: true });
+          }
+        `,
+        ],
+        {
+          ...process.env,
+          NODE_OPTIONS: undefined,
+          NODE_USE_SYSTEM_CA: undefined,
+          NODE_EXTRA_CA_CERTS: extraCa ? proxy.caCertPath : undefined,
+        },
+        undefined,
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
+
   it("retains effective CA trust when forwarding through another protected proxy", async () => {
     const parentProxy = proxy;
     const defaultCAs = tls.getCACertificates("default");
