@@ -1501,7 +1501,7 @@ src/infra/update-rehearsal-paths.ts
 src/infra/update-result-claim.ts
 src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
-src/infra/restart-sentinel-row.ts
+src/infra/restart-sentinel-codec.ts
 src/infra/restart-sentinel-store.ts
 src/infra/update-run-activity.ts
 src/infra/update-run-admission.read.ts

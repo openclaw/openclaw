@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-row.js";
+import { buildRestartSentinelRow } from "./restart-sentinel-codec.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";

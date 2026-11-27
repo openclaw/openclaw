@@ -1,11 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import {
-  isRecord as isPlainRecord,
-  omitUndefinedFields,
-} from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
-import { z } from "zod";
-import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -13,20 +7,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-row.js";
+import {
+  buildRestartSentinelRow,
+  parseRestartSentinelPayload,
+  type RestartSentinelPayload,
+} from "./restart-sentinel-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { updateRecoverySchema } from "./update-recovery.js";
-import { UpdateFailureFactSchema } from "./update-run-schema.js";
-
-type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
-type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
-
-export type RestartSentinelPayload = SchemaContract<
-  Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">
-> & {
-  continuation?: RestartSentinelContinuation | null;
-  stats?: RestartSentinelStats | null;
-};
 
 export type RestartSentinel = {
   version: 1;
@@ -74,96 +60,6 @@ type RestartSentinelRow = Omit<
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-// Optional properties are absent from the canonical payload, including when an
-// input explicitly supplies undefined. Keep nested diagnostic records untouched.
-const restartSentinelLogSchema = z
-  .object({
-    stdoutTail: z.string().nullish(),
-    stderrTail: z.string().nullish(),
-    exitCode: z.number().int().nullish(),
-  })
-  .transform(omitUndefinedFields);
-const restartSentinelStepSchema = z
-  .object({
-    name: z.string(),
-    command: z.string(),
-    failureFacts: UpdateFailureFactSchema.array().max(5).optional().catch(undefined),
-    cwd: z.string().nullish(),
-    durationMs: z.number().finite().nullish(),
-    log: restartSentinelLogSchema.nullish(),
-    advisory: z.boolean().optional(),
-  })
-  .transform(omitUndefinedFields);
-const restartSentinelStepsSchema = z.custom<unknown[]>(Array.isArray).transform((steps, ctx) =>
-  steps.map((step) => {
-    const parsed = restartSentinelStepSchema.safeParse(step);
-    if (parsed.success) {
-      return parsed.data;
-    }
-    ctx.addIssue({ code: "custom", message: "Invalid restart sentinel step" });
-    return z.NEVER;
-  }),
-);
-const restartSentinelStatsSchema = z
-  .object({
-    // Unsupported recovery metadata must not suppress the restart notice.
-    recovery: updateRecoverySchema.optional().catch(undefined),
-    mode: z.string().optional(),
-    root: z.string().optional(),
-    target: z.string().optional(),
-    requiresRestart: z.boolean().optional(),
-    handoffId: z.string().optional(),
-    runId: z.string().optional(),
-    before: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
-    after: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
-    steps: restartSentinelStepsSchema.optional(),
-    reason: z.string().nullish(),
-    durationMs: z.number().finite().nullish(),
-  })
-  .transform(omitUndefinedFields);
-
-const restartSentinelContinuationSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("systemEvent"), text: z.string() }),
-  z.object({ kind: z.literal("agentTurn"), message: z.string() }),
-]);
-export const restartSentinelPayloadSchema = z
-  .object({
-    kind: z.enum(["config-apply", "config-auto-recovery", "config-patch", "update", "restart"]),
-    status: z.enum(["ok", "error", "skipped"]),
-    ts: z.number().int(),
-    sessionKey: z.string().optional(),
-    deliveryContext: z
-      .object({
-        channel: z.string().optional(),
-        to: z.string().optional(),
-        accountId: z.string().optional(),
-      })
-      .transform(omitUndefinedFields)
-      .transform((value) => (Object.keys(value).length > 0 ? value : undefined))
-      .optional(),
-    threadId: z.string().optional(),
-    message: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
-    continuation: restartSentinelContinuationSchema
-      .nullish()
-      .transform((value) => value ?? undefined),
-    doctorHint: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
-    stats: restartSentinelStatsSchema.nullish().transform((value) => value ?? undefined),
-  })
-  // SQL NULL is canonical absence for optional top-level columns. Keep legacy
-  // nulls and empty routes consistent between writes and typed-column reads.
-  .transform(omitUndefinedFields);
-
-function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
-  const parsed = restartSentinelPayloadSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
 }
 
 function parseRequiredJson(value: string | null): unknown {
