@@ -647,7 +647,10 @@ enum SessionStatusScope: String, CaseIterable {
 struct CommandSessionsScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
-    @State private var sessions: [OpenClawChatSessionEntry] = []
+    @State private var archivedSessions: [OpenClawChatSessionEntry] = []
+    @State private var archivedRosterIsComplete = false
+    @State private var activityFilter: CommandSessionActivityFilter = .all
+    @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var isLoading = false
     @State private var loadErrorText: String?
     @State private var actionErrorText: String?
@@ -657,8 +660,13 @@ struct CommandSessionsScreen: View {
     @State private var refreshNonce = 0
     @State private var statusScope: SessionStatusScope = .active
     @State private var now: Date = .now
+    let dashboardModel: RootSidebarModel
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openChat: () -> Void
+
+    private var sessions: [OpenClawChatSessionEntry] {
+        self.statusScope == .archived ? self.archivedSessions : self.dashboardModel.sessions
+    }
 
     var body: some View {
         ZStack {
@@ -684,9 +692,20 @@ struct CommandSessionsScreen: View {
                 self.statusScope = .active
             }
         }
-        .task(id: self.sessions) {
+        .onChange(of: self.appModel.isOperatorGatewayConnected) { _, connected in
+            if !connected { self.activityFilter = .all }
+        }
+        .onChange(of: self.appModel.chatViewModelIdentityID) { _, _ in
+            self.presentedAttention = nil
+            self.activityFilter = .all
+        }
+        .onChange(of: self.sessions) { _, _ in
+            // Roster changes can age the displayed timestamps without changing any expiry deadline.
             self.now = .now
-            while let wake = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now) {
+        }
+        .task(id: self.expiryDeadlines) {
+            self.now = .now
+            while let wake = self.expiryDeadlines.filter({ $0 > self.now }).min() {
                 do {
                     try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow) + 0.001))
                     try Task.checkCancellation()
@@ -717,6 +736,13 @@ struct CommandSessionsScreen: View {
     private var sessionsPanel: some View {
         let mainKey = self.resolvedMainSessionKey
         let currentKey = self.resolvedCurrentSessionKey
+        let snapshot = self.activitySnapshot
+        let visible = snapshot.sessions(matching: self.activityFilter)
+        let sections = CommandSessionGrouping.sections(
+            from: visible,
+            knownGroups: self.appModel.sessionGroups.names(for: self.sessions),
+            preservesGroupOrder: true)
+        let visibleSections = self.activityFilter == .all ? sections : sections.filter { !$0.entries.isEmpty }
         return ProCard(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
@@ -750,6 +776,18 @@ struct CommandSessionsScreen: View {
                     .accessibilityIdentifier("Sessions.StatusScope")
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                }
+
+                CommandSessionActivityFilterBar(selection: self.$activityFilter, snapshot: snapshot)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+
+                if !snapshot.isConnected {
+                    Text("Connect to filter current activity.")
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
                 }
 
                 if let groupError = self.appModel.sessionGroups.failure {
@@ -797,7 +835,7 @@ struct CommandSessionsScreen: View {
                         detail: .verbatim(loadErrorText))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
-                } else if self.visibleSessions.isEmpty, self.sessionSections.isEmpty {
+                } else if visible.isEmpty, visibleSections.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.appModel
                             .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
@@ -810,14 +848,18 @@ struct CommandSessionsScreen: View {
                         .padding(.bottom, 10)
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(self.sessionSections) { section in
+                        ForEach(visibleSections) { section in
                             VStack(alignment: .leading, spacing: 6) {
                                 if section.showsHeader {
                                     self.sectionHeader(section)
                                 }
                                 if !self.isCollapsed(section) {
                                     ForEach(section.entries) { session in
-                                        self.sessionRow(session, currentSessionKey: currentKey, mainSessionKey: mainKey)
+                                        self.sessionRow(
+                                            session,
+                                            currentSessionKey: currentKey,
+                                            mainSessionKey: mainKey,
+                                            attention: snapshot.attention(for: session))
                                     }
                                 }
                             }
@@ -840,7 +882,7 @@ struct CommandSessionsScreen: View {
             case .archived: return String(localized: "Loading archived sessions")
             }
         }
-        let count = self.visibleSessions.count
+        let count = self.activitySnapshot.sessions(matching: self.activityFilter).count
         if count == 0 {
             return self.emptyTitle
         }
@@ -848,7 +890,7 @@ struct CommandSessionsScreen: View {
             AttributedString(localized: "^[\(count) session](inflect: true)").characters)
     }
 
-    private var visibleSessions: [OpenClawChatSessionEntry] {
+    private var scopedSessions: [OpenClawChatSessionEntry] {
         let mainKey = self.resolvedMainSessionKey
         let currentKey = self.resolvedCurrentSessionKey
         return self.sessions
@@ -883,11 +925,30 @@ struct CommandSessionsScreen: View {
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
-    private var sessionSections: [CommandSessionSection] {
-        CommandSessionGrouping.sections(
-            from: self.visibleSessions,
-            knownGroups: self.appModel.sessionGroups.names(for: self.sessions),
-            preservesGroupOrder: true)
+    private var attentionRequests: [OpenClawChatAttentionRequest] {
+        let questions = self.appModel.chatPresentation.isCurrent(appModel: self.appModel)
+            ? self.appModel.chatPresentation.viewModel?.pendingQuestionAttentionRequests ?? [] : []
+        return questions + self.appModel.pendingApprovalAttentionRequests
+    }
+
+    private var expiryDeadlines: [Date] {
+        self.attentionRequests.map { Date(timeIntervalSince1970: $0.expiresAtMs / 1000) }
+            + self.sessions.compactMap { session in
+                OpenClawChatSessionSnooze.nextWake(in: [session], now: self.now)
+            }
+    }
+
+    private var activitySnapshot: CommandSessionActivitySnapshot {
+        CommandSessionActivitySnapshot(
+            sessions: self.scopedSessions,
+            requests: self.attentionRequests,
+            mainSessionKey: self.resolvedMainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            isConnected: self.appModel.isCommandSessionListAvailable,
+            isComplete: self.statusScope == .archived
+                ? self.archivedRosterIsComplete : self.dashboardModel.isSessionRosterComplete,
+            now: self.now)
     }
 
     private var sessionCategories: [String] {
@@ -906,6 +967,11 @@ struct CommandSessionsScreen: View {
         guard self.appModel.isCommandSessionListAvailable else {
             return String(localized: "Gateway offline")
         }
+        switch self.activityFilter {
+        case .needsYou: return String(localized: "No sessions need you")
+        case .working: return String(localized: "No sessions working")
+        case .all: break
+        }
         switch self.statusScope {
         case .active: return String(localized: "No recent sessions")
         case .snoozed: return String(localized: "No snoozed sessions")
@@ -915,7 +981,12 @@ struct CommandSessionsScreen: View {
     }
 
     private var emptyDetail: String {
-        switch self.statusScope {
+        switch self.activityFilter {
+        case .needsYou: return String(localized: "Pending questions or approvals appear here.")
+        case .working: return String(localized: "Active or queued work appears here.")
+        case .all: break
+        }
+        return switch self.statusScope {
         case .active: String(localized: "Start a chat and it will appear here.")
         case .snoozed: String(localized: "Snoozed sessions will appear here until they wake.")
         case .automations: String(localized: "Automation sessions will appear here.")
@@ -960,19 +1031,28 @@ struct CommandSessionsScreen: View {
     private func sessionRow(
         _ session: OpenClawChatSessionEntry,
         currentSessionKey: String,
-        mainSessionKey: String) -> some View
+        mainSessionKey: String,
+        attention: OpenClawChatAttentionSummary?) -> some View
     {
         let item = SessionPresentation.workItem(
             for: session,
             currentSessionKey: currentSessionKey,
             now: self.now)
-        return Button {
-            self.openSessionKey(session.key)
-        } label: {
-            CommandSessionRow(item: item)
+        return HStack(spacing: 8) {
+            Button {
+                self.openSessionKey(session.key)
+            } label: {
+                CommandSessionRow(item: item)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
+            if let summary = attention {
+                OpenClawChatAttentionBadge(
+                    summary: summary,
+                    targetID: "session:\(session.key)",
+                    presentation: self.$presentedAttention)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
         .commandSessionActions(
             session: session,
             mainSessionKey: mainSessionKey,
@@ -1026,13 +1106,7 @@ struct CommandSessionsScreen: View {
     }
 
     private func refreshSessions() async {
-        // Pick up groups stored by other surfaces (for example the per-session
-        // New Group editor) alongside the fresh session list.
-        await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         let requestedScope = self.statusScope
-        let requestsArchived = requestedScope == .archived
-        let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
-        let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
         self.actionErrorText = nil
@@ -1040,24 +1114,31 @@ struct CommandSessionsScreen: View {
             if requestedScope == self.statusScope { self.isLoading = false }
         }
 
+        if requestedScope != .archived {
+            await self.dashboardModel.refreshSessions(appModel: self.appModel, allowCachedFallback: true)
+            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            self.loadErrorText = self.sessions.isEmpty ? self.dashboardModel.sessionErrorText : nil
+            self.partialLoadText = self.sessions.isEmpty ? nil : self.dashboardModel.sessionErrorText
+            return
+        }
+
+        await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         do {
             let roster = try await self.appModel.loadChatSessionRoster(
                 limit: CommandCenterTab.recentSessionsFetchLimit,
-                archived: requestsArchived)
+                archived: true)
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
-            self.sessions = roster.sessions
+            self.archivedSessions = roster.sessions
+            self.archivedRosterIsComplete = roster.isComplete
             self.partialLoadText = roster.incompleteLoadMessage
         } catch is CancellationError {
             return
         } catch {
             guard !Task.isCancelled, requestedScope == self.statusScope else { return }
             self.partialLoadText = nil
-            let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
-                gatewayID: sourceGatewayID,
-                agentID: sourceAgentID)
-            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
-            self.sessions = cached
-            self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
+            self.archivedSessions = []
+            self.archivedRosterIsComplete = false
+            self.loadErrorText = String(localized: "Try again after the gateway reconnects.")
         }
     }
 }

@@ -14,9 +14,16 @@ const requests = [];
 let questions = [];
 let approvals = [];
 let created;
+let workIsActive;
+let recencyProof = false;
+let recencyTimestamp;
+const planningKey = "agent:main:snooze-active";
 
 function reset() {
   created = Date.now();
+  recencyProof = false;
+  recencyTimestamp = undefined;
+  workIsActive = true;
   questions = ["Which draft should we review first?", "Should the summary include a timeline?"].map(
     (question, index) => ({
       id: `attention-question-${index + 1}`,
@@ -128,6 +135,7 @@ const events = [
   "plugin.approval.resolved",
   "openclaw.approval.resolved",
   "tick",
+  "sessions.changed",
 ];
 const staticReplies = {
   "config.get": {
@@ -213,12 +221,74 @@ function settleApprovals(status, id) {
     });
   }
 }
+function reviewSession() {
+  return {
+    key: reviewKey,
+    sessionId: "synthetic-review-session",
+    displayName: "Pending review",
+    label: "Pending review",
+    category: "Research",
+    kind: "direct",
+    updatedAt: created - 60000,
+    totalTokens: 84,
+    hasActiveRun: workIsActive,
+    status: workIsActive ? "running" : "done",
+  };
+}
+function planningSession() {
+  const title = recencyTimestamp ? "Planning recency" : "Planning notes";
+  return {
+    key: planningKey,
+    sessionId: "synthetic-snooze-active",
+    displayName: title,
+    label: title,
+    kind: "direct",
+    updatedAt: recencyTimestamp ?? (recencyProof ? created - 120_000 : created),
+  };
+}
+function publishSessionChange(session) {
+  broadcast("sessions.changed", {
+    sessionKey: session.key,
+    reason: "lifecycle",
+    agentId: "main",
+    session,
+  });
+}
 const server = createServer((req, res) => {
   res.setHeader("content-type", "application/json");
   const path = new URL(req.url, `http://127.0.0.1:${port}`).pathname;
   if (req.method === "POST") {
     if (path === "/reset") {
       reset();
+    } else if (path === "/recency/reset") {
+      reset();
+      recencyProof = true;
+      questions = [];
+      approvals = [];
+      workIsActive = false;
+    } else if (path === "/recency/seed") {
+      recencyTimestamp = Date.now() - 45_000;
+      publishSessionChange(planningSession());
+    } else if (path === "/recency/refresh" && recencyTimestamp) {
+      // Update a different row only after the planning row crosses the minute boundary.
+      const delay = Math.max(0, recencyTimestamp + 61_000 - Date.now());
+      setTimeout(() => {
+        publishSessionChange({
+          ...reviewSession(),
+          displayName: "Refreshed review",
+          label: "Refreshed review",
+        });
+        res.end("{}");
+      }, delay);
+      return;
+    } else if (path === "/work/finish") {
+      workIsActive = false;
+      broadcast("sessions.changed", {
+        sessionKey: reviewKey,
+        reason: "lifecycle",
+        agentId: "main",
+        session: reviewSession(),
+      });
     } else if (path === "/questions/answer") {
       settleQuestions("answered");
     } else if (path === "/questions/answer-oldest") {
@@ -349,14 +419,7 @@ wss.on("connection", (ws) => {
           hasMore: false,
           defaults: {},
           sessions: [
-            {
-              key: "agent:main:snooze-active",
-              sessionId: "synthetic-snooze-active",
-              displayName: "Planning notes",
-              label: "Planning notes",
-              kind: "direct",
-              updatedAt: created,
-            },
+            planningSession(),
             {
               key: "agent:main:snooze-later",
               sessionId: "synthetic-snooze-later",
@@ -364,8 +427,8 @@ wss.on("connection", (ws) => {
               label: "Follow-up notes",
               kind: "direct",
               updatedAt: created - 1000,
-              snoozedAt: created,
-              snoozedUntil: Date.parse("2099-01-05T17:00:00Z"),
+              snoozedAt: recencyProof ? undefined : created,
+              snoozedUntil: recencyProof ? undefined : Date.parse("2099-01-05T17:00:00Z"),
             },
             {
               key: mainKey,
@@ -386,15 +449,7 @@ wss.on("connection", (ws) => {
               updatedAt: created - 30000,
               totalTokens: 60,
             },
-            {
-              key: reviewKey,
-              displayName: "Pending review",
-              label: "Pending review",
-              category: "Research",
-              kind: "direct",
-              updatedAt: created - 60000,
-              totalTokens: 84,
-            },
+            reviewSession(),
           ],
         });
         break;

@@ -12,30 +12,8 @@ final class SidebarAttentionUITests: XCTestCase {
         let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
         continueAfterFailure = false
         try await self.changeFixture(fixture, path: "reset")
-        let app = XCUIApplication()
+        let app = self.connectedApp(setupCode: setupCode)
         defer { app.terminate() }
-        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
-            guard alert.buttons["Allow"].exists else { return false }
-            alert.buttons["Allow"].tap()
-            return true
-        }
-        app.launchArguments = [
-            "--openclaw-reset-onboarding", "--openclaw-initial-tab", "chat",
-            "--openclaw-initial-destination", "chat", "-AppleLanguages", "(en)",
-        ]
-        app.launch()
-        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15))
-        app.buttons["Continue"].tap()
-        XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 10))
-        app.buttons["Connect Manually"].tap()
-        let setupField = app.textFields["Enter setup code"]
-        XCTAssertTrue(setupField.waitForExistence(timeout: 5))
-        setupField.tap()
-        setupField.typeText(setupCode)
-        app.buttons["Apply"].tap()
-        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 60))
-        app.buttons["Go to Chat"].tap()
-        XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
         self.openSidebar(app)
         let review = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
@@ -143,6 +121,143 @@ final class SidebarAttentionUITests: XCTestCase {
         try await self.changeFixture(fixture, path: "approvals/cancel")
         XCTAssertTrue(approval.waitForNonExistence(timeout: 10))
         self.capture(app, named: "sidebar-cleared")
+    }
+
+    func testSessionActivityFiltersFollowNativeRequestAndRunUpdates() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(
+            environment["OPENCLAW_IOS_ATTENTION_FIXTURE_URL"] != nil,
+            "Requires an isolated synthetic Gateway")
+        let fixture = try XCTUnwrap(environment["OPENCLAW_IOS_ATTENTION_FIXTURE_URL"].flatMap(URL.init(string:)))
+        let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
+        continueAfterFailure = false
+        try await self.changeFixture(fixture, path: "reset")
+        let app = self.connectedApp(setupCode: setupCode)
+        defer { app.terminate() }
+        self.openSidebar(app)
+        let sessions = app.buttons["All Sessions…"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 10))
+        for _ in 0..<5 where !sessions.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sessions.isHittable)
+        sessions.tap()
+        XCTAssertTrue(app.staticTexts["Recent sessions"].waitForExistence(timeout: 15))
+        self.capture(app, named: "sessions-filter-entry")
+        let all = app.buttons["Sessions.Activity.all"]
+        let needsYou = app.buttons["Sessions.Activity.needsYou"]
+        let working = app.buttons["Sessions.Activity.working"]
+        XCTAssertTrue(all.waitForExistence(timeout: 10), "Session filters must be discoverable")
+        self.waitForCount(all, count: "4")
+        self.waitForCount(needsYou, count: "1")
+        self.waitForCount(working, count: "1")
+        for filter in [all, needsYou, working] {
+            XCTAssertGreaterThanOrEqual(filter.frame.height, 44)
+            XCTAssertTrue(app.frame.contains(filter.frame))
+        }
+        self.tapActivityFilter(needsYou)
+        XCTAssertTrue(app.buttons["SessionDashboard.Session.agent:main:attention-review"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SessionDashboard.Session.agent:main:snooze-active"].exists)
+        self.capture(app, named: "sessions-needs-you")
+        self.tapActivityFilter(working)
+        XCTAssertTrue(app.buttons["SessionDashboard.Session.agent:main:attention-review"].waitForExistence(timeout: 5))
+        self.capture(app, named: "sessions-working")
+        try await self.changeFixture(fixture, path: "work/finish")
+        self.waitForCount(working, count: "0")
+        XCTAssertTrue(app.staticTexts["No sessions working"].waitForExistence(timeout: 5))
+        self.waitForCount(needsYou, count: "1")
+        self.tapActivityFilter(all)
+        self.waitForCount(all, count: "4")
+        self.tapActivityFilter(needsYou)
+        try await self.changeFixture(fixture, path: "questions/answer")
+        try await self.changeFixture(fixture, path: "approvals/cancel")
+        self.waitForCount(needsYou, count: "0")
+        XCTAssertTrue(app.staticTexts["No sessions need you"].waitForExistence(timeout: 5))
+        self.capture(app, named: "sessions-cleared")
+    }
+
+    func testSessionRecencyRefreshesWhenRosterChangesWithoutDeadlines() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(
+            environment["OPENCLAW_IOS_ATTENTION_FIXTURE_URL"] != nil,
+            "Requires an isolated synthetic Gateway")
+        let fixture = try XCTUnwrap(environment["OPENCLAW_IOS_ATTENTION_FIXTURE_URL"].flatMap(URL.init(string:)))
+        let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
+        continueAfterFailure = false
+        try await self.changeFixture(fixture, path: "recency/reset")
+        let app = self.connectedApp(setupCode: setupCode)
+        defer { app.terminate() }
+
+        self.openSidebar(app)
+        let sessions = app.buttons["All Sessions…"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 10))
+        for _ in 0..<5 where !sessions.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sessions.isHittable)
+        sessions.tap()
+
+        let planningRow = app.buttons["SessionDashboard.Session.agent:main:snooze-active"]
+        let reviewRow = app.buttons["SessionDashboard.Session.agent:main:attention-review"]
+        XCTAssertTrue(planningRow.waitForExistence(timeout: 15))
+        try await self.changeFixture(fixture, path: "recency/seed")
+        let initial = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Planning recency", "just now"),
+            object: planningRow)
+        XCTAssertEqual(XCTWaiter.wait(for: [initial], timeout: 5), .completed)
+
+        try await self.changeFixture(fixture, path: "recency/refresh")
+        let rosterUpdated = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Refreshed review"),
+            object: reviewRow)
+        XCTAssertEqual(XCTWaiter.wait(for: [rosterUpdated], timeout: 5), .completed)
+        let recencyUpdated = XCTNSPredicateExpectation(
+            predicate: NSPredicate(
+                format: "label CONTAINS %@ AND NOT (label CONTAINS %@)",
+                "Planning recency",
+                "just now"),
+            object: planningRow)
+        XCTAssertEqual(XCTWaiter.wait(for: [recencyUpdated], timeout: 5), .completed)
+    }
+
+    private func connectedApp(setupCode: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        app.launchArguments = [
+            "--openclaw-reset-onboarding", "--openclaw-initial-tab", "chat",
+            "--openclaw-initial-destination", "chat", "-AppleLanguages", "(en)",
+        ]
+        app.launch()
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15))
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 10))
+        app.buttons["Connect Manually"].tap()
+        let setupField = app.textFields["Enter setup code"]
+        XCTAssertTrue(setupField.waitForExistence(timeout: 5))
+        setupField.tap()
+        setupField.typeText(setupCode)
+        app.buttons["Apply"].tap()
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 60))
+        app.buttons["Go to Chat"].tap()
+        XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
+        return app
+    }
+
+    private func tapActivityFilter(_ filter: XCUIElement) {
+        // AX hit-point lookup fails here and for the existing status picker on this simulator.
+        // Exercise a screen touch at the rendered target instead of AX activation.
+        filter.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(filter.isSelected)
+    }
+
+    private func waitForCount(_ element: XCUIElement, count: String) {
+        let expected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", count), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 15), .completed)
     }
 
     private func openSidebar(_ app: XCUIApplication) {

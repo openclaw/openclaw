@@ -13,6 +13,16 @@ struct OpenClawTypographyTests {
         #expect(!source.contains(".font(."))
     }
 
+    @Test func `session activity filters use branded typography`() throws {
+        let activityFilters = try String(
+            contentsOf: Self.sourceURL("Design/CommandSessionActivityFilterBar.swift"),
+            encoding: .utf8)
+        #expect(Self.unbrandedTextCallOffenders(
+            in: activityFilters,
+            relativePath: "CommandSessionActivityFilterBar.swift")
+            .isEmpty)
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")
