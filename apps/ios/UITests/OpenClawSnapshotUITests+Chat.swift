@@ -190,12 +190,17 @@ extension OpenClawSnapshotUITests {
 
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
+        // Start from an undecided microphone, so a simulator left denied or granted by an earlier run
+        // can't change what this test sees.
+        XCUIApplication().resetAuthorizationStatus(for: .microphone)
         self.launchApp(
             for: ScreenshotTarget(
                 initialTab: "chat",
                 initialDestination: "chat",
                 name: "chat-voice-note-stop-active-response"),
-            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+            // Lab Macs have no audio input, so a real recording can't start in the simulator. The fixture
+            // keeps the permission request and records silence.
+            additionalArguments: ["--openclaw-hold-initial-chat-run", "--openclaw-voice-note-fixture"])
 
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
@@ -219,9 +224,21 @@ extension OpenClawSnapshotUITests {
         let recordVoiceNote = app.buttons["Record Voice Note"]
         XCTAssertTrue(recordVoiceNote.waitForExistence(timeout: 5))
         recordVoiceNote.tap()
+        // The first recording asks for the microphone. Allow it, as a person would, so the recorder
+        // really starts.
+        let microphoneAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        let microphonePrompt = microphoneAlert.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "microphone")).firstMatch
+        XCTAssertTrue(microphonePrompt.waitForExistence(timeout: 8))
+        // The system alert nests each button in a second button with the same label.
+        let allow = microphoneAlert.buttons["Allow"].firstMatch
+        XCTAssertTrue(allow.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        allow.tap()
+        XCTAssertTrue(microphoneAlert.waitForNonExistence(timeout: 5))
 
         let finishVoiceNote = app.buttons["Finish voice note"]
         XCTAssertTrue(finishVoiceNote.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "voice-note-recording-active-response")
         finishVoiceNote.tap()
 
         let voiceNote = app.staticTexts["Voice note"]

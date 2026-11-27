@@ -412,7 +412,9 @@ qualified to release its native resources (such as Bun on Windows) also keep ded
 workers, because their cleanup relies on worker exit. A failed, cancelled or timed-out hosted task
 replaces the whole shared host: every hosted endpoint's in-flight work fails with an
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
-OOM guarantee.
+OOM guarantee. One-shot CLI commands outside the Gateway, such as `openclaw agent --local`,
+always run every worker of these core kinds, not only the first, in the shared host, whatever
+this setting is.
 
 ### Lean startup
 

@@ -122,8 +122,8 @@ async function receiveCallback(
       ? [binding.facts.previousSecret.value]
       : []),
   ];
-  const webhookId = verifyWebhook({ headers, body, secrets, now: service.now });
-  const parsed = parseCallback(body, webhookId, binding.facts.definition);
+  verifyWebhook({ headers, body, secrets, now: service.now });
+  const parsed = parseCallback(body, binding.facts.definition);
   if (parsed.kind === "verification") {
     guard();
     return { challenge: parsed.challenge };

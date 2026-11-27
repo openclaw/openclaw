@@ -20,7 +20,40 @@ import {
   getSubagentRunStaleAt,
   hasSubagentRunEnded,
   isRetainedUnendedSubagentRun,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
+  shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  isSubagentRunPausedForContinuation,
+  resolveSubagentSessionStatus,
+} from "./subagent-session-metrics.js";
+
+function readSessionDisplayFacts(entry: SubagentRunReadRecord | null, now: number) {
+  if (!entry) {
+    return null;
+  }
+  const identity: object = entry;
+  return {
+    identity,
+    model: entry.model,
+    ownerSessionKey: resolveControllerSessionKey(entry).trim() || undefined,
+    active: isSubagentRunLive(entry) || isSubagentRunQueued(entry),
+    paused: isSubagentRunPausedForContinuation(entry),
+    status: resolveSubagentSessionStatus(entry),
+    startedAt: getSubagentSessionStartedAt(entry),
+    endedAt: entry.execution.endedAt,
+    runtimeMs: getSubagentSessionRuntimeMs(entry, now),
+    clock: Number.isFinite(entry.execution.endedAt) ? undefined : now,
+    childLinkExpiresAt: hasSubagentRunEnded(entry)
+      ? entry.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : Infinity,
+    retainChildLink: shouldKeepSubagentRunChildLink(entry, { now }),
+  };
+}
 
 /** Lists runs of a requester chat, optionally scoped to a requester run. */
 export function listRunsForRequesterFromRuns(
@@ -138,7 +171,10 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
     now?: number,
   ): SubagentRunReadIndex<T>;
-  getDisplaySubagentRun(childSessionKey: string): T | null;
+  getSessionDisplayFacts(
+    childSessionKey: string,
+    now?: number,
+  ): ReturnType<typeof readSessionDisplayFacts>;
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   runsByChildSessionKey: ReadonlyMap<string, readonly T[]>;
   activeRequesterSessionKeys(): ReadonlySet<string>;
@@ -248,7 +284,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     const pendingDescendantCountBySessionKey = new Map<string, number>();
     const admissionPendingDescendantCountBySessionKey = new Map<string, number>();
     const displayByChildSessionKey = new Map<string, T | null>();
-    const getDisplaySubagentRun = (childSessionKey: string): T | null => {
+    const selectSessionDisplayRun = (childSessionKey: string): T | null => {
       const key = childSessionKey.trim();
       if (!key || !runsByChildSessionKey.has(key)) {
         return null;
@@ -387,7 +423,9 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       revision: topology.revision,
       atTime,
       patch,
-      getDisplaySubagentRun,
+      // Selection is captured; custody and elapsed runtime are current query facts.
+      getSessionDisplayFacts: (key, queryTime = clock) =>
+        readSessionDisplayFacts(selectSessionDisplayRun(key), queryTime),
       latestRunsByChildSessionKey,
       runsByChildSessionKey,
       activeRequesterSessionKeys: () => {

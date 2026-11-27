@@ -19,7 +19,7 @@ export function describeGitHubPublishTool(options: {
   ];
   if (options.publicationAvailable) {
     lines.push(
-      `- publish (default): open a PR from accepted workspace changes (draft: true for a draft)${options.workspacePreparationAvailable ? "; for a committed local checkout pass workspacePath" : ""}.`,
+      `- publish (default): PR from accepted work; draft: true for draft. Missing title/body use first branch commit${options.workspacePreparationAvailable ? "; local checkout: workspacePath" : ""}.`,
       "- edit: omit title/body to read; send its headCommit as expectedHeadCommit with a change.",
       "- ready, request_review: mark a draft ready; post the fixed re-review request when asked.",
     );

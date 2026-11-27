@@ -1,112 +1,133 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
-release_icon_set="$repo_root/apps/ios/Sources/Assets.xcassets/AppIcon.appiconset"
-debug_icon_set="$repo_root/apps/ios/Sources/Assets.xcassets/AppIconDebug.appiconset"
-source_svg="$repo_root/ui/public/favicon.svg"
-debug_renderer="$repo_root/apps/ios/scripts/app-icon-debug-dark.swift"
+# The approved artwork is the pair of 1024 px PNGs in each iOS icon set:
+# 1024.png (Default) and 1024-dark.png (Dark). They are flattened bitmaps with
+# no vector source. To change an icon, replace those two files and run
+# `generate`, which redraws every smaller size and the Watch icon sets from
+# 1024.png. The Tinted slot has no file, so the system derives it.
 
-require_command() {
-  local command_name="$1"
-  local install_hint="$2"
-  if ! command -v "$command_name" >/dev/null 2>&1; then
-    echo "app-icon-variants: missing $command_name; $install_hint" >&2
-    exit 1
-  fi
-}
+repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
+ios_catalog="$repo_root/apps/ios/Sources/Assets.xcassets"
+watch_catalog="$repo_root/apps/ios/WatchApp/Assets.xcassets"
+icon_sets=(AppIcon AppIconDebug)
+watch_source_name="watch-marketing-1024.png"
 
 preflight() {
-  require_command node "install the repository's required Node.js version"
-  require_command xcrun "install Xcode command-line tools"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "app-icon-variants: missing node; install the repository's required Node.js version" >&2
+    exit 1
+  fi
   if [[ ! -x /usr/bin/sips ]]; then
     echo "app-icon-variants: /usr/bin/sips is required; run this generator on macOS" >&2
     exit 1
   fi
-  if ! xcrun --find swift >/dev/null 2>&1; then
-    echo "app-icon-variants: Swift is required; select a complete Xcode toolchain" >&2
-    exit 1
-  fi
 }
 
-render_release_dark_icon() {
-  local output="$1"
-  /usr/bin/sips -z 1024 1024 -s format png "$source_svg" --out "$output" >/dev/null
+# Prints "<filename> <pixels>" for every resized image an icon set declares.
+resized_images() {
+  node - "$1/Contents.json" <<'NODE'
+const fs = require("node:fs");
+
+const { images } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const sizes = new Map();
+for (const image of images) {
+  if (!image.filename || !image.scale) continue;
+  const pixels = Math.round(Number.parseFloat(image.size) * Number.parseInt(image.scale, 10));
+  if (pixels === 1024) continue;
+  if (sizes.has(image.filename) && sizes.get(image.filename) !== pixels) {
+    throw new Error(`${image.filename} is declared at two pixel sizes`);
+  }
+  sizes.set(image.filename, pixels);
+}
+for (const [filename, pixels] of sizes) console.log(`${filename} ${pixels}`);
+NODE
 }
 
-render_debug_dark_icon() {
-  local output="$1"
-  xcrun swift "$debug_renderer" "$debug_icon_set/1024.png" "$output"
+render_icon_set() {
+  local source="$1" icon_set="$2" output_dir="$3" filename pixels
+  while read -r filename pixels; do
+    /usr/bin/sips -z "$pixels" "$pixels" "$source" --out "$output_dir/$filename" >/dev/null
+  done < <(resized_images "$icon_set")
+}
+
+render_all() {
+  local output_root="$1" name
+  for name in "${icon_sets[@]}"; do
+    mkdir -p "$output_root/ios/$name" "$output_root/watch/$name"
+    render_icon_set "$ios_catalog/$name.appiconset/1024.png" \
+      "$ios_catalog/$name.appiconset" "$output_root/ios/$name"
+    cp "$ios_catalog/$name.appiconset/1024.png" "$output_root/watch/$name/$watch_source_name"
+    render_icon_set "$ios_catalog/$name.appiconset/1024.png" \
+      "$watch_catalog/$name.appiconset" "$output_root/watch/$name"
+  done
 }
 
 check_manifests() {
-  node - \
-    "$release_icon_set/Contents.json" "$release_icon_set" \
-    "$debug_icon_set/Contents.json" "$debug_icon_set" <<'NODE'
+  local name
+  for name in "${icon_sets[@]}"; do
+    node - "$ios_catalog/$name.appiconset" "$watch_catalog/$name.appiconset" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
-const inputs = process.argv.slice(2);
+const [iosIconSet, watchIconSet] = process.argv.slice(2);
+const catalogName = path.basename(iosIconSet, ".appiconset");
+const read = (iconSet) =>
+  JSON.parse(fs.readFileSync(path.join(iconSet, "Contents.json"), "utf8")).images;
 const luminosity = (image) =>
   image.appearances?.find((entry) => entry.appearance === "luminosity")?.value;
 
-for (let index = 0; index < inputs.length; index += 2) {
-  const manifestPath = inputs[index];
-  const iconSetPath = inputs[index + 1];
-  const catalogName = path.basename(iconSetPath, ".appiconset");
-  const { images } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const dark = images.filter((image) => luminosity(image) === "dark");
-  const tinted = images.filter((image) => luminosity(image) === "tinted");
-  const marketing = images.filter(
-    (image) =>
-      image.idiom === "ios-marketing" &&
-      image.size === "1024x1024" &&
-      image.scale === "1x",
+const images = read(iosIconSet);
+const dark = images.filter((image) => luminosity(image) === "dark");
+const tinted = images.filter((image) => luminosity(image) === "tinted");
+const marketing = images.filter(
+  (image) => image.idiom === "ios-marketing" && image.size === "1024x1024" && image.scale === "1x",
+);
+
+if (
+  marketing.length !== 1 ||
+  marketing[0].filename !== "1024.png" ||
+  dark.length !== 1 ||
+  dark[0].filename !== "1024-dark.png" ||
+  dark[0].idiom !== "universal" ||
+  dark[0].platform !== "ios" ||
+  dark[0].size !== "1024x1024" ||
+  tinted.length !== 1 ||
+  Object.hasOwn(tinted[0], "filename") ||
+  tinted[0].idiom !== "universal" ||
+  tinted[0].platform !== "ios" ||
+  tinted[0].size !== "1024x1024"
+) {
+  throw new Error(
+    `${catalogName} must declare its Default image, one custom Dark image, and one automatic Tinted slot`,
   );
+}
 
-  if (
-    marketing.length !== 1 ||
-    marketing[0].filename !== "1024.png" ||
-    dark.length !== 1 ||
-    dark[0].filename !== "1024-dark.png" ||
-    dark[0].idiom !== "universal" ||
-    dark[0].platform !== "ios" ||
-    dark[0].size !== "1024x1024" ||
-    tinted.length !== 1 ||
-    Object.hasOwn(tinted[0], "filename") ||
-    tinted[0].idiom !== "universal" ||
-    tinted[0].platform !== "ios" ||
-    tinted[0].size !== "1024x1024"
-  ) {
-    throw new Error(
-      `${catalogName} must declare its existing Default image, one custom Dark image, and one automatic Tinted slot`,
-    );
-  }
-
-  for (const filename of new Set(images.flatMap((image) => image.filename ?? []))) {
-    if (!fs.existsSync(path.join(iconSetPath, filename))) {
-      throw new Error(`${catalogName} references missing file: ${filename}`);
+for (const [iconSet, declared] of [
+  [iosIconSet, images],
+  [watchIconSet, read(watchIconSet)],
+]) {
+  for (const filename of new Set(declared.flatMap((image) => image.filename ?? []))) {
+    if (!fs.existsSync(path.join(iconSet, filename))) {
+      throw new Error(`${iconSet} references missing file: ${filename}`);
     }
   }
 }
 NODE
+  done
 }
 
-check_pngs() {
-  node - \
-    "$release_icon_set/1024.png" opaque any \
-    "$release_icon_set/1024-dark.png" alpha srgb \
-    "$debug_icon_set/1024.png" opaque srgb \
-    "$debug_icon_set/1024-dark.png" alpha srgb <<'NODE'
+# iOS draws these full-bleed and applies its own mask, so both appearances are
+# opaque squares. sRGB is declared so the colors do not depend on the reader.
+check_artwork() {
+  local name
+  for name in "${icon_sets[@]}"; do
+    node - "$ios_catalog/$name.appiconset/1024.png" "$ios_catalog/$name.appiconset/1024-dark.png" <<'NODE'
 const fs = require("node:fs");
 
-const inputs = process.argv.slice(2);
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
-for (let index = 0; index < inputs.length; index += 3) {
-  const imagePath = inputs[index];
-  const alphaExpectation = inputs[index + 1];
-  const profileExpectation = inputs[index + 2];
+for (const imagePath of process.argv.slice(2)) {
   const data = fs.readFileSync(imagePath);
   if (!data.subarray(0, 8).equals(pngSignature)) {
     throw new Error(`${imagePath} is not a PNG`);
@@ -136,49 +157,49 @@ for (let index = 0; index < inputs.length; index += 3) {
     if (type === "IEND") break;
   }
 
-  if (
-    !header ||
-    header.width !== 1024 ||
-    header.height !== 1024 ||
-    header.bitDepth !== 8
-  ) {
+  if (!header || header.width !== 1024 || header.height !== 1024 || header.bitDepth !== 8) {
     throw new Error(`${imagePath} must be an 8-bit 1024x1024 PNG`);
   }
-
-  const hasAlphaChannel = header.colorType === 4 || header.colorType === 6;
-  if ((alphaExpectation === "alpha") !== hasAlphaChannel) {
-    throw new Error(`${imagePath} has an unexpected PNG alpha-channel shape`);
+  if (header.colorType === 4 || header.colorType === 6) {
+    throw new Error(`${imagePath} must be opaque, with no alpha channel`);
   }
-
-  if (
-    profileExpectation === "srgb" &&
-    !hasSRGBChunk &&
-    !iccProfileName?.toLowerCase().startsWith("srgb")
-  ) {
+  if (!hasSRGBChunk && !iccProfileName?.toLowerCase().startsWith("srgb")) {
     throw new Error(`${imagePath} must declare an sRGB color profile`);
   }
 }
 NODE
+  done
 }
 
 case "${1:-check}" in
   generate)
     preflight
-    render_release_dark_icon "$release_icon_set/1024-dark.png"
-    render_debug_dark_icon "$debug_icon_set/1024-dark.png"
+    check_manifests
+    check_artwork
+    temp_dir="$(mktemp -d /tmp/openclaw-app-icon-variants.XXXXXX)"
+    trap 'rm -rf "$temp_dir"' EXIT
+    render_all "$temp_dir"
+    for name in "${icon_sets[@]}"; do
+      cp "$temp_dir/ios/$name/"* "$ios_catalog/$name.appiconset/"
+      cp "$temp_dir/watch/$name/"* "$watch_catalog/$name.appiconset/"
+    done
     ;;
   check)
     preflight
     check_manifests
-    check_pngs
-
+    check_artwork
     temp_dir="$(mktemp -d /tmp/openclaw-app-icon-variants.XXXXXX)"
     trap 'rm -rf "$temp_dir"' EXIT
-    render_release_dark_icon "$temp_dir/1024-dark.png"
-    render_debug_dark_icon "$temp_dir/1024-debug-dark.png"
-    cmp "$release_icon_set/1024-dark.png" "$temp_dir/1024-dark.png"
-    cmp "$debug_icon_set/1024-dark.png" "$temp_dir/1024-debug-dark.png"
-    echo "AppIcon and AppIconDebug Default, Dark, and automatic Tinted variants are valid."
+    render_all "$temp_dir"
+    for name in "${icon_sets[@]}"; do
+      for rendered in "$temp_dir/ios/$name/"*; do
+        cmp "$rendered" "$ios_catalog/$name.appiconset/$(basename "$rendered")"
+      done
+      for rendered in "$temp_dir/watch/$name/"*; do
+        cmp "$rendered" "$watch_catalog/$name.appiconset/$(basename "$rendered")"
+      done
+    done
+    echo "AppIcon and AppIconDebug artwork, sizes, and Watch icon sets are valid."
     ;;
   *)
     echo "usage: $0 [generate|check]" >&2

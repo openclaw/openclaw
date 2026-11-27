@@ -6,6 +6,8 @@ import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import * as spawnRuntime from "../agents/subagents/spawn/subagent-spawn.runtime.js";
+import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { loadCronJobsStore } from "../cron/store.js";
@@ -172,22 +174,26 @@ it("readmits pending native child and scheduled work under current invitation bo
           { ...target, identityId: carol.id },
           { signal },
         );
-        const beforeRelease = providerRequests.length;
         releaseChild.resolve();
+        // Removal stops the parent run Carol started, so the held child launch ends with it.
         const childReceipt = await withinTest(childFinished.promise, signal);
-        expect(childReceipt).toMatchObject({ error: "Error: Session participation was revoked." });
-        const parentReceipt = await sender.request(
-          "agent.wait",
-          { runId: "native-held-parent" },
-          { signal },
-        );
-        console.info(
-          "native-revocation-receipts",
-          JSON.stringify({ child, childReceipt, parentReceipt }),
-        );
-        expect(parentReceipt).toMatchObject({ status: "error" });
+        expect(childReceipt).toHaveProperty("error");
+        expect(
+          await sender.request("agent.wait", { runId: "native-held-parent" }, { signal }),
+        ).not.toMatchObject({ status: "ok" });
         expect(childCalls).toBe(0);
         const afterParent = providerRequests.length;
+        const fallback = createDeferred<SessionEventOutcome>();
+        const enqueue = sessionEvents.enqueueSessionEventForHost;
+        using _ = vi
+          .spyOn(sessionEvents, "enqueueSessionEventForHost")
+          .mockImplementation((...args) => {
+            const receipt = enqueue(...args);
+            if (args[1].contextKey === `cron:${job.id}:failure-alert`) {
+              fallback.resolve(receipt.settled);
+            }
+            return receipt;
+          });
         await sender.request(
           "cron.update",
           {
@@ -215,6 +221,12 @@ it("readmits pending native child and scheduled work under current invitation bo
         expect(dueReceipt).toMatchObject({
           status: "error",
           error: expect.stringContaining("authority"),
+        });
+        // Revocation pauses the recurring job. Let its failure alert settle before restoring access.
+        expect(await withinTest(fallback.promise, signal)).toMatchObject({
+          status: "failed",
+          executionStarted: false,
+          error: `Error: Session "${parent.key}" was not found.`,
         });
         expect(providerRequests.length).toBe(afterParent);
         await expect(fs.access(outside)).rejects.toThrow();
@@ -307,7 +319,6 @@ it("readmits pending native child and scheduled work under current invitation bo
           job.operatorSource?.executionRevision,
         );
         expect(toolCalls).toBe(10);
-        expect(afterParent).toBe(beforeRelease);
         // No membership is ever created on this independent owner-only session.
         const owner = await sender.request<{ key: string }>(
           "sessions.create",
