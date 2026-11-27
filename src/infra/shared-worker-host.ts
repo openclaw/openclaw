@@ -18,6 +18,7 @@ import { getDatabaseProcessRole } from "./database-engine/admission-scope.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
+import { postgresPoolState } from "./postgres-sync/pool-state.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
@@ -97,7 +98,7 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   }
   // The Postgres bridge binds one pool per isolate; hosted endpoints cannot share it.
   const engines = getDatabaseEngineSelection()?.effectiveEngines;
-  if (engines && Object.values(engines).includes("postgres")) {
+  if (postgresPoolState.endpoints || (engines && Object.values(engines).includes("postgres"))) {
     return false;
   }
   const host = state.host;

@@ -76,6 +76,14 @@ export function operatorRefusalText(cause: OperatorRefusalCause, action = "start
   return `I did not ${action}. ${why} ${nextStep}`;
 }
 
+/**
+ * The session's timeline line for runs stopped because their starter lost access. Every viewer
+ * of the session sees it, so it names the person instead of addressing them.
+ */
+export function accessLossStopText(runs: number, name: string): string {
+  return `Stopped ${runs} ${runs === 1 ? "run" : "runs"} started by ${name}: their access to this session changed.`;
+}
+
 /** A definite refusal of operator work. Its message is the sentence the person sees. */
 export class OperatorRefusalError extends Error {
   constructor(

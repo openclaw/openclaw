@@ -10,6 +10,7 @@ import {
 } from "../config/resolution-facts.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import * as webRuntime from "../secrets/runtime-web-tools.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import {
@@ -208,6 +209,53 @@ function setWebTargetDeps(targetPath: string, provider?: string, owner?: string)
     );
   }
 }
+
+it.each([
+  { mode: "enforce_resolved", fail: false },
+  { mode: "enforce_resolved", fail: true },
+  { mode: "read_only_status", fail: true },
+] as const)(
+  "preserves web runtime resolution in $mode (failure: $fail)",
+  async ({ mode, fail }) => {
+    const targetPath = "plugins.entries.fixture.config.apiKey";
+    setSingleSecretTargetDeps({ path: targetPath });
+    vi.stubEnv("OPENCLAW_TEST_PLUGIN_KEY", "fixture-plugin-key");
+    const runtime = vi.spyOn(webRuntime, "resolveRuntimeWebTools");
+    if (fail) {
+      runtime.mockRejectedValueOnce(new Error("fixture web resolution failure"));
+    }
+    try {
+      const resolution = resolveCommandSecretRefsViaGateway({
+        config: {
+          plugins: {
+            entries: { fixture: { config: { apiKey: secretRef("OPENCLAW_TEST_PLUGIN_KEY") } } },
+          },
+        },
+        commandName: "fixture command",
+        targetIds: new Set([targetPath]),
+        mode,
+        localGatewayAbsent: true,
+      });
+      if (fail && mode === "enforce_resolved") {
+        await expect(resolution).rejects.toThrow("failed to resolve command secrets locally");
+      } else {
+        const result = await resolution;
+        expectWebKey(result, targetPath, "fixture-plugin-key");
+        expect(result.hadUnresolvedTargets).toBe(false);
+        expect(result.diagnostics).toEqual(
+          fail
+            ? [
+                "fixture command: failed to resolve web tool secrets locally (fixture web resolution failure).",
+              ]
+            : [],
+        );
+      }
+      expect(runtime).toHaveBeenCalledOnce();
+    } finally {
+      runtime.mockRestore();
+    }
+  },
+);
 
 it("skips gateway resolution when all configured target refs are inactive", async () => {
   const search = { enabled: false, remote: { apiKey: secretRef("AGENT_MEMORY_API_KEY") } };
