@@ -15,13 +15,15 @@ export function fragmentTrajectorySnapshot(
   originalBytes: number,
   maxCaptureBytes: number,
 ): SerializedEvent[] | undefined {
+  const captureLimit = Math.min(maxCaptureBytes, TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES);
   const snapshot = event.data?.messagesSnapshot;
   if (
     event.type !== "model.completed" ||
     !Array.isArray(snapshot) ||
     snapshot.length === 0 ||
     event.data?.truncated !== undefined ||
-    event.data?.droppedFields !== undefined
+    event.data?.droppedFields !== undefined ||
+    originalBytes > captureLimit
   ) {
     return undefined;
   }
@@ -30,7 +32,7 @@ export function fragmentTrajectorySnapshot(
     const json = JSON.stringify(value) ?? "null";
     return { value, json, bytes: Buffer.byteLength(json) };
   });
-  const sha256 = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
+  let sha256 = "0".repeat(64);
   const fragment = (messages: unknown[], index: number, count: number): TrajectoryEvent => ({
     ...event,
     type: TRAJECTORY_SNAPSHOT_FRAGMENT,
@@ -85,6 +87,22 @@ export function fragmentTrajectorySnapshot(
       messagesSnapshotFragments: { id, count: groups.length, sha256 },
     },
   };
+  const sizes = groups.map(
+    (messages, index) =>
+      Buffer.byteLength(JSON.stringify(fragment([], index, groups.length))) +
+      messages.reduce((sum, message) => sum + message.bytes, 0) +
+      messages.length -
+      1,
+  );
+  sizes.push(Buffer.byteLength(JSON.stringify(parent)));
+  if (
+    sizes.some((bytes) => bytes > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) ||
+    sizes.reduce((total, bytes) => total + bytes + 1, 0) > captureLimit
+  ) {
+    return undefined;
+  }
+  sha256 = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
+  parent.data!.messagesSnapshotFragments = { id, count: groups.length, sha256 };
   const records = groups.map((messages, index) => {
     const entry = fragment(
       messages.map(({ value }) => value),
@@ -102,14 +120,6 @@ export function fragmentTrajectorySnapshot(
     };
   });
   records.push({ event: parent, line: JSON.stringify(parent) });
-  const sizes = records.map(({ line }) => Buffer.byteLength(line));
-  if (
-    sizes.some((bytes) => bytes > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) ||
-    sizes.reduce((total, bytes) => total + bytes + 1, 0) >
-      Math.min(maxCaptureBytes, TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES)
-  ) {
-    return undefined;
-  }
   return records;
 }
 
