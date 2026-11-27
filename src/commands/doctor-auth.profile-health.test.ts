@@ -10,7 +10,10 @@ import {
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const authProfileMocks = vi.hoisted(() => ({
@@ -372,6 +375,26 @@ describe("inspectAuthProfileHealth", () => {
     await expect(pending(env)).resolves.toBe("work");
     expect(await collectCopilotAmbientTokenFindings(cfg, env)).toHaveLength(1);
     await expect(pending(env)).resolves.toBe("none");
+  });
+
+  it("cannot decide the profile inspection while its own state database is unheld", async () => {
+    // Doctor's env names another state root; the inspection, like the repair, reads this one.
+    openOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
+    const sidecars = () =>
+      fs.readdirSync(path.join(tempDir, "state")).filter((name) => /-(wal|shm)$/u.test(name));
+    expect(sidecars()).toEqual([]);
+    useLocalStore(expiredStore("openai-codex:default", now - 60_000));
+
+    await expect(
+      checkAuthProfileRefreshPending({
+        cfg: configForAgents("main"),
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-auth-other-") },
+        inspectProfiles: true,
+      }),
+    ).resolves.toBe("undecidable");
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
+    expect(sidecars()).toEqual([]);
   });
 
   it.each([

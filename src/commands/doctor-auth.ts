@@ -518,24 +518,26 @@ export async function checkAuthProfileRefreshPending(params: {
   inspectProfiles: boolean;
 }): Promise<DoctorMaintenancePending> {
   const env = params.env ?? process.env;
-  // The reads touch the state database and every auth store; read them only while held.
-  const stores = [
-    resolveOpenClawStateSqlitePath(env),
+  // Each read touches the state database and the agent auth stores of its environment:
+  // the notice reads Doctor's env, while the profile inspection (like the repair) reads
+  // the process env. Read only stores a connection holds.
+  const heldStores = (storeEnv: NodeJS.ProcessEnv) => [
+    resolveOpenClawStateSqlitePath(storeEnv),
     ...listAgentIds(params.cfg).map((agentId) =>
-      resolveAuthProfileDatabasePath(resolveAgentDir(params.cfg, agentId, env)),
+      resolveAuthProfileDatabasePath(resolveAgentDir(params.cfg, agentId, storeEnv)),
     ),
   ];
-  return decideDoctorPendingFromLiveStores(stores, async () => {
+  const notice = await decideDoctorPendingFromLiveStores(heldStores(env), async () =>
     // The once-per-state ambient-token notice records that it was shown.
-    if (await isCopilotAmbientTokenNoticePending(params.cfg, env)) {
-      return "work";
-    }
-    if (!params.inspectProfiles) {
-      return "none";
-    }
+    (await isCopilotAmbientTokenNoticePending(params.cfg, env)) ? "work" : "none",
+  );
+  if (notice !== "none" || !params.inspectProfiles) {
+    return notice;
+  }
+  return decideDoctorPendingFromLiveStores(heldStores(process.env), async () => {
     // The shared store's location is known only after its ownership is read.
-    await prepareSharedAuthStoreOwnership(env);
-    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath(env)], async () => {
+    await prepareSharedAuthStoreOwnership();
+    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath()], async () => {
       for (const target of await listAuthProfileHealthTargets(params.cfg)) {
         const { summary } = await loadAuthProfileHealth({
           cfg: params.cfg,
