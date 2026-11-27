@@ -4,8 +4,6 @@ Related: https://github.com/openclaw/openclaw/issues/206424
 
 ## What Problem This Solves
 
-Our work focuses on long-running, multi-user Discord conversations in OpenClaw, particularly on consumer hardware with a 32k local-model context window. Discord is our test environment; the underlying context-management principles have wider applicability.
-
 OpenClaw can spend a substantial portion of its context window on its own bookkeeping rather than the conversation. On the tested route, historical runtime-context snapshots accumulate even when the latest snapshot already supplies the relevant information. Each snapshot also contains unnecessary operational metadata.
 
 This creates a compounding problem: **redundant context → faster context growth → earlier context exhaustion → more frequent compaction, history rebuilding or session resets → potential cache loss and increased inference usage.** A warm cache does not eliminate the context-window capacity consumed by redundant tokens. Depending on the harness and provider, rewriting or resetting the cached prefix can make those tokens expensive to process again.
