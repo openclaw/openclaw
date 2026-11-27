@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { builtinDeveloperProfiles } from "./dictation-developer-builtins.ts";
 import {
   DEVELOPER_LIMITS,
@@ -44,10 +45,10 @@ const legacyKeys = profileKeys.filter(
 );
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const result = asOptionalRecord(value);
+  if (!result) {
     throw new Error("Expected a profile object.");
   }
-  const result = value as Record<string, unknown>;
   if (Object.keys(result).some((key) => !keys.includes(key))) {
     throw new Error("Unknown profile fields are not supported.");
   }

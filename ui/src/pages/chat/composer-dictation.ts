@@ -5,6 +5,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type {
   ComposerDictationCommits,
+  ComposerDictationReviewCapture,
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
@@ -18,12 +19,6 @@ type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recordin
 type ComposerDictationFailure = {
   kind: "interrupted" | "start" | "busy";
   preservesText: boolean;
-};
-
-/** Optional capture preparation consumes finals before they can enter an unsent draft. */
-export type ComposerDictationReviewCapture = {
-  finish(rawTranscript: string): void;
-  cancel(): void;
 };
 
 type ComposerDictationOwnerOptions = {

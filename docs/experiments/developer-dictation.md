@@ -26,7 +26,7 @@ external-application insertion capability.
 
 ## Choose a mode and review
 
-Open **Dictation syntax** below the composer. Enable syntax review, choose
+Open **+ → Dictation syntax** in the composer. Enable syntax review, choose
 **English (en-US)** explicitly, and select a profile and mode:
 
 | Mode      | Behavior                                                                                                                                                                |

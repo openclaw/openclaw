@@ -7,7 +7,6 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import type { ComposerDictationReviewCapture } from "./composer-dictation.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -22,6 +21,12 @@ registerEnglishCatalog(registerChatComposerEnglish);
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
+
+/** Optional capture preparation consumes finals before they can enter an unsent draft. */
+export type ComposerDictationReviewCapture = {
+  finish(rawTranscript: string): void;
+  cancel(): void;
+};
 
 type DictationSessionResult = {
   sessionId: string;

@@ -44,13 +44,16 @@ async function openDictationPage() {
   return { page, gateway, textarea: page.locator(".agent-chat__composer-combobox textarea") };
 }
 
-async function openSyntaxSettings(page: Page) {
-  await page.locator("summary").filter({ hasText: "Dictation syntax" }).click();
-  await page.getByRole("checkbox", { name: "Enable exact syntax review", exact: true }).waitFor();
+async function setSyntaxSettingsOpen(page: Page, open = true) {
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Dictation syntax", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "Enable exact syntax review", exact: true })
+    .waitFor({ state: open ? "visible" : "hidden" });
 }
 
 async function enableSyntaxReview(page: Page) {
-  await openSyntaxSettings(page);
+  await setSyntaxSettingsOpen(page);
   await page
     .getByRole("combobox", { name: "Spoken command language", exact: true })
     .selectOption("en-US");
@@ -141,7 +144,7 @@ suite.define(() => {
     );
     await capture(page, "disabled", [textarea]);
 
-    await openSyntaxSettings(page);
+    await setSyntaxSettingsOpen(page);
     for (const module of modules) {
       expect(requests.some((request) => module.test(request))).toBe(true);
     }
@@ -153,7 +156,7 @@ suite.define(() => {
     await textarea.waitFor();
     await enableSyntaxReview(page);
     await capture(page, "settings", [textarea]);
-    await page.locator("summary").filter({ hasText: "Dictation syntax" }).click();
+    await setSyntaxSettingsOpen(page, false);
     await textarea.fill("prefix: ");
     const preview = await finalizeCapture(page, gateway, textarea, "prefix: ");
     await capture(page, "review", [textarea, preview]);
@@ -207,8 +210,8 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe("retained draft");
       await capture(page, "runtime-pending", [textarea]);
       release.resolve();
-      await openSyntaxSettings(page);
-      await page.locator("summary").filter({ hasText: "Dictation syntax" }).click();
+      await setSyntaxSettingsOpen(page);
+      await setSyntaxSettingsOpen(page, false);
       const preview = await finalizeCapture(page, gateway, textarea, "retained draft");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await capture(page, "runtime-retry-review", [textarea, preview]);

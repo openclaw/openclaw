@@ -4,11 +4,10 @@ import {
   type DeveloperDiagnostic,
   type DeveloperProfile,
 } from "../../../../../src/shared/dictation-developer.ts";
+import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  createComposerDeveloperSyntax,
-  type ComposerDeveloperSyntax,
-} from "../composer-developer-syntax.ts";
+import { ComposerDeveloperSyntax } from "../composer-developer-syntax.ts";
+import { captureDeveloperDictationTarget } from "../composer-developer-target.ts";
 import type { ChatComposerState } from "./chat-composer-types.ts";
 
 function profileLabel(profile: DeveloperProfile) {
@@ -111,7 +110,16 @@ export function DeveloperSyntaxContent(
     const state = props.state;
     if (!state.developerSyntax) {
       // The lazy presenter must be mounted before it can install the pane owner.
-      state.developerSyntax = createComposerDeveloperSyntax(state);
+      state.developerSyntax = new ComposerDeveloperSyntax({
+        readSettings: () => loadSettings().developerDictation,
+        saveSettings: (value) => patchSettings({ developerDictation: value }),
+        captureTarget: () => {
+          const composer = state.developerSyntaxHost?.readProps();
+          return composer ? captureDeveloperDictationTarget(composer, state) : undefined;
+        },
+        cancelCapture: () => state.dictation?.cancel(),
+        copy: (text) => navigator.clipboard.writeText(text),
+      });
       state.setDeveloperSyntax(state.developerSyntax);
     }
   });

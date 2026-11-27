@@ -262,16 +262,14 @@ export function parseDeveloperCommand(
     ["camelCase", "identifierEnd"],
     ["pascalCase", "identifierEnd"],
     ["kebabCase", "identifierEnd"],
-    ...(!inCode ? [["codeStart", "codeEnd"]] : []),
+    ...(!inCode ? [["codeStart", "codeEnd"] as const] : []),
   ] as const;
   for (const [open, close] of commands) {
-    const openKey = open as keyof typeof grammar;
-    const closeKey = close as keyof typeof grammar;
-    const size = matchesPhrase(tokens, start, grammar[openKey]);
+    const size = matchesPhrase(tokens, start, grammar[open]);
     if (!size) {
       continue;
     }
-    let end = findPhrase(tokens, start + size, limit, grammar[closeKey]);
+    let end = findPhrase(tokens, start + size, limit, grammar[close]);
     // A literal escape owns its terminator even when its payload names the
     // surrounding code terminator. Escaped command words remain inert bytes.
     if (open === "codeStart") {
@@ -295,7 +293,7 @@ export function parseDeveloperCommand(
         }
       }
     }
-    const next = end < 0 ? limit : end + grammar[closeKey].split(" ").length;
+    const next = end < 0 ? limit : end + grammar[close].split(" ").length;
     const raw = source.slice(tokens[start]!.start, tokens[next - 1]!.end);
     if (end < 0) {
       return {
@@ -307,7 +305,7 @@ export function parseDeveloperCommand(
             start,
             next,
             "incomplete",
-            `Finish the command with “${grammar[closeKey]}”.`,
+            `Finish the command with “${grammar[close]}”.`,
           ),
         ],
       };
@@ -331,7 +329,7 @@ export function parseDeveloperCommand(
       output = code.text;
       diagnostics = code.diagnostics;
     } else if (request.mode === "developer") {
-      output = identifier(body, open as Style, profile);
+      output = identifier(body, open, profile);
     } else {
       diagnostics = [
         diagnostic(

@@ -16,18 +16,19 @@ import {
   requiresDeveloperDictationReview,
   type DeveloperDictationSettings,
 } from "../../app/settings-developer-dictation.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { ChatComposerState } from "./components/chat-composer-types.ts";
-import {
-  captureDeveloperDictationTarget,
-  type DeveloperDictationTarget,
-} from "./composer-developer-target.ts";
-import type { ComposerDictationReviewCapture } from "./composer-dictation.ts";
+import type { ComposerDictationReviewCapture } from "./composer-dictation-session.ts";
 
 registerChatDictationEnglish();
+
+/** Only a qualified, mounted, unsent draft can accept a review result. */
+export type DeveloperDictationTarget = {
+  isCurrent(): boolean;
+  canInsertExact?(text: string): boolean;
+  insert(text: string, isAuthorized?: () => boolean): boolean;
+};
 
 type Review = {
   id: number;
@@ -399,18 +400,4 @@ export class ComposerDeveloperSyntax extends EventTarget {
   dispose() {
     this.retire();
   }
-}
-
-/** The existing pane owns this instance; its editor adapter loads with syntax use. */
-export function createComposerDeveloperSyntax(state: ChatComposerState) {
-  return new ComposerDeveloperSyntax({
-    readSettings: () => loadSettings().developerDictation,
-    saveSettings: (value) => patchSettings({ developerDictation: value }),
-    captureTarget: () => {
-      const props = state.developerSyntaxHost?.readProps();
-      return props ? captureDeveloperDictationTarget(props, state) : undefined;
-    },
-    cancelCapture: () => state.dictation?.cancel(),
-    copy: (text) => navigator.clipboard.writeText(text),
-  });
 }

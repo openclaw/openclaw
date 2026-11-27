@@ -40,6 +40,14 @@ beforeEach(() => {
 });
 afterEach(() => resetComposerFixture());
 
+async function toggleSyntaxSettings(container: HTMLElement) {
+  container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
+  const entry = () => container.querySelector<HTMLButtonElement>('[data-value="dictation-syntax"]');
+  await waitForSolid(() => expect(entry()).not.toBeNull());
+  entry()!.click();
+  flush();
+}
+
 async function fixture(
   initial = "",
   initialMentions: readonly HumanMention[] = [],
@@ -74,7 +82,7 @@ async function fixture(
   renderComposerInto(container, props);
   const state = getChatComposerState(props.paneId);
   const input = state.composerTextarea!;
-  container.querySelector<HTMLElement>(".developer-syntax summary")!.click();
+  await toggleSyntaxSettings(container);
   await waitForSolid(() => {
     expect(state.developerSyntax).not.toBeNull();
     expect(container.querySelector(".developer-syntax fieldset")).not.toBeNull();
@@ -468,18 +476,15 @@ it("retains pending profile input and an export when syntax settings are collaps
   flush();
   const exported = () =>
     view.container.querySelector<HTMLTextAreaElement>(
-      ".developer-syntax details textarea[readonly]",
+      '.developer-syntax section[aria-label="Dictation syntax"] textarea[readonly]',
     );
   expect(JSON.parse(exported()!.value).id).toBe("en-us-plain-code");
-  const details = view.container.querySelector<HTMLDetailsElement>(".developer-syntax details")!;
+  const panel = view.container.querySelector<HTMLElement>(
+    '.developer-syntax section[aria-label="Dictation syntax"]',
+  )!;
   for (const open of [false, true]) {
-    const toggled = new Promise<void>((resolve) => {
-      details.addEventListener("toggle", () => resolve(), { once: true });
-    });
-    details.querySelector<HTMLElement>("summary")!.click();
-    await toggled;
-    flush();
-    expect(details.open).toBe(open);
+    await toggleSyntaxSettings(view.container);
+    expect(panel.hidden).toBe(!open);
   }
   expect(
     view.container.querySelector<HTMLTextAreaElement>(".developer-syntax fieldset textarea")!.value,

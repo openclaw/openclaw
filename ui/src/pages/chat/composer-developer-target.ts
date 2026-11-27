@@ -4,14 +4,8 @@ import {
   withExactComposerInsertion,
 } from "../../lib/composer-input.ts";
 import type { ChatComposerProps, ChatComposerState } from "./components/chat-composer-types.ts";
+import type { DeveloperDictationTarget } from "./composer-developer-syntax.ts";
 import { normalizeChatComposerDraft } from "./composer-draft.ts";
-
-/** Only this mounted, unsent browser draft is a qualified insertion target. */
-export type DeveloperDictationTarget = {
-  isCurrent(): boolean;
-  canInsertExact?(text: string): boolean;
-  insert(text: string, isAuthorized?: () => boolean): boolean;
-};
 
 export function captureDeveloperDictationTarget(
   props: ChatComposerProps,

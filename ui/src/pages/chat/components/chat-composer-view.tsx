@@ -106,6 +106,7 @@ export function renderChatComposerView(
     return () => setReadPluginActions(undefined);
   };
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
+  const [syntaxSettingsOpen, setSyntaxSettingsOpen] = createSignal<boolean>();
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
     (): ChatComposerPlusMenuView => {
@@ -603,6 +604,7 @@ export function renderChatComposerView(
               <DeveloperSyntaxSlot
                 state={state}
                 requested={context().developerSyntaxRequested}
+                settingsOpen={syntaxSettingsOpen()}
                 readOwner={() => context().developerSyntax}
               />
             </Show>
@@ -618,6 +620,24 @@ export function renderChatComposerView(
                     open: capabilityOpen(),
                     view: capabilityView(),
                     toolOverrides: props.toolOverrides,
+                    rootToggles: context().dictation
+                      ? [
+                          {
+                            value: "dictation-syntax",
+                            label: t("chat.composer.dictationSyntax"),
+                            icon: "mic",
+                            checked: syntaxSettingsOpen() === true,
+                            disabled: false,
+                            onChange: (open) => {
+                              setSyntaxSettingsOpen(open);
+                              setCapabilityOpen(false);
+                              if (open) {
+                                state.developerSyntaxHost?.request();
+                              }
+                            },
+                          },
+                        ]
+                      : undefined,
                     onOpenChange: (open) => {
                       setCapabilityOpen(open);
                       if (!open) {
