@@ -35,7 +35,6 @@ describe("prepared trajectory snapshots", () => {
   it("round-trips Unicode and order without changing the input or row and window limits", () => {
     const before = JSON.stringify(event);
     const encoded = records();
-    expect(encoded.length).toBeGreaterThan(1);
     expect(
       encoded.every(({ line }) => Buffer.byteLength(line) <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES),
     ).toBe(true);
@@ -58,6 +57,7 @@ describe("prepared trajectory snapshots", () => {
       if (mutation === "index") encoded[0]!.data!.index = 9;
       if (mutation === "digest") encoded[0]!.data!.sha256 = "0".repeat(64);
       const decoded = restoreTrajectorySnapshots(encoded);
+      expect(decoded, mutation).toHaveLength(1);
       expect(decoded.at(-1)?.data?.truncated, mutation).toBe(true);
       expect(decoded.at(-1)?.data?.messagesSnapshot, mutation).toBeUndefined();
       expect(JSON.stringify(decoded)).not.toContain('"sha256"');

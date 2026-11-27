@@ -26,7 +26,11 @@ export function fragmentTrajectorySnapshot(
     return undefined;
   }
   const id = randomUUID();
-  const sha256 = hash("sha256", JSON.stringify(snapshot));
+  const messages = snapshot.map((value) => {
+    const json = JSON.stringify(value) ?? "null";
+    return { value, json, bytes: Buffer.byteLength(json) };
+  });
+  const sha256 = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
   const fragment = (messages: unknown[], index: number, count: number): TrajectoryEvent => ({
     ...event,
     type: TRAJECTORY_SNAPSHOT_FRAGMENT,
@@ -42,24 +46,27 @@ export function fragmentTrajectorySnapshot(
       messagesSnapshot: messages,
     },
   });
-  const groups: unknown[][] = [];
-  let group: unknown[] = [];
+  const groups: (typeof messages)[] = [];
+  let group: typeof messages = [];
+  let groupBytes = 0;
   // Reserve the longest numeric header while choosing groups; final headers are smaller.
-  const fits = (messages: unknown[]) =>
-    Buffer.byteLength(
-      JSON.stringify(fragment(messages, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)),
-    ) <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES;
-  for (const message of snapshot) {
-    const next = [...group, message];
-    if (fits(next)) {
-      group = next;
-      continue;
-    }
-    if (group.length === 0 || !fits([message])) {
+  const overhead = Buffer.byteLength(
+    JSON.stringify(fragment([], Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)),
+  );
+  for (const message of messages) {
+    if (overhead + message.bytes > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
       return undefined;
     }
-    groups.push(group);
-    group = [message];
+    if (
+      overhead + groupBytes + (group.length ? 1 : 0) + message.bytes >
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES
+    ) {
+      groups.push(group);
+      group = [];
+      groupBytes = 0;
+    }
+    groupBytes += (group.length ? 1 : 0) + message.bytes;
+    group.push(message);
   }
   groups.push(group);
   const data = { ...event.data };
@@ -78,10 +85,23 @@ export function fragmentTrajectorySnapshot(
       messagesSnapshotFragments: { id, count: groups.length, sha256 },
     },
   };
-  const records = [
-    ...groups.map((messages, index) => fragment(messages, index, groups.length)),
-    parent,
-  ].map((entry) => ({ event: entry, line: JSON.stringify(entry) }));
+  const records = groups.map((messages, index) => {
+    const entry = fragment(
+      messages.map(({ value }) => value),
+      index,
+      groups.length,
+    );
+    const header = JSON.stringify({
+      ...entry,
+      data: { ...entry.data, messagesSnapshot: undefined },
+    });
+    return {
+      event: entry,
+      // The header ends with the data and event braces; append the already encoded array once.
+      line: `${header.slice(0, -2)},"messagesSnapshot":[${messages.map(({ json }) => json).join(",")}]}}`,
+    };
+  });
+  records.push({ event: parent, line: JSON.stringify(parent) });
   const sizes = records.map(({ line }) => Buffer.byteLength(line));
   if (
     sizes.some((bytes) => bytes > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) ||
@@ -106,6 +126,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
   }
   const consumed = new Set<TrajectoryEvent>();
   const replacements = new Map<TrajectoryEvent, TrajectoryEvent>();
+  const parents = new Set<unknown>();
   const sameRun = (left: TrajectoryEvent, right: TrajectoryEvent) =>
     left.source === "runtime" &&
     right.source === "runtime" &&
@@ -135,6 +156,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
       continue;
     }
     const { id, count, sha256 } = reference as Record<string, unknown>;
+    parents.add(id);
     const fragments = typeof id === "string" ? groups.get(id) : undefined;
     if (
       !fragments ||
@@ -191,7 +213,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     }
     if (event.type === TRAJECTORY_SNAPSHOT_FRAGMENT) {
       const id = event.data?.snapshotId;
-      if (reportedOrphans.has(id)) {
+      if (parents.has(id) || reportedOrphans.has(id)) {
         return [];
       }
       reportedOrphans.add(id);

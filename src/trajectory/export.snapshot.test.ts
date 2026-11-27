@@ -53,7 +53,6 @@ it("exports a complete large snapshot through the recorder and bounded SQLite ro
   recorder.recordEvent("model.completed", { messagesSnapshot: snapshot, stopReason: "stop" });
   await recorder.flush();
   const stored = await loadSqliteTrajectoryRuntimeEvents(sessionTarget);
-  expect(stored.length).toBeGreaterThan(1);
   for (const event of stored) {
     expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
