@@ -4,6 +4,7 @@ import "./server-context.chrome-test-harness.js";
 import { withTimeout } from "../sdk-node-runtime.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdp from "./cdp.helpers.js";
+import * as cdpActions from "./cdp.js";
 import type { ChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
@@ -31,6 +32,15 @@ const chrome = {
 
 function fakeRunning(pid: number): RunningChrome {
   return mockLaunchedChrome(vi.fn(), pid);
+}
+
+function blankPage(id: string) {
+  return {
+    id,
+    type: "page",
+    url: "about:blank",
+    webSocketDebuggerUrl: `ws://127.0.0.1:18800/devtools/page/${id}`,
+  };
 }
 
 function deferResult<T>(mock: { mockImplementationOnce: (fn: () => Promise<T>) => unknown }) {
@@ -139,16 +149,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const { dispatch } = createBrowserRouteDispatcher(ctx);
     const running = mockLaunchedChrome(chrome.launch, 1203);
     chrome.reachable.mockImplementation(async () => runtime.running === running);
-    const blankTab = (id: string) => ({
-      id,
-      type: "page",
-      url: "about:blank",
-      webSocketDebuggerUrl: `ws://127.0.0.1:18800/devtools/page/${id}`,
-    });
-    const readPages = vi.spyOn(cdp, "fetchJson").mockResolvedValue([blankTab("warmup-tab")]);
+    const readPages = vi.spyOn(cdp, "fetchJson").mockResolvedValue([blankPage("warmup-tab")]);
 
     await expect(dispatch({ method: "POST", path: "/prewarm" })).resolves.toMatchObject({
       status: 200,
+    });
+    await expect(dispatch({ method: "GET", path: "/tabs" })).resolves.toMatchObject({
+      status: 200,
+      body: { running: false, tabs: [] },
     });
     await expect(
       dispatch({ method: "POST", path: "/screencast", body: { targetId: "warmup-tab" } }),
@@ -157,8 +165,34 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(chrome.stop).toHaveBeenCalledExactlyOnceWith(running);
     mockLaunchedChrome(chrome.launch, 1204);
-    readPages.mockResolvedValue([blankTab("next-tab")]);
+    readPages.mockResolvedValue([blankPage("next-tab")]);
     await expect(profile.ensureTabAvailable()).resolves.toMatchObject({ targetId: "next-tab" });
+  });
+
+  it("keeps Chrome running for an explicit screenshot of a warmup tab", async () => {
+    const { ctx, profile, runtime } = setupEnsureBrowserAvailableHarness();
+    const { dispatch } = createBrowserRouteDispatcher(ctx);
+    const running = mockLaunchedChrome(chrome.launch, 1203);
+    chrome.reachable.mockImplementation(async () => runtime.running === running);
+    vi.spyOn(cdp, "fetchJson").mockResolvedValue([blankPage("warmup-tab")]);
+    const { entered, result } = deferResult(vi.spyOn(cdpActions, "captureScreenshot"));
+    await profile.ensureBrowserAvailable({ prewarm: true });
+
+    const screenshot = dispatch({
+      method: "POST",
+      path: "/screenshot",
+      body: { targetId: "warmup-tab" },
+    });
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    result.resolve(
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    await expect(screenshot).resolves.toMatchObject({ status: 200 });
+    expect(runtime.running).toBe(running);
   });
 
   it("honors an explicit headless start queued behind a headed warmup", async () => {

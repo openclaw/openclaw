@@ -128,7 +128,7 @@ type BrowserRequestEnvelope = {
 /**
  * Marks a request as the person deliberately using the page (click, key, text, scroll,
  * history, navigation). The Gateway shows the agent recent use and keeps a takeover alive
- * from these only; automatic panel requests (viewport fit, page metrics) stay unmarked.
+ * from these only. Automatic panel requests may explicitly mark themselves as passive.
  */
 const OPERATOR_INPUT = { operatorInput: true };
 
@@ -402,6 +402,7 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
     await browserRequest(client, {
       method: "POST",
       path: "/screenshot",
+      query: { operatorInput: false },
       body: { targetId, type: "png" },
     }),
   );

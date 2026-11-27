@@ -261,7 +261,7 @@ export function registerBrowserAgentSnapshotRoutes(
       res,
       ctx,
       targetId,
-      preserveWarmup: true,
+      preserveWarmup: toBoolean(req.query.operatorInput) === false,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal }) => {
         const jsonScreenshot = (image: Awaited<ReturnType<typeof saveBrowserScreenshot>>) => {

@@ -240,6 +240,25 @@ export function prepareAddressWarmupForStart(
   }
 }
 
+export function observeAddressWarmupPages(
+  runtime: ProfileRuntimeState | undefined,
+  pages: readonly { url: string }[],
+): boolean {
+  if (!runtime?.running) {
+    return false;
+  }
+  const actor = getProfileLifecycle(runtime);
+  if (!actor.addressWarmupOnly) {
+    return false;
+  }
+  actor.addressWarmupOnly =
+    pages.length <= 1 &&
+    pages.every(({ url }) =>
+      ["about:blank", "chrome://newtab/", "chrome://new-tab-page/"].includes(url),
+    );
+  return actor.addressWarmupOnly;
+}
+
 /** An address edit may launch Chrome, but never close a browser someone has since used. */
 export function scheduleAddressWarmupExpiry(
   state: BrowserServerState,
@@ -258,23 +277,19 @@ export function scheduleAddressWarmupExpiry(
       await sleepWithAbort(1_000, undefined, { ref: false });
       return unclaimed() ? await readPages() : null;
     });
-    if (
-      pages &&
-      unclaimed() &&
-      pages.length <= 1 &&
-      pages.every(({ url }) =>
-        ["about:blank", "chrome://newtab/", "chrome://new-tab-page/"].includes(url),
-      )
-    ) {
+    if (pages && unclaimed() && observeAddressWarmupPages(runtime, pages)) {
       await beginProfileTransition({ state, runtime, reason: "unused address warmup" });
     }
   }
   setTimeout(() => {
-    void expire().catch((error: unknown) =>
+    void expire().catch((error: unknown) => {
+      if (unclaimed()) {
+        actor.addressWarmupOnly = false;
+      }
       createSubsystemLogger("browser").warn(
         `Could not retire unused Chrome warmup: ${String(error)}`,
-      ),
-    );
+      );
+    });
   }, 30_000).unref();
 }
 
