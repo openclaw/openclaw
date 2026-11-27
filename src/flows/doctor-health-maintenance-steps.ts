@@ -147,7 +147,7 @@ export async function runDoctorPreStopMaintenance(params: {
  * failed restore they still run; if they cannot, the earlier failure stays the outcome and
  * their absence is reported.
  */
-export async function runDoctorAfterRestartSteps(params: {
+async function runDoctorAfterRestartSteps(params: {
   ctx: DoctorHealthFlowContext | undefined;
   measure: DoctorProgressMeasure;
   failed: boolean;

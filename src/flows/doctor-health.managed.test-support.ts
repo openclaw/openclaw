@@ -285,9 +285,9 @@ async function runManagedRepair(
         createDoctorHealthContribution("doctor:fixture-diagnostic", "Fixture diagnostic", {
           pending: "diagnostic-only",
           placement: "after-restart",
-          async run(current) {
+          async run(diagnosisCtx) {
             events.push("diagnose");
-            renderStructuredHealthFindings(current, [
+            renderStructuredHealthFindings(diagnosisCtx, [
               {
                 checkId: "core/doctor/fixture-diagnostic",
                 severity: "warning",
