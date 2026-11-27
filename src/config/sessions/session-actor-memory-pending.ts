@@ -185,6 +185,8 @@ export function createSessionActorMemoryPending(
       return {
         rows: structuredClone(page.slice(0, selected.length)),
         total,
+        hasQueuedInput:
+          total === undefined ? undefined : rows.some((row) => row.state === "queued"),
         currentSessionId:
           page.length && query.sessionKey === state.hot.target.sessionKey
             ? state.hot.entry?.sessionId

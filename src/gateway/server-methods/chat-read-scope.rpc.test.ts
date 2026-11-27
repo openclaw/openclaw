@@ -217,6 +217,7 @@ describe("registered chat read scope", () => {
         const first = (await history()).pendingInputs;
         expect(first).toEqual({
           total: 22,
+          hasQueuedInput: true,
           items: [],
           queuedCount: 0,
           nextBefore: expect.any(Number),
@@ -249,7 +250,12 @@ describe("registered chat read scope", () => {
           sessionId: "replacement-physical-session",
           updatedAt: 2,
         });
-        expect((await history()).pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
+        expect((await history()).pendingInputs).toEqual({
+          items: [],
+          total: 0,
+          hasQueuedInput: false,
+          queuedCount: 0,
+        });
       } finally {
         for (const receipt of receipts) {
           receipt.finish("interrupted", "failed");

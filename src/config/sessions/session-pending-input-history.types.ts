@@ -15,6 +15,7 @@ export type PendingInputHistoryQuery = {
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
   total: number | undefined;
+  hasQueuedInput?: boolean;
   nextBefore?: number;
   currentSessionId?: string;
 };

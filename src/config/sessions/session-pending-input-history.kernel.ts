@@ -60,15 +60,21 @@ export function readPendingInputHistoryInDatabase(
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
-    const total =
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        base.select(db.fn.count<number>("input_id").as("total")),
-      )?.total ?? 0;
-    if (total === 0) {
-      return { rows: [], total };
+    const counts = executeSqliteQueryTakeFirstSync(
+      database.db,
+      base.select((eb) => [
+        eb.fn.countAll<number>().as("total"),
+        eb.fn.countAll<number>().filterWhere("state", "=", "queued").as("queued"),
+      ]),
+    );
+    if (!counts?.total) {
+      return { rows: [], total: 0 };
     }
-    return { ...readPendingInputPageInDatabase(database, query, hasConsumption), total };
+    return {
+      ...readPendingInputPageInDatabase(database, query, hasConsumption),
+      total: counts.total,
+      hasQueuedInput: counts.queued > 0,
+    };
   });
 }
 

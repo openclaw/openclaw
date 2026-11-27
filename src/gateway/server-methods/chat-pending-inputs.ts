@@ -105,6 +105,7 @@ export async function readChatPendingInputs(
     before: options.before,
     limit: Math.min(options.limit, 20),
     audience: options.audience,
+    includeQueueObservation: options.queuedRunIds !== undefined,
   });
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     page.items.map((input) => input.message),

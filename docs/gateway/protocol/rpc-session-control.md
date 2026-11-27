@@ -273,6 +273,12 @@ Query `chat.history.inputRunIds` for the selected current session:
 | `inputConsumptions`                                                 | Consumed-only compatibility projection for existing v4 clients. |
 
 Pending display pages are separate from the transcript and exact receipt query.
+When present, `pendingInputs.hasQueuedInput` says whether any retained, unconsumed
+input in this physical session and audience was queued when the Gateway read the
+page. It covers all pages, not just the returned items. A client can use this
+observation alongside the run's terminal state rather than combining receipt
+states from different reads. Older Gateways omit the field; absence does not
+mean the queue is empty. `queuedCount` still describes live queue custody.
 A `started` acknowledgment is not consumption. Keep uncertain input and its
 original idempotency key until reconciled; a missing receipt does not prove
 consumption or justify a new send identity. Idempotency retention is bounded.

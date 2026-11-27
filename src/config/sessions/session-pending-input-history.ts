@@ -177,12 +177,15 @@ export async function listSessionPendingInputs(
     limit?: number;
     before?: number;
     audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    includeQueueObservation?: boolean;
   } = {},
 ): Promise<SessionPendingInputPage> {
-  const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
+  const { includeQueueObservation, ...query } = options;
+  const { rows, total, hasQueuedInput, nextBefore } = await readPendingInputRows(scope, query);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
     total: total ?? 0,
+    ...(includeQueueObservation ? { hasQueuedInput: total === 0 ? false : hasQueuedInput } : {}),
     ...(nextBefore !== undefined ? { nextBefore } : {}),
   };
 }

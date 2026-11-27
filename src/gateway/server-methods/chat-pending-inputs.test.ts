@@ -111,6 +111,27 @@ async function read(
 }
 
 describe("pending input read boundary", () => {
+  it("reports durable queued work outside the displayed history page", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("off-page-queue");
+      await using inputs = pendingInputs(scope);
+      const older = await inputs.stage("older");
+      const newer = await inputs.stage("newer");
+      newer.finish("cancelled", "failed");
+      await newer.settled?.();
+      const context = await createHistoryReadContext();
+      const page = () => read(context, { sessionKey: scope.sessionKey, limit: 1 });
+      const displayed = {
+        total: 2,
+        queuedCount: 0,
+        items: [{ id: newer.inputId, state: "cancelled" }],
+      };
+      expect((await page()).pendingInputs).toMatchObject({ ...displayed, hasQueuedInput: true });
+      older.finish("cancelled", "failed");
+      await older.settled?.();
+      expect((await page()).pendingInputs).toMatchObject({ ...displayed, hasQueuedInput: false });
+    }));
+
   it("omits retained startup state while delivering changed pending inputs and session metadata", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = await createScope("warm-metadata");
@@ -569,7 +590,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       expect([page.inputReceipts, page.inputConsumptions, page.pendingInputs]).toEqual([
         expected,
         [{ runId: "source-a", consumedByEventId: aggregate.inputId }],
-        { items: [], total: 0, queuedCount: 0 },
+        { items: [], total: 0, hasQueuedInput: false, queuedCount: 0 },
       ]);
       expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
       const delta = await call({ inputRunIds, cursor: page.deltaCursor });
