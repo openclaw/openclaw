@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { orderTranscriptSpeech } from "../shared/transcript-speech-order.js";
 import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
 import type {
   TranscriptSessionDescriptor,
@@ -61,7 +62,7 @@ export function summarizeTranscripts(
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
   // Reserve names in recording order, even if a particular line is filtered
   // out of the notes. The roster and Markdown export use the same order.
-  const utterances = params.utterances
+  const recordedUtterances = params.utterances
     .map((utterance) => ({
       ...utterance,
       text: sanitizeTerminalText(utterance.text),
@@ -71,6 +72,7 @@ export function summarizeTranscripts(
       },
     }))
     .filter((utterance) => !isTranscriptArtifactText(utterance.text));
+  const utterances = orderTranscriptSpeech(recordedUtterances);
   const overview =
     firstSentences(utterances, 4) ||
     (params.session.stoppedAt ? "No usable speech was captured." : "No transcript captured yet.");

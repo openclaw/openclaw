@@ -11,6 +11,7 @@ import {
   latest,
   onSettled,
 } from "solid-js";
+import { orderTranscriptSpeech } from "../../../../src/shared/transcript-speech-order.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -532,7 +533,9 @@ function Reader(props: TranscriptsViewProps) {
                   ) : null}
                   <ol class="transcripts-utterances">
                     <For
-                      each={props.reader.pages.flatMap((result) => result.utterances ?? [])}
+                      each={orderTranscriptSpeech(
+                        props.reader.pages.flatMap((result) => result.utterances ?? []),
+                      )}
                       keyed={(utterance) => utterance.sequence}
                     >
                       {(utterance) => (
