@@ -81,7 +81,7 @@ actor CameraController: CameraServicing {
         let base64 = res.data.base64EncodedString()
         try Task.checkCancellation()
 
-        return (
+        return .init(
             format: format.rawValue,
             base64: base64,
             width: res.widthPx,
@@ -137,7 +137,7 @@ actor CameraController: CameraServicing {
         try Task.checkCancellation()
         let base64 = data.base64EncodedString()
         try Task.checkCancellation()
-        return (
+        return .init(
             format: format.rawValue,
             base64: base64,
             durationMs: durationMs,

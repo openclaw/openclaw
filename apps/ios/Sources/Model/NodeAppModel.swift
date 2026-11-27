@@ -2539,18 +2539,8 @@ final class NodeAppModel {
                     defaultFacing: defaultFacing)
             }
 
-            struct Payload: Codable {
-                var format: String
-                var base64: String
-                var width: Int
-                var height: Int
-            }
             try Task.checkCancellation()
-            let payload = try Self.encodePayload(Payload(
-                format: res.format,
-                base64: res.base64,
-                width: res.width,
-                height: res.height))
+            let payload = try Self.encodePayload(res)
             try Task.checkCancellation()
             updateCameraHUD(ownerID: req.id, text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
@@ -2569,18 +2559,8 @@ final class NodeAppModel {
                     defaultFacing: defaultFacing)
             }
 
-            struct Payload: Codable {
-                var format: String
-                var base64: String
-                var durationMs: Int
-                var hasAudio: Bool
-            }
             try Task.checkCancellation()
-            let payload = try Self.encodePayload(Payload(
-                format: res.format,
-                base64: res.base64,
-                durationMs: res.durationMs,
-                hasAudio: res.hasAudio))
+            let payload = try Self.encodePayload(res)
             try Task.checkCancellation()
             updateCameraHUD(ownerID: req.id, text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)

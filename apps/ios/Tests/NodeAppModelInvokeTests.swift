@@ -103,7 +103,7 @@ private actor RecordingCameraService: CameraServicing {
         params _: OpenClawCameraSnapParams,
         defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
     {
-        (format: "jpg", base64: "", width: 1, height: 1)
+        .init(format: "jpg", base64: "c25hcA==", width: 37, height: 23)
     }
 
     func clip(
@@ -111,7 +111,7 @@ private actor RecordingCameraService: CameraServicing {
         defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
     {
         self.clipCalls += 1
-        return (format: "mp4", base64: "", durationMs: 1, hasAudio: true)
+        return .init(format: "mp4", base64: "Y2xpcA==", durationMs: 1700, hasAudio: true)
     }
 
     func clipCallCount() -> Int {
@@ -176,7 +176,7 @@ private actor BlockingAudioCameraService: CameraServicing {
         params _: OpenClawCameraSnapParams,
         defaultFacing _: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
     {
-        (format: "jpg", base64: "", width: 1, height: 1)
+        .init(format: "jpg", base64: "", width: 1, height: 1)
     }
 
     func clip(
@@ -185,7 +185,7 @@ private actor BlockingAudioCameraService: CameraServicing {
     {
         await self.barrier.suspendFirstPreparation()
         try Task.checkCancellation()
-        return (format: "mp4", base64: "", durationMs: 1, hasAudio: true)
+        return .init(format: "mp4", base64: "", durationMs: 1, hasAudio: true)
     }
 }
 
@@ -274,7 +274,7 @@ private actor OverlappingCameraService: CameraServicing {
         self.secondStarted.yield()
         self.secondStarted.finish()
         await withCheckedContinuation { self.secondGate = $0 }
-        return (format: "jpg", base64: "", width: 1, height: 1)
+        return .init(format: "jpg", base64: "", width: 1, height: 1)
     }
 
     func clip(
@@ -8702,7 +8702,15 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talk.error?.message.contains("/talk") == true)
     }
 
-    @Test @MainActor func `camera list preserves device wire fields`() async throws {
+    @Test(arguments: [
+        ("camera.list", """
+        {"devices":[{"id":"front-camera","name":"Front Camera",
+        "position":"front","deviceType":"builtInWideAngleCamera"}]}
+        """),
+        ("camera.snap", #"{"format":"jpg","base64":"c25hcA==","width":37,"height":23}"#),
+        ("camera.clip", #"{"format":"mp4","base64":"Y2xpcA==","durationMs":1700,"hasAudio":true}"#),
+    ])
+    @MainActor func `camera commands preserve wire fields`(command: String, expectedJSON: String) async throws {
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
         let previous = defaults.object(forKey: key)
@@ -8715,19 +8723,16 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             }
         }
         let appModel = NodeAppModel(camera: RecordingCameraService())
-        let request = BridgeInvokeRequest(id: "camera-list", command: OpenClawCameraCommand.list.rawValue)
+        let request = BridgeInvokeRequest(id: "camera-wire", command: command)
 
         let response = await appModel.handleInvoke(request)
 
         #expect(response.ok)
+        #expect(response.id == request.id)
         let data = try #require(response.payloadJSON?.data(using: .utf8))
-        let payload = try JSONSerialization.jsonObject(with: data) as? [String: [[String: String]]]
-        #expect(payload == ["devices": [[
-            "id": "front-camera",
-            "name": "Front Camera",
-            "position": "front",
-            "deviceType": "builtInWideAngleCamera",
-        ]]])
+        let payload = try JSONDecoder().decode([String: AnyCodable].self, from: data)
+        let expected = try JSONDecoder().decode([String: AnyCodable].self, from: Data(expectedJSON.utf8))
+        #expect(payload == expected)
     }
 
     @Test @MainActor func `handle invoke rejects camera when disabled`() async {
