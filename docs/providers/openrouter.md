@@ -123,11 +123,11 @@ Discovered models use OpenRouter's advertised tool support. When a model's
 definitions or tool choice. Models without that metadata keep the default tool
 behavior.
 
-On public `openrouter.ai` chat-completions routes, OpenClaw sends
-`function.strict: false` for tool definitions and preserves the schema's required
-fields, so optional inputs stay optional. Custom proxy endpoints keep their
-existing compatibility policy. An explicit `compat.supportsStrictMode: false`
-omits the strict field.
+On OpenRouter chat-completions routes, OpenClaw marks each tool `function.strict`
+when its schema allows it; optional inputs are sent as nullable and stay
+optional. A route that refuses strict tools is retried once without them and
+remembered. An explicit `compat.supportsStrictMode: false` always omits the
+strict field.
 
 ## Typed decisions
 
