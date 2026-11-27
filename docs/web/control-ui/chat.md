@@ -1641,8 +1641,10 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
-messages, and tool activity can share one **Worked for…** disclosure above the answers.
+In completed dashboard turns answered by OpenAI models, commentary the model labels as
+such, reasoning-only messages, and tool activity can share one **Worked for…** disclosure
+above the answers. Assistant text without a commentary label, such as text before a
+tool call on Chat Completions transports, stays visible below the disclosure.
 For other models, mixed-model work, or history that does not identify the model,
 there is no turn-wide disclosure: text and tools stay inline. Switching the selected
 model does not change earlier turns. Tool names and tool grouping are unchanged.
