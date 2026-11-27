@@ -149,7 +149,7 @@ describe("qwen provider plugin", () => {
       });
     }
     expect(profile("Qwen4-Max")).toEqual({
-      levels: ["off", "low", "high", "xhigh"].map((id) => ({ id })),
+      levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
       defaultLevel: "high",
     });
     const expected = {

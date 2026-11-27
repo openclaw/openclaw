@@ -215,7 +215,7 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
   // Uncataloged exact refs remain selectable, so family predicates preserve their request controls.
   if (isQwen4MaxModelId(modelId)) {
     return {
-      levels: (["off", "low", "high", "xhigh"] as const).map((id) => ({ id })),
+      levels: QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS.map((id) => ({ id })),
       defaultLevel: "high" as const,
     };
   }

@@ -1,13 +1,23 @@
 import { fileURLToPath } from "node:url";
 import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { assert, describe, expect, it, vi } from "vitest";
+import { resolveThinkingSelectionForModel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import {
+  registerProviderPlugins,
+  requireRegisteredProvider,
+} from "../../test-utils/plugin-registration.js";
 import { resolveEnvApiKey } from "../model-auth-env.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
+import type { StreamFn } from "../runtime/index.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 
 const loaded = loadPluginManifest(
@@ -107,4 +117,53 @@ describe("Qwen static fallback routing", () => {
       expect(resolved.error).toContain("not supported on the Qwen Coding Plan endpoint");
     }
   });
+});
+
+it("admits Qwen4-Max thinking aliases and sends their canonical efforts", async () => {
+  const model = makeProviderModelFixture<"openai-completions">({
+    provider: "qwen-token-plan",
+    id: "qwen4-max",
+    api: "openai-completions",
+    baseUrl: "https://example.test/v1",
+    reasoning: true,
+  });
+  const { default: plugin } = await loadBundledPluginFacade<{
+    default: Parameters<typeof registerProviderPlugins>[0];
+  }>({ pluginId: "qwen", artifactBasename: "index.js" });
+  const provider = requireRegisteredProvider(await registerProviderPlugins(plugin), model.provider);
+  const aliases = [
+    ["minimal", "low"],
+    ["medium", "high"],
+    ["max", "xhigh"],
+  ] as const;
+
+  for (const [level, effort] of aliases) {
+    const selected = resolveThinkingSelectionForModel({
+      provider: model.provider,
+      model: model.id,
+      catalog: [model],
+      providerPolicySource: { providers: [{ provider }] },
+      level,
+    });
+    expect(selected.supported).toBe(true);
+    assert(selected.level === level);
+
+    const payload = { messages: [] };
+    const streamFn: StreamFn = async (requestModel, _context, options) => {
+      await options?.onPayload?.(payload, requestModel);
+      return createAssistantMessageEventStream();
+    };
+    const stream = expectDefined(
+      provider.wrapStreamFn?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        streamFn,
+        thinkingLevel: selected.level,
+      }),
+      "Qwen Token Plan stream wrapper",
+    );
+    await stream(model, { messages: [] });
+    expect(payload).toEqual({ messages: [], enable_thinking: true, reasoning_effort: effort });
+  }
 });
