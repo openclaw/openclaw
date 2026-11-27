@@ -174,8 +174,19 @@ export function resolveAutomaticUtilityModel(
       )
     : undefined;
   // A role refusal is checked before inventory, so the outcome never depends on
-  // whether the catalog has published yet.
-  if (declaredModelId && refused({ provider, model: declaredModelId })) {
+  // whether the catalog has published yet. Policies compare canonical ids, so the
+  // declared id resolves like a configured fallback; an unresolvable id is not refused.
+  const declaredForPolicy =
+    declaredModelId && params.modelPolicy
+      ? resolveUtilityRefs({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          raws: [`${provider}/${declaredModelId}`],
+          plugins: snapshot?.plugins,
+          providerFallback: provider,
+        })[0]?.resolved?.ref
+      : undefined;
+  if (declaredForPolicy && refused(declaredForPolicy)) {
     roleRefused = true;
   } else if (declaredRef && (routed ? offered === true : offered !== false)) {
     // Routers require a positive grant. Ordinary providers retain their preference
