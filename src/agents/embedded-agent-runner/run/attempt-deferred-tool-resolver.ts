@@ -107,14 +107,23 @@ export function createAttemptDeferredToolResolver(
     const onDemand = tool !== undefined && isOnDemandCatalogTool(tool);
     if (codeMode && !onDemand) {
       const entries = clientTools.toolSearchCatalogRef?.current?.entries;
-      if (entries?.some((entry) => entry.name === toolCall.name)) {
+      if (!entries?.some((entry) => entry.name === toolCall.name)) {
+        return undefined;
+      }
+      if (!tool) {
+        // The name is in the catalog but does not resolve to one callable entry
+        // (a duplicate name, or an id-only entry such as an MCP tool). Only this
+        // case still needs the model to disambiguate inside exec.
         throw new Error(
           "This tool is available through Code Mode, not as a top-level tool. This call did not execute it. Use exec with JavaScript: find its callable handle with catalog.search(...), use handle.describe() for the input schema, then await the handle with the tool arguments.",
         );
       }
-      return undefined;
+      // A unique catalog entry runs as called. The prompt index omits it to save
+      // context, not to deny it, and refusing here only costs the turn that
+      // retries the same call inside exec.
+      log.info(`code-mode: ran top-level call to catalog tool ${toolCall.name}`);
     }
-    if (tool && !onDemand && !clientTools.deferredDirectoryToolsCallable) {
+    if (tool && !onDemand && !codeMode && !clientTools.deferredDirectoryToolsCallable) {
       throw new Error(
         `Tool ${toolCall.name} is deferred and not directly callable. Call ${TOOL_CALL_RAW_TOOL_NAME} with id ${JSON.stringify(tool.name)} and its parameters in args.`,
       );
