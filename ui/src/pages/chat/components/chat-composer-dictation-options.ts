@@ -1,5 +1,5 @@
 import { resolveDictationRefinementPreference } from "../../../app/settings-contract.ts";
-import { loadSettings } from "../../../app/settings.ts";
+import { loadLiveUiPreferences } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   focusComposerInput,
@@ -19,7 +19,7 @@ export function createComposerDictationOptions(
   onTap?: () => void,
 ) {
   const refinement = resolveDictationRefinementPreference({
-    saved: loadSettings().dictationRefinement,
+    saved: loadLiveUiPreferences().dictationRefinement,
   });
   return {
     client: props.gatewayClient ?? null,

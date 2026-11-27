@@ -356,6 +356,11 @@ export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): Ui
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
 }
 
+/** Same preference scope as loadSettings, without touching session-scoped credentials. */
+export function loadLiveUiPreferences(): UiPreferences {
+  return loadUiPreferences(livePreferenceOwner?.gatewayUrl());
+}
+
 export function loadUiPreferences(
   requestedGatewayUrl = configuredUiDevGateway()?.gatewayUrl,
 ): UiPreferences {
