@@ -40,4 +40,5 @@ export type RunIsolatedCompletionParams = {
   /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
   answerTokenBudget?: number;
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
+  streamParamsMode?: AgentHarnessIsolatedCompletionParamsV2["streamParamsMode"];
 };

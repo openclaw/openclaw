@@ -70,8 +70,12 @@ export async function runCodexIsolatedCompletion(
   }
   params.assertCurrent?.();
   const outputSchema = isJsonObject(params.outputSchema) ? params.outputSchema : undefined;
+  const streamParams =
+    params.streamParamsMode === "preferred" && isCodexResponsesOAuth(preparedAuth)
+      ? undefined
+      : params.streamParams;
   const hasStreamParams =
-    params.streamParams?.maxTokens !== undefined || params.streamParams?.temperature !== undefined;
+    streamParams?.maxTokens !== undefined || streamParams?.temperature !== undefined;
   if (hasStreamParams && isCodexResponsesOAuth(preparedAuth)) {
     throw new Error(
       "ChatGPT token sharing does not support explicit token or temperature limits; select an API-key model.",
@@ -103,7 +107,7 @@ export async function runCodexIsolatedCompletion(
     requireInferenceRoute: authRequirement === "api-key" || hasStreamParams,
     timeoutMs: params.timeoutMs,
     thinkLevel: params.thinkLevel,
-    streamParams: params.streamParams,
+    streamParams,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     agentDir: params.agentDir,
