@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
+import { loadRatchetSources, runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 
 // Request and history shaping must follow declared capability (model compat, catalog rows,
-// transcript policy), never a guess from a provider id, model id, API name or URL. Each line that
-// branches on one of those counts once, in files on the request/history path (they name a
-// request or history concept). Existing lines are listed in the allowlist, which may only shrink.
-// Same method as the 2026-11-27 provider-branching audit scan.
+// transcript policy), never a guess from a provider id, model id, API name or URL. This is a
+// tripwire on spelling, not a parser: each comparison, predicate or probe below counts once per
+// occurrence, and the per-file allowlist may only shrink.
 const BASELINE_PATH = "config/provider-branching-allowlist.txt";
 const BASELINE_HEADER = [
   "# Provider, model, API and URL branches on the request/history path, per file.",
@@ -22,83 +23,82 @@ const PATHSPECS = [
   "packages/ai/src/**/*.ts",
   "packages/llm-core/src/**/*.ts",
 ].map((glob) => `:(glob)${glob}`);
-const NAMES =
-  "Provider|Model|Anthropic|OpenAI|Openai|Google|Gemini|Bedrock|Mistral|Codex|Responses|Completions|Claude|Vertex|Ollama|Copilot|Moonshot|Kimi|Deepseek|DeepSeek|Qwen|Xai|Grok";
-const IDS =
-  "anthropic|openai|google|bedrock|amazon-bedrock|mistral|openai-responses|openai-completions|openai-codex-responses|anthropic-messages|google-generative-ai|google-vertex|codex|bedrock-converse-stream|ollama";
-const BRANCH = new RegExp(
-  [
-    // A provider, API, transport, model or auth field compared with a literal.
-    String.raw`(?:provider|providerId|modelApi|\bapi|transport|modelId|model\.id|model\.provider|model\.api|authMode|auth\.mode|auth\.type|endpointClass)\s*(?:===|!==|==|!=)\s*["'\x60]`,
-    // A named provider/model predicate call.
-    String.raw`\b(?:is|uses|supports|needs|requires)(?:[A-Z][A-Za-z]*)?(?:${NAMES})[A-Za-z]*\s*\(`,
-    String.raw`case\s+["'](?:${IDS})["']`,
-    String.raw`\.(?:startsWith|includes)\(["'](?:claude|gpt|gemini|o[0-9]|anthropic|openai|google|mistral|deepseek|qwen|kimi|grok)`,
-    // Named URL and model-size guesses the patterns above do not see.
-    String.raw`\b(?:usesExplicitProxyLikeEndpoint|isLocalModelLeanEnabled|isLocalBaseUrl|shouldDropClaudeThinkingBlocks|isSmallModel)\b`,
-  ].join("|"),
-  "u",
-);
-// Files that name a request or history concept; the audit's request-path filter.
-const REQUEST_PATH =
-  /previous_response_id|previousResponseId|cache_control|cacheControl|cachePoint|replayPolicy|ReplayPolicy|sanitize.*[Rr]eplay|transcriptPolicy|TranscriptPolicy|systemPrompt|system_prompt|compaction|toolDefinitions|tools:/u;
 const EXCLUDE = [
-  "*.test.ts",
-  "*.test-*.ts",
-  "*.e2e.ts",
-  "*test-support*",
-  "*test-harness*",
-  "*test-helpers*",
-  "*.generated.ts",
-  "*cli-runner*",
-  "test/**",
-  "test-helpers/**",
-  "fixtures/**",
-  "ui/**",
-  "gateway/**",
-  "channels/**",
-].map((glob) => `:(exclude,glob)**/${glob}`);
+  "**/*.test.ts",
+  "**/*.test-*.ts",
+  "**/*.e2e.ts",
+  "**/*test-support*",
+  "**/*test-harness*",
+  "**/*test-helpers*",
+  "**/*.generated.ts",
+  // Provider identity is these owners' subject, not request shaping: CLI backend adapters,
+  // per-provider credentials and model selection.
+  "src/agents/cli-output*",
+  "src/agents/cli-runner*",
+  "src/agents/cli-runner/**",
+  "src/agents/auth-profiles/**",
+  "src/agents/model-auth*",
+  "src/agents/model-catalog*",
+  "src/agents/model-selection*",
+].map((glob) => `:(exclude,glob)${glob}`);
 
-/** One branch per line, as the audit counted; files off the request/history path count zero. */
+const VENDORS =
+  "anthropic|openai|google|gemini|bedrock|mistral|codex|claude|vertex|ollama|copilot|moonshot|kimi|deepseek|qwen|xai|grok|gpt|zai|glm|mimo|minimax|openrouter|azure|cloudflare|litellm|vllm|lmstudio";
+const VENDOR_NAMES =
+  "Anthropic|OpenAI|Openai|Google|Gemini|Bedrock|Mistral|Codex|Responses|Completions|Claude|Vertex|Ollama|Copilot|Moonshot|Kimi|Deepseek|DeepSeek|Qwen|Xai|Grok|Gpt|GPT|Zai|Glm|MiMo|Mimo|OpenRouter|Openrouter|Azure|Endpoint|BaseUrl";
+const IDENTITY = String.raw`(?:\w*[pP]rovider(?:Id)?|\w*[mM]odelId|\w*[mM]odelApi|\bapi|model\.id|endpointClass|hostname)`;
+const NOT_DECLARATION = String.raw`(?<!function\s{1,4})`;
+const PATTERNS = [
+  // An identity field compared with a literal.
+  new RegExp(String.raw`${IDENTITY}\s*[!=]==?\s*["'\x60]`, "gu"),
+  // A named provider, model or URL predicate, called (declarations do not count).
+  new RegExp(
+    String.raw`${NOT_DECLARATION}\b(?:is|uses|supports|needs|requires|should|has)\w*?(?:${VENDOR_NAMES})\w*\s*\(`,
+    "gu",
+  ),
+  // URL and model-size guesses read as flags or named without a vendor word.
+  new RegExp(
+    String.raw`${NOT_DECLARATION}\b(?:usesExplicitProxyLikeEndpoint\b(?!\s*\()|isLocalModelLeanEnabled\b|isSmallModel\b)`,
+    "gu",
+  ),
+  new RegExp(String.raw`\bcase\s+["'][\w./-]*(?:${VENDORS})[\w./-]*["']`, "gu"),
+  // Substring probes of model ids, provider ids and hosts.
+  new RegExp(
+    String.raw`\.(?:startsWith|endsWith|includes)\(\s*["'\x60][^"'\x60\n]*(?:${VENDORS}|localhost|127\.0\.0\.1)`,
+    "giu",
+  ),
+  new RegExp(String.raw`/\^?[^/\n]*(?:${VENDORS})[^/\n]*/[a-z]*\.test\(`, "giu"),
+  // Membership of an identity field in a list or set.
+  new RegExp(String.raw`\.(?:has|includes)\(\s*[\w.?]*${IDENTITY}\s*\)`, "gu"),
+];
+// Type checks and imports name no branch.
+const IGNORED = [/\btypeof\s+[\w$.?]+\s*[!=]==?\s*["'`]\w+["'`]/gu, /^import\s[^;]*;/gmu];
+
+/** Counts provider, model, API and URL branches in one source file. */
 export function countProviderBranches(source: string) {
-  if (!REQUEST_PATH.test(source)) {
-    return 0;
-  }
-  return source.split("\n").filter((line) => BRANCH.test(line)).length;
-}
-
-function gitGrep(root: string, staged: boolean, args: string[]) {
-  try {
-    return execFileSync(
-      "git",
-      [
-        "grep",
-        "-I",
-        "-P",
-        ...(staged ? ["--cached"] : []),
-        ...args,
-        "--",
-        ...PATHSPECS,
-        ...EXCLUDE,
-      ],
-      { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-    );
-  } catch (error) {
-    // git grep exits 1 when nothing matches.
-    if (!(error instanceof Error && "status" in error && error.status === 1)) {
-      throw error;
-    }
-    return "";
-  }
+  const text = IGNORED.reduce((rest, pattern) => rest.replace(pattern, " "), source);
+  return PATTERNS.reduce((sum, pattern) => sum + (text.match(pattern)?.length ?? 0), 0);
 }
 
 function collectCurrent(root: string, staged: boolean) {
-  const requestPath = new Set(gitGrep(root, staged, ["-l", "-e", REQUEST_PATH.source]).split("\n"));
+  const files = execFileSync("git", ["ls-files", "-z", "--", ...PATHSPECS, ...EXCLUDE], {
+    cwd: root,
+    encoding: "utf8",
+  })
+    .split("\0")
+    .filter(Boolean);
+  const sources = staged
+    ? loadRatchetSources(root, files)
+    : new Map(
+        files
+          .filter((file) => fs.existsSync(path.join(root, file)))
+          .map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]),
+      );
   const counts = new Map<string, number>();
-  for (const row of gitGrep(root, staged, ["-e", BRANCH.source]).split("\n")) {
-    const file = row.slice(0, row.indexOf(":"));
-    if (file && requestPath.has(file)) {
-      counts.set(file, (counts.get(file) ?? 0) + 1);
+  for (const [file, source] of sources) {
+    const count = countProviderBranches(source);
+    if (count > 0) {
+      counts.set(file, count);
     }
   }
   return counts;
@@ -111,14 +111,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     renameSourceRoots: ["src", "packages"],
     collectCurrent: ({ staged }) => collectCurrent(root, staged),
     countAtRef: (ref, filePath) =>
-      countProviderBranches(
-        execFileSync("git", ["show", `${ref}:${filePath}`], {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 256 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "ignore"],
-        }),
-      ),
+      countProviderBranches(loadRatchetSources(root, [filePath], ref).get(filePath) ?? ""),
     messages: {
       increaseTitle: "Provider/model/URL branches exceed the per-file allowlist:",
       expansionTitle: "The provider-branching allowlist may only shrink:",
