@@ -88,10 +88,14 @@ export function projectRuntimeContextFragments(fragments: RuntimeContextFragment
  * projected system update. Other carrier forms yield none.
  */
 export function readRuntimeContextConversationData(message: unknown): string[] {
-  if (!isOpenClawRuntimeContextCustomMessage(message)) {
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    !isOpenClawRuntimeContextCustomMessage(message)
+  ) {
     return [];
   }
-  const fragments = Reflect.get(Reflect.get(message as object, "details") ?? {}, "fragments");
+  const fragments = Reflect.get(Reflect.get(message, "details") ?? {}, "fragments");
   if (Array.isArray(fragments)) {
     return fragments.flatMap((fragment: Partial<RuntimeContextFragment>) =>
       fragment?.kind === "conversation-data" && typeof fragment.text === "string"
@@ -99,7 +103,7 @@ export function readRuntimeContextConversationData(message: unknown): string[] {
         : [],
     );
   }
-  const content = Reflect.get(message as object, "content");
+  const content = Reflect.get(message, "content");
   if (typeof content !== "string") {
     return [];
   }
