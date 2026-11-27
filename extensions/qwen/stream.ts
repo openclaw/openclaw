@@ -33,7 +33,7 @@ import {
 type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 type QwenThinkingFormat = string | undefined;
 type QwenThinkingContract =
-  | { family: "qwen"; generation: "3.8" | "4" }
+  | { family: "qwen"; modelGeneration: "3.8" | "4" }
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
@@ -108,10 +108,10 @@ function resolveQwenThinkingContract(
   modelId: string,
 ): QwenThinkingContract | undefined {
   if (isQwen38ModelId(modelId)) {
-    return { family: "qwen", generation: "3.8" };
+    return { family: "qwen", modelGeneration: "3.8" };
   }
   if (isQwen4MaxModelId(modelId)) {
-    return { family: "qwen", generation: "4" };
+    return { family: "qwen", modelGeneration: "4" };
   }
   if (!isQwenTokenPlanProviderId(providerId)) {
     return undefined;
@@ -132,7 +132,7 @@ function patchQwenEffortPayload(
   payload: Record<string, unknown>,
   thinkingLevel: QwenThinkingLevel,
   enableThinking: boolean,
-  generation: "3.8" | "4",
+  modelGeneration: "3.8" | "4",
 ): void {
   delete payload.thinking;
   // An explicit token budget owns reasoning depth; Qwen rejects it together
@@ -143,7 +143,7 @@ function patchQwenEffortPayload(
   }
   if (thinkingLevel === "minimal" || thinkingLevel === "low") {
     payload.reasoning_effort = "low";
-  } else if (generation === "3.8") {
+  } else if (modelGeneration === "3.8") {
     payload.reasoning_effort = thinkingLevel === "medium" ? "medium" : "xhigh";
   } else {
     payload.reasoning_effort =
@@ -400,7 +400,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                   payload,
                   normalizeQwenThinkingLevel(rawThinkingLevel),
                   enableThinking,
-                  tokenPlanContract.generation,
+                  tokenPlanContract.modelGeneration,
                 );
               } else if (tokenPlanContract?.family === "deepseek-v4") {
                 const deepSeekLevel =
