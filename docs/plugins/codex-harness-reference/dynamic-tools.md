@@ -154,16 +154,20 @@ through the OpenClaw bridge.
 - Skills and memory: `skills_read`, `skills_search`, `memory_search`, `memory_get`.
 - Web: `web_search`, `web_fetch`, `x_search`.
 - Documents and images: `pdf`, `view_image`.
+- Media generation: `image_generate`, `video_generate`, `music_generate`.
 
 All other core tools, including new ones, remain unsupported until OpenClaw
 adds child support for them. Neither an exact allow entry nor `allow: ["*"]`
 overrides this limit.
 
-For example, you can grant `view_image`, but not `image_generate`,
-`video_generate`, or `music_generate`. In a chat session, these generators can
-start a background job that sends the finished media to the conversation later.
-A grant selects a whole tool, not individual actions. It cannot grant generation
-separately from delivery.
+For example, `allow: ["image_generate"]` lets a child generate an image, but
+does not grant music or video generation. A delegated generator returns the
+artifact path or provider URL to the child. It does not queue a chat job or
+send the media to the parent's conversation. The caller can pass the artifact
+reference back to the parent, which decides whether to send it. Image review
+and delivery actions require a chat session and are unavailable to the child.
+Provider costs, tool timeouts, and workspace restrictions still apply. Calling
+the same tools directly in the parent chat keeps their usual delivery behavior.
 
 Non-core tools can qualify when OpenClaw identifies their owning plugin or MCP
 server. OpenClaw excludes tools it recognizes as channel messaging tools.

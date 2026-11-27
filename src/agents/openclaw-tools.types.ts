@@ -149,6 +149,8 @@ export type OpenClawToolsOptions = {
   allowLocalBrowserLoopback?: boolean;
   assertLocalBrowserLoopbackCurrent?: () => void;
   agentSessionKey?: string;
+  /** Keep generation inline and return artifacts only to the caller. */
+  mediaResultOnly?: true;
   agentChannel?: string;
   /** Prepared active-conversation support for structured human questions. */
   questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;

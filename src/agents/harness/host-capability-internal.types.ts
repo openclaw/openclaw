@@ -9,4 +9,6 @@ export type AgentHarnessHostCapabilityParams = {
   requiredNodeCommands?: readonly string[];
   nativeModelPolicySupport?: "exact";
   toolCalls?: "deny";
+  /** Build generation tools without a chat task or delivery destination. */
+  mediaResultOnly?: true;
 };

@@ -28,6 +28,12 @@ const CHILD_COMPATIBLE_CORE_TOOLS = new Set([
   "pdf",
   "view_image",
 ]);
+// Only the built-in factories receive the child host's result-only binding.
+const CHILD_RESULT_ONLY_MEDIA_TOOLS = new Set([
+  "image_generate",
+  "video_generate",
+  "music_generate",
+]);
 
 type CatalogRow = {
   name: string;
@@ -80,7 +86,9 @@ export function resolveNativeChildToolCatalog(params: {
           reason: "Not on the executable host surface for this child.",
         };
       }
-      if (!CHILD_COMPATIBLE_CORE_TOOLS.has(name) && (!meta || core || isMessagingTool(name))) {
+      const compatibleCore =
+        CHILD_COMPATIBLE_CORE_TOOLS.has(name) || (!meta && CHILD_RESULT_ONLY_MEDIA_TOOLS.has(name));
+      if (!compatibleCore && (!meta || core || isMessagingTool(name))) {
         return {
           name,
           owner,

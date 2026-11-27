@@ -10,6 +10,31 @@ import { resolveNativeChildToolCatalog } from "./native-child-tool-policy.js";
 const availableTools = [createTool("read"), createTool("skills_read")];
 
 describe("nativeChildTools", () => {
+  it("makes media generation eligible without granting it by default or overriding denies", () => {
+    const names = ["image_generate", "music_generate", "video_generate"];
+    const generators = names.map((name) => createTool(name));
+    const statuses = (policy: { allow?: string[]; deny?: string[] }) =>
+      resolveNativeChildToolCatalog({ availableTools: generators, policy }).tools.map(
+        (tool) => tool.status,
+      );
+    expect(statuses({})).toEqual(["denied", "denied", "denied"]);
+    expect(statuses({ allow: names })).toEqual(["allowed", "allowed", "allowed"]);
+    const otherOwner = createOwnerBackedContractTool({
+      name: "image_generate",
+      pluginId: "fixture",
+      result: textToolResult(""),
+    });
+    expect(
+      resolveNativeChildToolCatalog({ policy: { allow: names }, availableTools: [otherOwner] })
+        .tools[0]?.status,
+    ).toBe("unsupported");
+    expect(statuses({ allow: ["*_generate"], deny: ["video_generate"] })).toEqual([
+      "allowed",
+      "allowed",
+      "denied",
+    ]);
+  });
+
   it.each([{}, { nativeChildTools: {} }, { nativeChildTools: { allow: [] } }])(
     "does not grant host authority by default",
     (config) => {

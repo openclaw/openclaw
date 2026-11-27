@@ -400,6 +400,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
     return {
       options: {
         ...effectiveOptions,
+        mediaResultOnly: params.mediaResultOnly,
         readDelegationConfig,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,

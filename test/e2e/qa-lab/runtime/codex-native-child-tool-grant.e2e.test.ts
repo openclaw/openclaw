@@ -5,23 +5,25 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, TINY_PNG_BASE64 } from "../../../../extensions/qa-lab/api.js";
 import {
   writeOpenAiResponsesItem,
   readLatestUserMarker,
 } from "../../../helpers/openai-responses-item.test-support.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
-// Only inference is scripted. The real Codex app-server creates the child,
-// routes its dynamic call, and sends its result back to this provider.
+// Only external inference and image bytes are scripted. The real Codex app-server
+// creates the child, routes its dynamic calls, and returns results to its model.
 it(
-  "delivers an allowlisted memory plugin result to a native Codex child",
+  "returns granted memory and a generated image artifact directly to a native Codex child",
   { timeout: 180_000 },
   async () => {
     const secret = randomUUID();
     const parentMarker = "START_NATIVE_GRANT_PROBE";
     const childMarker = "READ_NATIVE_GRANT_PROBE";
-    const childOutputs: unknown[] = [];
+    let memoryOutput: unknown;
+    let imageOutput: unknown;
+    const imageRequests: unknown[] = [];
     const parentOutputs: unknown[] = [];
     const missing: string[] = [];
     let spawned = false;
@@ -34,6 +36,13 @@ it(
               data: [{ id: "gpt-5.6-luna", object: "model" }],
             }),
           );
+          return;
+        }
+        if (req.method === "POST" && req.url === "/v1/images/generations") {
+          imageRequests.push(await json(req));
+          res
+            .writeHead(200, { "content-type": "application/json" })
+            .end(JSON.stringify({ data: [{ b64_json: TINY_PNG_BASE64 }] }));
           return;
         }
         if (req.method !== "POST" || !req.url?.endsWith("/responses")) {
@@ -49,17 +58,26 @@ it(
         // from Codex's request source, not by searching the inherited prompt.
         const child = req.headers["x-openai-subagent"] === "collab_spawn";
         const scenario = child ? "child" : readLatestUserMarker(body, [["parent", parentMarker]]);
-        const id = child ? "call_granted_memory" : "call_spawn_reader";
-        const output = body.input.find(
-          (entry) =>
-            isRecord(entry) && entry.type === "function_call_output" && entry.call_id === id,
-        );
-        if (isRecord(output)) {
-          (child ? childOutputs : parentOutputs).push(output.output);
+        let parentOutput = false;
+        for (const entry of body.input) {
+          if (!isRecord(entry) || entry.type !== "function_call_output") {
+            continue;
+          }
+          if (child && entry.call_id === "call_memory_get") {
+            memoryOutput = entry.output;
+          }
+          if (child && entry.call_id === "call_image_generate") {
+            imageOutput = entry.output;
+          }
+          if (!child && entry.call_id === "call_spawn_agent") {
+            parentOutputs.push(entry.output);
+            parentOutput = true;
+          }
         }
         // Choose exactly the advertised wire identity. Direct loading may expose the
         // function at the root, while native collaboration versions may namespace it.
-        const toolName = child ? "memory_get" : "spawn_agent";
+        const toolName = !child ? "spawn_agent" : memoryOutput ? "image_generate" : "memory_get";
+        const output = child ? imageOutput : parentOutput;
         const tools = Array.isArray(body.tools) ? body.tools.filter(isRecord) : [];
         const rootTool = tools.find((tool) => tool.name === toolName);
         const group = tools.find(
@@ -87,23 +105,27 @@ it(
               }
             : {
                 type: "function_call",
-                call_id: id,
+                call_id: `call_${toolName}`,
                 ...(group && !rootTool ? { namespace: group.name } : {}),
                 name: toolName,
                 arguments: JSON.stringify(
-                  child
-                    ? { path: "memory/probe.md" }
-                    : {
-                        ...(isRecord(tool.parameters) &&
-                        isRecord(tool.parameters.properties) &&
-                        tool.parameters.properties.task_name
-                          ? { task_name: "reader" }
-                          : {}),
-                        message: childMarker,
-                      },
+                  toolName === "image_generate"
+                    ? { prompt: "A QA lighthouse." }
+                    : child
+                      ? { path: "memory/probe.md" }
+                      : {
+                          ...(isRecord(tool.parameters) &&
+                          isRecord(tool.parameters.properties) &&
+                          tool.parameters.properties.task_name
+                            ? { task_name: "reader" }
+                            : {}),
+                          message: childMarker,
+                        },
                 ),
               };
-        if (!child && item.type === "function_call") spawned = true;
+        if (!child && item.type === "function_call") {
+          spawned = true;
+        }
         writeOpenAiResponsesItem(res, `resp_${randomUUID()}`, item, {
           input_tokens: 32,
           input_tokens_details: null,
@@ -121,6 +143,7 @@ it(
     if (!address || typeof address === "string") {
       throw new Error("No mock provider port");
     }
+    const providerBaseUrl = `http://127.0.0.1:${address.port}/v1`;
     const owner = createQaGatewayChild();
     await runQaGatewayFixture(
       async () => {
@@ -134,7 +157,7 @@ it(
           },
           transportBaseUrl: "http://127.0.0.1",
           providerMode: "mock-openai",
-          providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+          providerBaseUrl,
           forcedRuntime: "codex",
           codexMockNativeSubagents: true,
           runtimeSelection: "configured",
@@ -151,8 +174,18 @@ it(
             codex.config = {
               ...codex.config,
               codexDynamicToolsLoading: "direct",
-              nativeChildTools: { allow: ["memory_get"] },
+              nativeChildTools: { allow: ["memory_get", "image_generate"] },
             };
+            // Only the image route goes to the loopback image endpoint; do not
+            // override the Codex model route used to authenticate native children.
+            const openai = config.models!.providers!.openai!;
+            const image = "gpt-image-1";
+            const imageRoute = openai.models.find((model) => model.id === image);
+            if (!imageRoute) {
+              throw new Error("Missing QA image model");
+            }
+            imageRoute.baseUrl = providerBaseUrl;
+            config.agents!.defaults!.mediaModels = { image: { primary: `openai/${image}` } };
             return config;
           },
         });
@@ -168,7 +201,7 @@ it(
         await expect
           .poll(
             () => {
-              if (childOutputs.length) {
+              if (imageOutput !== undefined || missing.length) {
                 return true;
               }
               return {
@@ -190,7 +223,23 @@ it(
           )
           .slice(-18)
           .join("\n");
-        expect(JSON.stringify(childOutputs), diagnostic).toContain(secret);
+        expect(missing, diagnostic).toEqual([]);
+        expect(JSON.stringify(memoryOutput), diagnostic).toContain(secret);
+        const output = Array.isArray(imageOutput)
+          ? imageOutput
+              .filter(isRecord)
+              .map((item) => item.text)
+              .join("\n")
+          : String(imageOutput);
+        expect(output, diagnostic).toContain("Generated 1 image");
+        expect(imageRequests).toEqual([expect.objectContaining({ prompt: "A QA lighthouse." })]);
+        const artifact = /path="([^"]+)"/u.exec(output)?.[1];
+        if (!artifact || !artifact.startsWith(gateway.tempRoot + path.sep)) {
+          throw new Error("Child did not receive a file path in the isolated Gateway");
+        }
+        expect(await fs.readFile(artifact, "base64")).toBe(TINY_PNG_BASE64);
+        const history = await gateway.call("chat.history", { sessionKey: "agent:qa:main" });
+        expect(JSON.stringify(history)).not.toContain(path.basename(artifact));
       },
       () => stopQaGatewayFixture(owner),
       () =>

@@ -109,12 +109,13 @@ it.each([
 });
 
 it.each([
-  [cronKey, cronRunKey, cronRunKey],
-  [qaKey, "agent:main:main", qaKey],
-  ["agent:main:policy", "agent:work:run", "agent:main:policy"],
-])(
+  [cronKey, cronRunKey, cronRunKey, undefined],
+  [qaKey, "agent:main:main", qaKey, undefined],
+  ["agent:main:policy", "agent:work:run", "agent:main:policy", undefined],
+  [qaKey, "agent:main:subagent:native-fixture", undefined, true],
+] as const)(
   "passes a separate durable requester key for background media from %s",
-  async (agentSessionKey, runSessionKey, taskSessionKey) => {
+  async (agentSessionKey, runSessionKey, taskSessionKey, mediaResultOnly) => {
     await createOpenClawToolsAsync({
       disableMessageTool: true,
       disablePluginTools: true,
@@ -126,6 +127,9 @@ it.each([
         },
       },
       agentSessionKey,
+      mediaResultOnly,
+      agentChannel: "discord",
+      agentTo: "channel:fixture",
       sandboxAgentId: "main",
       sandboxed: true,
       runSessionKey,
@@ -133,7 +137,8 @@ it.each([
     });
     const expectedOptions = {
       agentSessionKey: taskSessionKey,
-      requesterRunSessionKey: runSessionKey,
+      requesterRunSessionKey: mediaResultOnly ? undefined : runSessionKey,
+      requesterOrigin: mediaResultOnly ? undefined : { channel: "discord", to: "channel:fixture" },
       sandboxSessionKey: agentSessionKey,
       sandboxAgentId: "main",
       requesterAgentId: runSessionKey.startsWith("agent:work:") ? "work" : "main",

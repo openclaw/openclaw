@@ -183,6 +183,7 @@ function registerNativeChildToolHost(params: {
                   abortSignal: signal,
                 },
                 pluginId: "codex",
+                mediaResultOnly: true,
               });
               closeHost = host.close;
               host.setToolPolicyScope(params.scope);
