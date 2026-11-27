@@ -44,6 +44,32 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testCappedSearchPreviewStartsUnderFilters() throws {
+        self.launchApp(for: Self.controlScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
+        let app = try XCTUnwrap(self.app)
+        app.buttons["Sessions.Search"].tap()
+        let field = app.textFields["Search.Field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        // The fixture session titles do not contain “i”; the built-in pages exceed the All preview limit.
+        field.typeText("i")
+        let more = app.buttons["Show more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        let filters = app.buttons["Search.Tab.all"]
+        let offline = app.staticTexts["Offline. Searching what’s on this device."]
+        let first = offline.exists ? offline : more
+        let gap = first.frame.minY - filters.frame.maxY
+        XCTAssertGreaterThanOrEqual(gap, 0)
+        XCTAssertLessThan(gap, filters.frame.height / 2, "The preview must not leave an empty row under the filters")
+        app.buttons["Search.Tab.pages"].tap()
+        let results = app.scrollViews.containing(.button, identifier: "Skill Workshop").firstMatch
+        XCTAssertLessThan(results.frame.minY, filters.frame.midY)
+        XCTAssertGreaterThan(results.frame.maxY, field.frame.midY)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.41))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.29))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        self.attachScreenshot(named: "search-under-filters")
+    }
+
     /// User-made session groups live on the Sessions screen (the drawer lists sessions without group headers
     /// since the prototype snapshot). The header is the shared fold control; its actions sit on a long press.
     func testSessionsGroupHeaderControls() throws {
