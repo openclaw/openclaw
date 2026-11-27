@@ -25,7 +25,7 @@ import {
 } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import {
-  checkDoctorMigrationBackupsPending,
+  checkDoctorDatabaseMigrationsPending,
   prepareDoctorMigrationBackups,
 } from "./doctor-heartbeat-migration-backup.js";
 import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
@@ -207,7 +207,7 @@ describe("database migrations check", () => {
         .run();
     }
     const check = (schemas: Awaited<ReturnType<typeof prepareDoctorDatabasePreflight>>) =>
-      checkDoctorMigrationBackupsPending({ schemas, env, automaticRepair: false });
+      checkDoctorDatabaseMigrationsPending({ schemas, env, automaticRepair: false });
     const preflight = await prepareDoctorDatabasePreflight();
     expect(preflight.pendingMigrations).toEqual([
       expect.objectContaining({ kind: "agent", path: agentPath }),

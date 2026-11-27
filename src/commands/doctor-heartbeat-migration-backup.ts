@@ -100,7 +100,7 @@ async function resolveMigrationDatabaseTargets(schemas: DoctorDatabasePreflight)
  * migration capture (which always adds agent schemas) or an artifact-preserving read,
  * and for a store no connection holds open (the read would create its WAL sidecars).
  */
-export async function checkDoctorMigrationBackupsPending(params: {
+export async function checkDoctorDatabaseMigrationsPending(params: {
   schemas: DoctorDatabasePreflight;
   env: NodeJS.ProcessEnv;
   automaticRepair: boolean;

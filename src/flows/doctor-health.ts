@@ -353,11 +353,11 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { checkDoctorMigrationBackupsPending, prepareDoctorMigrationBackups } =
+        const { checkDoctorDatabaseMigrationsPending, prepareDoctorMigrationBackups } =
           await import("../commands/doctor-heartbeat-migration-backup.js");
         const automaticRepair = Boolean(automaticHeartbeatRepair);
         await tracePending("database-migrations", () =>
-          checkDoctorMigrationBackupsPending({ schemas, env: process.env, automaticRepair }),
+          checkDoctorDatabaseMigrationsPending({ schemas, env: process.env, automaticRepair }),
         );
         await prepareDoctorMigrationBackups({
           schemas,
