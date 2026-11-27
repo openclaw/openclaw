@@ -692,6 +692,7 @@ export function hasMessagingToolDeliveryToSource(
     ) {
       return false;
     }
+    // SAFETY: Agent runners produce MessagingToolSend records; the guard excludes non-records.
     const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
     // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
     const sourceTarget =
