@@ -189,7 +189,7 @@ it("says an admin links an unlinked account, and confirms an existing link", asy
   view.getByText("Link").click();
   await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
   const error = view.container.querySelector('[role="alert"]')?.textContent;
-  expect.soft(error).toContain("verified email isn’t the email you signed in with");
+  expect.soft(error).toContain("Link works only when OpenClaw ID has verified its email");
   expect
     .soft(error)
     .toContain(
