@@ -30,7 +30,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
-  readCdpTargetCrashState: vi.fn(async () => false),
+  readCdpTargetCrashState: async () => false,
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>

@@ -571,7 +571,7 @@ vi.mock("./chrome.js", () => ({
 
 // mock-isolation: The control server uses synthetic page sockets for its CDP operations.
 vi.mock("./cdp.js", () => ({
-  readCdpTargetCrashState: vi.fn(async () => false),
+  readCdpTargetCrashState: async () => false,
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
