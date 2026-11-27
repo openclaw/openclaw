@@ -218,7 +218,7 @@ defineDiscordVoiceTests(
             );
             const result = await tool.execute("voice-non-owner-" + name, {});
             expect(result.details).toMatchObject({ gated: true });
-            expect(JSON.stringify(result.content)).toContain(name + " needs the owner's authority");
+            expect(JSON.stringify(result.content)).toContain(`I did not run ${name}.`);
           }
         }
       },

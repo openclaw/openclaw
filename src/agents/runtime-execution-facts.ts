@@ -18,11 +18,15 @@ export type ExecutionHostRuntimeFactsParams = {
   includeEmptySnapshots?: boolean;
 };
 
+/** Snapshot headings; the change filter in runtime-facts-prompt.ts identifies snapshots by them. */
+export const APPROVED_EXECUTABLES_HEADING = "## Approved executables";
+export const EXEC_SESSIONS_HEADING = "Active exec sessions at turn start (snapshot):";
+
 async function buildApprovedExecutablesRuntimeContext(
   agentId: string,
   includeEmptySnapshots: boolean,
 ): Promise<string | undefined> {
-  const header = "## Approved executables";
+  const header = APPROVED_EXECUTABLES_HEADING;
   try {
     const { allowlist } = resolveExecApprovalsFromFile({
       file: await loadExecApprovalsReadOnlyAsync(),
@@ -91,7 +95,7 @@ export async function buildExecutionHostRuntimeFacts(
     if (sessions.length || includeEmptySnapshots) {
       sections.push(
         [
-          "Active exec sessions at turn start (snapshot):",
+          EXEC_SESSIONS_HEADING,
           "Scope: exec-tool process sessions only; persistent automations and other background work are not included.",
           sessions.join("\n") || "No active exec-tool sessions in this scope at turn start.",
         ].join("\n"),

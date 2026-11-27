@@ -669,7 +669,7 @@ it.each([
   },
 );
 
-it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
+it("lifts non-Claude tool images into user content, keeping result associations", async () => {
   const image = { type: "image" as const, mimeType: "image/png", data: png };
   const context = {
     messages: [
@@ -681,7 +681,7 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
   };
   const before = structuredClone(context);
   const input = await capturePayload(
-    bedrockModel({ id: "us.openai.gpt-5.6-sol", input: ["text", "image"] }),
+    bedrockModel({ id: opaqueProfile, input: ["text", "image"] }),
     context,
   );
   const expectedImage = {
@@ -704,12 +704,14 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
   ]);
   expect(context).toEqual(before);
 
-  const unaffected = await capturePayload(bedrockModel({ input: ["text", "image"] }), context);
+  const claude = claudeModel("global.anthropic.claude-sonnet-5", { input: ["text", "image"] });
+  const unaffected = await capturePayload(claude, context);
   expect(unaffected.messages).toEqual([
     wireUser(
       wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
       wireToolResult("call_second", [expectedImage], "error"),
       wireToolResult("call_text", [{ text: "plain result" }]),
+      checkpoint,
     ),
   ]);
 });

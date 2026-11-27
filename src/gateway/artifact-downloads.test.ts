@@ -316,7 +316,7 @@ it.each(["missing", "stream", "body-and-stream"] as const)(
   },
 );
 
-it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and exact originals", async () => {
+it("serves bounded image renditions over HTTP with alpha, orientation, and exact originals", async () => {
   const processor = createImageProcessor();
   const client = createClient();
   const server = await listen(client);
@@ -368,12 +368,18 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
     expect(original.response.headers.get("content-type")).toBe("image/png");
     expect(original.bytes).toEqual(source);
 
-    // Dense images may step down, but may not evade the selected rendition's byte ceiling.
+    // Dense opaque images can trade JPEG quality for detail at the requested width.
     const denseUrl = grantImage(createNoisyPngBuffer(1600, 800));
     const dense = await fetchImage(denseUrl + "?variant=thumbnail&width=480");
     expect(dense.response.status).toBe(200);
     expect(dense.bytes.byteLength).toBeLessThanOrEqual(96 * 1024);
-    await expectWebp(dense.bytes, 240, 120);
+    expect(dense.response.headers.get("content-type")).toBe("image/jpeg");
+    expect(dense.response.headers.get("content-disposition")).toContain("-preview.jpg");
+    expect(await processor.probe(dense.bytes)).toMatchObject({
+      format: "jpeg",
+      width: 480,
+      height: 240,
+    });
 
     const sourceJpeg = await jpeg(solidPng(32, 16));
     const orientation = Buffer.from(

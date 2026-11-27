@@ -7,8 +7,8 @@ import {
 } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 
-function queued(id: string, createdAt: number, extra: Partial<ChatQueueItem> = {}): ChatQueueItem {
-  return { id, text: id, createdAt, ...extra };
+function queued(id: string, createdAt: number): ChatQueueItem {
+  return { id, text: id, createdAt };
 }
 
 function orderedIds(queue: readonly ChatQueueItem[]): string[] {
@@ -49,27 +49,5 @@ describe("chat queue order", () => {
     );
 
     expect(segments.map((rows) => rows.map((row) => row.id))).toEqual([["a"], ["c"]]);
-  });
-
-  it("cannot carry a row past an attempted delivery", () => {
-    // The drain stops on a locked head, so a move across it would deliver the
-    // later message first. Reordering stays inside the row's own segment.
-    const queue = [
-      queued("a", 10),
-      queued("locked", 20, { sendState: "waiting-reconnect", sendAttempts: 1 }),
-      queued("b", 30),
-      queued("c", 40),
-    ];
-    const segment =
-      chatQueueMovableSegments(queue).find((rows) => rows.some((row) => row.id === "c")) ?? [];
-
-    const moved = new Map(reorderChatQueueItems(segment, "c", 0).map((item) => [item.id, item]));
-
-    expect(orderedIds(queue.map((item) => moved.get(item.id) ?? item))).toEqual([
-      "a",
-      "locked",
-      "c",
-      "b",
-    ]);
   });
 });

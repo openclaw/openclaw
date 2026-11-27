@@ -18,6 +18,10 @@ const refusalCauses = {
     why: "Your role on this Gateway does not allow it.",
     nextStep: "Ask a Gateway admin to do it, or to add the permission to your role.",
   },
+  "owner-only": {
+    why: "It needs the Gateway owner's authority, and this turn does not run with it.",
+    nextStep: "Ask the Gateway owner to do it.",
+  },
   "channel-unverified": {
     why: "This channel cannot confirm who you are.",
     nextStep:

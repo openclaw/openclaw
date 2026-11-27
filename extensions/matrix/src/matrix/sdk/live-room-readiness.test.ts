@@ -1,6 +1,12 @@
 import { once as emitted } from "node:events";
 import path from "node:path";
-import { ClientEvent, type MatrixClient as MatrixJsClient } from "matrix-js-sdk/lib/matrix.js";
+import {
+  ClientEvent,
+  MatrixError,
+  MatrixEvent,
+  type MatrixClient as MatrixJsClient,
+} from "matrix-js-sdk/lib/matrix.js";
+import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import { Room } from "matrix-js-sdk/lib/models/room.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -9,6 +15,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { MatrixClient } from "../sdk.js";
+import { withResolvedMatrixSendClient } from "../send/client.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
@@ -142,6 +149,117 @@ describe("Matrix live encrypted room ownership", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["crypto memory", "room state"])(
+    "sends when encryption is known only by %s",
+    async (source) => {
+      vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(source === "room state");
+      fixture.probe.mockResolvedValue(source === "crypto memory");
+      const state = vi
+        .spyOn(sdk, "getStateEvent")
+        .mockRejectedValue(
+          new MatrixError({ errcode: "M_NOT_FOUND", error: "State event not found" }, 404),
+        );
+      const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+      await expect(client.getMessageWireEventType(roomId)).resolves.toBe("m.room.encrypted");
+      await expect(
+        client.sendMessage(roomId, {
+          msgtype: "m.image",
+          body: "private photo",
+          url: "mxc://matrix.test/plaintext",
+        }),
+      ).rejects.toThrow(/unencrypted media.*retry/i);
+      expect(message).not.toHaveBeenCalled();
+      liveSync();
+      const sent = client.sendMessage(roomId, { msgtype: "m.text", body: "secret" });
+      pending.push(Promise.allSettled([sent]));
+      const delivered = vi.fn();
+      void sent.then(delivered, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(delivered).toHaveBeenCalledWith("$sent");
+      await expect(sent).resolves.toBe("$sent");
+      expect(state).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["message", "event", "resend"] as const)(
+    "holds the first encrypted send after a cached restart until live sync (%s)",
+    async (kind) => {
+      const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+      const custom = vi.spyOn(sdk, "sendEvent").mockResolvedValue({ event_id: "$sent-event" });
+      const resend = vi.spyOn(sdk, "resendEvent").mockResolvedValue({ event_id: "$resent" });
+      const content = { msgtype: "m.text" as const, body: "secret" };
+      if (kind === "resend") {
+        const event = new MatrixEvent({ event_id: "~pending", type: "m.room.message", content });
+        event.setStatus(EventStatus.NOT_SENT);
+        vi.spyOn(fixture.room!, "getEventForTxnId").mockReturnValue(event);
+      }
+      const sent =
+        kind === "event"
+          ? client.sendEvent(roomId, "m.poll.start", { "m.text": "Lunch?" })
+          : client.sendMessage(roomId, content, kind === "resend" ? "oc_retry" : undefined);
+      pending.push(Promise.allSettled([sent]));
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(message).not.toHaveBeenCalled();
+        expect(custom).not.toHaveBeenCalled();
+        expect(resend).not.toHaveBeenCalled();
+        sdk.emit(ClientEvent.Sync, SyncState.Catchup, SyncState.Prepared);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(message).not.toHaveBeenCalled();
+        expect(custom).not.toHaveBeenCalled();
+        expect(resend).not.toHaveBeenCalled();
+      } finally {
+        liveSync();
+        await sent;
+      }
+      await expect(sent).resolves.toBe(
+        kind === "event" ? "$sent-event" : kind === "resend" ? "$resent" : "$sent",
+      );
+    },
+  );
+
+  it("cancels a production send waiting for live sync without another sync event", async () => {
+    const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+    const abort = new AbortController();
+    const sent = withResolvedMatrixSendClient({ client, signal: abort.signal }, (resolved) =>
+      resolved.sendMessage(roomId, { msgtype: "m.text", body: "canceled" }),
+    );
+    pending.push(Promise.allSettled([sent]));
+    const rejected = vi.fn();
+    void sent.catch(rejected);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(message).not.toHaveBeenCalled();
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ name: "AbortError" }));
+    await expect(sent).rejects.toMatchObject({ name: "AbortError" });
+    liveSync();
+    await expect(client.sendMessage(roomId, { msgtype: "m.text", body: "next" })).resolves.toBe(
+      "$sent",
+    );
+    expect(message).toHaveBeenCalledOnce();
+  });
+
+  it("keeps reactions ordered behind an encrypted message waiting for live sync", async () => {
+    const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+    const event = vi.spyOn(sdk, "sendEvent").mockResolvedValue({ event_id: "$reaction" });
+    const sent = client.sendMessage(roomId, { msgtype: "m.text", body: "waiting" });
+    pending.push(Promise.allSettled([sent]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(message).not.toHaveBeenCalled();
+    const reaction = client.sendEvent(roomId, "m.reaction", {
+      "m.relates_to": { rel_type: "m.annotation", event_id: "$prior", key: "👍" },
+    });
+    pending.push(Promise.allSettled([reaction]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(event).not.toHaveBeenCalled();
+    expect(message).not.toHaveBeenCalled();
+    liveSync();
+    await expect(sent).resolves.toBe("$sent");
+    await expect(reaction).resolves.toBe("$reaction");
+    expect(message).toHaveBeenCalledBefore(event);
+  });
+
   it.each(["room replacement", "missing room", "membership", "encryption", "offline"])(
     "revalidates %s after a held crypto probe",
     async (change) => {
@@ -152,6 +270,7 @@ describe("Matrix live encrypted room ownership", () => {
       await started;
       if (change === "room replacement") {
         fixture.room = makeRoom();
+        vi.mocked(fixture.room).hasEncryptionStateEvent.mockReturnValue(false);
         fixture.probe.mockResolvedValue(false);
       } else if (change === "missing room") {
         fixture.room = undefined;
@@ -162,7 +281,7 @@ describe("Matrix live encrypted room ownership", () => {
       } else {
         sdk.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
       }
-      finish(true);
+      finish(change !== "encryption");
       await vi.advanceTimersByTimeAsync(0);
       expect(send).not.toHaveBeenCalled();
       fixture.room = makeRoom();

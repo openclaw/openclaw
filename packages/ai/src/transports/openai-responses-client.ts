@@ -69,10 +69,7 @@ import {
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
-import {
-  DegenerateToolCallArgumentsError,
-  hasOnlyResponsesFunctionTools,
-} from "./openai-responses-stream-errors.js";
+import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
@@ -616,9 +613,6 @@ function createResponsesTransportExecutor(config: {
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
         itemRecovery.reject(error);
-        if (error instanceof DegenerateToolCallArgumentsError) {
-          firstEventAbort?.abort(error);
-        }
         if (requestLifecycle) {
           await requestLifecycle.settle().catch(() => undefined);
         }

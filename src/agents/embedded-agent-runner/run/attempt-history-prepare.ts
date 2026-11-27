@@ -19,6 +19,7 @@ import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import { sessionManagerInheritedMessages } from "../../sessions/session-manager-current-turn.js";
+import { clearsTurnScopedSystemUpdates } from "../../transcript-policy.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { describePastProjectMoves } from "../project-move-replay.js";
@@ -282,8 +283,10 @@ export async function prepareEmbeddedAttemptHistory(
     contextEngine: activeContextEngine,
     agentId: sessionAgentId,
     appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
-    clearsTurnScopedSystemUpdates:
-      transcriptPolicy.inHistorySystemUpdates && attempt.model.api === "anthropic-messages",
+    clearsTurnScopedSystemUpdates: clearsTurnScopedSystemUpdates(
+      transcriptPolicy,
+      attempt.model.api,
+    ),
     messages: activeSession.messages,
     availableTools: new Set(capabilityToolNames),
     citationsMode: attempt.config?.memory?.citations,

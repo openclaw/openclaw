@@ -1,4 +1,3 @@
-import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import { logVerbose } from "../../../globals.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -40,7 +39,6 @@ type SubagentKillSettlementOwnerParams = {
   assertState: () => void;
   targetState: () => SubagentKillTargetState | undefined;
   getClaim: () => SubagentKillClaim | undefined;
-  releaseClaim: (claim: SubagentKillClaim) => Promise<boolean>;
   session: SubagentKillSession;
   stateContext: OpenClawStateWorkerContext;
   stopAcceptance: { accepted: boolean; queuedOnly?: boolean };
@@ -80,43 +78,12 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
     );
   };
 
-  const ownsSessionIncarnation = () => {
-    try {
-      params.assertState();
-      return true;
-    } catch (error) {
-      if (isSessionDeliveryGenerationRevokedError(error)) {
-        return false;
-      }
-      throw error;
-    }
-  };
-
-  // The claim is the kill's authority: only the claimed row and session incarnation stay checked.
+  // The durable claim retains the original row; a rotated session is a different target.
   const assertClaimCurrent = () => {
-    if (!isCurrent() || !ownsSessionIncarnation()) {
-      throw new Error("Subagent ownership changed before cancellation; retry.");
+    params.assertState();
+    if (!isCurrent()) {
+      throw new Error("Subagent kill lost its original claim.");
     }
-  };
-
-  const releaseChangedSession = async (
-    claim: SubagentKillClaim,
-  ): Promise<SubagentRunKillResult> => {
-    try {
-      await params.releaseClaim(claim);
-    } catch (error) {
-      if (hasSqliteWorkerOutcomeUnknown(error)) {
-        throw error;
-      }
-      return {
-        killed: false,
-        error: `Subagent session changed and its kill intent could not be released: ${formatErrorMessage(error)}`,
-      };
-    }
-    return {
-      killed: false,
-      error: "Subagent session changed while the kill was pending; retry.",
-    };
   };
 
   // A committed kill ends the row's completion obligation, including its owed inputs.
@@ -150,9 +117,6 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
   };
 
   const settleKill = async (claim: SubagentKillClaim): Promise<SubagentRunKillResult> => {
-    if (!ownsSessionIncarnation()) {
-      return releaseChangedSession(claim);
-    }
     if (!isCurrent()) {
       return { killed: false, superseded: true };
     }
@@ -166,6 +130,7 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
         runId: selected.runId,
         suppressSessionEffects: params.stopAcceptance.queuedOnly,
         session: params.session,
+        killClaim: claim,
         withdrawQueuedReservation: params.withdrawQueuedReservation,
         reason: "killed",
         suppressTaskDelivery: params.suppressTaskDelivery,
@@ -215,8 +180,6 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
     assertClaimCurrent,
     isCurrent,
     ownsIntent,
-    ownsSessionIncarnation,
-    releaseChangedSession,
     retireObligations,
     settle,
   };

@@ -55,7 +55,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
+import { readRuntimeConfig, selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
@@ -164,7 +164,7 @@ type LoadTriggerPluginRegistry = (input: {
 }) => PluginRegistry;
 
 type CronTriggerEvaluatorDeps = {
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   runHeadless?: typeof runCodeModeScriptHeadless;
   prepareRuntime?: PrepareTriggerRuntime;
   loadPluginRegistry?: LoadTriggerPluginRegistry;
@@ -520,7 +520,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         params.deliveryAttemptFence,
       );
       const request = {
-        runtimeConfig: selectLiveRuntimeConfig(deps.config),
+        runtimeConfig: deps.config ? selectLiveRuntimeConfig(deps.config) : readRuntimeConfig(),
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,

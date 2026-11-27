@@ -15,11 +15,11 @@ export function describeGitHubPublishTool(options: {
     "- readiness: observe publication state and an existing requestId; never resubmit it.",
     "- inspect_pr: read a PR by pullRequestUrl.",
     "- create_issue: title and optional body.",
-    "- create_comment: post approved Markdown (issueNumber, body).",
+    "- create_comment: issueNumber/body; approval unless session PR.",
   ];
   if (options.publicationAvailable) {
     lines.push(
-      `- publish (default): open a PR from accepted workspace changes (draft: true for a draft)${options.workspacePreparationAvailable ? "; for a committed local checkout pass workspacePath" : ""}.`,
+      `- publish (default): PR from accepted work; draft: true for draft. Missing title/body use first branch commit${options.workspacePreparationAvailable ? "; local checkout: workspacePath" : ""}.`,
       "- edit: omit title/body to read; send its headCommit as expectedHeadCommit with a change.",
       "- ready, request_review: mark a draft ready; post the fixed re-review request when asked.",
     );
