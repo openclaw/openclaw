@@ -43,10 +43,8 @@ export function admissionPlugin(provider: string, config: OpenClawConfig, worksp
   return { metadata, manifest, record };
 }
 
-export async function resetAdmissionState(prepared = false) {
-  if (prepared) {
-    await resetPreparedModelRuntimeSnapshotsForTest();
-  }
+export async function resetAdmissionState() {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearRuntimeConfigSnapshot();
@@ -56,7 +54,6 @@ export async function withAdmissionFixture(
   provider: "baseten",
   responseBody: unknown,
   run: (fixture: AdmissionFixture) => Promise<void>,
-  beforeReply?: (requestNumber: number) => Promise<void>,
 ) {
   const state = await createOpenClawTestState({ label: `${provider}-authority`, applyEnv: false });
   const bundledPluginsDir = state.path("bundled");
@@ -72,13 +69,10 @@ export async function withAdmissionFixture(
           headers: request.headers,
           body: undefined,
         };
-        const requestNumber = received.push(incoming);
+        received.push(incoming);
         void json(request)
-          .then(async (body) => {
+          .then((body) => {
             incoming.body = body;
-            if (beforeReply) {
-              await beforeReply(requestNumber);
-            }
             respondJson(response, responseBody);
           })
           .catch((error: unknown) => {

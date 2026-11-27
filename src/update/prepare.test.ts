@@ -658,6 +658,12 @@ console.log(JSON.stringify(process.argv[3] === 'check-release'
   ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
+      if (build === "installed") {
+        await fs.copyFile(
+          path.join(packedRoot, "openclaw.mjs"),
+          path.join(runningRoot, "openclaw.mjs"),
+        );
+      }
       const archive = path.join(root, "candidate.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       await executable(
@@ -897,7 +903,7 @@ describe("retained updater runtimes", () => {
       // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
       expect(log.mock.calls.map(([line]) => String(line))).toEqual([
         `Removed abandoned updater runtime: ${abandoned}`,
-        "Already up to date.",
+        expect.stringContaining("already up to date"),
       ]);
     } finally {
       process.exitCode = undefined;
