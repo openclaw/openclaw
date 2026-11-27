@@ -32,10 +32,6 @@ function commitTooltipSurface(tooltip: TooltipElement) {
   return settleTooltip(tooltip);
 }
 
-function tooltipIsRendered(tooltip: TooltipElement) {
-  return currentTooltipSurface(tooltip)?.querySelector(".tooltip-content") != null;
-}
-
 function tooltipIsOpen(tooltip: TooltipElement) {
   return currentTooltipSurface(tooltip)?.matches(":popover-open");
 }

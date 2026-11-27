@@ -964,8 +964,6 @@ describe("runReplyAgent provider failures", () => {
   });
 });
 
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
 it.each(["completed", "failed", "hidden"] as const)(
   "reports accepted visible work before final dispatch for a %s run",
   async (outcome) => {
