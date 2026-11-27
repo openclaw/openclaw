@@ -175,6 +175,42 @@ describe("Chat Completions historical tools", () => {
       { role: "tool", tool_call_id: "call_1", content: "results" },
     ]);
   });
+
+  it.each([{ tools: [] }, { tools: undefined }])(
+    "replays unavailable tool history as text without declaring tools (%j)",
+    ({ tools }) => {
+      const params = buildOpenAICompletionsParams(
+        openAIModel,
+        {
+          tools,
+          messages: [
+            { role: "user", content: "Run it", timestamp: 1 },
+            {
+              role: "assistant",
+              api: openAIModel.api,
+              provider: openAIModel.provider,
+              model: openAIModel.id,
+              content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }],
+              usage: createZeroUsage(),
+              stopReason: "toolUse",
+              timestamp: 2,
+            },
+            makeTextToolResult("call_1", "exec", "done", false, 3),
+          ],
+        },
+        undefined,
+      );
+      expect(params).not.toHaveProperty("tools");
+      expect(params.messages.slice(-2)).toEqual([
+        { role: "user", content: "Run it" },
+        {
+          role: "assistant",
+          content:
+            '[tool call id=call_1 name=exec] {"cmd":"ls"}\n[tool result id=call_1 name=exec] done',
+        },
+      ]);
+    },
+  );
 });
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {

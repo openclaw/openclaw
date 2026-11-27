@@ -937,26 +937,45 @@ describe("OpenAI completions compatibility and tools", () => {
     }
   });
 
-  it("fails required choice when every schema is quarantined", () => {
-    expect(() =>
-      request(toolsNative, { toolChoice: "required" }, { ...emptyContext(), tools: [brokenTool] }),
-    ).toThrow("no tools survived schema conversion");
+  it.each(["direct", "managed"] as const)(
+    "fails required choice when every schema is quarantined in %s mode",
+    (mode) => {
+      expect(() =>
+        requestMode(
+          mode,
+          toolsNative,
+          { toolChoice: "required" },
+          {
+            ...emptyContext(),
+            tools: [brokenTool],
+          },
+        ),
+      ).toThrow("no tools survived schema conversion");
+    },
+  );
+
+  it("omits tools for managed requests on models that do not support them", () => {
+    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
+    const params = request(unsupported, undefined, { ...historyContext(), tools: [tool()] });
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
   });
 
-  it("preserves history markers only for native requests with supported tools", () => {
-    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
-    const cases = [
-      [request(unsupported, undefined, { ...historyContext(), tools: [tool()] }), false],
-      [request(toolsNative, undefined, { ...historyContext(), tools: [brokenTool] }), true],
-      [request(proxy, undefined, historyContext()), false],
-    ] as const;
-    for (const [params, marker] of cases) {
-      if (marker) {
-        expect(params.tools).toEqual([]);
-      } else {
+  it.each(["direct", "managed"] as const)(
+    "never sends an empty tools array or an orphan tool choice in %s mode",
+    (mode) => {
+      const cases: [CompletionsModel, Context][] = [
+        [toolsNative, { ...historyContext(), tools: [brokenTool] }],
+        [toolsNative, historyContext()],
+        [toolsNative, { ...historyContext(), tools: [] }],
+        [proxy, historyContext()],
+        [proxy, { ...historyContext(), tools: [] }],
+      ];
+      for (const [model, context] of cases) {
+        const params = requestMode(mode, model, { toolChoice: "none" }, context);
         expect(params).not.toHaveProperty("tools");
         expect(params).not.toHaveProperty("tool_choice");
       }
-    }
-  });
+    },
+  );
 });
