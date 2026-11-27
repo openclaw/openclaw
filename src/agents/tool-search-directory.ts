@@ -483,9 +483,9 @@ function formatMcpToolDirectory(
     ...server,
     rows: server.rows.toSorted((a, b) => compare(a.label, b.label)),
   })).toSorted((a, b) => compare(a.name, b.name));
-  // Degrade in fixed steps: descriptions, then input signatures (smallest servers keep
-  // theirs), then names, then whole servers become counts. Every server stays visible as at
-  // least a count.
+  // Degrade in fixed steps: descriptions, then names (smallest servers keep theirs, the rest
+  // become counts; every server stays visible as at least a count). Inputs then fill the
+  // space the listed names leave.
   const full = renderMcpToolDirectory(servers, { expanded: all, signed: all, described: all });
   if (fitsMcpToolDirectory(full)) {
     return full;
@@ -497,48 +497,88 @@ function formatMcpToolDirectory(
   if (ranked !== undefined) {
     return ranked;
   }
-  // Smallest servers first, both for signatures and for names: the most servers stay
-  // callable, and the ones that keep inputs skip tool_describe.
-  const bySize = servers.toSorted(
-    (a, b) => a.rows.length - b.rows.length || compare(a.name, b.name),
-  );
-  const grow = (members: Set<McpDirectoryServer>, layout: () => McpDirectoryLayout) => {
-    for (const server of bySize) {
-      members.add(server);
-      if (!fitsMcpToolDirectory(renderMcpToolDirectory(servers, layout()))) {
-        members.delete(server);
-        break;
-      }
-    }
-  };
   if (fitsMcpToolDirectory(names)) {
-    const signedServers = new Set<McpDirectoryServer>();
-    const serverOf = new Map(servers.flatMap((server) => server.rows.map((row) => [row, server])));
-    const signedLayout = (): McpDirectoryLayout => ({
-      expanded: all,
-      signed: (row) => {
-        const server = serverOf.get(row);
-        return server !== undefined && signedServers.has(server);
-      },
-      described: none,
-    });
-    grow(signedServers, signedLayout);
-    return renderMcpToolDirectory(servers, signedLayout());
+    return renderMcpToolDirectory(servers, withInputs(servers, { expanded: all, described: none }));
   }
   const expanded = new Set<McpDirectoryServer>();
   const isExpanded = (server: McpDirectoryServer) => expanded.has(server);
-  grow(expanded, () => ({ expanded: isExpanded, described: none }));
+  const bySize = servers.toSorted(
+    (a, b) => a.rows.length - b.rows.length || compare(a.name, b.name),
+  );
+  for (const server of bySize) {
+    expanded.add(server);
+    if (
+      !fitsMcpToolDirectory(
+        renderMcpToolDirectory(servers, { expanded: isExpanded, described: none }),
+      )
+    ) {
+      expanded.delete(server);
+      break;
+    }
+  }
   for (let hidden = 0; hidden <= servers.length; hidden += 1) {
-    const text = renderMcpToolDirectory(servers, {
-      expanded: isExpanded,
-      described: none,
-      hiddenServers: hidden,
-    });
-    if (fitsMcpToolDirectory(text) || hidden === servers.length) {
-      return text;
+    const layout = { expanded: isExpanded, described: none, hiddenServers: hidden };
+    if (
+      fitsMcpToolDirectory(renderMcpToolDirectory(servers, layout)) ||
+      hidden === servers.length
+    ) {
+      return renderMcpToolDirectory(servers, withInputs(servers, layout));
     }
   }
   return "";
+}
+
+/**
+ * Gives listed rows their input in the space the names leave. Servers take turns, each
+ * offering its shortest remaining input, so no server goes without inputs because of its size
+ * or name. Without learned usage no tool is known to matter more; within a server the widest
+ * inputs, often write tools, come last.
+ */
+function withInputs(
+  servers: readonly McpDirectoryServer[],
+  layout: McpDirectoryLayout,
+): McpDirectoryLayout {
+  const withEvery: McpDirectoryLayout = { ...layout, signed: all };
+  if (fitsMcpToolDirectory(renderMcpToolDirectory(servers, withEvery))) {
+    return withEvery;
+  }
+  const signed = new Set<McpDirectoryRow>();
+  const result: McpDirectoryLayout = { ...layout, signed: (row) => signed.has(row) };
+  // Not every input fits, so some listed row stays without one and the heading carries both
+  // call sentences. The layout lists no inputs yet (describe-first heading): reserve the
+  // growth to that heading; the rest of it does not change.
+  const headingGrowth =
+    Buffer.byteLength(
+      `${MCP_TOOL_DIRECTORY_CALL_WITH_INPUT} ${MCP_TOOL_DIRECTORY_CALL_WITHOUT_INPUT}`,
+    ) - Buffer.byteLength(MCP_TOOL_DIRECTORY_DESCRIBE_FIRST);
+  let remaining =
+    MAX_MCP_TOOL_DIRECTORY_BYTES -
+    Buffer.byteLength(renderMcpToolDirectory(servers, result)) -
+    headingGrowth;
+  const queues = servers
+    .slice(0, servers.length - (layout.hiddenServers ?? 0))
+    .filter((server) => layout.expanded(server))
+    .map((server) =>
+      server.rows
+        .flatMap((row) => (row.input ? [{ row, cost: Buffer.byteLength(row.input) + 1 }] : []))
+        .toSorted((a, b) => a.cost - b.cost),
+    );
+  while (queues.some((queue) => queue.length > 0)) {
+    for (const queue of queues) {
+      const next = queue.shift();
+      if (!next) {
+        continue;
+      }
+      if (next.cost > remaining) {
+        // This server's later inputs cost at least as much.
+        queue.length = 0;
+        continue;
+      }
+      signed.add(next.row);
+      remaining -= next.cost;
+    }
+  }
+  return result;
 }
 
 /**
