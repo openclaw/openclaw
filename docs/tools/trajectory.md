@@ -209,6 +209,13 @@ partial markers. A single oversized message and existing field limits still
 truncate normally. A reconstructed export event can span several stored records;
 this does not recover data discarded by earlier captures.
 
+Older readers that can open the same database do not reconstruct these groups.
+Their exports include separate redacted snapshot fragments and a partial
+completion event. Their session tail output also counts and displays fragment
+rows. Use the current exporter for a complete snapshot. This format behavior
+does not guarantee database compatibility when rolling back across other schema
+changes.
+
 The general runtime string limit is 65,536 UTF-16 code units (JavaScript string
 length). Longer strings are replaced with an explicit truncation marker.
 Field-specific bounds and the separate event byte limit still apply, including
