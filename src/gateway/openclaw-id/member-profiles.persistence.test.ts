@@ -12,6 +12,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import {
   readOpenClawIdLinkedProfile,
+  readOpenClawIdLinksOfProfile,
   linkCanonicalOpenClawIdUserProfile,
 } from "../../state/user-profile-openclaw-id.js";
 import {
@@ -405,6 +406,73 @@ for (const change of ["merged", "deleted", "taken", "account-linked", "same-acco
     );
   });
 }
+
+// A personal profile without an OpenClaw ID subject row is never bound by a colliding email.
+async function expectUnlinkedVictim(victimId: string, accountId: string) {
+  expect(await readOpenClawIdLinksOfProfile(victimId)).toEqual([]);
+  expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(victimId);
+  expect((await ensureCanonicalUserProfileForEmail("alice@example.test")).id).toBe(victimId);
+}
+
+it("never binds an unlinked profile to an account that reports its email", async ({ state }) => {
+  state.applyEnv();
+  const victim = await ensureCanonicalUserProfileForEmail("alice@example.test");
+  await setCanonicalUserProfileDisplayName(victim.id, "Alice");
+  const direct = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+    accountId: "acct-direct",
+    email: "ALICE@example.test",
+    name: "Alice",
+  });
+  expect(direct.id).not.toBe(victim.id);
+  await expectUnlinkedVictim(victim.id, "acct-direct");
+  // Profile Link binds the caller's own profile; the account's email never redirects it.
+  const caller = await ensureCanonicalUserProfileForEmail("mallory@example.test");
+  expect(
+    await linkCanonicalOpenClawIdUserProfile({
+      profileId: caller.id,
+      accountId: "acct-linked",
+      email: "alice@example.test",
+    }),
+  ).toEqual({ ok: true });
+  expect((await readOpenClawIdLinkedProfile("acct-linked"))?.profileId).toBe(caller.id);
+  await expectUnlinkedVictim(victim.id, "acct-linked");
+
+  // The invite audience is the victim's address, and the redeemer reports exactly that.
+  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  const invite = await ownerInvite(claw, { email: "alice@example.test" });
+  await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel");
+  const mail = await redemptionMail({
+    clawId: claw.clawId,
+    inviteId: invite.inviteId,
+    proofKey: invite.proofKey,
+    accountId: "acct-mallory",
+    email: "alice@example.test",
+  });
+  expect(
+    await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
+  ).toMatchObject({ ok: true });
+  expect(
+    await claw.authority.submit(
+      await claw.sign({
+        op: "add",
+        account_id: "acct-mallory",
+        role: "operator",
+        peer_keys: [mail.peerKey],
+        invite_id: invite.inviteId,
+      }),
+      "tunnel",
+    ),
+  ).toMatchObject({ ok: true });
+  expect(await claw.authority.resolvePeer(mail.peerKey)).toMatchObject({ kind: "member" });
+  await expectUnlinkedVictim(victim.id, "acct-mallory");
+  // Tunnel admission resolves the member by subject only.
+  const admitted = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+    accountId: "acct-mallory",
+  });
+  expect(admitted.id).not.toBe(victim.id);
+  await closeOpenClawStateDatabaseAsync();
+  await expectUnlinkedVictim(victim.id, "acct-mallory");
+});
 
 it("imports legacy member roles once, preserves assignments, and does not undo suspension", async ({
   state,
