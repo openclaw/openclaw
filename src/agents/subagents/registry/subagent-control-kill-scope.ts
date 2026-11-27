@@ -1,6 +1,7 @@
 /** Retains cancellation selection, session facts, and exact dispatch ownership. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -48,6 +49,7 @@ import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent
 
 type KillBinding = {
   entry: SubagentRunRecord;
+  session?: SubagentKillSession;
   isCurrent: (entry: SubagentRunRecord) => boolean;
   ownsRun: () => boolean;
   canTraverse: () => boolean;
@@ -55,7 +57,6 @@ type KillBinding = {
 };
 
 export type KillTree = KillBinding & {
-  session?: SubagentKillSession;
   children: KillTree[];
   errors: Set<string>;
   completedCleanupError?: string;
@@ -315,6 +316,18 @@ export async function withSubagentKillScope<T>(
     parent?: KillBinding,
     ownsRoot?: (entry: SubagentRunRecord) => boolean,
   ) => {
+    // New descendants need their own admission to the captured parent's incarnation.
+    // Previously selected rows keep settling under their existing kill claims.
+    if (parent?.session) {
+      try {
+        parent.session.assertCurrent();
+      } catch (error) {
+        if (isSessionDeliveryGenerationRevokedError(error)) {
+          return;
+        }
+        throw error;
+      }
+    }
     const pending: PendingKillTree[] = [];
     capture(pending, runs, trees, owner, parent, ownsRoot);
     captureResidentDescendants(pending);
