@@ -41,7 +41,7 @@ packages/ai/src/transports/anthropic-transport-stream.ts	8
 packages/ai/src/transports/google-thinking-level.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	63
 packages/ai/src/transports/openai-completions-host.ts	3
-packages/ai/src/transports/openai-completions-params.ts	13
+packages/ai/src/transports/openai-completions-params.ts	12
 packages/ai/src/transports/openai-completions-replay.ts	11
 packages/ai/src/transports/openai-completions-stream.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	5

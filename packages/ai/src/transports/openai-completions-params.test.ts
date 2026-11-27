@@ -967,20 +967,24 @@ describe("OpenAI completions compatibility and tools", () => {
     ).toThrow("no tools survived schema conversion");
   });
 
-  it("preserves history markers only for native requests with supported tools", () => {
-    const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
-    const cases = [
-      [request(unsupported, undefined, { ...historyContext(), tools: [tool()] }), false],
-      [request(toolsNative, undefined, { ...historyContext(), tools: [brokenTool] }), true],
-      [request(proxy, undefined, historyContext()), false],
-    ] as const;
-    for (const [params, marker] of cases) {
-      if (marker) {
-        expect(params.tools).toEqual([]);
-      } else {
+  it.each(["direct", "managed"] as const)(
+    "never sends an empty tools array or an orphan tool choice in %s mode",
+    (mode) => {
+      const send = ({ compat, ...fields }: Partial<ToolsModel>, context: Context) =>
+        requestMode(
+          mode,
+          { ...makeCompletionsModel(fields), compat },
+          { toolChoice: "none" },
+          context,
+        );
+      for (const params of [
+        send(toolsNative, { ...historyContext(), tools: [brokenTool] }),
+        send(toolsNative, historyContext()),
+        send(proxy, historyContext()),
+      ]) {
         expect(params).not.toHaveProperty("tools");
         expect(params).not.toHaveProperty("tool_choice");
       }
-    }
-  });
+    },
+  );
 });
