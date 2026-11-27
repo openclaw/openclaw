@@ -13,7 +13,6 @@ import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
-import { resolveToolLoopDetectionConfig } from "../../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
@@ -44,6 +43,8 @@ export function prepareEmbeddedAttemptClientTools(params: {
   effectiveTools: AgentTool[];
   /** Applies the session tool pin each time the surface is built, including permission refreshes. */
   pinTools?: (tools: AgentTool[]) => AgentTool[];
+  /** Records an on-demand catalog tool the model just called by name as a session direct tool. */
+  onPromoteTool?: (tool: AgentTool) => void;
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
   sandboxSessionKey?: string;
   sessionAgentId: string;
@@ -69,10 +70,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
     }
     return slot;
   };
-  const clientToolLoopDetection = resolveToolLoopDetectionConfig({
-    cfg: params.attempt.config,
-    agentId: params.sessionAgentId,
-  });
   const sourceClientToolDefs = params.clientTools
     ? toClientToolDefinitions(
         params.clientTools,
@@ -98,7 +95,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
           config: params.toolSearchRuntimeConfig,
           sessionId: params.attempt.sessionId,
           runId: params.attempt.runId,
-          loopDetection: clientToolLoopDetection,
           onToolOutcome: params.attempt.onToolOutcome,
           allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,
         },

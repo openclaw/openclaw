@@ -34,7 +34,7 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 // The fixture helper imports backup commands; install the tar mock before loading it.
 const { isolatedBackupCase } = await import("../infra/backup-create.test-support.js");
 const { backupCreateCommand } = await import("./backup.js");
-const actualTar = await vi.importActual<typeof import("tar")>("tar");
+const actualTar = await vi.importActual<typeof import("tar/raw")>("tar/raw");
 const { walkBackupTar } = await vi.importActual<typeof import("../infra/backup-tar-walk.js")>(
   "../infra/backup-tar-walk.js",
 );
@@ -61,6 +61,23 @@ describe("backup commands", () => {
       expect(report).not.toContain("\nforged");
       expect(result.archivePath).toBe(output);
       expect((await fs.stat(output)).isFile()).toBe(true);
+    }),
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "writes the archive where a symlinked folder's `..` leads, not to the lexical neighbor",
+    backupCase(async () => {
+      await mockStateOnlyBackupPlan(stateDir);
+      const physical = path.join(home, "out-physical");
+      await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+      await fs.symlink(path.join(physical, "nested"), path.join(home, "out-link"));
+      const result = await create({
+        output: `${home}/out-link/../backup.tar.gz`,
+        includeWorkspace: false,
+      });
+      expect(result.archivePath).toBe(path.join(await fs.realpath(physical), "backup.tar.gz"));
+      expect((await fs.stat(result.archivePath)).isFile()).toBe(true);
+      await expect(fs.stat(path.join(home, "backup.tar.gz"))).rejects.toThrow();
     }),
   );
 
@@ -381,6 +398,19 @@ describe("backup commands", () => {
       const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
       const result = await create({ nowMs });
       expect(result.archivePath).toBe(path.join(home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`));
+      await fs.rm(result.archivePath, { force: true });
+    }),
+  );
+
+  it.each([false, true])(
+    "writes a home-preferred archive to home unless home is a backed-up workspace (%s)",
+    backupCase(async (workspaceIsHome) => {
+      await writeWorkspaceBackupConfig(workspaceIsHome ? home : await prepareWorkspace());
+      const cwd = path.join(fixtureRoot, "gateway-cwd");
+      await fs.mkdir(cwd);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const result = await create({ preferHomeOutput: true });
+      expect(path.dirname(result.archivePath)).toBe(workspaceIsHome ? cwd : home);
       await fs.rm(result.archivePath, { force: true });
     }),
   );

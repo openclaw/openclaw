@@ -14,7 +14,7 @@
 // writes per logical second, with --row-update-population and --row-update-field selecting them.
 // --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
 // --search-fts seeds one searchable message per row and uses real transcript FTS.
-// --search-query searchwalkcommon|searchwalkrare compares dense/sparse matches;
+// --search-query searchwalkcommon|searchwalkrare|会 compares dense/sparse word and CJK matches;
 // --search-concurrency 4 measures a burst through the same embedded Gateway owner.
 // --active-runs 30 holds synthetic runs active; discovery also reports warm page preparation
 // at offsets 0/3600/7200/12800 after the measured sweep (outside CPU/allocation samples).
@@ -264,6 +264,9 @@ if (values["search-workload"]) {
   main.identity = { name: "Synthetic Explorer" };
   main.model = "openai/gpt-4.1";
 }
+if (values["search-discovery"]) {
+  cfg.tools = { sessions: { visibility: "all" }, agentToAgent: { enabled: true } };
+}
 config.setRuntimeConfigSnapshot(cfg);
 if (siblingSessions && !values["reuse-fixture"]) {
   const { writeSessionEntry } =
@@ -325,7 +328,7 @@ if (values["search-fts"] && !values["reuse-fixture"]) {
             content: [
               {
                 type: "text",
-                text: `searchwalkcommon synthetic transcript ${index % 1000 === 0 ? "searchwalkrare" : "ordinary"}`,
+                text: `searchwalkcommon synthetic transcript ${index % 1000 === 0 ? "searchwalkrare 明天下午开会讨论" : "ordinary"}`,
               },
             ],
           },
@@ -514,6 +517,7 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
   let prepared = 0;
   let roster = 0;
   let list = 0;
+  let sidebarShare = 0;
   let sort = 0;
   let comparator = 0;
   const visit = (
@@ -523,6 +527,7 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     inList = false,
     inSort = false,
     inComparator = false,
+    inSidebarShare = false,
   ) => {
     const preparedFrame = inPrepared || node.callFrame.functionName === "withPreparedExactRows";
     const rosterFrame = inRoster || node.callFrame.functionName === "withAgentRosterFactsBatch";
@@ -530,18 +535,29 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     const sortFrame = inSort || node.callFrame.functionName === "sortAndLimitSessionEntries";
     const comparatorFrame =
       inComparator || node.callFrame.functionName === "compareSessionEntryPairs";
+    const sidebarShareFrame =
+      inSidebarShare || node.callFrame.functionName === "shareSidebarSessionRows";
     total += node.selfSize;
     prepared += preparedFrame ? node.selfSize : 0;
     roster += rosterFrame ? node.selfSize : 0;
     list += listFrame ? node.selfSize : 0;
     sort += sortFrame ? node.selfSize : 0;
     comparator += comparatorFrame ? node.selfSize : 0;
+    sidebarShare += sidebarShareFrame ? node.selfSize : 0;
     for (const child of node.children) {
-      visit(child, preparedFrame, rosterFrame, listFrame, sortFrame, comparatorFrame);
+      visit(
+        child,
+        preparedFrame,
+        rosterFrame,
+        listFrame,
+        sortFrame,
+        comparatorFrame,
+        sidebarShareFrame,
+      );
     }
   };
   visit(profile.head);
-  return { total, prepared, roster, list, sort, comparator };
+  return { total, prepared, roster, list, sort, comparator, sidebarShare };
 }
 
 function sampledCpu(profile: Profiler.Profile) {
@@ -557,6 +573,7 @@ function sampledCpu(profile: Profiler.Profile) {
     "resolveGatewaySessionThinkingProjectionInternal",
     "resolveAvailableAgentHarnessPolicy",
     "projectGatewaySessionRunState",
+    "shareSidebarSessionRows",
   ]);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
   const parents = new Map(
@@ -847,8 +864,8 @@ try {
           return gateway<T>(request);
         }
         assert.equal(request.method, "sessions.search");
-        const params = request.params as { sessionKeys: string[] };
-        keys.push(...params.sessionKeys);
+        const params = request.params as { sessionKeys?: string[] };
+        keys.push(...(params.sessionKeys ?? []));
         if (!values["search-fts"]) {
           return { results: [] } as T;
         }
@@ -871,7 +888,6 @@ try {
         resultDigest: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
       });
     }
-    assert(last);
     discovery = {
       pages,
       rows: returned,
@@ -879,7 +895,17 @@ try {
       digest: createHash("sha256").update(JSON.stringify(keys.toSorted())).digest("hex"),
       dashboardDigest: dashboards?.digest("hex"),
     };
-    return last;
+    return (
+      last ??
+      ({
+        ts: anchor,
+        path: "synthetic-search",
+        count: 0,
+        totalCount: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      } satisfies SessionsListResult)
+    );
   };
   const read = async (index: number) => {
     const results = await Promise.all(

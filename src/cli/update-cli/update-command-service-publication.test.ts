@@ -388,7 +388,7 @@ it.each([
     }
     const effect = vi.fn(async () => "published");
     await expect(publish(effect)).rejects.toThrow(
-      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
+      /must be republished \(this update changed them or they were already stale\), but the affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
     expect(effect).not.toHaveBeenCalled();
   }),

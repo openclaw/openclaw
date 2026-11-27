@@ -226,10 +226,20 @@ still alive. A confirmed missing executable or runtime loader failure marks
 `503` with `failing: ["child-runtime"]`. Worker requests explain which runtime
 failed and ask you to restart the Gateway. The diagnosis is logged once and
 further worker launches fail immediately; ordinary worker crashes do not mark
-the runtime unavailable. A health or readiness check that finds the executable
+the runtime unavailable. An explicit health check that finds the executable
 missing publishes the same diagnosis, even when resident workers still serve reads.
 Clients without `operator.admin` see `[redacted]` in `childRuntime.execPath` while
 the availability flag remains visible.
+
+HTTP readiness reads the runtime owner's recorded diagnosis; it does not launch a
+child, stat the executable, ping a database worker, or attempt a commit. A slow
+SQLite commit or filesystem operation alone does not make the Gateway unready
+while its admitted traffic can still be served. Startup and explicit health
+diagnostics retain executable verification, and actual child-launch failures
+publish the same diagnosis. Until one of those owners observes a broken runtime,
+readiness can remain green. Known failures still return `503` with their named
+`failing` owner; there is no elapsed-write-time threshold or new timeout verdict.
+`/healthz` remains HTTP liveness, and `/startupz` reads recorded startup state.
 
 For a service-managed Gateway, the lifecycle owner checks the effective service
 command's Node with a bounded `--version` probe. On macOS, the loaded launchd

@@ -573,7 +573,7 @@ describe("Gateway state ownership", () => {
       };
       vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
         if (
-          pathname === secondLock &&
+          path.dirname(String(pathname)) === directory &&
           typeof flags === "number" &&
           (flags & fs.constants.O_EXCL) !== 0 &&
           !released
@@ -702,6 +702,38 @@ describe("Gateway state ownership", () => {
       } finally {
         fs.rmSync(pathname, { force: true });
       }
+    },
+  );
+
+  it.each(["exited", "unverified"] as const)(
+    "keeps a changing owner observation bounded until death is proven: %s",
+    (state) => {
+      const pathname = markerPath(databasePath);
+      const raw = JSON.stringify({
+        ...ownerPayload(root, process.ppid),
+        role: "sqlite-maintenance",
+        stateOwnerKind: "schema",
+      });
+      fs.writeFileSync(pathname, raw);
+      cleanups.push(() => fs.rmSync(pathname, { force: true }));
+      vi.spyOn(pidAlive, "isPidDefinitelyDead")
+        .mockReturnValueOnce(false)
+        .mockReturnValue(state === "exited");
+      vi.spyOn(pidAlive, "isPidAlive").mockReturnValue(false);
+      const admitted = vi.fn();
+      const open = () =>
+        withStateDatabaseColdAdmission(
+          { databasePath, busyTimeoutMs: state === "exited" ? 100 : 0 },
+          admitted,
+        );
+      if (state === "exited") {
+        expect(open).not.toThrow();
+        expect(admitted).toHaveBeenCalledOnce();
+      } else {
+        expect(open).toThrow(StateDatabaseAdmissionPendingError);
+        expect(admitted).not.toHaveBeenCalled();
+      }
+      expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
     },
   );
 

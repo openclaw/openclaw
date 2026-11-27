@@ -453,6 +453,7 @@ export function createSessionActivity(notify: () => void) {
             includePeople: true,
             activityPulseBoundaries: boundaries,
             excludeSubagents: true,
+            excludeSystem: true,
             includeActivitySummary: true,
             sortBy: "activity" as const,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),

@@ -8,7 +8,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
@@ -144,7 +144,7 @@ export function createAgentDatabaseNativeGeneration(
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
-      invalidateOpenClawAgentDatabaseValidation(validationSource);
+      invalidateOpenClawAgentDatabaseValidation(validationSource, "execution retirement");
     }
     // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
     if (preparationPublished) {
@@ -382,7 +382,10 @@ export function createAgentDatabaseNativeGeneration(
               if (!lease && getOpenClawAgentDatabaseValidationForTransfer(validationSource)) {
                 // Absence ends retained proof even if Linux reuses the inode. Later open
                 // checkpoints must preserve the publication captured by the lease handoff.
-                invalidateOpenClawAgentDatabaseValidation(validationSource);
+                invalidateOpenClawAgentDatabaseValidation(
+                  validationSource,
+                  "a missing database file",
+                );
               }
               registration.begin();
             }

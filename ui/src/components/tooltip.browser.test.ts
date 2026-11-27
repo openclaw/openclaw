@@ -216,7 +216,7 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
     expectSharedTooltipSkin(tooltip);
     await clickTarget(link!, undefined, true);
   });
-  it("publishes completion only after the real opening transition, then hides on blur", async () => {
+  it("publishes completion only after the real opening animation, then hides on blur", async () => {
     const { page } = await import("vitest/browser");
     const f = await fixture();
     const body = tooltipBody(f.tooltip);
@@ -238,7 +238,7 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
               .getAnimations()
               .find(
                 (candidate) =>
-                  candidate instanceof CSSTransition && candidate.playState === "running",
+                  candidate instanceof CSSAnimation && candidate.playState === "running",
               );
             if (animation) {
               rate = animation.playbackRate;
@@ -284,12 +284,6 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
       withoutTooltipMotion(f);
     }
     await openTooltip(f);
-    const duration = Number.parseFloat(getComputedStyle(tooltipBody(f.tooltip)).transitionDuration);
-    if (zeroDuration) {
-      expect(duration).toBe(0);
-    } else {
-      expect(duration).toBeGreaterThan(0);
-    }
     await expectVisibility(f, true);
     f.events.length = 0;
 
@@ -297,6 +291,12 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip browser ownership", 
     f.trigger.blur();
     await commitTooltip(f.tooltip);
     expect(f.events).toEqual(["closing"]);
+    const duration = Number.parseFloat(getComputedStyle(tooltipBody(f.tooltip)).animationDuration);
+    if (zeroDuration) {
+      expect(duration).toBe(0);
+    } else {
+      expect(duration).toBeGreaterThan(0);
+    }
     f.trigger.focus();
     await reopened;
     expect(document.activeElement).toBe(f.trigger);

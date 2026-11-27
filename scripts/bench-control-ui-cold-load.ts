@@ -50,7 +50,6 @@ import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
 import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
-import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isChatHistoryState } from "../ui/src/lib/protocol-validators.generated/history-state.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
@@ -902,6 +901,7 @@ if (!Number.isInteger(primeReloads) || primeReloads < 0 || primeReloads > 10) {
 if (primeReloads > 0 && !primeEligible) {
   throw new Error("prime-reloads requires a fixed-route unprofiled paint-holding capture");
 }
+const { shareSidebarSessionRows } = await import("../src/gateway/session-row-presentation.js");
 const timingCaptureKey = "openclaw-bench-timing-capture";
 const timingCaptureMs = captureMs || 2200;
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));

@@ -6,8 +6,12 @@ import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openc
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
+  matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
+} from "./subagent-child-owner-match.js";
+import {
+  isDeliveryTerminalForRequesterSettle,
   projectSubagentRunForMaintenance,
   shouldPreserveSubagentForMaintenance,
 } from "./subagent-delivery-state.js";
@@ -19,7 +23,6 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
-import { countActiveRunsForSessionFromRuns } from "./subagent-registry-queries.js";
 import {
   consumeFreshSubagentRuns,
   getSessionListLookup,
@@ -48,6 +51,8 @@ import { resolveControllerSessionKey } from "./subagent-registry-read-topology.j
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { latestSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
+import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 import type { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
@@ -467,15 +472,76 @@ export function countActiveSubagentRunsForSession(
   requesterSessionKey: string,
   options?: { collect?: boolean; requesterAgentId?: string },
 ): number {
-  const runs = new Map<string, SubagentRunReadRecord>(
-    shouldReadPersistedSubagentRuns()
-      ? loadPersistedSubagentRunsForRead(persistedSubagentSessionListRunsReadCache)
-      : undefined,
-  );
-  for (const [runId, entry] of inMemoryRuns) {
-    runs.set(runId, entry);
+  const key = requesterSessionKey.trim();
+  if (!key) {
+    return 0;
   }
-  return countActiveRunsForSessionFromRuns(runs, requesterSessionKey, options);
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const persisted = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : undefined;
+  const live = getSubagentSessionReadLookup(inMemoryRuns);
+  const durable = persisted && getSessionListLookup(cache, persisted);
+  // Select from both memberships; raw live rows veto stale persisted ownership.
+  function* rows(select: (lookup: SubagentSessionReadLookup) => Iterable<string>) {
+    for (const id of durable ? select(durable) : []) {
+      yield (inMemoryRuns.get(id) ?? persisted!.get(id))!;
+    }
+    for (const id of select(live)) {
+      yield inMemoryRuns.get(id)!;
+    }
+  }
+  const now = Date.now();
+  const owners = new Set([key]);
+  const latest = new Map<string, SubagentRunReadRecord>();
+  for (const entry of rows((lookup) => lookup.selectControllers(owners, true))) {
+    const owner = entry.collect
+      ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
+      : resolveControllerSessionKey(entry);
+    if (
+      owner !== key ||
+      (options?.collect !== undefined && (entry.collect === true) !== options.collect) ||
+      (options?.requesterAgentId && resolveRecordedRequester(entry) !== options.requesterAgentId)
+    ) {
+      continue;
+    }
+    recordLatestSubagentRun(latest, entry.childSessionKey, entry);
+  }
+  const hasPendingDescendant = (root: string): boolean => {
+    const pending = new Set(root.trim() ? [root.trim()] : []);
+    for (const requester of pending) {
+      for (const lookup of durable ? [durable, live] : [live]) {
+        for (const child of lookup.childrenForRequester(requester)) {
+          const keys = new Set([child]);
+          const entry = latestSubagentRun(
+            rows((source) => source.selectChildren(keys)),
+            (row) => row.childSessionKey.trim() === child,
+          );
+          // A newer generation or live move can retire this requester's old edge.
+          if (!entry || entry.requesterSessionKey !== requester) {
+            continue;
+          }
+          if (
+            hasSubagentRunEnded(entry)
+              ? typeof entry.cleanupCompletedAt !== "number" &&
+                !isDeliveryTerminalForRequesterSettle(entry)
+              : isRetainedUnendedSubagentRun(entry, now)
+          ) {
+            return true;
+          }
+          pending.add(child);
+        }
+      }
+    }
+    return false;
+  };
+  let count = 0;
+  for (const entry of latest.values()) {
+    if (isRetainedUnendedSubagentRun(entry) || hasPendingDescendant(entry.childSessionKey)) {
+      count++;
+    }
+  }
+  return count;
 }
 
 export function getSubagentSessionListRunsSnapshotForRead(

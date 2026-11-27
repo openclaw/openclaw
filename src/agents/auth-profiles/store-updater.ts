@@ -5,8 +5,7 @@ import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import type { createExternalAuthRuntime } from "./external-auth.js";
-import { assertAuthProfileMigrationCandidates } from "./legacy-source-diagnostic.js";
-import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import { assertAuthProfileMigrationStateAtDatabasePath } from "./legacy-source-diagnostic.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
@@ -136,11 +135,7 @@ export function createAuthProfileStoreUpdater(
         options: writeOptions,
         update(prepared, owner) {
           if (!envOnly) {
-            assertAuthProfileMigrationCandidates({
-              databasePath: owner.databasePath,
-              candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir, env: owner.env }),
-              hasCredentials: () => Object.keys(prepared.store.profiles).length > 0,
-            });
+            assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
             observeCanonicalAuthProfileCredentials(owner.databasePath, prepared.store.profiles);
           }
           loadedStore = applyScopedAuthReadThrough(prepared.store);

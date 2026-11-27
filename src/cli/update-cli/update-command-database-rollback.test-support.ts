@@ -29,7 +29,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 /** Resolve after the execution fixture has loaded its native worker owners. */
-export function resolveRollbackWorkerInputs() {
+function resolveRollbackWorkerInputs() {
   const gatewayLockUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.gatewayLock);
   const databaseGenerationsUrl = resolveRuntimeWorkerUrl(
     updateExecutorNativeEntrypoints.databaseGenerations,

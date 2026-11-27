@@ -77,6 +77,7 @@ describe("subagent progress-card availability", () => {
     expect(names.includes("progress_card")).toBe(sessionKey === parent);
     const { extraSystemPrompt: prompt } = await prepareAttemptSystemPromptAdditions({
       agentId: "main",
+      workspaceDir: tempDir,
       sessionId: "synthetic-session",
       config,
       sessionKey,

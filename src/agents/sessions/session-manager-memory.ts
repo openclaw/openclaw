@@ -1,4 +1,3 @@
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { SessionActorMemoryMetadataCommand } from "../../config/sessions/session-actor-memory-metadata-contract.js";
 import type {
   SessionManagerIncognitoDatabase,
@@ -23,13 +22,11 @@ export function createSessionManagerMemoryDatabase(
     path: database.path,
     identity: { incarnation: actor.target.database.incarnation },
     async withMetadata(assertCurrent, operation, controls) {
-      let cliWriter: CliHistoryWriter | undefined;
       let commandSignal: AbortSignal | undefined;
       const assertMetadataCurrent = () => {
         commandSignal?.throwIfAborted();
         assertCurrent();
         binding.authority.assertCurrent();
-        cliWriter?.assertCurrent();
         controls?.initialWriter?.assertActive();
       };
       const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
@@ -45,7 +42,7 @@ export function createSessionManagerMemoryDatabase(
         },
       };
       const execute = async (command: SessionActorMemoryMetadataCommand) => {
-        cliWriter = prepareSessionManagerMetadataCommand(command, database.path, admission.control);
+        prepareSessionManagerMetadataCommand(command, admission.control);
         if (command.type === "session.metadata.mutation") {
           return storage.read(command, authority);
         }

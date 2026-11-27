@@ -143,17 +143,6 @@ export function jsonExtractText(
     : eb.fn<string | null>("json_extract", [value, eb.val(jsonKeyPath(key))]);
 }
 
-export function jsonOrderedTextArray(
-  db: DatabaseSync | PostgresSqlConnection,
-  value: Expression<string | null>,
-  orderBy: Expression<unknown>,
-): AliasableExpression<string> {
-  // SQLite consumes caller-ordered rows; PostgreSQL requires ordering within the aggregate.
-  return isPostgresSqlConnection(db)
-    ? /* kysely-allow-raw: Engine-owned ordered JSON aggregation. */ sql<string>`coalesce(array_to_json(array_agg(${value} order by ${orderBy}))::text, '[]')`
-    : expressionBuilder().fn<string>("json_group_array", [value]);
-}
-
 export function jsonRemoveKey(
   db: DatabaseSync | PostgresSqlConnection,
   value: Expression<string | null>,

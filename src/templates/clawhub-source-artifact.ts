@@ -14,6 +14,7 @@ import type {
   ClawHubResolvedArtifact,
 } from "../infra/clawhub-packages.js";
 import { readTemplateManifestFile } from "./reader.js";
+import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import type { TemplateDiagnostic, TemplateReadResult } from "./types.js";
 
 const TEMPLATE_SOURCE_CACHE_DIR = "templates/sources";
@@ -29,6 +30,24 @@ export class ClawHubSourceError extends Error {
   ) {
     super(message);
     this.name = "ClawHubSourceError";
+  }
+}
+
+export function requireTemplateName(packageName: string): void {
+  if (!isCanonicalClawHubPackageName(packageName)) {
+    throw new ClawHubSourceError(
+      "clawhub_package_name_invalid",
+      "Select a canonical ClawHub package name without a version selector.",
+    );
+  }
+}
+
+export function requireExactVersion(version: string): void {
+  if (!isExactSemVer(version)) {
+    throw new ClawHubSourceError(
+      "clawhub_version_unavailable",
+      "Select an exact published Template version.",
+    );
   }
 }
 

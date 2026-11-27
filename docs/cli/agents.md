@@ -55,6 +55,7 @@ openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
+openclaw agents render-blobster design.json --out ~/.openclaw/workspace/avatars/blobster.svg
 openclaw agents delete work
 ```
 
@@ -210,6 +211,12 @@ Options: `--agent <id>` (defaults to the current default agent), `--bind <channe
 ### `agents set-identity`
 
 Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-identity`, `--name <name>`, `--theme <theme>`, `--emoji <emoji>`, `--avatar <value>`, `--json`. See [Set identity](#set-identity) below.
+
+### `agents render-blobster <design>`
+
+Options: `--out <path>` (required, `.svg` or `.png`), `--json`.
+
+Validates a versioned Blobster design JSON file (or `-` for standard input) against OpenClaw's bounded SVG shape allowlist and writes a deterministic 256×256 `.svg` or transparent `.png` without network access or Gateway configuration. Use `--json` to return `{ id, name, description, out, format, bytes }`. In chat, the bundled `create-blobster` skill uses this command to preview and apply custom Blobster avatars for agents and [Templates](/cli/templates).
 
 ### `agents delete <id>`
 

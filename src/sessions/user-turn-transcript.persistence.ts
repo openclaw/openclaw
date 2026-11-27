@@ -8,11 +8,11 @@ import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
   PersistUserTurnTranscriptParams,
-  PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptTarget,
   UserTurnTranscriptTargetResolver,

@@ -1,10 +1,7 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import {
   createCatalogCodeModeHarness,
@@ -555,28 +552,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
-  });
-
-  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
-    let revoked = false;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator authority revoked");
-        }
-      },
-    });
-    const stalled = await createStalledRun({ operatorAuthority });
-    await stallBeforeOutput(stalled);
-    revoked = true;
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
-
-    await settleStalledOwner(stalled);
-    expect(drainedRuns).not.toHaveBeenCalled();
   });
 
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {

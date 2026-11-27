@@ -9,7 +9,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import {
+  applyAssistantDeliveryDirectives,
+  type PrepareAssistantTranscriptMessage,
+} from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -521,10 +524,8 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   }
   await store.releaseTurn(placementClosedClaim);
   expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
-  expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
-  await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
-    "worker turn authority changed",
-  );
+  expect(() => placementReceiptAuthority?.()).toThrow("worker turn ended");
+  await expect(placementCapability.run(async () => "stale")).rejects.toThrow("worker turn ended");
   releaseAgentRunDelegatedAuthority(placementClosedAuthority);
 
   const runClosedClaim = await store.claimTurn({
@@ -553,7 +554,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
       releaseAgentRunDelegatedAuthority(runClosedAuthority);
       return "closed-after-await";
     }),
-  ).rejects.toThrow("worker turn authority changed");
+  ).rejects.toThrow("worker turn ended");
   await store.releaseTurn(runClosedClaim);
 });
 
@@ -629,12 +630,12 @@ it.each(["root admission", "wrong generation"] as const)(
       credentialExpiresAtMs: Date.now() + 60_000,
     });
     const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
-    const prepare = vi.fn(
-      (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {
-        expect(sourceText).toBe(text);
-        return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
-      },
-    );
+    const prepareSpy = vi.fn();
+    const prepare: PrepareAssistantTranscriptMessage = (message, sourceText) => {
+      prepareSpy(message, sourceText);
+      expect(sourceText).toBe(text);
+      return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
+    };
     const admission =
       scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
     const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
@@ -696,7 +697,7 @@ it.each(["root admission", "wrong generation"] as const)(
           content: [{ type: "text", text: current ? "Prepared\nMEDIA:./unowned.png" : text }],
         },
       });
-      expect(prepare).toHaveBeenCalledTimes(current ? 1 : 0);
+      expect(prepareSpy).toHaveBeenCalledTimes(current ? 1 : 0);
       const rows = await loadTranscriptEvents(target);
       expect(rows.at(-1)).toMatchObject({
         message: {

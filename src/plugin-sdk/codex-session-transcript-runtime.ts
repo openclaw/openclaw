@@ -58,6 +58,7 @@ import type {
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
 export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 export { SessionTranscriptReadFenceError };
+export { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 
 export {
   createSessionTranscriptContextReader as createCodexSessionContextReader,

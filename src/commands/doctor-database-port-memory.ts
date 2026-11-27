@@ -20,7 +20,7 @@ import { resolveMemoryRebuildConcurrency } from "./doctor-database-port-memory-c
 
 type MemoryRebuildTarget = { agentId: string; path: string };
 type MemoryRebuildResult = MemoryRebuildTarget & {
-  status: "rebuilt" | "failed";
+  status: "rebuilt" | "disabled" | "failed";
   elapsedMs?: number;
   files?: number;
   chunks?: number;
@@ -121,14 +121,16 @@ export async function rebuildPortedAgentMemory(params: {
               mode: "enforce_resolved",
             });
             assertCurrent();
-            const { manager } = await getActiveMemorySearchManagerCore({
+            const { manager, error } = await getActiveMemorySearchManagerCore({
               cfg: resolvedConfig,
               agentId: target.agentId,
               purpose: "cli",
               inspectSources: true,
             });
             if (!manager) {
-              return failed(target, "The selected memory plugin is unavailable.");
+              return error?.trim()
+                ? failed(target, "The selected memory plugin is unavailable.")
+                : { ...target, status: "disabled" };
             }
             let outcome: MemoryRebuildResult;
             try {

@@ -297,7 +297,7 @@ it.each(scenarios)(
         }
         expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toBeUndefined();
       } finally {
-        recorder?.finishPendingInput?.("interrupted");
+        recorder?.finishPendingInput?.("interrupted", "failed");
         claim?.dispose();
         if (bound) {
           unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
@@ -641,7 +641,7 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
         expect(claimInboundDedupe(command).status).toBe("duplicate");
       } finally {
-        recorder?.finishPendingInput?.("interrupted");
+        recorder?.finishPendingInput?.("interrupted", "failed");
         await disposeAcpSessionManagerInstance(manager, "test-complete");
         testing.resetAcpSessionManagerForTests();
         unregisterAcpRuntimeBackend(backendId);

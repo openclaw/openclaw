@@ -1,12 +1,7 @@
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayProtocolRequestError } from "../../../../packages/gateway-client/src/protocol-request.js";
-import { ErrorCodes } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
-import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
-import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -39,69 +34,18 @@ export function summarizeDeliveryError(error: unknown): string {
   }
 }
 
-const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
-  /unsupported channel/i,
-  /unknown channel/i,
-  /chat not found/i,
-  /user not found/i,
-  /bot.*not.*member/i,
-  /bot was blocked by the user/i,
-  /forbidden: bot was kicked/i,
-  /recipient is not a valid/i,
-  /outbound not configured for channel/i,
-  /Session "[^"]+" is archived\. Restore it before starting new work\./i,
-];
-
-// The Gateway refused the request itself; resending the same handoff gets the same answer.
-const PERMANENT_GATEWAY_REQUEST_ERROR_CODES: ReadonlySet<string> = new Set([
-  ErrorCodes.INVALID_REQUEST,
-  ErrorCodes.FORBIDDEN,
-]);
-
-function isPermanentGatewayRequestRefusal(candidate: unknown): boolean {
-  return (
-    candidate instanceof GatewayProtocolRequestError &&
-    !candidate.retryable &&
-    PERMANENT_GATEWAY_REQUEST_ERROR_CODES.has(candidate.gatewayCode)
-  );
-}
-
-function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {
-  return collectErrorGraphCandidates(error, (candidate) => [
-    candidate.cause,
-    candidate.error,
-    candidate.reason,
-  ]).some(matches);
-}
-
-function hasPermanentAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(
-    error,
-    (candidate) =>
-      isPlatformMessageRejectedError(candidate) ||
-      isPermanentGatewayRequestRefusal(candidate) ||
-      isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
-      PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
-        pattern.test(summarizeDeliveryError(candidate)),
-      ),
-  );
-}
-
-export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
-  const typedRetryability = resolveDeliveryNotSentRetryability(error);
-  if (typedRetryability !== undefined) {
-    return !typedRetryability;
-  }
-  return hasPermanentAnnounceError(error);
-}
-
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
+/** A partly sent reply must not fall back to a second text send. */
 export function hasAnnounceSendEvidence(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, (candidate) => {
+  return collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+    candidate.reason,
+  ]).some((candidate) => {
     const record = asOptionalObjectRecord(candidate);
     return record?.sentBeforeError === true || record?.visibleReplySent === true;
   });

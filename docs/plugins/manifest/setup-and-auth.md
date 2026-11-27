@@ -53,6 +53,15 @@ resource is missing.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
+For an installed and enabled provider plugin with a guided sign-in available in
+Models, **Sign in** under **Accounts** in the plugin's settings opens that
+plugin's choices in Models.
+After saving a connection, users can choose an available model for a new chat.
+Their default model stays the same. Use `groupLabel` for the picker heading and
+`choiceLabel` for the method and its default action text. Set
+`appGuidedActionLabel` when you need different text for the native sign-in
+button or the local model setup button.
+
 When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
 
 | Field                  | Required | Type                                                                  | What it means                                                                                                                                              |
@@ -61,7 +70,7 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                                                                             |
 | `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                                                                    |
 | `platforms`            | No       | `string[]`                                                            | Supported Gateway host platforms, such as `["darwin"]`. Omission allows every platform; an empty or invalid restriction offers the choice on none.         |
-| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                                                                          |
+| `choiceLabel`          | No       | `string`                                                              | Method label and default guided action text. If omitted, OpenClaw falls back to `choiceId`.                                                                |
 | `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                                          |
 | `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                                          |
 | `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                                              |
@@ -79,7 +88,7 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                                                                              |
 | `personalAccount`      | No       | `boolean`                                                             | Offer this method in Connected accounts; it must stage one inline credential without importing host logins or writing shared state.                        |
 | `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                                                                               |
-| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                                                                   |
+| `appGuidedActionLabel` | No       | `string`                                                              | Explicit override for the native sign-in button or the local model setup button. Omit it to use `choiceLabel`.                                             |
 | `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                                                                  |
 | `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                                         |
 | `credentialOnly`       | No       | `boolean`                                                             | The method supports saving credentials without starter-model discovery or activation. Omitted means setup only.                                            |
@@ -190,6 +199,19 @@ prove that an OAuth reconnect is the same provider account. Match the complete
 identity, not an email or a shared workspace alone. Without that proof, a new
 OAuth account slot is created and old chat pins retain their original credential.
 API keys and static tokens reuse a slot only when their literal value matches.
+
+An OAuth auth method can also declare account actions for its saved sign-ins.
+With an optional `revoke({ profileId, credential, config, signal })` hook, Settings
+shows **Sign out on this device** (deletes the saved profile on this Gateway) and a
+disconnect action that calls `revoke` first. Resolve when the provider revoked the
+grant or it is already invalid; OpenClaw then deletes the saved profile. Throw an
+`Error` with a user-facing message when the grant may still be active: OpenClaw
+keeps the profile and shows the message with **Try again**. Honor `signal`; the
+Gateway aborts after 30 seconds. `disconnectLabel` names the action (default
+**Disconnect account**). `accountManagementUrl` (HTTPS) and
+`accountManagementLabel` (default **Manage connected apps**) add a link to the
+provider's connected-apps page. These fields are read from the loaded plugin, not
+the manifest.
 
 ## setup reference
 

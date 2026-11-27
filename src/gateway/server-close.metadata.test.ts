@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { statSync } from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { MessageChannel } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import * as transcriptPool from "../config/sessions/session-transcript-reconcile-pool.js";
+import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
@@ -11,6 +15,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
@@ -40,7 +45,8 @@ async function createFixture() {
       entered,
       release,
       onClose,
-      close: (reason: string) => (closing = server.close({ reason })),
+      close: (reason: string, exitAfterClose = false) =>
+        (closing = server.close({ reason, exitAfterClose })),
       [Symbol.asyncDispose]: dispose,
     };
   } catch (error) {
@@ -57,6 +63,63 @@ function setupOwner(fixture: Awaited<ReturnType<typeof createFixture>>) {
   assert(owner);
   return { callback, owner };
 }
+
+it("seals databases and closes plugin handles after transcript shutdown grace expires", async () => {
+  await using fixture = await createFixture();
+  const { owner } = setupOwner(fixture);
+  const agent = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env });
+  const shared = openOpenClawStateDatabase({ env: fixture.state.env });
+  const channel = new MessageChannel();
+  channel.port1.ref();
+  const portClosed = new Promise<void>((resolve) => {
+    channel.port1.once("close", resolve);
+  });
+  const closePorts = () => {
+    channel.port1.close();
+    channel.port2.close();
+  };
+  owner.lifecycle.onDispose(closePorts);
+  fixture.onClose.push(closePorts);
+  const operation = transcriptPool.runSessionTranscriptReconcileOperation(async ({ signal }) => {
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await fixture.release.promise;
+  });
+  fixture.onClose.push(() => operation);
+  const stop = transcriptPool.closeSessionTranscriptReconcileWorkerPool;
+  const held = vi
+    .spyOn(transcriptPool, "closeSessionTranscriptReconcileWorkerPool")
+    .mockImplementation(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const closing = stop();
+      fixture.entered.resolve();
+      return closing;
+    });
+  fixture.onClose.unshift(() => {
+    vi.useRealTimers();
+    held.mockRestore();
+  });
+  const closing = fixture.close("slow transcript shutdown", true).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await awaitGateBeforeSettlement(fixture.entered.promise, closing, "transcript close not reached");
+  await vi.advanceTimersByTimeAsync(5_001);
+  fixture.release.resolve();
+  vi.useRealTimers();
+  const failure = await closing;
+  expect(agent.db.isOpen).toBe(false);
+  expect(shared.db.isOpen).toBe(false);
+  expect(channel.port1.hasRef()).toBe(false);
+  await portClosed;
+  for (const database of [agent, shared]) {
+    expect(
+      readSqliteCleanCloseSeal(database.path, statSync(database.path, { bigint: true })),
+    ).toBeDefined();
+  }
+  expect(failure).toBeUndefined();
+});
 
 it("retires retained Gateway bindings after metadata close fails", async () => {
   await using fixture = await createFixture();

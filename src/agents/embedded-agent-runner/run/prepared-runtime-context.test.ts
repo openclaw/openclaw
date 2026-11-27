@@ -1,7 +1,36 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  bindPreparedModelRuntimeAuth,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "../../prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { prepareAgentPromptProjects } from "../../prompt-projects.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
-import { bindRunToPreparedModelRuntime } from "./prepared-runtime-context.js";
+import {
+  bindRunToPreparedModelRuntime,
+  prepareRunModelRuntimeProjects,
+} from "./prepared-runtime-context.js";
+
+vi.mock("../../prompt-projects.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../prompt-projects.js")>()),
+  prepareAgentPromptProjects: vi.fn(),
+}));
+
+it("preserves the private admitted policy reader when capturing turn projects", async () => {
+  const run = { sessionId: "project-turn" } as RunEmbeddedAgentParamsWithSessionFile;
+  const snapshot = { config: {} } as PreparedModelRuntimeSnapshot;
+  const readPolicyConfig = () => snapshot.config;
+  const projects = { repoRoot: null, projectKey: null, activeProjectKeys: [] };
+  vi.mocked(prepareAgentPromptProjects).mockResolvedValueOnce(projects);
+  bindPreparedModelRuntimeAuth(snapshot, { readPolicyConfig });
+
+  const prepared = await prepareRunModelRuntimeProjects(run, snapshot);
+
+  expect(prepareAgentPromptProjects).toHaveBeenCalledWith(run);
+  expect(prepared).toEqual({ ...snapshot, ...projects });
+  expect(Object.isFrozen(prepared)).toBe(true);
+  expect(getPreparedModelRuntimePolicyConfigReader(prepared)).toBe(readPolicyConfig);
+});
 
 describe("bindRunToPreparedModelRuntime", () => {
   it("replaces queued config and directories with one committed generation", () => {

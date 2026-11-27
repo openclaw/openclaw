@@ -69,7 +69,7 @@ import {
 
 export type SessionStoreTargetPreparationRequest =
   | { storePath: string; captureIdentity?: false }
-  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
+  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv; captureIdentity?: false }
   | ({ inventory: true; captureIdentity?: false } & CapturedSessionStoreTargetInventory)
   | {
       observePaths: {

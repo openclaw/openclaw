@@ -1,5 +1,20 @@
 // Full-suite Vitest shard definitions used by test-projects and CI planning.
 import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+
+export const infraTestOwner = {
+  root: ".",
+  include: ["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles],
+  exclude: [...boundaryTestFiles, ...cliProcessTestFiles],
+};
+
+export const runtimeConfigTestOwner = {
+  root: "src/config",
+  include: ["src/config/**/*.test.ts"],
+  exclude: databaseWorkerCoreTestFiles,
+};
 
 export const autoReplyCoreTestInclude = [
   "src/auto-reply/*.test.ts",

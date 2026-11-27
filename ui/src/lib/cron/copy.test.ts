@@ -23,9 +23,20 @@ it("localizes missing revisions and queued run feedback at the action owner", as
   expect(state.cronNotice).toContain(i18n.t("cron.runQueued", { runId: "Run-ID" }));
 });
 
-it.each([false, true])(
-  "localizes conflict recovery feedback (load fails: %s)",
-  async (loadFails) => {
+it.each([
+  {
+    loadFails: false,
+    message:
+      "This automation changed before your edits could be saved. Review the latest settings shown here, then reapply your edits.",
+  },
+  {
+    loadFails: true,
+    message:
+      "This automation changed before your edits could be saved. Copy your edits before reloading the page, then review the latest settings in Edit before reapplying them.",
+  },
+])(
+  "localizes stale save recovery feedback (load fails: $loadFails)",
+  async ({ loadFails, message }) => {
     const translate = vi.spyOn(i18n, "t");
     const job = createCronJob("job", "Job", { configRevision: "stale" });
     const request = vi.fn(async (method: string) => {
@@ -45,8 +56,9 @@ it.each([false, true])(
     startCronEdit(state, job);
     state.cronForm.name = "Draft";
     await addCronJob(state);
-    const key = loadFails ? "cron.changedOnGatewayLoadFailed" : "cron.changedOnGateway";
+    const key = loadFails ? "cron.saveConflictReloadFailed" : "cron.saveConflictReloaded";
     expect.soft(translate).toHaveBeenCalledWith(key, undefined);
-    expect(state.cronError).toBe(i18n.t(key));
+    expect(state.cronEditingJob?.configRevision).toBe(loadFails ? "stale" : "current");
+    expect(state.cronError).toBe(message);
   },
 );

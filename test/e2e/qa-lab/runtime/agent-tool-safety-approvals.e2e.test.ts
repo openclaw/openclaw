@@ -86,7 +86,6 @@ describe("agent tool safety approvals", () => {
       {
         agentId: AGENT_ID,
         sessionKey: SESSION_KEY,
-        loopDetection: { enabled: false },
       },
     );
   });

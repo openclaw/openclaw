@@ -7,6 +7,7 @@ import {
 } from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { nonReasoningModelState } from "./get-reply-run.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
@@ -19,6 +20,25 @@ export function registerSystemEventAdmissionCases({
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
+  it("reports an unsupported thinking override to the session event owner before starting", async () => {
+    const onFailed = vi.fn();
+    const onStarted = vi.fn();
+    const reply = await runPrepared({
+      provider: "openai",
+      model: "chat-latest",
+      modelState: nonReasoningModelState(),
+      resolvedThinkLevel: "xhigh",
+      opts: {
+        thinkingLevelOverride: "xhigh",
+        internalEventExecution: { onFailed, onStarted, onTerminal: vi.fn() },
+      },
+    });
+    const reason = Array.isArray(reply) ? undefined : reply?.text;
+    expect(reason).toContain('Thinking level "xhigh" is not supported');
+    expect(onFailed).toHaveBeenCalledWith(reason);
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
   async function useRealDrain() {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",

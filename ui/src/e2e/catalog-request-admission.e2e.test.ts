@@ -82,7 +82,7 @@ suite.define(() => {
       const trigger =
         path === "new"
           ? page.locator('.new-session-page__composer [data-chat-model-select="true"]')
-          : page.getByRole("button", { name: /^Primary model/ });
+          : page.locator("openclaw-agents-page").getByRole("button", { name: /^Model:/ });
       await trigger.click();
       await page.getByRole("option", { name: /Initial fixture model/ }).waitFor();
       await page.keyboard.press("Escape");

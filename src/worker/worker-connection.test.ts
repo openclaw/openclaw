@@ -159,6 +159,21 @@ function closeListener(server: WebSocketServer | net.Server) {
   });
 }
 
+function interruptReadyPeer(
+  connection: ReturnType<typeof createWorkerConnection>,
+  peer: WebSocket,
+) {
+  const changed = createDeferred<WorkerConnectionState>();
+  const unsubscribe = connection.onStateChange((state) => {
+    if (state.kind !== "ready") {
+      unsubscribe();
+      changed.resolve(state);
+    }
+  });
+  peer.terminate();
+  return changed.promise;
+}
+
 it("keeps a presence read pending through both cold geolocation download windows", async () => {
   const { server, endpoint } = await listen();
   const admitted = acceptHello(server);
@@ -611,6 +626,101 @@ it("staggers twenty workers recovering from transient Gateway transport loss", a
     await closeListener(server);
   }
 });
+
+it("backs off repeatedly admitted but disconnected sockets within one retry budget", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const { server, endpoint } = await listen();
+  const peers: WebSocket[] = [];
+  server.on("connection", (peer) => {
+    peers.push(peer);
+    peer.once("message", (data) => {
+      const frame = JSON.parse(rawDataToString(data)) as { id: string };
+      sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
+    });
+  });
+  const connection = makeConnection({
+    endpoint,
+    admissionDeadlineMs: 650,
+    reconnectBackoff: { initialMs: 100, maxMs: 400, factor: 2, jitter: 0 },
+  });
+  await connection.start();
+
+  for (const [attempt, delayMs] of [
+    [1, 100],
+    [2, 200],
+  ] as const) {
+    expect(await interruptReadyPeer(connection, peers.at(-1)!)).toMatchObject({
+      kind: "reconnecting",
+      attempt,
+    });
+    expect(peers).toHaveLength(attempt);
+    await vi.advanceTimersByTimeAsync(delayMs - 1);
+    expect(peers).toHaveLength(attempt);
+    const ready = connection.waitForReady();
+    await vi.advanceTimersByTimeAsync(1);
+    await ready;
+    expect(peers).toHaveLength(attempt + 1);
+  }
+
+  expect(await interruptReadyPeer(connection, peers.at(-1)!)).toMatchObject({
+    kind: "reconnecting",
+    attempt: 3,
+  });
+  // The next backoff cannot outlive the remaining admission budget.
+  await vi.advanceTimersByTimeAsync(350);
+  await expect(connection.waitForExit()).resolves.toMatchObject({
+    kind: "failed",
+    error: expect.any(WorkerAdmissionDeadlineExceededError),
+  });
+  expect(peers).toHaveLength(3);
+});
+
+it("clears an unstable reconnect streak after a successful heartbeat", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const { server, endpoint } = await listen();
+  const heartbeatAccepted = createDeferred();
+  const releaseHeartbeat = createDeferred();
+  const connection = makeConnection({
+    endpoint,
+    // The original budget expires before the readmitted socket's heartbeat.
+    admissionDeadlineMs: 60_050,
+    reconnectBackoff: { initialMs: 100, maxMs: 400, factor: 2, jitter: 0 },
+    onHeartbeat: async () => {
+      heartbeatAccepted.resolve();
+      await releaseHeartbeat.promise;
+    },
+  });
+  try {
+    const admitted = acceptHello(server);
+    const [first] = await Promise.all([admitted, connection.start()]);
+    expect(await interruptReadyPeer(connection, first)).toMatchObject({
+      kind: "reconnecting",
+      attempt: 1,
+    });
+
+    const readmitted = acceptHello(server);
+    const ready = connection.waitForReady();
+    await vi.advanceTimersByTimeAsync(100);
+    const [peer] = await Promise.all([readmitted, ready]);
+    const heartbeat = once(peer, "message");
+    await vi.advanceTimersByTimeAsync(60_000);
+    const [data] = await heartbeat;
+    const frame = JSON.parse(rawDataToString(data));
+    reply(peer, frame.id, {
+      receivedAtMs: Date.now(),
+      status: "ok",
+      ownerEpoch: FRAME_CONNECT_PARAMS.admission.ownerEpoch,
+    });
+    await heartbeatAccepted.promise;
+    expect(await interruptReadyPeer(connection, peer)).toMatchObject({
+      kind: "reconnecting",
+      attempt: 1,
+    });
+  } finally {
+    releaseHeartbeat.resolve();
+  }
+});
+
 it("isolates listener failures and binds terminal errors during nested transitions", async () => {
   const connection = makeConnection({
     connectParams: {

@@ -98,6 +98,47 @@ function mountPicker(state: ChatPageHost, manualRefresh = false, cleanup?: () =>
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it("uses the current row's name, not its choices, before a scoped catalog arrives", async () => {
+    const htmlStyle = document.documentElement.style.cssText;
+    const { state } = createRefreshChatPane(createTestGatewayClient(makeRequestMock({})));
+    onTestFinished(() => {
+      state.sessions.dispose();
+      document.documentElement.style.cssText = htmlStyle;
+    });
+    state.chatModelCatalogInitialized = false;
+    state.chatModelsLoading = true;
+    const selectedSession: GatewaySessionRow = {
+      key: state.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      modelProvider: "fixture",
+      model: "s-42",
+      modelDisplayName: "Orchard Chat",
+      modelOverrideSource: "user",
+    };
+    const container = document.createElement("div");
+    const present = (cachedSessionStatePending: boolean, open = false) =>
+      renderPaneModelControl(
+        renderControls(state, { selectedSession, cachedSessionStatePending }).composerControls,
+        container,
+        open,
+      );
+    const label = () =>
+      container.querySelector("[data-chat-model-select] .chat-controls__inline-select-label")
+        ?.textContent;
+    present(true);
+    await waitForSolid(() => expect(label()).toBe("Default model"));
+    present(false);
+    await waitForSolid(() => expect(label()).toBe("Orchard Chat"));
+    state.chatModelCatalogRetired = true;
+    present(false);
+    await waitForSolid(() => expect(label()).toBe("Default model"));
+    state.chatModelCatalogRetired = false;
+    present(false, true);
+    await menuReady(container);
+    expect(container.querySelector('[data-chat-model-option="fixture/s-42"]')).toBeNull();
+  });
+
   it("shares a pending picker catalog when session facts change before reopening", async () => {
     const htmlStyle = document.documentElement.style.cssText;
     const replacement = createDeferred<ModelCatalogResult>();
@@ -276,17 +317,16 @@ describe("chat pane composer controls", () => {
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
     await menuReady(container);
-    container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
-    flush();
-    expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
+    const account = container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!;
+    const spinner = () => account.querySelector(".chat-controls__account-spinner");
+    await waitForSolid(() => expect(spinner()).not.toBeNull());
+    expect(account.disabled).toBe(true);
 
     container.querySelector<HTMLElement>("[data-chat-model-select]")!.click();
     flush();
     expect(picker.open).toBe(false);
     accounts.resolve({ profileId: "owner", links: [], accounts: [] });
-    await waitForSolid(() =>
-      expect(container.querySelector('[data-chat-account-option="loading"]')).toBeNull(),
-    );
+    await waitForSolid(() => expect(spinner()).toBeNull());
     expect(picker.open).toBe(false);
   });
 
@@ -397,6 +437,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
       }) as unknown as ChatPageHost;
+      state.chatModelCatalogInitialized = false;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
         container.remove();

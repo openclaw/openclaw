@@ -13,6 +13,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronCommandArgv } from "./input-options.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -30,7 +31,6 @@ import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
   buildCronCommandShellArgvForGateway,
-  parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
@@ -41,7 +41,6 @@ import {
   parseCronStringOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
-  callCronReadFromCli,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
@@ -64,7 +63,7 @@ type CronEditOptions = GatewayRpcOpts &
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callCronReadFromCli("cron.get", opts, { id })) as CronJobForEdit;
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;

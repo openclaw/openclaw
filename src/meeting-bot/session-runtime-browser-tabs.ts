@@ -11,6 +11,56 @@ type BrowserTabOptions<TSession, TTab extends MeetingBrowserTab> = {
   formatError(error: unknown): string;
 };
 
+export type MeetingBrowserTabRelease<TTab> = {
+  messages: { noTrackedTab: string; sharedTab: string; leaveFailed(error: string): string };
+  leave: (tab: TTab) => Promise<{ left: boolean; note: string }>;
+};
+
+export const releasedMeetingBrowserHealth = {
+  captioning: false,
+  audioInputRouted: false,
+  audioOutputRouted: false,
+  providerConnected: false,
+  realtimeReady: false,
+  audioInputActive: false,
+  audioOutputActive: false,
+} as const;
+
+export async function leaveTrackedMeetingBrowserTab<
+  TSession extends MeetingSessionRecord,
+  TTab extends MeetingBrowserTab,
+>(
+  sessions: Iterable<TSession>,
+  options: Pick<BrowserTabOptions<TSession, TTab>, "getBrowser" | "formatError">,
+  session: TSession,
+  { messages, leave }: MeetingBrowserTabRelease<TTab>,
+): Promise<{ left?: boolean; note: string }> {
+  const browser = options.getBrowser(session);
+  const tab = browser?.tab;
+  if (!tab) {
+    return { left: false, note: messages.noTrackedTab };
+  }
+  // Target IDs belong to one browser route. Another active session on that route keeps the tab.
+  for (const other of sessions) {
+    if (
+      other.id === session.id ||
+      other.state !== "active" ||
+      other.transport !== session.transport
+    ) {
+      continue;
+    }
+    const owner = options.getBrowser(other);
+    if (owner?.tab?.targetId === tab.targetId && owner.nodeId === browser.nodeId) {
+      return { note: messages.sharedTab };
+    }
+  }
+  try {
+    return await leave(tab);
+  } catch (error) {
+    return { left: false, note: messages.leaveFailed(options.formatError(error)) };
+  }
+}
+
 export function inheritMeetingBrowserTabOwnership<
   TSession extends MeetingSessionRecord,
   TTab extends MeetingBrowserTab,

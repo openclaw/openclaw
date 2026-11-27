@@ -37,8 +37,13 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   );
 }
 
-function isEmittedResponsesItem(item: unknown): boolean {
-  return isRecord(item) && item.type !== "compaction";
+function isEmittedResponsesItem(item: unknown, failedSnapshot = false): boolean {
+  return (
+    isRecord(item) &&
+    item.type !== "compaction" &&
+    // Failed snapshots are not emitted; tool items can still own effects.
+    !(failedSnapshot && (item.type === "message" || item.type === "reasoning"))
+  );
 }
 
 export function readResponsesRecoveryEvent(event: unknown) {
@@ -52,7 +57,10 @@ export function readResponsesRecoveryEvent(event: unknown) {
           ? (record.error ?? record)
           : undefined,
     hasResponseOutput:
-      (Array.isArray(response?.output) && response.output.some(isEmittedResponsesItem)) ||
+      (Array.isArray(response?.output) &&
+        response.output.some((item) =>
+          isEmittedResponsesItem(item, record?.type === "response.failed"),
+        )) ||
       isEmittedResponsesItem(record?.item) ||
       (typeof record?.type === "string" &&
         (record.type.endsWith(".delta") || record.type.includes("_call"))),
@@ -130,6 +138,7 @@ export function createResponsesItemConflictRecovery(
             : output.stopReason === "error" || output.stopReason === "aborted"
               ? "failed"
               : "recovered";
+        output.itemConflictRecovery = outcome;
         log.info(
           `[responses] item_conflict_recovery sessionHash=${redactIdentifier(options?.sessionId)} outcome=${outcome}`,
         );

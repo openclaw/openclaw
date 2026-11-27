@@ -10,7 +10,7 @@ import type { GetReplyFromConfig } from "./get-reply.types.js";
 import type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
-} from "./reply-dispatcher.js";
+} from "./reply-dispatcher.types.js";
 
 type DispatchReplyContext = MsgContext | FinalizedMsgContext;
 type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &

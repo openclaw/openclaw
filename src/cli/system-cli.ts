@@ -123,7 +123,7 @@ export function registerSystemCli(program: Command) {
       const signal = method === "set-heartbeats" ? undefined : getAsyncWorkSignal();
       await runSystemGatewayCommand(
         opts,
-        () => callGatewayFromCli(method, opts, params, { expectFinal: false, signal }),
+        () => callGatewayFromCli(method, opts, params, { expectFinal: false }),
         undefined,
         signal,
       );

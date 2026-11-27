@@ -186,7 +186,6 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: state.updateSessionStoreMock,
 }));
 

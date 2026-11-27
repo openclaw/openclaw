@@ -82,6 +82,9 @@ export async function createUpdateRunNotifier(
   // Update delivery belongs to the host and can outlive the requesting attempt.
   return (run: UpdateRunRecord, kind: UpdateRunNoticeKind) =>
     runWithoutOwnedSessionTranscriptWrites(async () => {
+      if (run.origin.noticeSurface === "app") {
+        return { delivered: false, owned: false };
+      }
       // Pre-park and later activation share one durable notice, never a fifth milestone.
       const milestone = kind === "parking" ? "activating" : kind;
       const noticeStep =

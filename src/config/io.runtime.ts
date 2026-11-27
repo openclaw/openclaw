@@ -239,8 +239,12 @@ export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  projectInvalidConfig?: (snapshot: ConfigFileSnapshot) => OpenClawConfig | undefined;
 }): OpenClawConfig {
-  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
+  return createCurrentConfigReader(params).loadConfig({
+    skipSuspiciousRecovery: true,
+    projectInvalidConfig: params.projectInvalidConfig,
+  });
 }
 
 /** Keep the Template Add policy reader bound to its admitted plugin-state lease. */

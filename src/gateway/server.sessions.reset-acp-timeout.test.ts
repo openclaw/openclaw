@@ -45,9 +45,6 @@ import {
   threadBindingMocks,
   writeSingleLineSession,
   getGatewayConfigModule,
-  expectNoSessionQueueCleanup,
-  browserSessionTabMocks,
-  sessionHookMocks,
   subagentLifecycleHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -367,7 +364,7 @@ describe("concurrency", () => {
     return { [Symbol.dispose]: () => restoreRegisteredAgentHarnesses(previous) };
   }
 
-  async function resetFromCaller(key: string, current: () => boolean) {
+  async function resetFromCaller(key: string) {
     const { getRuntimeConfig } = await getGatewayConfigModule();
     const resources = new LegacyPluginSdkResourceHost();
     const work = new AsyncWorkScope();
@@ -391,7 +388,7 @@ describe("concurrency", () => {
               agentId: "main",
               sessionKey: "agent:main:reset-requester",
               operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
-              receiptAuthority: current,
+              receiptAuthority: () => true,
             },
             () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
           ),
@@ -400,71 +397,57 @@ describe("concurrency", () => {
     );
   }
 
-  test.each(["normal", "incognito", "replacement"])(
-    "sessions.reset completes only its accepted %s generation after caller closure during cleanup",
-    async (mode) => {
-      const sessionKey = `agent:main:dashboard:${mode === "incognito" ? "incognito-" : ""}closing-reset`;
-      const sessionId = "closing-reset";
-      const { scope, read, write } = await seedSession(sessionKey, sessionId, {
-        incognito: mode === "incognito" ? true : undefined,
-        lifecycleRevision: "original",
-        totalTokens: 99,
-      });
-      let current = true;
-      let cleaned = false;
-      using _ = resetHarness("caller-reset-cleanup", async () => {
-        cleaned = true;
-        current = false;
-        if (mode === "replacement") {
-          await write(sessionId, { lifecycleRevision: "replacement", totalTokens: 123 });
-        }
-      });
-      await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
-      expect(cleaned).toBe(true);
-      const entry = read();
-      if (mode === "incognito") {
-        expect(entry).toBeUndefined();
-      } else if (mode === "replacement") {
-        expect(entry).toMatchObject({ lifecycleRevision: "replacement", totalTokens: 123 });
-        expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
-      } else {
-        expect(entry).toMatchObject({ sessionId, totalTokens: 0 });
-        expect(entry?.lifecycleRevision).not.toBe("original");
-      }
-    },
-  );
-
-  test("sessions.reset never creates a missing session after caller closure during cleanup", async () => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:dashboard:missing-reset";
-    let current = true;
-    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(async () => {
-      current = false;
-      return 0;
+  test("sessions.reset keeps a replacement generation written during caller cleanup", async () => {
+    const sessionKey = "agent:main:dashboard:closing-reset";
+    const sessionId = "closing-reset";
+    const { scope, read, write } = await seedSession(sessionKey, sessionId, {
+      lifecycleRevision: "original",
+      totalTokens: 99,
     });
-    await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
-    expect(current).toBe(false);
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    using _ = resetHarness("caller-reset-cleanup", async () => {
+      await write(sessionId, { lifecycleRevision: "replacement", totalTokens: 123 });
+    });
+    await expect(resetFromCaller(sessionKey)).resolves.toMatchObject({
+      ok: true,
+      entry: { lifecycleRevision: "replacement", totalTokens: 123 },
+    });
+    expect(read()).toMatchObject({ lifecycleRevision: "replacement", totalTokens: 123 });
+    expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
   });
 
-  test.each([false, true])(
-    "sessions.reset rejects caller closure before cleanup (incognito: %s)",
-    async (incognito) => {
-      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}early-reset`;
-      const { read } = await seedSession(sessionKey, "early-reset", {
-        incognito: incognito ? true : undefined,
-        totalTokens: 99,
-      });
-      const before = read();
-      let current = true;
-      sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
-        current = false;
-      });
-      await expect(resetFromCaller(sessionKey, () => current)).rejects.toThrow(/authority/i);
-      expect(read()).toEqual(before);
-      expectNoSessionQueueCleanup();
-    },
-  );
+  test("finishes a role-wide writer reset to default after adopted cleanup closes its caller", async () => {
+    const key = "agent:main:dashboard:writer-default-reset";
+    const { read } = await seedSession(key, "writer-default-reset", {
+      lifecycleRevision: "before-reset",
+      permissionMode: "workspace",
+      totalTokens: 99,
+    });
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Gateway caller authority is no longer active");
+      }
+    };
+    using _ = resetHarness("writer-reset-cleanup", async () => {
+      current = false;
+    });
+    const result = await resetSession({
+      key,
+      clearSpawnedCwd: true,
+      requestingOperatorScopes: ["operator.write"],
+      requestingOperatorProfileId: "role-wide-writer",
+      getCurrentSessionAccessCap: () => {
+        assertCurrent();
+        return "write";
+      },
+      assertCurrent,
+    });
+    expect(result.ok).toBe(true);
+    expect(current).toBe(false);
+    expect(read()).toMatchObject({ sessionId: "writer-default-reset", totalTokens: 0 });
+    expect(read()?.permissionMode).toBeUndefined();
+    expect(read()?.lifecycleRevision).not.toBe("before-reset");
+  });
 
   test.each(["sess-main", "sess-replacement"])(
     "sessions.reset preserves a concurrent lifecycle replacement (%s)",

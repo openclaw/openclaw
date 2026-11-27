@@ -26,6 +26,7 @@ For custom servers, leave room for the full OpenClaw prompt, tools, history, and
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls                     |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                          |
+| [Llama](/providers/llama)                            | llama.cpp's desktop app: download models in a GUI and let the app run the server             |
 | [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server           |
 | [llmman](/providers/llmman)                          | OCI-registry model pulls, upstream llama.cpp/vLLM/MLX engines, hybrid local + hosted routing |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                                     |
@@ -331,6 +332,8 @@ For one shared vLLM server handling interactive and background work, see
 It uses vLLM's native scheduler and is disabled by default.
 
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
+
+Setup's connection check sends a short prompt without tools, so it can pass on a model whose context window is too small for a real first turn, which also carries the system prompt and tool definitions. When the effective window is below 16,384 tokens, automatic setup skips the model, and a model you choose yourself is accepted with a warning that names the window and what to raise.
 
 1. **Check the local model responds** - no tools, no agent context:
 

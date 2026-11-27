@@ -57,23 +57,18 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
     await appendTranscriptMessage(scope, { message: { role: "assistant", content: fixtures } });
     const context = await createHistoryReadContext();
     const client = identifiedClient("viewer"); // Deliberately lacks an HTTP grant connection.
-    const responses: Array<Parameters<RespondFn>> = [];
     const invoke = async (
       method: "artifacts.list" | "artifacts.download",
       params: Record<string, unknown>,
       selectedClient: GatewayClient = client,
-      hasCurrentClientAuthority?: () => boolean,
     ) => {
-      const respond = vi.fn<RespondFn>((...args) => {
-        responses.push(args);
-      });
+      const respond = vi.fn<RespondFn>();
       await artifactsHandlers[method]!({
         params: { sessionKey: scope.sessionKey, ...params },
         context,
         client: selectedClient,
         req: { type: "req", id: "rpc-previews", method },
         isWebchatConnect: () => false,
-        hasCurrentClientAuthority,
         respond,
       });
       return respond;
@@ -186,20 +181,6 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
     expect(fetch).not.toHaveBeenCalled();
 
     const resolveThumbnail = thumbnails.resolveManagedImageThumbnail;
-    let current = true;
-    using revokedCaller = vi
-      .spyOn(thumbnails, "resolveManagedImageThumbnail")
-      .mockImplementationOnce(async (...args) => {
-        const bytes = await resolveThumbnail(...args);
-        current = false;
-        return bytes;
-      });
-    const priorResponses = responses.length;
-    await expect(
-      invoke("artifacts.download", { artifactId, previewWidth: 960 }, client, () => current),
-    ).rejects.toThrow("Gateway requester authority changed");
-    expect(responses).toHaveLength(priorResponses);
-    revokedCaller.mockRestore();
     vi.spyOn(thumbnails, "resolveManagedImageThumbnail").mockImplementationOnce(async (...args) => {
       const bytes = await resolveThumbnail(...args);
       await replaceSessionEntry(scope, { ...entry, visibility: "draft", updatedAt: 2 });

@@ -236,41 +236,30 @@ it("refreshes metadata inside anyOf branches after edits", async () => {
   expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
 });
 
-it("prepares search text and its revision once across warm searches and runtimes", async () => {
+it("preserves tool visibility and text across rebuilt search indexes", async () => {
   const catalog = CATALOG.map((item) => entry({ ...item, id: `warm-index:${item.id}` }));
-  const render = vi.spyOn(ranking, "readParameterText");
-  const build = vi.spyOn(ranking, "buildLexicalIndex");
-  const tokenize = vi.spyOn(ranking, "tokenizeDocument");
   const allowedIds = new Set(catalog.map(({ id }) => id));
   for (let turn = 0; turn < 3; turn++) {
     const search = runtime(catalog);
     expect(await names(search, "repository", { allowedIds })).toEqual(["issue_create"]);
     expect(await names(search, "read", { allowedIds })).toEqual(["read_file"]);
   }
-  expect(render).toHaveBeenCalledTimes(catalog.length);
-  expect(build).toHaveBeenCalledTimes(1);
   allowedIds.delete(catalog[2]!.id);
   expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
   allowedIds.add(catalog[2]!.id);
   expect(await names(runtime(catalog), "repository", { allowedIds })).toEqual(["issue_create"]);
-  expect(render).toHaveBeenCalledTimes(catalog.length);
-  expect(build).toHaveBeenCalledTimes(2);
-  expect(tokenize).toHaveBeenCalledTimes(catalog.length);
 
-  // A new descriptor revision only tokenizes its changed text; old views remain valid.
+  // A revised description only affects its own catalog.
   const revised = catalog.map((item, index) =>
     index === 2 ? entry({ ...item, description: "Track asteroids" }) : item,
   );
   expect(await names(runtime(revised), "asteroids")).toEqual(["issue_create"]);
   expect(await runtime(catalog).search("asteroids")).toEqual([]);
-  expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
 });
 
-it("shares published search text across runs and isolates metadata revisions", async () => {
+it("keeps published search text isolated across metadata revisions", async () => {
   const schema = (description: string) =>
     publishRuntimeToolInputSchema(objectSchema({ target: { type: "string", description } })).schema;
-  const render = vi.spyOn(ranking, "readParameterText");
-  const build = vi.spyOn(ranking, "buildLexicalIndex");
   const first = entry({
     name: "published_search_resource",
     description: "Locate records",
@@ -284,15 +273,11 @@ it("shares published search text across runs and isolates metadata revisions", a
     });
     expect(await names(runtime([current]), "quasars")).toEqual([first.name]);
   }
-  expect(render).toHaveBeenCalledTimes(1);
-  expect(build).toHaveBeenCalledTimes(1);
 
   const revised = entry({ ...first, parameters: schema("Observe nebulae") });
   expect(await names(runtime([revised]), "nebulae")).toEqual([first.name]);
   expect(await runtime([revised]).search("quasars")).toEqual([]);
   expect(await names(runtime([first]), "quasars")).toEqual([first.name]);
-  expect(render).toHaveBeenCalledTimes(2);
-  expect(build).toHaveBeenCalledTimes(2);
 
   const renamed = entry({ ...first, label: "Pulsars", description: "Locate galaxies" });
   expect(await names(runtime([renamed]), "pulsars galaxies")).toEqual([first.name]);

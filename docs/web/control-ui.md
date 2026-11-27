@@ -112,18 +112,14 @@ Agent questions appear above the message box. You can keep writing or queue a
 follow-up while the question is expanded; sending a chat message does not answer
 the question. Use its choices and **Submit**, or **Skip**, to resolve it.
 
-## Edit a failed message
+<a id="edit-a-failed-message" />
 
-If a model rejects a message (for example, because it contains too many images),
-choose **Edit message** on the latest failed reply. Confirm the rewind to return
-that message and its attachments to the composer, remove or change attachments,
-and send again. The rejected turn remains in a saved conversation branch, but is
-excluded from the active model context.
+## Rewind and fork
 
-Send or clear any existing composer draft first; recovery never replaces it.
-Editing requires permission to rewind the conversation and is unavailable while
-a run is active. **Try again** still continues the existing conversation without
-replaying the original message, because earlier actions may already have run.
+To edit a failed message, hover over your original message and choose **Rewind**,
+or right-click it and choose **Rewind to here**. Confirm to load the message and
+its attachments into the composer. Rewind replaces any draft already there.
+
 Rewinding does not undo external actions. Rewinding and switching branches keep
 the existing conversation and move only its active branch, so neither copies the
 transcript. Both still read its history navigation, and a selection far from the
@@ -174,6 +170,12 @@ Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. Long lists show the search field immediately; search remains
 available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
+
+For a new worktree, type part of a branch name in **From** to filter the loaded
+repository branches. The menu lists the default and current branches first,
+then the most recently committed ones, and shows up to eight matches; names
+that start with your text come first. You can still enter a custom branch, tag,
+or commit, or leave it blank for the Gateway default.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
@@ -280,7 +282,7 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. New session becomes available once the connected Gateway grants session-creation access, without waiting for cached rows to be replaced. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
 
@@ -349,9 +351,11 @@ The selected chat loads before automatic sidebar session lists refresh. Live eve
 A foreground create uses its reply to keep the confirmed title and an actionless current-session display row available independently of the sidebar refresh. This display row does not add the session to filtered membership or counts; those still come from the Gateway. The first message and run status appear from local submission facts and live events without waiting for the list refresh.
 
 After the current page and transcript are ready, the browser can prepare code for
-Pages, New Session, and common dialogs during idle time. Hovering or focusing a
-navigation link, the Settings menu item, the command-palette button, or the model picker prepares
-that destination sooner.
+Pages, New Session, and common dialogs during idle time. In Chat, it first prepares
+the effort picker, composer attachment menu, and side-panel launcher and layout menu.
+Pointing at or focusing a navigation link, the Settings menu item, the command
+palette button, the model picker, or a session or account menu button can prepare
+that destination sooner. Warming Chat controls does not open panels or fetch their data.
 Navigation preparation pauses while a page loads, the tab is hidden, or the
 connection is offline, and respects the browser's Save-Data setting. Page data
 still loads through its normal navigation flow. Hashed assets remain cached for
@@ -364,6 +368,8 @@ If the selected session changes while its message subscription is being admitted
 
 Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
 
+On a page reload, the sidebar remembers branches you opened manually. Branches opened automatically for another chat start collapsed; the sidebar still reveals the path to the nested chat you're opening.
+
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
 Snoozing also hides pinned sessions from the Active sidebar until they wake. Their pins and relative order are preserved, and snoozed sessions remain discoverable with the **Snoozed** or **All** filter.
@@ -373,6 +379,8 @@ The chat header’s **Details** panel groups session information into collapsibl
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
 Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+Successful GitHub publications appear in **Details → Changes** without an automatic assistant message. Publication failures and requests for confirmation appear as system notices in chat.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
@@ -512,7 +520,9 @@ with a reported zero exit code still shows **failed** in its summary and expande
 result. Nonzero exit codes remain visible as diagnostics; captured output and
 reported exit facts are unchanged.
 
-Failed replies show **Try again** at the right of the heading. A compact
+Failed replies show one action at the right of the heading: **Open Models** when
+the provider rejects the saved key or reports a billing problem, **Start a new
+session** when the harness needs an update, and **Try again** otherwise. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker
@@ -569,36 +579,20 @@ Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
 
+Choose **Archive all** from a shared sidebar group’s options to archive its
+unarchived sessions, including nested sessions that still belong to the group.
+The confirmation shows how many sessions will be archived, even when the
+sidebar hasn’t loaded them all. The group stays in place, and **Undo** cancels
+the archive before it is saved.
+
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-**Sections** organize only your sidebar, for solo users, members, and guests.
-They appear below **Pinned**, among the sidebar groups, marked with a stacked-layers
-icon; deliberately empty sections remain visible. Choose **New section** in
-**Filter & sort** even without selecting a session, or use a session's
-**Add to section** menu to add it to an existing section or create one with that
-session selected. Only your sidebar changes. Sessions stay in their groups.
-
-Creating a section takes two steps. First name it and choose where its sessions
-come from: **My sessions**, **Involving me**, **All sessions** (including
-teammates'), or one project. Then pick sessions from that list; the search button
-searches every session you can access, not only those loaded in the sidebar, and
-teammates' sessions show their owner. **Edit section** opens on the session list;
-**Back** returns to the name and source. Sessions inside a section follow the
-sidebar's **Sort by** selection. Drag an existing session into a section to add it.
-Dragging a session from one personal section to another moves that reference,
-leaving references in other sections unchanged. Drag section headers to reorder
-them, or use **Move up** and **Move down** in the section menu.
-**Remove section** removes only that personal section; it never deletes sessions.
-Pins and shared groups are independent, and **Move to group** still changes shared
-group membership.
-
-Sections do not grant access. Unavailable saved sessions remain hidden,
-and sessions outside the loaded session list resolve through the normal access-checked
-session lookup. Sections are scoped to your profile and Gateway. Connections with
-general Gateway write access sync them through personal preferences. Session-only,
-read-only, and profileless connections keep their edits in that browser, like personal pins.
+Personal sidebar sections have been retired. Their conversations are not deleted
+or moved. If an older conversation is no longer visible in the sidebar, find it
+in **Sessions** and use **Pin session** to keep it in view. **Move to group**
+still changes shared group membership.
 
 Dragging a session between shared sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
@@ -692,9 +686,10 @@ Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
 Detected PDFs opened from chat file links or the Files panel use the same
-browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
-larger PDFs retain **Download file**. Rendering depends on your browser's PDF
-support; the generic text and image inline-preview limit is unchanged.
+browser-native preview as PDF attachments, up to 16 MiB. In browsers that support
+these settings, the PDF fits the preview pane's width and opens with page
+thumbnails collapsed. Preview failures and larger PDFs retain **Download file**.
+The generic text and image inline-preview limit is unchanged.
 Refreshing unchanged file metadata keeps the PDF reader's page and scroll
 position. The preview still reads fresh bytes and checks file access; changed
 contents reload the document, and selecting a different source replaces it.
@@ -796,10 +791,11 @@ read succeeds. Failed summary reads show **Failed** instead of an unexplained
 with **Refresh** available; previously loaded jobs remain visible while a
 refresh is pending or fails.
 
-Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
-This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
-to make it available; when disabled, both the Pages entry and direct visits to
-Templates discovery or details are unavailable. The former `/agents` overview is removed.
+Open **Customize → Templates** (find **Customize** in **Pages** if it is not pinned),
+or visit `/templates`, to discover official Templates.
+Templates are available by default, without a Labs switch. An explicit
+`gateway.controlUi.experimental.templates: false` hides the Templates entry and
+direct visits to discovery or details. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

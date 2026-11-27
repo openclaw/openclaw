@@ -10,6 +10,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
@@ -220,16 +221,14 @@ describe("delivery queue entry state", () => {
 
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       const context = claimRoot(originalRoot);
-      const generation = {
+      const generation = chatRef({
         agentId: "main",
         storePath: path.join(originalRoot, "agent-sessions.json"),
         sessionKey: "agent:main:dashboard:queued",
+      });
+      await replaceSessionEntry(generation, {
         sessionId: "queued-session",
         lifecycleRevision: "queued-lifecycle",
-      };
-      await replaceSessionEntry(generation, {
-        sessionId: generation.sessionId,
-        lifecycleRevision: generation.lifecycleRevision,
         updatedAt: 1,
       });
       await enqueueDeliveryOnce(

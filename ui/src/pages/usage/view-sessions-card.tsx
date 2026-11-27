@@ -235,9 +235,12 @@ function SessionRows(props: {
         const valueLabel = createMemo(() => {
           i18nRevision();
           const usage = session().usage;
+          if (!usage) {
+            return t("usage.common.emptyValue");
+          }
           return props.isTokenMode
-            ? formatUsageTokens(usage?.totalTokens ?? 0)
-            : formatAnalysisCost(usage?.totalCost ?? 0);
+            ? formatUsageTokens(usage.totalTokens)
+            : formatAnalysisCost(usage.totalCost);
         });
         const copyIdentity = createMemo(() => ({ label: label() }), {
           equals: (previous, next) => previous.label === next.label,

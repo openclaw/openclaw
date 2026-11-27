@@ -23,8 +23,6 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -50,13 +48,13 @@ import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import { projectSessionModelContextEntries, buildInitialContext } from "./session-manager-codec.js";
+import { buildInitialContext, projectSessionModelContextEntries } from "./session-manager-codec.js";
 import {
-  sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
   sessionManagerReleaseTranscript,
 } from "./session-manager-core.js";
 import {
+  sessionManagerInheritedMessages,
   sessionManagerReadInitialContext,
   sessionManagerReadTranscriptStart,
 } from "./session-manager-current-turn.js";
@@ -67,7 +65,7 @@ import {
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
-import { openSessionManagerBoundedView } from "./session-manager-reload.js";
+import * as reload from "./session-manager-reload.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -97,8 +95,8 @@ export {
   buildSessionContext,
   getLatestCompactionEntry,
   migrateSessionEntries,
-  parseSessionEntries,
 } from "./session-manager-codec.js";
+export { parseSessionEntries } from "./session-manager-jsonl.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -111,6 +109,7 @@ export type {
 
 export class SessionManager extends SessionManagerBranching {
   private preparedInitialContext?: { branch: SessionEntry[]; writeToken: string; view: object };
+  [sessionManagerInheritedMessages]?: () => WeakSet<AgentMessage> | undefined;
 
   private constructor(
     cwd: string,
@@ -125,6 +124,7 @@ export class SessionManager extends SessionManagerBranching {
 
   override [sessionManagerReleaseTranscript](): void {
     this.preparedInitialContext = undefined;
+    this[sessionManagerInheritedMessages] = undefined;
     super[sessionManagerReleaseTranscript]();
   }
 
@@ -145,6 +145,33 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   async [sessionManagerReadInitialContext]() {
+    const restore = (branch: SessionEntry[]) => {
+      const through = this.getHeader()?.inheritedThrough;
+      this[sessionManagerInheritedMessages] = through?.length
+        ? () => {
+            // Model and navigation views may hydrate different rows. Match local entry IDs,
+            // not text, timestamps, or a source-session lookup. New child rows never qualify.
+            const copied = new Set(
+              through.flatMap((id) =>
+                this[sessionManagerReadTranscriptBranch](id).map((entry) => entry.id),
+              ),
+            );
+            const end = branch.findLastIndex((entry) => copied.has(entry.id));
+            // A child reset or compaction now owns the replay window, including its kept entries.
+            return end < 0 ||
+              branch
+                .slice(end + 1)
+                .some((entry) => entry.type === "compaction" || entry.type === "reset")
+              ? undefined
+              : new WeakSet(
+                  branch
+                    .slice(0, end + 1)
+                    .flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+                );
+          }
+        : undefined;
+      return buildCoreSessionContext(branch);
+    };
     const prepared = this.preparedInitialContext;
     this.preparedInitialContext = undefined;
     if (
@@ -153,7 +180,7 @@ export class SessionManager extends SessionManagerBranching {
       "compaction" in this.boundedContextLimits ||
       this.pendingDeliberateAppend
     ) {
-      return buildInitialContext(this[sessionManagerReadTranscriptBranch]());
+      return buildInitialContext(this[sessionManagerReadTranscriptBranch](), undefined, restore);
     }
     // A deliberate local branch owns its view; a concurrent selection must not
     // install the database's different active path into the same writer.
@@ -175,7 +202,7 @@ export class SessionManager extends SessionManagerBranching {
       // materializing this snapshot need not join a later, still-pending write.
       this.assertTranscriptWriteActive();
       reader.assertCurrent();
-      return buildCoreSessionContext(prepared.branch);
+      return restore(prepared.branch);
     }
     const context = await readSessionManagerModelContextAsync(
       target,
@@ -189,7 +216,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return buildInitialContext(context[sessionManagerReadTranscriptBranch](), this.byId);
+    return buildInitialContext(context[sessionManagerReadTranscriptBranch](), this.byId, restore);
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -481,34 +508,6 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @internal Read complete current context and compaction facts in one owner snapshot. */
-  static async [sessionManagerOpenCompaction](
-    target: SessionTranscriptRuntimeTarget,
-    options: { cwd?: string; signal?: AbortSignal } = {},
-  ) {
-    const { cwd, signal } = options;
-    const limits = { compaction: true } as const;
-    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
-      prepareSessionTranscriptHydration(target, limits, signal),
-    );
-    const prepared = await hydration.read({ compaction: true });
-    if (prepared.kind !== "bounded" || !prepared.compaction) {
-      throw new Error("Expected a prepared compaction transcript");
-    }
-    const context = prepared.snapshot;
-    const header = findSessionTranscriptHeader(context.events);
-    return {
-      ...prepared.compaction,
-      eventCount: context.totalEvents,
-      sessionManager: new SessionManager(
-        cwd ?? header?.cwd ?? process.cwd(),
-        prepared.compaction.sessionTarget,
-        context.events,
-        { ...context, limits },
-      ),
-    };
-  }
-
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static open(
     target: SessionTranscriptRuntimeTarget,
@@ -570,7 +569,7 @@ export class SessionManager extends SessionManagerBranching {
       ...prepared: Parameters<SessionManagerTranscriptCohort["consume"]>
     ) => void,
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) => {
@@ -604,7 +603,7 @@ export class SessionManager extends SessionManagerBranching {
       signal?: AbortSignal;
     },
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) =>
@@ -669,11 +668,6 @@ export class SessionManager extends SessionManagerBranching {
     return readSessionManagerModelContextAsync(target, options, (context) =>
       SessionManager.fromSelectedEntries(context.events, options.cwd, context.version),
     );
-  }
-
-  /** The source snapshot's version, including writes beyond a selected admission prefix. */
-  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
-    return this.transcriptVersion;
   }
 
   private static fromSelectedEntries(

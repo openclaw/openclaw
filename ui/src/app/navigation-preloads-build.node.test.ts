@@ -6,7 +6,7 @@ import { controlUiNavigationPreloadsPlugin } from "../../config/control-ui-navig
 it("describes the emitted static JS/CSS graph without importing optional dynamic code", async () => {
   const modules: Record<string, string> = {
     "/entry.js":
-      'import { shared } from "/shared.js"; globalThis.shared = shared; globalThis.page = () => import("/fixture/ui/src/pages/templates/page.tsx");',
+      'import { shared } from "/shared.js"; globalThis.shared = shared; globalThis.page = () => import("/fixture/ui/src/pages/templates/page.tsx"); globalThis.plusMenu = () => import("/fixture/ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx");',
     "/fixture/ui/src/pages/templates/page.tsx":
       'import "/page.css"; import { shared } from "/shared.js"; export const render = () => shared; export const dialog = () => import("/dialog.js");',
     "/page.css": ".templates-page { color: red; }",
@@ -18,6 +18,13 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
       'import { shared } from "/shared.js"; export const render = () => shared; export const dialog = () => import("/chat-dialog.js");',
     "/chat.css": ".chat-page { color: blue; }",
     "/chat-dialog.js": "globalThis.chatDialogLoaded = true;",
+    "/fixture/ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx":
+      'import "/plus.css"; export const subview = () => import("/plus-subview.js");',
+    "/plus.css": ".plus-menu { color: green; }",
+    "/plus-subview.js": "globalThis.plusSubviewLoaded = true;",
+    "/fixture/ui/src/components/sidebar-menus-render.tsx":
+      'import "/sidebar.css"; export { shared } from "/shared.js";',
+    "/sidebar.css": ".sidebar-menu { color: red; }",
   };
   const built = await build({
     configFile: false,
@@ -57,6 +64,7 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
           entry: "/entry.js",
           page: "/fixture/ui/src/pages/templates/page.tsx",
           chat: "/fixture/ui/src/pages/chat/route-entry.ts",
+          sidebar: "/fixture/ui/src/components/sidebar-menus-render.tsx",
         },
         preserveEntrySignatures: "allow-extension",
         output: {
@@ -103,6 +111,21 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
   expect(manifest["roster-next"]).toContain(chatView?.fileName);
   expect(manifest["roster-next"]?.some((file) => file.endsWith(".css"))).toBe(true);
   expect(manifest["roster-next"]).not.toContain(chatDialog?.fileName);
+  const plus = built.output.find(
+    (file) =>
+      file.type === "chunk" &&
+      file.facadeModuleId?.endsWith("/chat-composer-plus-menu-content.tsx"),
+  );
+  const plusSubview = built.output.find(
+    (file) => file.type === "chunk" && "/plus-subview.js" in file.modules,
+  );
+  expect(plusSubview).toBeDefined();
+  expect(manifest["chat-next"]).toContain(plus?.fileName);
+  expect(manifest["chat-next"]?.some((file) => file.endsWith(".css"))).toBe(true);
+  expect(manifest["chat-next"]).not.toContain(plusSubview?.fileName);
+  const sidebar = built.output.find((file) => file.type === "chunk" && file.name === "sidebar");
+  expect(sidebar?.viteMetadata?.importedCss.size).toBe(1);
+  expect(manifest["sidebar-menus"]).toEqual([sidebar?.fileName]);
   expect(manifest["roster-next"]).not.toContain("assets/plugin-island.js");
   expect(descriptor.fileName).toMatch(/^assets\/navigation-preloads-[\w-]+\.json$/u);
 });

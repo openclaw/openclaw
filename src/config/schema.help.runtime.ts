@@ -234,7 +234,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.experimental.customPlugins":
     "Allow enabled user-installed plugins to execute native JavaScript in the web app (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open web app pages to clear previously loaded plugin code.",
   "gateway.controlUi.experimental.templates":
-    "Enable ClawHub discovery and one-way Add through the web app and Gateway (default: false). Existing agents keep running while this is off.",
+    "Allow ClawHub discovery and one-way Add through the web app and Gateway (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Installation still requires its normal authority and consent. Existing agents keep running while this is off.",
   "gateway.controlUi.experimental.chatBubbles":
     "Enable experimental speech bubbles in the web app (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
   "gateway.controlUi.environment":
@@ -345,7 +345,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.capacity":
     "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.workerRuns.isolation":
-    'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
+    'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine; "filesystem" restricts Linux workers to their workspace, model HOME, and temporary directory using Landlock ABI 3+. Isolation setup failures never fall back to unrestricted execution.',
   "nodeHost.workerRuns.containerImage":
     'Optional Node 24.22.1+ or 26.12.1+ image for container-isolated workers (default: "node:24.22.1-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
@@ -463,7 +463,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Controls rolling-history tool-loop detection and the post-compaction guard. Omit to keep rolling detection off and post-compaction protection on. Set true to enable both, or false to disable both.",
+    "Controls the tool repeat guard. The guard adds a redirect note on the third identical consecutive tool call and ends the turn at the twentieth. Omit or set true to keep it on; set false to disable it.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":

@@ -6,6 +6,9 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { toErrorObject } from "../infra/errors.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { createReplyOperation } from "./session-controller.operation.js";
@@ -157,6 +160,25 @@ describe("nested compaction attempts", () => {
     expect(watchdog.snapshot().executionDeadlineAtMs).toBe(100);
     watchdog.close();
   });
+
+  it("lets quiet compaction outlast the stall window while Stop still cancels it", async () => {
+    const { operation, cancel } = running();
+    operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const compaction = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    compaction.setExecutionDeadline(10 * 60_000); // compaction.timeoutSeconds: 600
+    const summaryAt = 7 * 60_000;
+    await tickAt(operation.watchdog, summaryAt);
+    expect(cancel).not.toHaveBeenCalled();
+    compaction.close(); // The summary arrived; the turn resumes from here.
+    await tickAt(operation.watchdog, summaryAt + abortMs - 1);
+    expect(cancel).not.toHaveBeenCalled();
+
+    const next = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    next.setExecutionDeadline(summaryAt + abortMs + 10 * 60_000);
+    operation.abort();
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(next.isCurrent()).toBe(false);
+  });
 });
 
 describe("execution deadline recovery", () => {
@@ -171,6 +193,7 @@ describe("execution deadline recovery", () => {
         (await effect.recoverExecutionDeadline?.()) ? "resumed" : "blocked",
     });
     const attempt = watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginTool({ toolName: "exec", toolCallId: "recovered-tool" });
     attempt.setExecutionDeadline(10);
     watchdog.beginExecution(() => 10, recover);
     watchdog.beginExecution(() => 20, laterRecovery);
@@ -178,6 +201,7 @@ describe("execution deadline recovery", () => {
     expect(recover).toHaveBeenCalledOnce();
     expect(laterRecovery).not.toHaveBeenCalled();
     expect(watchdog.snapshot().recovery).toBeUndefined();
+    expect(watchdog.describeStop().error).toMatchObject({ pendingTools: [] });
     watchdog.close();
   });
 
@@ -543,7 +567,6 @@ describe("operation-owned watchdog through controller admission", () => {
     async (terminal) => {
       const { operation, cancel } = running();
       const first = operation.watchdog.attachAttempt({ assertCurrent() {} });
-      first.observeStagnation({ active: true });
       first.beginRequest({ deadlineAtMs: abortMs * 10 });
       vi.setSystemTime(abortMs - 1_000);
       const second = operation.watchdog.attachAttempt({ assertCurrent() {} });
@@ -585,6 +608,47 @@ describe("operation-owned watchdog through controller admission", () => {
     await operation.watchdog.tick(abortMs * 10);
     expect(cancel).not.toHaveBeenCalled();
     expect(getSessionControllerOperation(key)).toBe(successor);
+  });
+
+  it("preserves pending tools through watchdog abort cleanup and lane diagnostics", async () => {
+    const { operation } = running();
+    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const log = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
+    const pendingTools = Array.from({ length: 5 }, (_, index) => ({
+      toolName: `host_tool_${index}`,
+      toolCallId: `host-call-${index}`,
+      explicitDeadline: false,
+      elapsedMs: SESSION_WATCHDOG_QUIET_TOOL_MS,
+    }));
+    const started = createDeferredCore();
+    const run = enqueueCommandInLane("watchdog-attribution", async () => {
+      for (const tool of [...pendingTools, { toolName: "omitted", toolCallId: "sixth" }]) {
+        attempt.beginTool(tool);
+      }
+      started.resolve();
+      await new Promise<never>((_, reject) => {
+        operation.abortSignal.addEventListener("abort", () =>
+          reject(toErrorObject(operation.abortSignal.reason, "Reply operation stalled")),
+        );
+      });
+    });
+    const rejected = expect(run).rejects.toMatchObject({
+      code: "OPENCLAW_SESSION_WATCHDOG",
+      staleReason: "no_activity",
+      pendingTools,
+    });
+    try {
+      await started.promise;
+      await tickAt(operation.watchdog, SESSION_WATCHDOG_QUIET_TOOL_MS);
+      await rejected;
+      expect(operation.watchdog.snapshot().tools).toEqual([]);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("lane task error: lane=watchdog-attribution"),
+        expect.objectContaining({ staleReason: "no_activity", pendingTools }),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("honors owned tool and execution deadlines on the exact attempt", async () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
@@ -9,7 +9,10 @@ import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
 } from "./openai-responses-continuation.js";
-import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
+import {
+  OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
+  RESPONSES_SYSTEM_PROMPT,
+} from "./openai-responses-contracts.js";
 import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   cloneResponsesInputForPayloadHook,
@@ -53,7 +56,6 @@ export function takeResponsesContextUsageInput(
     prepared.messages !== context.messages ||
     prepared.systemPrompt !== context.systemPrompt ||
     prepared.identity.sessionId !== options.sessionId ||
-    prepared.identity.authProfileId !== options.authProfileId ||
     prepared.projection !== "transport" ||
     prepared.includeSystemPrompt !== options.includeSystemPrompt ||
     options.replayResponsesItemIds !== true ||
@@ -148,14 +150,12 @@ export function recordResponsesContextUsage(
       includeSystemPrompt: false,
     },
   ).filter((item) => item.type !== "function_call_output");
-  const firstInput = request.input[0];
   const contextUsage = {
     ...buildProviderReplayContext(model, identity),
     projection,
-    includeSystemPrompt:
-      request.instructions === undefined &&
-      firstInput?.type === "message" &&
-      (firstInput.role === "developer" || firstInput.role === "system"),
+    includeSystemPrompt: request.input.some((item: unknown) =>
+      Boolean(isRecord(item) && Reflect.get(item, RESPONSES_SYSTEM_PROMPT)),
+    ),
     prefixHash: contextFingerprint(request.input, replayOutput),
     prefixLength: request.input.length + replayOutput.length,
     promptTokens: usage.promptTokens,
@@ -247,7 +247,7 @@ export function resolveResponsesContextUsageBoundary(
   return undefined;
 }
 
-function isAssistant(message: { role: string }): message is AssistantMessage {
+function isAssistant(message: { role: string }): message is AssistantHistoryMessage {
   return message.role === "assistant";
 }
 

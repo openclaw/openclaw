@@ -195,6 +195,7 @@ async function prepareGatewaySessionStoreReadInWorker(
         config: params.cfg,
         agentIds,
         env: { ...(params.env ?? process.env) },
+        captureIdentity: retainPlan || isArtifactPreservingStateRead() ? undefined : false,
       })
     ).inventory!,
     ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),

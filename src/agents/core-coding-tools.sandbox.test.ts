@@ -105,6 +105,60 @@ ${moveTo ? `*** Move to: ${moveTo}\n` : ""}@@
 
 installFsBridgeTestHarness();
 
+it.each([false, true])("retains exact-session attachment reads with state alias=%s", (aliased) =>
+  withTempDir("openclaw-participant-attachments-", async (root) => {
+    const workspaceDir = path.join(root, "workspace");
+    const attachments = path.join(root, "attachments");
+    const outside = path.join(root, "outside");
+    await writeFiles(root, {
+      "workspace/marker": "WORKSPACE",
+      "attachments/marker": "ATTACHED",
+      "outside/marker": "PRIVATE",
+    });
+    const attachmentReadRoot = aliased ? path.join(root, "state-link", "attachments") : attachments;
+    if (aliased) {
+      await linkDirectory(root, path.join(root, "state-link"));
+    }
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      workspaceAccess: "rw",
+      readOnlyResourceMounts: [
+        { hostPath: await fs.realpath(attachments), containerPath: "/openclaw/attachments" },
+        { hostPath: outside, containerPath: "/private-resource" },
+      ],
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+    sandbox.fsBridge = bridge;
+    installLocalTransport(bridge);
+    const { execute, text, edit, patch } = createSandboxCodingTools(sandbox, {
+      strictWorkspaceRoot: true,
+      attachmentReadRoot,
+      shellTools: "patch-only",
+      applyPatchEnabled: true,
+    });
+    expect(await text("read", "/workspace/marker")).toContain("WORKSPACE");
+    expect(await text("read", "/openclaw/attachments/marker")).toContain("ATTACHED");
+    await expect(text("read", "/private-resource/marker")).rejects.toThrow(/escapes .*root/);
+    for (const attempt of [
+      () => execute("ls", { path: "/openclaw/attachments" }),
+      () => execute("write", { path: "/openclaw/attachments/marker", content: "denied" }),
+      () => edit("/openclaw/attachments/marker", "ATTACHED", "denied"),
+      () => patch(updatePatch("/openclaw/attachments/marker", "ATTACHED", "denied")),
+    ]) {
+      await expect(attempt()).rejects.toThrow(/escapes .*root/);
+    }
+    await expectFile(attachments, "marker", "ATTACHED");
+    const otherSession = createSandboxCodingTools(sandbox, {
+      strictWorkspaceRoot: true,
+      attachmentReadRoot: outside,
+    });
+    await expect(otherSession.text("read", "/openclaw/attachments/marker")).rejects.toThrow(
+      /escapes .*root/,
+    );
+  }),
+);
+
 it.runIf(process.platform !== "win32").each([true, false])(
   "keeps literal backslash read/write/edit/patch targets distinct with workspaceOnly=%s",
   (workspaceOnly) =>

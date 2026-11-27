@@ -421,10 +421,27 @@ export function createPrepublishPluginRegistryArtifact(params) {
       fs.constants.COPYFILE_EXCL,
     );
   }
-  for (const { packageName, packageDir } of pluginSources) {
+  const batchEntry = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack-batch.mts");
+  // Bound module retention without adding build/pack concurrency. Older sources keep their CLI.
+  const batchSize = fs.existsSync(batchEntry) ? 4 : 1;
+  for (let offset = 0; offset < pluginSources.length; offset += batchSize) {
+    const batch = pluginSources.slice(offset, offset + batchSize);
+    const { packageDir } = batch[0];
     const before = new Set(fs.readdirSync(outputDir));
     const buildAndPack = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack.mts");
-    if (fs.existsSync(buildAndPack)) {
+    if (batchSize > 1) {
+      runChecked(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          batchEntry,
+          outputDir,
+          ...batch.map((entry) => entry.packageDir),
+        ],
+        repoRoot,
+      );
+    } else if (fs.existsSync(buildAndPack)) {
       runChecked(
         process.execPath,
         ["--import", "./scripts/tsx.mjs", buildAndPack, packageDir, outputDir],
@@ -455,21 +472,26 @@ export function createPrepublishPluginRegistryArtifact(params) {
       );
     }
     const created = fs.readdirSync(outputDir).filter((name) => !before.has(name));
-    if (created.length !== 1 || !TARBALL_PATTERN.test(created[0])) {
-      throw new Error(`${packageName} pack must create exactly one .tgz`);
+    if (created.length !== batch.length || created.some((name) => !TARBALL_PATTERN.test(name))) {
+      throw new Error("plugin pack must create exactly one .tgz per package");
     }
-    const tarball = created[0];
-    const tarballPath = path.join(outputDir, tarball);
-    const packedPackage = readTarballPackageJson(tarballPath);
-    if (packedPackage.name !== packageName || packedPackage.version !== params.candidateVersion) {
-      throw new Error(`${packageName} packed identity differs from the candidate`);
+    const expectedNames = new Set(batch.map((entry) => entry.packageName));
+    for (const tarball of created) {
+      const tarballPath = path.join(outputDir, tarball);
+      const packedPackage = readTarballPackageJson(tarballPath);
+      if (
+        packedPackage.version !== params.candidateVersion ||
+        !expectedNames.delete(packedPackage.name)
+      ) {
+        throw new Error(`${tarball} packed identity differs from the candidate batch`);
+      }
+      packages.push({
+        name: packedPackage.name,
+        version: params.candidateVersion,
+        tarball,
+        sha256: sha256File(tarballPath),
+      });
     }
-    packages.push({
-      name: packageName,
-      version: params.candidateVersion,
-      tarball,
-      sha256: sha256File(tarballPath),
-    });
   }
   const manifest = {
     schema: SCHEMA,

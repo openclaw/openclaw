@@ -5,6 +5,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import { measuredPromptTokens } from "../../../../src/shared/prompt-cache-hit-rate.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -364,7 +365,7 @@ export function UsageInsights(props: {
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
     const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-    const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
+    const cacheBase = measuredPromptTokens(totals);
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
     const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;

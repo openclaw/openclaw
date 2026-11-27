@@ -16,7 +16,7 @@ import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.j
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 

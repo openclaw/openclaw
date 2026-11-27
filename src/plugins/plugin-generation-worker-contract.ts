@@ -28,9 +28,8 @@ export type GenerationWorkerInput = (
       storage: PluginSourceCaptureStorage;
       installRoots: PluginInstallRoots;
       readOnly: boolean;
-      scratch: string;
-      managedRoot?: string;
       retainSourceCustody?: boolean;
+      independentOperationSource?: true;
       sourceCustodyId?: number;
       sourceCustodyDigest?: string;
       inspection?: PluginGenerationInspection;
@@ -67,7 +66,6 @@ export type GenerationWorkerReply = (
     }
 ) & { released?: number[]; metrics?: PluginGenerationMetrics };
 export type GenerationWorkerCallback =
-  | { kind: "native-root"; id: number; signal: Int32Array }
   | { kind: "native-root-reference"; id: number; directory: string; signal: Int32Array }
   | {
       kind: "callback-result";

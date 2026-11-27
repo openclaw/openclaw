@@ -244,7 +244,7 @@ describe("chat pane header", () => {
       gatewayStatus: { kind: "reconnecting" },
     });
     const savedStatus = () => text(container, ".chat-pane__connection-state");
-    expect(savedStatus()).toBe("Reconnecting… · Saved conversation");
+    expect(savedStatus()).toBe("Reconnecting · Saved conversation");
     update({ gatewayStatus: undefined });
     absent(container, ".chat-pane__connection");
     update({ gatewayStatus: { kind: "offline" } });

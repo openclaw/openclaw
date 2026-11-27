@@ -66,6 +66,24 @@ describe("normalizeMessagesForLlmBoundary", () => {
     },
   );
 
+  it("dispatches a placed background result as labelled user input, even when it repeats the reply", () => {
+    const reply = timestampedTextAssistant("Report ready", timestamp + 1);
+    const result = {
+      ...timestampedTextAssistant("Report ready", timestamp + 2),
+      provider: "openclaw",
+      model: "automation-result",
+      openclawAutomation: { kind: "cron", jobId: "job-1", runId: "run-1" },
+    };
+    const out = normalizeMessagesForLlmBoundary([user("report"), reply, result], {
+      ...options,
+      includeTimestamp: false,
+    });
+    expect(out.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(contentOf(out[2])).toBe(
+      "[OpenClaw background result] You sent the message below to the user in this chat from a separate background run. It is a record of what they saw, not a new request.\n\nReport ready",
+    );
+  });
+
   it.each(["string", "blocks"] as const)(
     "retains unchanged mutable %s history through delimiter escaping",
     (kind) => {

@@ -398,10 +398,10 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             </span>
             <strong
               class="chat-processes__detail-name"
-              ref={titleScrollState}
+              ref={props.mobile ? titleScrollState : undefined}
               title={props.mobile ? undefined : selectedRow()?.name}
             >
-              {selectedRow()?.name}
+              <bdi>{selectedRow()?.name}</bdi>
             </strong>
             <Show when={selectedRow()}>
               {(row) => (

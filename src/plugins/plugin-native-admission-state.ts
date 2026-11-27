@@ -18,6 +18,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import type { PluginNativeCaptureRoot as NativeSnapshot } from "./plugin-native-root.types.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -30,7 +31,6 @@ import {
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 
-type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
   readonly captureStorage: PluginSourceCaptureStorage;
@@ -182,11 +182,9 @@ export function queuePluginNativeAdmissionPublication(
     data,
     run: () =>
       publish(data)
-        .then((accepted) => {
+        .then(async (accepted) => {
           if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
+            await Promise.all(roots.map(async (root) => root.commit()));
             if (state.publications.get(data.key) === publication) {
               state.publications.delete(data.key);
             }
@@ -349,6 +347,7 @@ export function preparePluginNativeAdmissions(
   if (state.preparedIndexes.has(index)) {
     return;
   }
+  const immutable = isDeeplyFrozenPlainData(index);
   for (const record of index.plugins) {
     const root = path.resolve(record.rootDir);
     if (state.owners.has(root)) {
@@ -391,14 +390,15 @@ export function preparePluginNativeAdmissions(
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
       state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
-        state.namespaces.set(id, structuredClone(namespace));
+        // Retain published membership until a native admission needs writable identities.
+        state.namespaces.set(id, immutable ? { ...namespace } : structuredClone(namespace));
       }
       for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
         state.files.set(source, { ...fact });
       }
     }
   }
-  if (isDeeplyFrozenPlainData(index)) {
+  if (immutable) {
     state.preparedIndexes.add(index);
   }
 }

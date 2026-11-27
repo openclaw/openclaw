@@ -86,7 +86,11 @@ export function createCodexDynamicToolSpecs(params: {
       specs.push(functionSpec);
       continue;
     }
-    if (entry.tool.catalogMode === "direct-only" && !params.functionToolsOnly) {
+    // Codex has no on-demand promotion; on-demand tools keep their direct contract here.
+    if (
+      (entry.tool.catalogMode === "direct-only" || entry.tool.catalogMode === "on-demand") &&
+      !params.functionToolsOnly
+    ) {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }

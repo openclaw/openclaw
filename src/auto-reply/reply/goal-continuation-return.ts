@@ -205,16 +205,12 @@ export function promoteGoalContinuationYield(params: {
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        (entry.completionRequesterSessionId !== undefined &&
-          (entry.completionRequesterSessionId !== continuation.sessionId ||
-            entry.completionRequesterLifecycleRevision !== continuation.lifecycleRevision)) ||
         entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
         entry.requesterSettleWake?.requesterYieldBatch !== true,
     )
   ) {
     return;
   }
-  base.operatorAuthority?.assertCurrent();
   if (!owner.cohort) {
     const source = base.queuedFollowupReplyDisposition;
     if (source?.kind === "drop") {
@@ -322,7 +318,6 @@ export function readGoalContinuationContext(params: {
   if (!context) {
     return undefined;
   }
-  settlement.owner.params.base.operatorAuthority?.assertCurrent();
   settlement.admitted = true;
   return context;
 }
@@ -355,6 +350,14 @@ export async function finishGoalContinuationSettlement(
 ): Promise<void> {
   const owner = findGoalReturn(entries);
   if (!owner) {
+    // A partition settled ahead of its siblings leaves the cohort; the last one resumes the Goal.
+    for (const key of entries.map(getSubagentRunRuntimeKey)) {
+      const member = cohortReturns.get(key);
+      if (member?.cohort) {
+        member.cohort = { ...member.cohort, keys: member.cohort.keys.filter((k) => k !== key) };
+        cohortReturns.delete(key);
+      }
+    }
     return;
   }
   try {
@@ -368,11 +371,6 @@ export async function finishGoalContinuationSettlement(
     }
   } catch (error) {
     if (owner.closed) {
-      return;
-    }
-    try {
-      owner.params.base.operatorAuthority?.assertCurrent();
-    } catch {
       return;
     }
     throw error;
