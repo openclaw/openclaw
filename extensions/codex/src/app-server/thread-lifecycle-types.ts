@@ -86,6 +86,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
+  webSearchRequested?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
