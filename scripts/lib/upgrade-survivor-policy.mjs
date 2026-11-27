@@ -243,9 +243,6 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
-  if (scenario === "boot-plugin-convergence") {
-    return baselineSpec === "openclaw@latest";
-  }
   if (scenario === "git-release") {
     return baselineSpec === "openclaw@2026.11.5";
   }

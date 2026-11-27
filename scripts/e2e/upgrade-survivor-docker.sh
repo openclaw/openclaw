@@ -243,10 +243,10 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && [ "${OPENCLAW_UPGRADE_SURVIVO
 fi
 if [ "$SCENARIO" = "boot-plugin-convergence" ] && {
   [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
-    [ "$BASELINE_SPEC" != "openclaw@latest" ] || [ "$UPDATE_RESTART_MODE" != "manual" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] ||
     [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
 }; then
-  echo "boot-plugin-convergence requires published openclaw@latest, isolated manual restart, and no live provider" >&2
+  echo "boot-plugin-convergence requires a published baseline, isolated manual restart, and no live provider" >&2
   exit 2
 fi
 if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then

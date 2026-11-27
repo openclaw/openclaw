@@ -30,11 +30,9 @@ const log = createSubsystemLogger("gateway/update-run");
 export function schedulePluginMaintenance(): void {
   wakeUpdateRunWatcher(undefined, () =>
     withCommandProcessScope(async () => {
-      switch ((await readTrial(resolvePrefix()))?.phase) {
-        case "pending":
-        case "trial":
-        case "restoring":
-          return;
+      const phase = (await readTrial(resolvePrefix()))?.phase;
+      if (phase === "pending" || phase === "trial" || phase === "restoring") {
+        return;
       }
       let pluginIds: string[] = [];
       let step: UpdateRunStep | undefined;
@@ -125,6 +123,7 @@ export function schedulePluginMaintenance(): void {
         (!lastRun.after.buildId || lastRun.after.buildId === resolveRuntimeServiceBuildId())
       ) {
         await recordUpdateRunStepAsync(lastRun.runId, step);
+        wakeUpdateRunWatcher(lastRun.runId);
       } else if (step.status === "failed" && step.detail) {
         log.warn(step.detail);
       }

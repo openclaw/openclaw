@@ -8,16 +8,15 @@ import {
 
 const scenarios = { scenarios: ["base"], assertionOnlyScenarios: ["codex-allowlist-survival"] };
 describe("inert upgrade-survivor catalog", () => {
-  it("runs manual boot plugin convergence only against latest stable when explicitly selected", () => {
+  it("runs manual boot plugin convergence against resolved published baselines when selected", () => {
     const scenario = "boot-plugin-convergence";
     expect(parseUpgradeSurvivorScenarios(scenario)).toEqual([scenario]);
     expect(isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario)).toBe(true);
     for (const aggregate of ["far-reaching", "reported-issues"]) {
       expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain(scenario);
     }
-    expect(supportsUpgradeSurvivorScenarioAtBaseline(scenario, "openclaw@latest")).toBe(true);
-    for (const baseline of ["openclaw@beta", "openclaw@2026.9.4", "openclaw@2026.11.5"]) {
-      expect(supportsUpgradeSurvivorScenarioAtBaseline(scenario, baseline)).toBe(false);
+    for (const baseline of ["openclaw@latest", "openclaw@2026.11.10", "openclaw@2026.11.9"]) {
+      expect(supportsUpgradeSurvivorScenarioAtBaseline(scenario, baseline)).toBe(true);
     }
   });
   it("keeps the shipped group-only fixture explicit and pinned to its audited baseline", () => {

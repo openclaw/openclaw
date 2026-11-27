@@ -138,7 +138,9 @@ function snapshot() {
     const file = path.join(record.installPath, relative);
     const stat = fs.lstatSync(file);
     if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(file).sort()) visit(path.join(relative, name));
+      for (const name of fs.readdirSync(file).sort()) {
+        visit(path.join(relative, name));
+      }
     } else {
       files[relative] = {
         mode: stat.mode,
