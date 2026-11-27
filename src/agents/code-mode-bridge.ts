@@ -188,7 +188,8 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
 
 /**
  * Recognize required intent only on the authorized core tool bindings. A native
- * ask_user question is always required: parking it would let turn teardown cancel it.
+ * ask_user question or secrets request waits for the human and is always required:
+ * parking it would let turn teardown cancel it.
  */
 export function requiresCodeModeCompletion(
   requests: readonly PendingBridgeRequest[],
@@ -202,9 +203,12 @@ export function requiresCodeModeCompletion(
     if (id === "openclaw:core:ask_user") {
       return true;
     }
+    const input = isRecord(request.args[1]) ? request.args[1] : undefined;
+    if (id === "openclaw:core:secrets") {
+      return input?.action === "request";
+    }
     return (
-      isRecord(request.args[1]) &&
-      request.args[1].awaitResults === true &&
+      input?.awaitResults === true &&
       (id === "openclaw:core:exec" || id === "openclaw:core:agents_wait")
     );
   });
