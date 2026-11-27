@@ -6681,6 +6681,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
+  it("prepares Android CodeQL on runners without an installed SDK or Gradle outputs", () => {
+    const { steps } = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs
+      .android;
+    const node = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env",
+    );
+    const toolchain = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
+    );
+    const init = steps.find((step: WorkflowStep) =>
+      step.uses?.startsWith("github/codeql-action/init@"),
+    );
+    const build = steps.find((step: WorkflowStep) => step.run?.includes(":app:assemblePlayDebug"));
+
+    expect(toolchain).toBeDefined();
+    expect(steps.indexOf(node)).toBeLessThan(steps.indexOf(toolchain));
+    expect(steps.indexOf(toolchain)).toBeLessThan(steps.indexOf(init));
+    expect(steps.indexOf(init)).toBeLessThan(steps.indexOf(build));
+    expect(node.with["install-deps"]).toBe("false");
+    expect(toolchain.with["install-native-deps"]).toBe("true");
+    expect(toolchain.with["gradle-cache-mode"]).toBe("off");
+    expect(build.env.JAVA_HOME).toBe(`\${{ steps.${toolchain.id}.outputs.gradle-java-home }}`);
+  });
+
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
     const networkConfig = readFileSync(
