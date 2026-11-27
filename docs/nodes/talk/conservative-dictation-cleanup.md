@@ -111,10 +111,8 @@ names, quotations, developer literals and correction evidence remain intact.
 | `the variable is um_count`             | Unchanged          |
 
 Recognizer confidence and timing describe recognition; they do not establish
-whether a word should be removed. Missing metadata remains missing. A valid
-source range or a category label also does not authorize semantic deletion.
-Until a supported semantic owner is accepted and integrated, every cleanup
-plan retains the original, including a plan that asks to remove text.
+whether a word should be removed. Missing metadata remains missing. A source range or a category label would not authorize semantic deletion.
+This review-only path does not accept or construct removal plans.
 
 ## Ownership and privacy
 
@@ -128,17 +126,10 @@ speech profile is added. The existing composer dictation owner continues to
 own capture, finalization order, draft revisions and publication. Review
 retains at most one bounded source in memory; it is not chat history.
 
-The private validator in `ui/src/pages/chat/dictation-cleanup.ts` checks source
-identity and revision, policy and locale, UTF-8 size, metadata shape, grapheme
-boundaries, protected spans, range order and deletion budget. It does not
-decide intent. Eligible final Conservative plans return the original text,
-no removals, an identity source map and a semantic-unavailable reason. Invalid
-plans also retain the source with their validation reason.
-
-The existing limits remain 32 KiB of UTF-8 source, 4,096 metadata ranges per
-collection and 64 proposed removals. A plan requesting more than one quarter
-of the source is rejected before semantic admission. These bounds are
-validation constraints, not evidence that a smaller deletion is safe.
+Preparation checks the source identity and revision, policy and locale, and
+keeps at most 32 KiB of UTF-8 text for original-text review. It does not parse
+removal ranges or produce a cleaned candidate. Validate removal plans only
+when an approved semantic producer actually supplies edits.
 
 There is no new Gateway RPC or public plugin SDK contract. An accepted
 semantic owner, preference scope, shared preparation behavior and preservation

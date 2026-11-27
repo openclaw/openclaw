@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DictationCleanupPolicy } from "../../app/settings-contract.ts";
+import { DICTATION_CLEANUP_CORPUS } from "./dictation-cleanup.test-support.ts";
 import type { DictationCleanupSource } from "./dictation-cleanup.ts";
 import { DictationRefinement } from "./dictation-refinement.ts";
 
@@ -47,6 +48,16 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("owned dictation refinement", () => {
+  it.each(DICTATION_CLEANUP_CORPUS)("offers and inserts the exact source: $id", async (sample) => {
+    const h = fixture();
+    h.prepare({ ...source, text: sample.raw, locale: sample.locale });
+    await Promise.resolve();
+    expect(h.owner.review?.rawText).toBe(sample.raw);
+    expect(h.writes).toEqual([]);
+    expect(h.owner.chooseRaw()).toBe(true);
+    expect(h.writes).toEqual([`Existing draft ${sample.raw}`]);
+  });
+
   it("keeps the original recoverable once when semantic cleanup is unavailable", async () => {
     const h = fixture();
     h.prepare();
@@ -66,6 +77,19 @@ describe("owned dictation refinement", () => {
     expect(h.owner.chooseRaw()).toBe(false);
     expect(h.writes).toEqual([`Existing draft ${source.text}`]);
     expect(h.owner.review).toBeNull();
+  });
+
+  it("offers original review without segmenting the recognizer text", async () => {
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment").mockImplementation(() => {
+      throw new Error("Segmentation is unavailable");
+    });
+    const h = fixture();
+    h.prepare();
+    await Promise.resolve();
+    expect(h.owner.review).toMatchObject({ status: "ready", reason: "semantic-unavailable" });
+    expect(segment).not.toHaveBeenCalled();
+    expect(h.owner.chooseRaw()).toBe(true);
+    expect(h.writes).toEqual([`Existing draft ${source.text}`]);
   });
 
   it("raw choice before the deferred candidate retires all later publication", async () => {

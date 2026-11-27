@@ -1,9 +1,8 @@
 import type { DictationCleanupPolicy } from "../../app/settings-contract.ts";
 import {
-  refineDictation,
+  dictationReviewReason,
   isCleanupSourceBounded,
   type CleanupReason,
-  type CleanupResult,
   type DictationCleanupSource,
 } from "./dictation-cleanup.ts";
 
@@ -31,7 +30,7 @@ type Preparation = {
   binding: DraftBinding;
   draft: DictationDraftSnapshot | undefined;
   status: DictationCleanupReview["status"];
-  result: CleanupResult | null;
+  reason?: CleanupReason;
   writeAttempted: boolean;
   cancelled: boolean;
   generation: number;
@@ -62,7 +61,7 @@ export class DictationRefinement {
     const unedited = authorized && this.matchesDraft(preparation);
     return {
       rawText: authorized ? preparation.source.text : "",
-      reason: authorized ? preparation.result?.reason : undefined,
+      reason: authorized ? preparation.reason : undefined,
       status:
         !authorized || preparation.status === "unavailable"
           ? "unavailable"
@@ -75,7 +74,7 @@ export class DictationRefinement {
         authorized &&
         !preparation.writeAttempted &&
         preparation.source.isFinal &&
-        preparation.result?.reason !== "semantic-unavailable",
+        preparation.reason !== "semantic-unavailable",
     };
   }
 
@@ -94,7 +93,6 @@ export class DictationRefinement {
       binding,
       draft,
       status: bounded ? "pending" : "unavailable",
-      result: null,
       writeAttempted: false,
       cancelled: false,
       generation: ++this.generation,
@@ -114,7 +112,7 @@ export class DictationRefinement {
     }
     preparation.policy = policy;
     preparation.draft = preparation.binding.readDraft();
-    preparation.result = null;
+    preparation.reason = undefined;
     preparation.cancelled = false;
     preparation.status = "pending";
     preparation.generation = ++this.generation;
@@ -143,7 +141,7 @@ export class DictationRefinement {
     if (preparation.status !== "unavailable") {
       preparation.status = "failed";
     }
-    preparation.result = null;
+    preparation.reason = undefined;
     this.changed();
   }
 
@@ -167,7 +165,7 @@ export class DictationRefinement {
   private run(preparation: Preparation): void {
     const generation = preparation.generation;
     this.changed();
-    // Let the review render before validating source ranges.
+    // Let the review render before checking the source.
     queueMicrotask(() => {
       if (this.preparation !== preparation || preparation.generation !== generation) {
         return;
@@ -182,31 +180,17 @@ export class DictationRefinement {
         return;
       }
       const started = performance.now();
-      let result: CleanupResult;
-      try {
-        result = refineDictation(preparation.source, preparation.policy);
-      } catch {
-        // No transcript or exception payload enters telemetry. Recovery still
-        // uses the same permission and draft checks as a successful preparation.
-        preparation.status = "failed";
-        preparation.result = null;
-        this.changed();
-        return;
-      }
+      const reason = dictationReviewReason(preparation.source, preparation.policy);
       if (this.preparation !== preparation || preparation.generation !== generation) {
         return;
       }
       // The input bound makes this a short synchronous stage. A stalled client
       // must still offer original text rather than a result outside its deadline.
-      if (
-        performance.now() - started > 2_500 ||
-        result.status === "rejected" ||
-        !preparation.source.isFinal
-      ) {
+      if (performance.now() - started > 2_500 || !preparation.source.isFinal) {
         preparation.status = "failed";
-        preparation.result = null;
+        preparation.reason = undefined;
       } else {
-        preparation.result = result;
+        preparation.reason = reason;
         preparation.status = "ready";
       }
       this.changed();
@@ -228,7 +212,7 @@ export class DictationRefinement {
       if (preparation.binding.publish(preparation.source.text) === false) {
         preparation.writeAttempted = false;
         preparation.status = "failed";
-        preparation.result = null;
+        preparation.reason = undefined;
         return false;
       }
       if (this.preparation === preparation) {

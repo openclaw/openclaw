@@ -1,12 +1,8 @@
-import type { CleanupRange, CleanupToken } from "./dictation-cleanup.ts";
-
 /** Authored preservation cases, not semantic-removal labels or a precision corpus. */
 export type DictationCleanupCase = {
   id: string;
   raw: string;
   locale?: string;
-  protectedSpans?: readonly CleanupRange[];
-  tokens?: readonly CleanupToken[];
 };
 
 export const DICTATION_CLEANUP_CORPUS: readonly DictationCleanupCase[] = [
@@ -44,9 +40,8 @@ export const DICTATION_CLEANUP_CORPUS: readonly DictationCleanupCase[] = [
   { id: "quotation-after-prefix", raw: 'um please send "um I need help"' },
   { id: "code-after-prefix", raw: "um please send `um_count`" },
   {
-    id: "protected-prefix",
-    raw: "um please call me tomorrow",
-    protectedSpans: [{ start: 0, end: 2 }],
+    id: "outer-whitespace",
+    raw: " \tum please call me tomorrow\n",
   },
   {
     id: "unsupported-locale",
@@ -54,8 +49,7 @@ export const DICTATION_CLEANUP_CORPUS: readonly DictationCleanupCase[] = [
     locale: "de-DE",
   },
   {
-    id: "low-confidence",
-    raw: "um please call me tomorrow",
-    tokens: [{ start: 0, end: 2, confidence: 0.2 }],
+    id: "unicode-graphemes",
+    raw: "um 👩‍💻 please call Zoe\u0308 tomorrow",
   },
 ];
