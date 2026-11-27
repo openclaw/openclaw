@@ -86,6 +86,12 @@ it.each(["positional edit", "controlled rewrite"] as const)(
       await userEvent.keyboard("home ");
       f.expectValue(edited.replace("$HOME", "$home "));
     }
+    const tokenStart = initial.indexOf("$HOME");
+    await expect
+      .poll(() => readComposerEditor(input)?.isAtomicRange(tokenStart, tokenStart + "$home".length))
+      .toBe(true);
+    // The rewrite leaves the caret at the end of a long draft. Reveal the already-admitted token before checking its rendered label.
+    selectComposerInput(input, tokenStart, tokenStart);
     await expect.poll(() => f.query(".chat-composer-skill")?.textContent).toBe("Home skill");
   },
 );
