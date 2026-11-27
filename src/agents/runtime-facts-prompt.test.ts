@@ -1,11 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { buildRuntimeContextCustomMessage } from "./embedded-agent-runner/run/runtime-context-prompt.js";
+import { projectRuntimeContextFragments } from "./internal-runtime-context.js";
 import type { MediaGenerationOperation } from "./media-generation-activity.js";
 import * as mediaActivity from "./media-generation-activity.js";
 import { buildRuntimeFactsContext } from "./runtime-facts-prompt.js";
 
-const params = { capabilityToolNames: new Set(["exec"]), agentId: "main", cfg: {} };
+const params = {
+  capabilityToolNames: new Set(["exec"]),
+  agentId: "main",
+  cfg: {},
+  sentHistory: [] as unknown[],
+};
 const fact = (text: string) => ({ kind: "conversation-data", text });
 const temporal = fact(expect.stringContaining("## Temporal Context\n"));
 const context = (text: string) => [fact(text), temporal];
@@ -75,10 +82,7 @@ it("scopes, sorts and refreshes executable hints", () =>
     main.allowlist.reverse();
     expect(await build()).toBe(added);
     file.agents = {};
-    await expectContext(params);
-    expect(await build({ ...params, includeEmptySnapshots: true })).toBe(
-      "## Approved executables\nnone",
-    );
+    await expectContext(params, context("## Approved executables\nnone"));
   }));
 it("bounds executable hints and omits unsafe, command and non-path entries", () =>
   withMockedPlatform("win32", async () => {
@@ -159,9 +163,8 @@ it("refreshes the scoped media snapshot and can explicitly clear it", async () =
     ),
   );
   read.mockReturnValue([]);
-  await expectContext(mediaParams);
   await expectContext(
-    { ...mediaParams, includeEmptySnapshots: true },
+    mediaParams,
     media(
       "- tool=image_generate; none",
       "- tool=music_generate; none",
@@ -179,18 +182,13 @@ it("includes only enabled media sections", async () => {
     capabilityToolNames: new Set(["music_generate", "video_generate"]),
   };
   const line = "- tool=music_generate; task=music-1; status=running";
-  await expectContext(input, media(line));
-  await expectContext(
-    { ...input, includeEmptySnapshots: true },
-    media(line, "- tool=video_generate; none"),
-  );
+  await expectContext(input, media(line, "- tool=video_generate; none"));
 });
 it.each([undefined, "   "])("does not read media without a session: %j", async (sessionKey) => {
   const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
   const input = { ...mediaParams, sessionKey };
-  await expectContext(input);
   await expectContext(
-    { ...input, includeEmptySnapshots: true },
+    input,
     media(
       "- tool=image_generate; none",
       "- tool=music_generate; none",
@@ -198,4 +196,21 @@ it.each([undefined, "   "])("does not read media without a session: %j", async (
     ),
   );
   expect(read).not.toHaveBeenCalled();
+});
+it("omits snapshots the request already carries unchanged, in either stored carrier form", async () => {
+  vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([task("image")]);
+  const input = { ...mediaParams, capabilityToolNames: new Set(["image_generate"]) };
+  const first = await buildRuntimeFactsContext(input);
+  const carriers = [
+    buildRuntimeContextCustomMessage("ignored", first),
+    buildRuntimeContextCustomMessage(projectRuntimeContextFragments(first), undefined, true),
+  ];
+  for (const carrier of carriers) {
+    await expectContext({ ...input, sentHistory: [carrier] }, []);
+  }
+  // The latest copy of a snapshot is the one compared, so a change is sent again.
+  vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([]);
+  await expectContext({ ...input, sentHistory: [carriers[0]] }, [
+    fact("## Media Generation Tasks\n- tool=image_generate; none"),
+  ]);
 });
