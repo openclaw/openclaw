@@ -184,32 +184,36 @@ const PAIRING_CONNECT_REASON_METADATA = {
   },
 } as const;
 
-const AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
-  ["token_missing", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING],
-  ["token_mismatch", ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH],
-  ["token_missing_config", ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED],
-  ["password_missing", ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING],
-  ["password_mismatch", ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH],
-  ["password_missing_config", ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED],
-  ["bootstrap_token_invalid", ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID],
-  ["tailscale_user_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING],
-  ["tailscale_proxy_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING],
-  ["tailscale_whois_failed", ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED],
-  ["tailscale_user_mismatch", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH],
-  ["rate_limited", ConnectErrorDetailCodes.AUTH_RATE_LIMITED],
-  ["device_token_mismatch", ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH],
-  ["scope_mismatch", ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH],
-  [undefined, ConnectErrorDetailCodes.AUTH_REQUIRED],
-]);
+// Enclose tuple reads as well as construction so clients that omit these
+// backend resolvers can discard the complete initialization.
+const AUTH_CONNECT_ERROR_CODES = /* @__PURE__ */ (() =>
+  new Map<string | undefined, ConnectErrorDetailCode>([
+    ["token_missing", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING],
+    ["token_mismatch", ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH],
+    ["token_missing_config", ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED],
+    ["password_missing", ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING],
+    ["password_mismatch", ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH],
+    ["password_missing_config", ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED],
+    ["bootstrap_token_invalid", ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID],
+    ["tailscale_user_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING],
+    ["tailscale_proxy_missing", ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING],
+    ["tailscale_whois_failed", ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED],
+    ["tailscale_user_mismatch", ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH],
+    ["rate_limited", ConnectErrorDetailCodes.AUTH_RATE_LIMITED],
+    ["device_token_mismatch", ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH],
+    ["scope_mismatch", ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH],
+    [undefined, ConnectErrorDetailCodes.AUTH_REQUIRED],
+  ]))();
 
-const DEVICE_AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
-  ["device-id-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH],
-  ["device-signature-stale", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED],
-  ["device-nonce-missing", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED],
-  ["device-nonce-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH],
-  ["device-signature", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID],
-  ["device-public-key", ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID],
-]);
+const DEVICE_AUTH_CONNECT_ERROR_CODES = /* @__PURE__ */ (() =>
+  new Map<string | undefined, ConnectErrorDetailCode>([
+    ["device-id-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH],
+    ["device-signature-stale", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED],
+    ["device-nonce-missing", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED],
+    ["device-nonce-mismatch", ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH],
+    ["device-signature", ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID],
+    ["device-public-key", ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID],
+  ]))();
 
 /** Maps internal auth failure reasons to public connect-error detail codes. */
 export function resolveAuthConnectErrorDetailCode(
