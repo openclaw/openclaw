@@ -127,6 +127,8 @@ const repositoryScriptEntries = [
   // Package scripts execute these maintained generators, whose inputs are production contracts.
   "scripts/generate-runtime-script-assets.mjs!",
   "scripts/generate-static-validators.mts!",
+  // OpenClawKit documents this standalone generator for its tool operation catalog.
+  "scripts/tool-operations.ts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.

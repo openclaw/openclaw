@@ -66,7 +66,7 @@ function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
  * session permission of the old one. A role that cannot be resolved is not comparable, so it
  * counts as a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
  */
-export function roleChangeLosesAccess(
+function roleChangeLosesAccess(
   cfg: OpenClawConfig,
   change: UserProfileRoleChange,
   identity: { githubLogin?: string | null; openclawIdAccountIds?: readonly string[] } | undefined,
