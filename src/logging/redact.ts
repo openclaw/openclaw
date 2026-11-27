@@ -722,7 +722,7 @@ function visitToolPayloadMatches(
   }
 }
 
-/** Final support-file protection edits JSON scalars without rewriting its delimiters. */
+/** Final protection for structured-redacted bundle JSON preserves its delimiters. */
 export function redactDiagnosticSupportBundleFile(
   file: DiagnosticSupportBundleFile,
 ): DiagnosticSupportBundleFile {
@@ -735,14 +735,11 @@ export function redactDiagnosticSupportBundleFile(
     content: redactJsonRecord(
       file.content,
       { value: { structured: false, primitiveMask: false }, children: new Map() },
-      [
-        [],
-        [{ patterns: preparationPatterns }, { patterns, visitMatches: visitToolPayloadMatches }],
-      ],
+      [[], [{ patterns, visitMatches: visitToolPayloadMatches }]],
       prepareRedactionCapture,
       () => [],
       () => [],
-      () => [],
+      (field) => getTextRecordEdits(field, "tools", false),
       () => true,
     ),
   };

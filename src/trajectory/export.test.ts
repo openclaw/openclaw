@@ -722,6 +722,25 @@ describe("exportTrajectoryBundle", () => {
     });
   });
 
+  it("preserves URL sibling fields while redacting exported JSON", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const { tmpDir, sessionTarget, outputDir } = exportPaths(state.root);
+      await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+      appendSqliteTrajectoryRuntimeEvents(sessionTarget, [
+        createRuntimeEvent("sibling-probe", {
+          data: { text: "https://example.invalid/?token=fixture-value", sibling: true, number: 17 },
+        }),
+      ]);
+      await exportFrom(tmpDir, { sessionTarget });
+      const event = readEvents(outputDir).find((item) => item.type === "sibling-probe");
+      expect(event?.data).toEqual({
+        text: "https://example.invalid/?token=***",
+        sibling: true,
+        number: 17,
+      });
+    });
+  });
+
   it("rejects oversized session transcript files before export", async () => {
     const { tmpDir, sessionFile } = exportPaths();
     fs.closeSync(fs.openSync(sessionFile, "w"));
