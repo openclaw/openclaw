@@ -13,7 +13,10 @@ import {
 } from "./auth-start-options.js";
 import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
-import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
+import {
+  createCodexEphemeralThreadPolicy,
+  createCodexPersistentThreadPolicy,
+} from "./client-thread-owner.js";
 import { CodexAppServerRpcError, isCodexAppServerOverloadError } from "./client.js";
 import { seedCodexHistory } from "./context-engine-history.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -377,6 +380,7 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
+      liveThreadEphemeralPolicy: createCodexPersistentThreadPolicy(params.refreshableInstructions),
       preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(promptBinding),
       lifecycle: {
         action: "resumed",
@@ -718,7 +722,7 @@ export async function startFreshCodexThread(
           },
           context.effectiveConfig.config,
         )
-      : undefined,
+      : createCodexPersistentThreadPolicy(params.refreshableInstructions),
     // Transient starts do not own the persisted binding, so their native
     // subscriptions must be released instead of entering the warm cache.
     ...(!preserveExistingBinding

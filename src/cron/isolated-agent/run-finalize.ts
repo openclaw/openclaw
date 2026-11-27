@@ -460,6 +460,10 @@ export async function finalizeCronRun(params: {
     deliveryPlan: prepared.deliveryPlan,
     deliveryRequested: prepared.deliveryRequested,
     undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
+    executionReplyAlreadyVisible:
+      prepared.inputProvenance === undefined &&
+      prepared.agentSessionKey === prepared.runSessionKey &&
+      replyDisposition === "visible",
     skipDelivery:
       policySuppression ??
       (noChange

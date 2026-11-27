@@ -431,9 +431,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       host: githubHost,
       assertCurrent: assertPublicationAction,
       readCurrentEntry: () => currentWorktree().loaded.entry,
-      description:
-        row.body?.trim() ||
-        "Published by the Gateway after authoritative workspace reconciliation.",
+      defaultDescription: "Published by the Gateway after authoritative workspace reconciliation.",
+      history: { cwd: worktree.path, base: remoteBaseSha, head: sourceHeadCommit, run },
+      existingPullRequest,
     });
     const { assertAction } = content;
     const completePublished = async (url: string, publishedHead: string) =>
