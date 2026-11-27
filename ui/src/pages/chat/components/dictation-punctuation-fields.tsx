@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createUniqueId, Show } from "solid-js";
 import { registerChatDictationEnglish } from "../../../i18n/locales/en-chat-dictation.ts";
 import type { DictationPunctuationPolicy } from "../../../lib/dictation-refinement.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -15,12 +15,16 @@ export function DictationPunctuationFields(props: {
 }) {
   const policy = (): DictationPunctuationPolicy =>
     props.value ?? { mode: "verbatim", explicitEnabled: false };
+  // Name each select by its caption alone; its options' text is not part of the label.
+  const modeLabel = `dictation-punctuation-mode-${createUniqueId()}`;
+  const localeLabel = `dictation-punctuation-locale-${createUniqueId()}`;
   return (
     <fieldset class="dictation-punctuation-fields" disabled={props.disabled}>
       <legend>{t("chat.dictation.punctuation.policy")}</legend>
       <label>
-        <span>{t("chat.dictation.punctuation.mode")}</span>
+        <span id={modeLabel}>{t("chat.dictation.punctuation.mode")}</span>
         <select
+          aria-labelledby={modeLabel}
           class="settings-select"
           value={props.value?.mode ?? "off"}
           onChange={(event) => {
@@ -42,8 +46,9 @@ export function DictationPunctuationFields(props: {
       </label>
       <Show when={props.value}>
         <label>
-          <span>{t("chat.dictation.punctuation.locale")}</span>
+          <span id={localeLabel}>{t("chat.dictation.punctuation.locale")}</span>
           <select
+            aria-labelledby={localeLabel}
             class="settings-select"
             value={policy().locale ?? ""}
             onChange={(event) =>
