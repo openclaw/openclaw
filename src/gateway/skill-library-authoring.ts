@@ -52,15 +52,15 @@ function listingsMatch(
 async function readCommittedPromptListing(params: {
   sessionKey: string;
   storedListing?: unknown;
-  sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+  sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
   listingStore?: { agentId?: string; storePath?: string };
-}): Promise<SkillLibraryPromptListing | undefined> {
+}): Promise<{ listing?: SkillLibraryPromptListing; sessionId?: string }> {
   const passed = readSkillLibraryPromptListing(
     params.storedListing ?? params.sessionEntry?.skillLibraryPromptListing,
   );
   const store = params.listingStore;
   if (!store || (!store.agentId && !store.storePath)) {
-    return passed;
+    return { listing: passed };
   }
   // The captured store is the physical owner. The session worker serves its
   // published row, including a retained fact, so this turn does not open the
@@ -70,13 +70,22 @@ async function readCommittedPromptListing(params: {
     ...(store.agentId ? { agentId: store.agentId } : {}),
     ...(store.storePath ? { storePath: store.storePath } : {}),
   });
-  return owned ? readSkillLibraryPromptListing(owned.skillLibraryPromptListing) : passed;
+  if (params.sessionEntry?.sessionId && owned?.sessionId !== params.sessionEntry.sessionId) {
+    throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library session changed. Retry.");
+  }
+  // An explicitly selected store with no row cannot inherit a caller's old listing.
+  return {
+    listing: readSkillLibraryPromptListing(owned?.skillLibraryPromptListing),
+    sessionId: owned?.sessionId,
+  };
 }
 
 async function commitSkillLibraryPromptListing(
   sessionKey: string,
   store: { agentId?: string; storePath?: string },
+  expectedSessionId: string,
   listing: SkillLibraryPromptListing | undefined,
+  assertCurrent: () => void,
 ) {
   if (!store.agentId && !store.storePath) {
     return null;
@@ -88,12 +97,16 @@ async function commitSkillLibraryPromptListing(
       ...(store.storePath ? { storePath: store.storePath } : {}),
     },
     (entry) => {
+      if (entry.sessionId !== expectedSessionId) {
+        throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library session changed. Retry.");
+      }
       const current = readSkillLibraryPromptListing(entry.skillLibraryPromptListing);
       if (listingsMatch(current, listing)) {
         return null;
       }
       return { skillLibraryPromptListing: listing };
     },
+    { assertCommitAllowed: assertCurrent },
   );
 }
 
@@ -158,7 +171,7 @@ export async function prepareGatewaySkillLibraryTurn(
     grant: TurnGrant | undefined;
     sessionKey: string;
     storedListing?: unknown;
-    sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+    sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
     listingStore?: { agentId?: string; storePath?: string };
   },
   prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
@@ -181,10 +194,11 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   grant: TurnGrant | undefined;
   prepared?: PreparedSkillLibrarySession;
   storedListing?: unknown;
-  sessionEntry?: { skillLibraryPromptListing?: SkillLibraryPromptListing };
+  sessionEntry?: { sessionId?: string; skillLibraryPromptListing?: SkillLibraryPromptListing };
   listingStore?: { agentId?: string; storePath?: string };
 }): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const storedListing = await readCommittedPromptListing(params);
+  const stored = await readCommittedPromptListing(params);
+  const storedListing = stored.listing;
   let next = storedListing;
   let live: SkillLibraryAuthoringCapability | undefined;
   if (grantsSkillAuthoring(params.owner, params.grant)) {
@@ -203,11 +217,13 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
   // The caller's entry is an immutable snapshot. Persistence returns the owner's
   // committed row, and this turn reads the listing from that result.
   let listingForTurn = next;
-  if (params.listingStore && !listingsMatch(storedListing, next)) {
+  if (params.listingStore && stored.sessionId && !listingsMatch(storedListing, next)) {
     const saved = await commitSkillLibraryPromptListing(
       params.sessionKey,
       params.listingStore,
+      stored.sessionId,
       next,
+      libraryAuthority(params.owner).assertCurrent,
     );
     if (saved) {
       listingForTurn = readSkillLibraryPromptListing(saved.skillLibraryPromptListing);

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
@@ -25,7 +24,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -674,6 +672,34 @@ it("reloads a recorded skill_library listing for a settle after restart", async 
   ).toBeUndefined();
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: otherKey, storePath: otherPath })
+      ?.skillLibraryPromptListing,
+  ).toBeUndefined();
+  expect(
+    await resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: otherKey,
+      grant: undefined,
+      storedListing: saved?.skillLibraryPromptListing,
+      listingStore: { agentId: "main", storePath: otherPath },
+    }),
+  ).toBeUndefined();
+
+  const staleEntry = loadSessionEntry({ agentId: "main", sessionKey: listingSessionKey, storePath });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: listingSessionKey, storePath },
+    { sessionId: "replacement-session", updatedAt: 2 },
+  );
+  await expect(
+    resolveGatewaySkillLibraryPromptGrant({
+      owner,
+      sessionKey: listingSessionKey,
+      grant: grantFor(owner),
+      sessionEntry: staleEntry,
+      listingStore: { agentId: "main", storePath },
+    }),
+  ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: listingSessionKey, storePath })
       ?.skillLibraryPromptListing,
   ).toBeUndefined();
 });
