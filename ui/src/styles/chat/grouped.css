@@ -78,6 +78,16 @@
   max-width: none;
 }
 
+/* A completion that leads the run shares the avatar's center line. */
+.chat-group.assistant
+  > :is(.chat-avatar, .chat-avatar-slot)
+  + .chat-group-messages
+  > .chat-agent-run-body:first-child
+  > .chat-tool-msg-collapse--completion:first-child
+  > .chat-tool-msg-summary {
+  min-block-size: var(--chat-avatar-column);
+}
+
 .chat-group.chat-group--with-footer > .chat-group-footer {
   grid-column: var(--chat-group-content-column);
   grid-row: 2;
