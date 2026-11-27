@@ -12,6 +12,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
+import * as chatAbortDescendants from "../../agents/subagents/cancel-descendants.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -33,7 +34,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
-import * as chatAbortDescendants from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
