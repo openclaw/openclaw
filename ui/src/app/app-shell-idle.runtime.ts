@@ -231,7 +231,8 @@ export function connectShellIdle(
     if (
       !target.isConnected ||
       !target.hasAttribute("href") ||
-      target.matches('[aria-current="page"], [aria-disabled="true"]') ||
+      target.matches('[aria-disabled="true"]') ||
+      (!sessionLink && target.matches('[aria-current="page"]')) ||
       !ready() ||
       router.getState().matches[0]?.routeId === routeId
     ) {

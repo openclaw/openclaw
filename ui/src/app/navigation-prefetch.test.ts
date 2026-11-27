@@ -625,10 +625,11 @@ it.each([
   fixture.outlet.presentationSettled = true;
   fixture.transcript.ready = true;
   const container = pin ? fixture.shell.appendChild(document.createElement("div")) : fixture.shell;
+  const link = container.appendChild(document.createElement("a"));
   if (pin) {
     container.dataset.sidebarEntry = pin;
+    link.setAttribute("aria-current", "page");
   }
-  const link = container.appendChild(document.createElement("a"));
   link.className = className;
   link.href = "/control/chat/main/example";
   const settings = fixture.theme.settings;
