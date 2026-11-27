@@ -15,6 +15,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import {
+  createTranscriptSpeechOrder,
+  orderTranscriptSpeech,
+} from "../shared/transcript-speech-order.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { presentTranscriptSession } from "./read-live.js";
 import {
@@ -132,7 +136,9 @@ export async function getTranscriptLibrary(
       undefined,
       providerName?.(entry.session.source.providerId),
     ),
-    ...(utterances ? { utterances } : {}),
+    ...(utterances
+      ? { utterances: purpose === "legacy" ? orderTranscriptSpeech(utterances) : utterances }
+      : {}),
     nextCursor: page?.hasMore && last ? encodeCursor(scope, [last.sequence]) : null,
     summary: projectTranscriptNotes(notes),
   };
@@ -147,7 +153,8 @@ export async function exportTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
-  const parts: string[] = [];
+  const jsonl: string[] = [];
+  const speech = createTranscriptSpeechOrder<string>();
   const speakerLabel = params.format === "markdown" ? createTranscriptSpeakerLabels() : undefined;
   let sizeBytes = 0;
   const completed = await store.streamExport(
@@ -174,11 +181,16 @@ export async function exportTranscriptLibrary(
         // Include Markdown list/newline overhead while accumulating, before rendering the body.
         sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
         assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-        parts.push(line);
+        if (speakerLabel) {
+          speech.add(line, utterance.startedAt);
+        } else {
+          jsonl.push(line);
+        }
       }
     },
   );
   const { entry, notes } = completed;
+  const parts = speakerLabel ? speech.finish() : jsonl;
   const summary = notes?.summary;
   const title = sanitizeTerminalText(entry.session.title ?? "").trim() || "Transcript";
   const body =

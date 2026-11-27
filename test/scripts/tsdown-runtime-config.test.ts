@@ -244,6 +244,7 @@ describe("tsdown config", () => {
   it("bundles SDK-owned helpers while retaining native package ownership", async () => {
     for (const [graph, bundleFsSafe] of [
       [runtimeGraph("plugins/runtime/index"), false],
+      [runtimeGraph("config/sessions/disk-budget.worker"), true],
       [runtimeGraph("infra/fs-safe-copy.worker"), true],
       [runtimeGraph("infra/sqlite-readonly-location.worker"), true],
       [runtimeGraph("plugins/plugin-generation-preparation.worker"), true],
@@ -254,8 +255,10 @@ describe("tsdown config", () => {
         throw new Error("expected runtime graph dependency predicates");
       }
 
-      expect(alwaysBundle("@openclaw/fs-safe/path", undefined)).toBe(bundleFsSafe);
-      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(!bundleFsSafe);
+      for (const specifier of ["@openclaw/fs-safe/advanced", "@openclaw/fs-safe/path"]) {
+        expect(alwaysBundle(specifier, undefined)).toBe(bundleFsSafe);
+        expect(external(specifier, undefined, false)).toBe(!bundleFsSafe);
+      }
       for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
         expect(alwaysBundle(specifier.split("/").slice(0, 2).join("/"), undefined)).toBe(false);
         expect(alwaysBundle(specifier, undefined)).toBe(false);

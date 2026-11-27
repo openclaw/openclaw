@@ -104,22 +104,6 @@ function readCgroupV2Membership(): string | undefined {
   }
 }
 
-/** Visible cgroup-v2 directories from this process's group up to the mount root. */
-function listCgroupV2Directories(): string[] {
-  if (process.platform !== "linux") {
-    return [];
-  }
-  const relative = readCgroupV2Membership();
-  if (!relative) {
-    return [];
-  }
-  const directory = path.resolve(CGROUP_V2_MOUNT, `.${relative}`);
-  if (directory !== CGROUP_V2_MOUNT && !directory.startsWith(`${CGROUP_V2_MOUNT}/`)) {
-    return [];
-  }
-  return directoriesToMount(directory);
-}
-
 function directoriesToMount(start: string): string[] {
   let directory = start;
   const directories = [directory];
@@ -130,60 +114,87 @@ function directoriesToMount(start: string): string[] {
   return directories;
 }
 
-// Optional work may only use charges proven to belong to the process's visible ancestry.
-function readCgroupV2AncestorView() {
-  const membership = readCgroupV2Membership();
-  if (!membership || membership === "/" || membership.split("/").includes("..")) {
+/** Map namespace-relative membership through the visible cgroup2 mount before reading any limits. */
+function readCgroupV2View() {
+  const membership = process.platform === "linux" ? readCgroupV2Membership() : undefined;
+  if (!membership || membership.split("/").includes("..")) {
     return undefined;
   }
   const overmounts = new Set<string>();
-  let directory: string;
+  let mountinfo: string;
   try {
-    // A delegated mount can expose /pod at this path while membership still names
-    // /pod/slice/service. A hidden, shadowed or unrelated view cannot identify our controllers.
-    const views = [
-      ...readFileSync("/proc/self/mountinfo", "utf8").matchAll(
-        /^(\d+) (\d+) \d+:\d+ (\S+) (\/sys\/fs\/cgroup(?:\/\S*)?) .*? - (\S+) /gmu,
-      ),
-    ].map(([, id, parent, root, point, type]) => ({ id, parent, root, point, type }));
-    // For stacked mounts, the visible one is not the parent mount of another at the same path.
-    const atMount = views.filter(({ point }) => point === CGROUP_V2_MOUNT);
-    const visible = atMount.filter(({ id }) => !atMount.some(({ parent }) => parent === id));
-    const controller = visible.length === 1 ? visible[0] : undefined;
-    if (!controller || controller.type !== "cgroup2") {
-      return undefined;
-    }
-    const root = decodeMountInfoPath(controller.root!);
-    const relative = path.relative(root, membership);
-    if (
-      !root.startsWith("/") ||
-      root.split("/").includes("..") ||
-      relative.split("/")[0] === ".."
-    ) {
-      return undefined;
-    }
-    directory = path.join(CGROUP_V2_MOUNT, relative);
-    if (directory === CGROUP_V2_MOUNT) {
-      return undefined;
-    }
-    directory = path.dirname(directory);
-    for (const { parent, point } of views) {
-      // A mount attached to a hidden lower view cannot cover the selected controller.
-      if (parent !== controller.id || point === CGROUP_V2_MOUNT) {
-        continue;
-      }
-      const child = decodeMountInfoPath(point!);
-      overmounts.add(child);
-      // Mask only the covered subtree. A parent can still cap the Gateway when
-      // its service leaf or one controller file is overmounted.
-      if (directory === child || directory.startsWith(`${child}/`)) {
-        directory = path.dirname(child);
-      }
-    }
+    mountinfo = readFileSync("/proc/self/mountinfo", "utf8");
   } catch {
+    // Restricted procfs still permits the historical hard-limit read. Optional
+    // work needs a verified ancestor charge before it can use this view.
+    const leaf = path.resolve(CGROUP_V2_MOUNT, `.${membership}`);
+    return { leaf, directories: directoriesToMount(leaf), overmounts, verified: false };
+  }
+  const views = [
+    ...mountinfo.matchAll(
+      /^(\d+) (\d+) (\d+:\d+) (\S+) (\/sys\/fs\/cgroup(?:\/\S*)?) .*? - (\S+) /gmu,
+    ),
+  ].map(([, id, parent, device, root, point, type]) => ({
+    id,
+    parent,
+    device,
+    root: decodeMountInfoPath(root!),
+    point: decodeMountInfoPath(point!),
+    type,
+  }));
+  const atMount = views.filter(({ point }) => point === CGROUP_V2_MOUNT);
+  const visible = atMount.filter(({ id }) => !atMount.some(({ parent }) => parent === id));
+  const controller = visible.length === 1 ? visible[0] : undefined;
+  if (
+    !controller ||
+    controller.type !== "cgroup2" ||
+    !controller.root.startsWith("/") ||
+    controller.root.split("/").includes("..")
+  ) {
     return undefined;
   }
-  return { directories: directoriesToMount(directory), overmounts };
+  const relative = path.relative(controller.root, membership);
+  if (relative.split("/")[0] === "..") {
+    return undefined;
+  }
+  const leaf = path.join(CGROUP_V2_MOUNT, relative);
+  const directories = directoriesToMount(leaf);
+  // An identity-preserving bind still exposes the same cgroup. Follow its
+  // child mounts too; other binds can hide one controller file or a whole subtree.
+  const visibleParents = [controller];
+  for (const current of visibleParents) {
+    const children = views.filter(({ parent, id }) => parent === current.id && id !== current.id);
+    const points = new Set(children.map(({ point }) => point));
+    for (const child of children) {
+      // A nonrecursive bind hides older submounts below it. Visible submounts
+      // attach to the new mount ID, not its parent in the lower view.
+      if (
+        directoriesToMount(child.point)
+          .slice(1)
+          .some((ancestor) => points.has(ancestor))
+      ) {
+        continue;
+      }
+      const expected = path.join(controller.root, path.relative(CGROUP_V2_MOUNT, child.point));
+      if (
+        child.type === "cgroup2" &&
+        child.device === controller.device &&
+        child.root === expected
+      ) {
+        visibleParents.push(child);
+      } else {
+        overmounts.add(child.point);
+      }
+    }
+  }
+  return {
+    leaf,
+    directories: directories.slice(
+      directories.findLastIndex((directory) => overmounts.has(directory)) + 1,
+    ),
+    overmounts,
+    verified: true,
+  };
 }
 
 function readCgroupV2File(
@@ -215,9 +226,10 @@ function readCgroupV2Number(
 /** Read cgroup-v2 limits through visible ancestors, including a namespaced mount root. */
 export function readCgroupV2MemoryLimits(files: readonly string[]): Record<string, number> {
   const limits: Record<string, number> = {};
-  for (const directory of listCgroupV2Directories()) {
+  const view = readCgroupV2View();
+  for (const directory of view?.directories ?? []) {
     for (const file of files) {
-      const value = readCgroupV2Number(directory, file);
+      const value = readCgroupV2Number(directory, file, view?.overmounts);
       if (value !== undefined) {
         limits[file] = Math.min(limits[file] ?? Infinity, value);
       }
@@ -226,41 +238,58 @@ export function readCgroupV2MemoryLimits(files: readonly string[]): Record<strin
   return limits;
 }
 
-/** The visible cgroup whose memory.max is the effective hard limit, if any. */
-export function findCgroupV2MemoryLimitDirectory(): string | undefined {
+/** The budget samples the same visible controller that supplied its hard limit. */
+export function captureCgroupV2WorkingSetReader(): (() => number | undefined) | undefined {
+  const view = readCgroupV2View();
+  if (!view) {
+    return undefined;
+  }
   let found: { directory: string; limit: number } | undefined;
-  for (const directory of listCgroupV2Directories()) {
-    const limit = readCgroupV2Number(directory, "memory.max");
+  for (const directory of view.directories) {
+    const limit = readCgroupV2Number(directory, "memory.max", view.overmounts);
     if (limit !== undefined && (!found || limit < found.limit)) {
       found = { directory, limit };
     }
   }
-  return found?.directory;
+  if (!found) {
+    return undefined;
+  }
+  const { directory } = found;
+  return () => {
+    const current = readCgroupV2Number(directory, "memory.current", view.overmounts);
+    return current === undefined
+      ? undefined
+      : cgroupV2WorkingSetBytes(directory, current, view.overmounts);
+  };
 }
 
 // Node's native check covers the leaf. Sibling usage belongs to each shared ancestor,
 // so compare its own charge with its own reclaim or hard limit.
 function isCgroupV2AncestorPressured(): boolean {
-  const view = readCgroupV2AncestorView();
-  return (
-    view?.directories.some((directory) => {
-      const limit = Math.min(
-        readCgroupV2Number(directory, "memory.high", view.overmounts) ?? Infinity,
-        readCgroupV2Number(directory, "memory.max", view.overmounts) ?? Infinity,
-      );
-      if (!Number.isFinite(limit)) {
-        return false;
-      }
-      const threshold = limit * 0.8;
-      const current = readCgroupV2Number(directory, "memory.current", view.overmounts);
-      // Reading memory.stat is unnecessary when even the full charge is below the threshold.
-      return (
-        current !== undefined &&
-        current >= threshold &&
-        cgroupV2WorkingSetBytes(directory, current, view.overmounts) >= threshold
-      );
-    }) ?? false
-  );
+  const view = readCgroupV2View();
+  if (!view?.verified) {
+    return false;
+  }
+  return view.directories.some((directory) => {
+    if (directory === view.leaf) {
+      return false;
+    }
+    const limit = Math.min(
+      readCgroupV2Number(directory, "memory.high", view.overmounts) ?? Infinity,
+      readCgroupV2Number(directory, "memory.max", view.overmounts) ?? Infinity,
+    );
+    if (!Number.isFinite(limit)) {
+      return false;
+    }
+    const threshold = limit * 0.8;
+    const current = readCgroupV2Number(directory, "memory.current", view.overmounts);
+    // Reading memory.stat is unnecessary when even the full charge is below the threshold.
+    return (
+      current !== undefined &&
+      current >= threshold &&
+      cgroupV2WorkingSetBytes(directory, current, view.overmounts) >= threshold
+    );
+  });
 }
 
 function cgroupV2WorkingSetBytes(
@@ -272,15 +301,6 @@ function cgroupV2WorkingSetBytes(
   const stat = readCgroupV2File(directory, "memory.stat", overmounts);
   const inactiveFile = Number(stat?.match(/^inactive_file (\d+)$/mu)?.[1] ?? 0);
   return Math.max(0, current - inactiveFile);
-}
-
-/**
- * memory.current minus inactive file cache: the part of the cgroup charge the kernel
- * cannot cheaply reclaim. Active file cache still counts, so this overstates anon use.
- */
-export function readCgroupV2WorkingSetBytes(directory: string): number | undefined {
-  const current = readCgroupV2Number(directory, "memory.current");
-  return current === undefined ? undefined : cgroupV2WorkingSetBytes(directory, current);
 }
 
 /** Hard memory allowance, not free memory or the cgroup's reclaim threshold. */
