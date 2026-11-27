@@ -418,6 +418,18 @@ async function handleRequest(request, response) {
 }
 
 const server = http.createServer((request, response) => {
+  if (process.env.OPENCLAW_NPM_REGISTRY_REQUEST_LOG) {
+    response.once("finish", () => {
+      fs.appendFileSync(
+        process.env.OPENCLAW_NPM_REGISTRY_REQUEST_LOG,
+        `${JSON.stringify({
+          path: request.url,
+          statusCode: response.statusCode,
+          atMs: Date.now(),
+        })}\n`,
+      );
+    });
+  }
   void handleRequest(request, response).catch((/** @type {unknown} */ error) => {
     if (!response.headersSent) {
       response.writeHead(500, { "content-type": "text/plain" });
