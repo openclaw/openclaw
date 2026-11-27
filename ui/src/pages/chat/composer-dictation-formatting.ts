@@ -6,30 +6,18 @@ import {
   type DictationRange,
   prepareDictationFormatting,
 } from "../../lib/dictation/formatting.ts";
-import { sameDictationFormattingTarget } from "./composer-dictation-target.ts";
+import {
+  type DictationFormattingCapture,
+  type DictationFormattingTarget,
+  sameDictationFormattingTarget,
+} from "./composer-dictation-target.ts";
 
 export type { DictationFormattingMode } from "../../lib/dictation/formatting.ts";
+export type {
+  DictationFormattingCapture,
+  DictationFormattingTarget,
+} from "./composer-dictation-target.ts";
 export type PrepareFormatting = typeof prepareDictationFormatting;
-
-/** Private adapter facts. Preparing HTML is not evidence that a target accepts it. */
-export type DictationFormattingTarget = {
-  identity: object;
-  revision: number;
-  value: string;
-  start: number;
-  end: number;
-  editable: boolean;
-  focused: boolean;
-  capabilities: {
-    version: 1;
-    revision: number;
-    formats: readonly ("text/plain" | "text/markdown" | "text/html")[];
-    markdownProfile?: "commonmark-0.31.2-lists";
-    richTextProfile?: "safe-blocks-v1";
-    safeMultiline: boolean;
-    maxLength?: number;
-  };
-};
 
 export type DictationFormattingReceipt = "not-committed" | "committed" | "outcome-unknown";
 export type ReviewedDictationPlacement = {
@@ -68,14 +56,6 @@ export type ComposerDictationOwnerOptions = {
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
-};
-
-export type DictationFormattingCapture = {
-  target: DictationFormattingTarget | undefined;
-  client: GatewayBrowserClient;
-  auth: GatewayBrowserClient["auth"];
-  connection: number;
-  invalidated: boolean;
 };
 
 export type DictationFormattingAuthority = {

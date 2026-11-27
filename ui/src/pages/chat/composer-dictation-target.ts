@@ -1,17 +1,41 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   canReplaceComposerInputWithHistory,
   composerInputHasFocus,
 } from "../../lib/composer-input.ts";
-import type {
-  ComposerDictationOwnerOptions,
-  DictationFormattingCapture,
-  DictationFormattingTarget,
-} from "./composer-dictation-formatting.ts";
+
+/** Private adapter facts. Preparing HTML is not evidence that a target accepts it. */
+export type DictationFormattingTarget = {
+  identity: object;
+  revision: number;
+  value: string;
+  start: number;
+  end: number;
+  editable: boolean;
+  focused: boolean;
+  capabilities: {
+    version: 1;
+    revision: number;
+    formats: readonly ("text/plain" | "text/markdown" | "text/html")[];
+    markdownProfile?: "commonmark-0.31.2-lists";
+    richTextProfile?: "safe-blocks-v1";
+    safeMultiline: boolean;
+    maxLength?: number;
+  };
+};
+
+export type DictationFormattingCapture = {
+  target: DictationFormattingTarget | undefined;
+  client: GatewayBrowserClient;
+  auth: GatewayBrowserClient["auth"];
+  connection: number;
+  invalidated: boolean;
+};
 
 /** A latched mic can keep recording while its captured insertion authority expires. */
 export function formattingTargetChanged(
   capture: DictationFormattingCapture | undefined,
-  readTarget: ComposerDictationOwnerOptions["readFormattingTarget"],
+  readTarget: (() => DictationFormattingTarget | undefined) | undefined,
   connecting: boolean,
   event?: Event,
 ): boolean {
