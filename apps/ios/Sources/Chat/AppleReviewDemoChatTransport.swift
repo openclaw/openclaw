@@ -355,7 +355,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        await self.store.sendMessage(
+        if let delay = ScreenshotFixtureMode.replyDelay {
+            try await Task.sleep(for: delay)
+        }
+        return await self.store.sendMessage(
             sessionKey: sessionKey,
             message: message,
             runId: idempotencyKey)

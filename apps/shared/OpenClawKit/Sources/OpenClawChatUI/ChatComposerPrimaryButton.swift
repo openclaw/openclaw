@@ -20,6 +20,8 @@ extension OpenClawChatComposer {
                 queueModes: self.inputModel?.sendModeChoices ?? [],
                 action: { mode in
                     self.markAwaitingReplyIfNeeded()
+                    // The message leaves from the field this button sits in.
+                    ChatSendEntrance.composerWillSend()
                     self.sendDraftIfEnabled(queueMode: mode)
                 }),
             stop: .init(

@@ -1116,6 +1116,7 @@ extension OpenClawSnapshotUITests {
     }
 
     func testAssistantReplyHoldOffersActionsInMenu() throws {
+        XCUIDevice.shared.orientation = .portrait
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",

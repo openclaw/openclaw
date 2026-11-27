@@ -496,6 +496,16 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     /// Not compared: only user bubbles carry it, and the iOS render gate never holds those.
     var userBubbleAccessories: ChatUserBubbleAccessories?
     @Environment(\.chatInlineVideos) private var inlineVideos
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+
+    private var clock: ChatMessageClock? {
+        guard self.isUser || self.message.role.lowercased() == "assistant" else { return nil }
+        return ChatMessageClock(
+            timestamp: self.isUser ? self.message.timestamp : self.metadata?.timestamp,
+            locale: self.locale,
+            timeZone: self.timeZone)
+    }
     #endif
 
     var canUseIOSRenderGate: Bool {
@@ -539,6 +549,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                 .contentShape(.accessibility, Rectangle())
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-user-message-body")
+                #if os(iOS)
+                .accessibilityValue(Text(verbatim: self.clock?.spoken ?? ""))
+                #endif
                 #if !os(iOS)
                 // On iOS the text bubble and attachments are measured separately.
                 .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
@@ -563,6 +576,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-assistant-message-body")
+                #if os(iOS)
+                .accessibilityValue(Text(verbatim: self.clock?.spoken ?? ""))
+                #endif
                 .assistantSpeakerLabel(
                     avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
@@ -664,14 +680,14 @@ extension ChatMessageBubble {
                     VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
                         if !self.visibleInlineAttachments.isEmpty {
                             self.userAttachments(hasBubble: hasBubble)
+                                .modifier(ChatClockAnchor(clock: hasBubble ? nil : self.clock, isMediaOnly: true))
                                 .padding(.bottom, hasBubble ? self.userAttachmentsToTextSpacing : 0)
                         }
                         if hasBubble {
                             self.userBubble(text: bubbleText, textColor: textColor)
+                                .background(ChatReadingBubbleMarker(textInset: self.bubblePadding))
                                 .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
                         }
-                        self.footer
-                            .padding(.trailing, self.style == .onboarding ? 8 : 0)
                     }
                     #else
                     self.userBubble(text: text, textColor: textColor)
@@ -790,6 +806,9 @@ extension ChatMessageBubble {
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
+        #if os(iOS)
+        .modifier(ChatClockAnchor(clock: self.clock, isMediaOnly: text.isEmpty && !attachments.isEmpty))
+        #endif
     }
 
     @ViewBuilder
