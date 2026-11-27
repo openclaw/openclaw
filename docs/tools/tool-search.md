@@ -41,7 +41,9 @@ When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
 structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
-surface. Direct-only tools remain visible alongside the controls.
+surface. Direct-only tools and OpenClaw tools that poll by design (such as
+`agents_wait` and `subagents`) remain visible alongside the controls. The tool
+repeat guard can then see the polling tools’ own repeat exemptions.
 
 The directory scales with the active model's context window. When space is tight,
 descriptions shorten before tool names are omitted; every authorized catalog
@@ -99,8 +101,9 @@ run:
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
 5. Apply optional include/exclude selectors to the eligible catalog. Keep
-   unselected and excluded tools, core coding primitives, and direct-only tools
-   model-visible; index compact descriptors for selected eligible tools.
+   unselected and excluded tools, core coding primitives, polling tools and
+   direct-only tools model-visible; index compact descriptors for selected
+   eligible tools.
 6. Add a size-limited capability directory filtered by policy to the cache-stable
    system-prompt prefix. Selection uses fixed rules unless the usage-ranked
    tool index lab is enabled.
