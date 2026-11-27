@@ -88,8 +88,6 @@ struct RootTabs: View {
     @State private var splitSidebarVisibility: Bool?
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
-    @State private var voiceWakeToastText: String?
-    @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var settingsSheetPath: [SettingsRoute] = []
     @State private var settingsToolQuery = ""
@@ -524,19 +522,7 @@ struct RootTabs: View {
                 // Stable container so the toast's move/opacity transition animates
                 // when the gateway problem appears or clears outside withAnimation.
                 ZStack(alignment: .top) {
-                    if let liveVoiceStartError = self.appModel.liveVoiceStartError {
-                        // A banner survives onboarding dismissal without racing another modal.
-                        OpenClawNoticeBanner(
-                            icon: "mic.slash",
-                            title: "Unable to Start Live Voice",
-                            message: .verbatim(liveVoiceStartError),
-                            ownerLabel: "Needs attention",
-                            tint: OpenClawBrand.warn,
-                            secondaryActionTitle: "Dismiss",
-                            onSecondaryAction: { self.appModel.liveVoiceStartError = nil })
-                            .padding(.horizontal, 12)
-                            .safeAreaPadding(.top, 10)
-                    } else if let gatewayRetryFailure {
+                    if let gatewayRetryFailure {
                         OpenClawNoticeBanner(
                             icon: "wifi.exclamationmark",
                             title: "Gateway reconnect failed",
@@ -555,18 +541,6 @@ struct RootTabs: View {
                 .animation(self.gatewayToastAnimation, value: self.gatewayRetryFailure)
                 .animation(self.gatewayToastAnimation, value: self.activeGatewayProblemToast)
             }
-            .overlay(alignment: .topLeading) {
-                if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
-                    VoiceWakeToast(command: voiceWakeToastText)
-                        .padding(.leading, 10)
-                        .safeAreaPadding(
-                            .top,
-                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil
-                                && self.appModel.liveVoiceStartError == nil ? 58 : 132)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-
             .overlay {
                 // Keep the observer mounted so the first 0 -> 1 capture transition
                 // flashes without treating a later remount as a new capture.
@@ -641,16 +615,11 @@ struct RootTabs: View {
                 guard let newValue else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
-
-                withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
-                    self.voiceWakeToastText = trimmed
-                }
-
-                self.toastDismissGate.schedule(after: .milliseconds(2300)) {
-                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
-                        self.voiceWakeToastText = nil
-                    }
-                }
+                // Shows over any sheet, since the command was heard wherever the person is.
+                self.appModel.toasts.post(OpenClawToast(
+                    String(format: String(localized: "“%@”"), trimmed),
+                    systemImage: "mic.fill",
+                    announcement: String(format: String(localized: "Voice Wake heard “%@”."), trimmed)))
             }
     }
 
@@ -672,10 +641,7 @@ struct RootTabs: View {
             .onChange(of: self.scenePhase) { _, newValue in
                 self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
-                guard newValue == .active else {
-                    self.clearVoiceWakeToast()
-                    return
-                }
+                guard newValue == .active else { return }
                 self.handleLiveVoiceStartRequest()
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
@@ -685,13 +651,7 @@ struct RootTabs: View {
             .onDisappear {
                 self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
-                self.clearVoiceWakeToast()
             }
-    }
-
-    private func clearVoiceWakeToast() {
-        self.voiceWakeToastText = nil
-        self.toastDismissGate.cancel()
     }
 
     private func rootGatewayProblemLifecycle(_ content: some View) -> some View {
@@ -1042,7 +1002,7 @@ extension RootTabs {
             }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem, toasts: self.appModel.toasts) {
             return
         } else if problem.retryable {
             self.gatewayRetryFailure = nil

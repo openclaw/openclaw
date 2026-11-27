@@ -1,6 +1,57 @@
 import Combine
+import OpenClawChatUI
 import OpenClawKit
+import OSLog
 import SwiftUI
+
+/// A failed host switch, in words someone can read in two seconds. The controller's message names
+/// transport details (endpoint, TLS URL, instance ID) and goes to the log instead.
+struct GatewaySwitchFailureToast: Equatable {
+    let text: String
+    let offersRetry: Bool
+
+    /// `hostName` is nil when the host has no saved name; sentences that start with it have their own wording.
+    init(message: String, problemKind: GatewayConnectionProblem.Kind?, hostName savedName: String?) {
+        let hostName = savedName ?? String(localized: "this host")
+        let unreachable = String(format: String(localized: "Couldn’t reach %@."), hostName)
+        let needsSecure = savedName.map { String(format: String(localized: "%@ needs a secure connection."), $0) }
+            ?? String(localized: "This host needs a secure connection.")
+        let secureTransportGuidance = GatewayConnectionController.DiscoveredGatewayConnectionAvailability
+            .secureTransportRequired.guidanceText ?? ""
+        switch problemKind {
+        case .reachabilityFailed?, .connectionRefused?, .timeout?:
+            (self.text, self.offersRetry) = (unreachable, true)
+            return
+        case .tlsCertificateUnavailable?:
+            (self.text, self.offersRetry) = (needsSecure, false)
+            return
+        case .tlsPinMismatch?:
+            let notPaired = savedName.map {
+                String(format: String(localized: "%@ isn’t the host you paired with."), $0)
+            } ?? String(localized: "This isn’t the host you paired with.")
+            (self.text, self.offersRetry) = (notPaired, false)
+            return
+        default:
+            break
+        }
+        switch message {
+        case GatewayFailureText.hostUnavailable, GatewayFailureText.checkAddress:
+            (self.text, self.offersRetry) = (message, false)
+        case GatewayFailureText.couldntSwitch, GatewayFailureText.notFound(hostName):
+            (self.text, self.offersRetry) = (message, true)
+        case "Failed to build TLS URL for trust verification.", "Failed to build discovered gateway URL.",
+             String(localized: "Failed to build the gateway URL."):
+            (self.text, self.offersRetry) = (GatewayFailureText.checkAddress, false)
+        case secureTransportGuidance, String(localized: "A TLS certificate fingerprint requires a secure gateway URL."):
+            (self.text, self.offersRetry) = (needsSecure, false)
+        case "Failed to resolve the discovered gateway endpoint.":
+            (self.text, self.offersRetry) = (unreachable, true)
+        default:
+            (self.text, self.offersRetry) = (
+                String(format: String(localized: "Couldn’t connect to %@."), hostName), true)
+        }
+    }
+}
 
 /// A projection of saved entries, not a second registry or connection owner.
 struct SidebarGatewayPresentation {
@@ -234,8 +285,8 @@ private struct SidebarConnectionMenu: UIViewRepresentable {
 struct RootSidebarGatewayControl: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(GatewayConnectionController.self) private var gatewayController
+    private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "GatewayPicker")
     @State private var registry = GatewaySettingsStore.GatewayRegistry.empty
-    @State private var switchError: String?
     let fallbackName: String
     let openSettings: () -> Void
 
@@ -258,18 +309,25 @@ struct RootSidebarGatewayControl: View {
             .onAppear { self.refreshRegistry() }
             .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
                 .receive(on: DispatchQueue.main)) { _ in self.refreshRegistry() }
-            .alert("Could Not Switch Gateway", isPresented: Binding(
-                get: { self.switchError != nil },
-                set: { if !$0 { self.switchError = nil } }))
-            {
-                Button { self.switchError = nil } label: {
-                    Text("OK")
-                        .font(OpenClawType.body)
-                }
-            } message: {
-                Text(verbatim: self.switchError ?? "")
-                    .font(OpenClawType.body)
-            }
+    }
+
+    /// The picker shows the host it's still on, so the toast only says what to do first.
+    private func refuseSwitch(_ text: String) {
+        self.appModel.toasts.post(OpenClawToast(text, systemImage: "exclamationmark.circle", kind: .warning))
+    }
+
+    private func postSwitchFailure(_ message: String, stableID: String) {
+        Self.logger.error("Host switch failed: \(message, privacy: .public)")
+        let entry = self.registry.entries.first { GatewayStableIdentifier.matches($0.stableID, stableID) }
+        let toast = GatewaySwitchFailureToast(
+            message: message,
+            problemKind: self.appModel.gatewayPreconnectProblemKind(for: stableID),
+            hostName: entry.map(self.registry.compactName))
+        guard toast.offersRetry else {
+            self.appModel.toasts.post(.failure(toast.text))
+            return
+        }
+        self.appModel.toasts.post(.failure(toast.text, retry: { self.switchGateway(stableID) }))
     }
 
     private func refreshRegistry() {
@@ -286,13 +344,11 @@ struct RootSidebarGatewayControl: View {
         if self.appModel.chatPresentation.viewModel?.isAttachmentOwnerPinned == true ||
             self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
         {
-            self.switchError = String(localized: """
-            Finish recording, remove attachments, or wait for delivery before switching gateways.
-            """)
+            self.refuseSwitch(String(localized: "Finish recording or remove attachments first."))
             return
         }
         if let draft = self.appModel.chatPresentation.viewModel?.input, !draft.isEmpty {
-            self.switchError = String(localized: "Send or clear the current draft before switching gateways.")
+            self.refuseSwitch(String(localized: "Send or clear your draft first."))
             return
         }
         self.appModel.isGatewayPickerRequestInFlight = true
@@ -308,9 +364,10 @@ struct RootSidebarGatewayControl: View {
                 // trust review, reset, and route commitment.
                 break
             case let .failed(message):
-                self.switchError = message
+                self.postSwitchFailure(message, stableID: stableID)
             case .superseded:
-                self.switchError = String(localized: "Another connection attempt replaced this gateway switch.")
+                // The newer attempt is the one the picker shows; nothing to say about this one.
+                break
             }
         }
     }

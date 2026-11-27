@@ -7,6 +7,13 @@ import SwiftUI
 import UIKit
 @preconcurrency import UserNotifications
 
+/// Keep native menu actions neutral without changing link or button tints elsewhere.
+private struct PrimaryInkMenuStyle: MenuStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Menu(configuration).tint(.primary)
+    }
+}
+
 enum WatchPromptAction: Sendable {
     case delivery(OpenClawWatchChatDeliveryCommand)
     case upgradeRequired
@@ -636,6 +643,8 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .openClawToasts(self.appModel.toasts)
+                .menuStyle(PrimaryInkMenuStyle())
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
                 .environment(self.appearanceModel)
@@ -655,6 +664,16 @@ struct OpenClawApp: App {
                     #if DEBUG
                     if Self.liveActivityVoicePreviewEnabled {
                         LiveActivityManager.shared.startVoicePreview()
+                    }
+                    if let command = Self.voiceWakeFixtureCommand {
+                        // UI tests: hear `command` every few seconds, as if spoken, with no microphone
+                        // and no send. Only the toast reacts to it.
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(4))
+                            self.appModel.voiceWake.lastTriggeredCommand = nil
+                            try? await Task.sleep(for: .milliseconds(100))
+                            self.appModel.voiceWake.lastTriggeredCommand = command
+                        }
                     }
                     #endif
                 }
@@ -697,6 +716,18 @@ struct OpenClawApp: App {
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
         #else
         false
+        #endif
+    }
+
+    private static var voiceWakeFixtureCommand: String? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-voice-wake-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+        #else
+        nil
         #endif
     }
 

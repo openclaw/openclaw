@@ -273,7 +273,7 @@ struct ChatInfoArtifactViewer: ViewModifier {
                     } else { self.sharedFile = file }
                 } catch {
                     guard !Task.isCancelled else { return }
-                    self.visit.model.errorText = String(localized: "Couldn’t open this file")
+                    self.app.toasts.post(.failure(String(localized: "Couldn’t open this file")))
                 }
             }
             .quickLookPreview(self.$previewURL)

@@ -30,7 +30,6 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
-    @State private var showsTranscriptExportError = false
     @Environment(\.dismiss) private var dismiss
     @State private var compactToolbarInset: CGFloat = 0
     @State private var infoVisit: ChatInfoVisit?
@@ -263,7 +262,7 @@ struct ChatProTab: View {
                     \.openClawChatFloatingHeader,
                     self.usesSideToolbar
                         ? AnyView(Color.clear.frame(height: self.compactToolbarInset).allowsHitTesting(false))
-                        : AnyView(self.chatHeader))
+                        : AnyView(self.chatHeader.toastTopBar()))
                 .environment(
                     \.openClawChatComposerAccessory,
                     viewModel.isNewChatDraft ? nil : AnyView(
@@ -290,7 +289,7 @@ struct ChatProTab: View {
         } else {
             OpenClawProBackground()
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    if !self.usesSideToolbar { self.chatHeader }
+                    if !self.usesSideToolbar { self.chatHeader.toastTopBar() }
                 }
         }
     }

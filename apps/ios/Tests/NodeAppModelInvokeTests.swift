@@ -8811,11 +8811,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
         #expect(response.error?.message == "node invoke cancelled")
-        #expect(appModel.cameraHUDText == nil)
-        #expect(appModel.cameraHUDKind == nil)
+        #expect(appModel.toasts.current == nil)
     }
 
-    @Test @MainActor func `older cancelled camera invoke preserves newer HUD`() async {
+    @Test @MainActor func `a cancelled camera invoke says nothing and the one that finishes says Photo taken`() async {
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
         let previous = defaults.object(forKey: key)
@@ -8851,12 +8850,12 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await camera.releaseFirst()
         let firstResponse = await firstTask.value
         #expect(firstResponse.error?.message == "node invoke cancelled")
-        #expect(appModel.cameraHUDText == "Taking photo…")
+        #expect(appModel.toasts.current == nil)
 
         await camera.releaseSecond()
         let secondResponse = await secondTask.value
         #expect(secondResponse.ok)
-        #expect(appModel.cameraHUDText == "Photo captured")
+        #expect(appModel.toasts.current?.toast.text == "Photo taken")
     }
 
     @Test @MainActor func `system notify returns unavailable when notifications off`() async throws {

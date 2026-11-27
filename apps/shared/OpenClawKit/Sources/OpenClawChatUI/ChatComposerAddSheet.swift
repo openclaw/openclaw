@@ -224,7 +224,12 @@ struct ChatComposerAddSheet: View {
             // After a failed load, opening the sheet is the "Try again".
             await self.viewModel.loadComposerCapabilities(force: self.viewModel.composerCapabilityErrorMessage != nil)
         }
-        .onAppear { self.viewModel.loadSlashCommandsIfNeeded() }
+        .onAppear {
+            self.viewModel.loadSlashCommandsIfNeeded()
+            // Its pages' footers show a failed change; the toast doesn't repeat it.
+            self.viewModel.statusStrip.surfaceDidOpen(OpenClawChatViewModel.addSheetSurface)
+        }
+        .onDisappear { self.viewModel.statusStrip.surfaceDidClose(OpenClawChatViewModel.addSheetSurface) }
         .onChange(of: live, initial: true) { _, live in
             if !self.viewModel.composerCapabilitiesBusy { self.settled = live }
         }
