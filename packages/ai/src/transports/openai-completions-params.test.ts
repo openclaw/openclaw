@@ -840,6 +840,20 @@ describe("OpenAI completions compatibility and tools", () => {
     }
   });
 
+  it("honors a declared seed field on an unknown host", () => {
+    const params = request(
+      {
+        id: "mistral-small-latest",
+        provider: "relay",
+        baseUrl: "https://relay.example/v1",
+        compat: { seedField: "random_seed" },
+      },
+      { seed: 7 },
+    );
+    expect(params).toHaveProperty("random_seed", 7);
+    expect(params).not.toHaveProperty("seed");
+  });
+
   it("shapes message content and keys for restrictive backends", () => {
     const cases: [Partial<ToolsModel>, Context, unknown[]][] = [
       [
