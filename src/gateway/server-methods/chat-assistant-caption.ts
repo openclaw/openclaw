@@ -21,9 +21,16 @@ export function findAssistantCaptionBlocks(params: {
     const text = sanitizeAssistantDisplayText(
       hasUsage ? delivered.slice(0, -suffix.length) : delivered,
     );
+    // A `before_message_write` hook may append text (for example a footer) after the
+    // delivered caption. The delivered block then becomes a prefix of the hook-finalized
+    // caption; consume it so the hook-edited blocks are retained once instead of the
+    // delivery caption being dropped (keyed path) or duplicated (retained path).
+    const appendedAfterCaption =
+      text !== undefined && text.length > 0 && params.caption.startsWith(`${text}\n`);
     const matched =
       text === params.caption ||
-      (params.nativeMirror && text?.endsWith(`\n${params.caption}`) === true);
+      (params.nativeMirror && text?.endsWith(`\n${params.caption}`) === true) ||
+      appendedAfterCaption;
     if (matched && hasUsage) {
       usage = suffix;
     }
