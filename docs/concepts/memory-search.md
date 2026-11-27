@@ -92,8 +92,9 @@ line. The record clears when the endpoint or model changes, or when
 `openclaw memory status --index` re-checks the endpoint and it now serves
 embeddings. `openclaw memory status --deep` and **Memory → Overview → Test** in the
 Control UI report the recorded refusal. A 401, 403, 429, or 5xx answer is not recorded; search is
-keyword-only until the next readiness check. An explicitly configured provider
-is always used.
+keyword-only until the next readiness check. With `memory.search.fallback` set, nothing is
+recorded: each process tries the endpoint and hands off to the fallback. An explicitly
+configured provider is always used.
 
 For local embeddings with no API key, configure the bundled llama.cpp
 provider, then set `provider: "local"`.

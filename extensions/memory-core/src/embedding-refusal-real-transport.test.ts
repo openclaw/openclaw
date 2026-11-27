@@ -173,30 +173,6 @@ it("keeps semantic search through an implicit endpoint that serves embeddings", 
   expect(endpoint.statuses.every((status) => status === 200)).toBe(true);
 });
 
-it("hands a remembered refusal to the configured fallback in a later process", async () => {
-  const refusing = await startChatEndpoint(404);
-  const backup = await startChatEndpoint("serve");
-  const base = implicitConfig(refusing.baseUrl);
-  const cfg = {
-    ...base,
-    models: {
-      providers: {
-        ...base.models!.providers,
-        backup: { ...base.models!.providers!.openai!, baseUrl: backup.baseUrl },
-      },
-    },
-    memory: { search: { ...base.memory!.search, fallback: "backup" } },
-  } as OpenClawConfig;
-
-  expect(await searchOnce(cfg, "Zebra deadline")).toMatchObject(hit);
-  const refused = refusing.statuses.length;
-  const servedBefore = backup.statuses.length;
-  expect(await searchOnce(cfg, "Zebra")).toMatchObject(hit);
-
-  expect(refusing.statuses).toHaveLength(refused);
-  expect(backup.statuses.length).toBeGreaterThan(servedBefore);
-});
-
 it("does not remember an authorization failure", async () => {
   const endpoint = await startChatEndpoint(401);
   const cfg = implicitConfig(endpoint.baseUrl);

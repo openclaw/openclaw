@@ -47,16 +47,11 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   protected abstract ensureProviderInitialized(): Promise<void>;
   protected abstract retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void>;
 
-  /**
-   * A recorded refusal fails the primary provider like a missing credential: no embedding
-   * calls, and createEmbeddingProvider's configured fallback, if any, takes over.
-   */
+  /** A recorded refusal fails the provider like a missing credential: no embedding calls. */
   protected refusalCheckedProviderFactory(recheck?: boolean): MemoryManagerProviderFactory {
-    let primary = true;
     return async (adapter, create) => {
       const result = await this.createProvider(adapter, create);
-      const refusal = primary && (await this.recordedEmbeddingRefusal(result.runtime, recheck));
-      primary = false;
+      const refusal = await this.recordedEmbeddingRefusal(result.runtime, recheck);
       if (refusal) {
         await this.retireProvider(result.provider);
         throw new Error(formatMemoryEmbeddingRefusal(refusal));
@@ -65,9 +60,14 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     };
   }
 
-  /** The remote endpoint an implicit (unset or auto) provider calls, from its cache identity. */
+  /**
+   * The remote endpoint an implicit (unset or auto) provider calls, from its cache identity.
+   * With a configured fallback, a refusal is not remembered: each process tries the primary
+   * and its failure hands off to the fallback, as before.
+   */
   private implicitEmbeddingEndpoint(cacheKeyData: unknown): MemoryEmbeddingEndpoint | undefined {
     return this.providerRequirement.mode === "optional" &&
+      (!this.settings.fallback || this.settings.fallback === "none") &&
       resolveEmbeddingProviderAdapterTransport(this.settings.provider, this.cfg) === "remote"
       ? readMemoryEmbeddingEndpoint(cacheKeyData)
       : undefined;
