@@ -362,8 +362,9 @@ export async function announceReady(buildId: string | null): Promise<void> {
       resolve(message.trial as Trial | null);
     }
   };
+  const onDisconnect = () => resolve(null);
   process.on("message", onMessage);
-  const timer = setTimeout(() => resolve(null), 2000);
+  process.once("disconnect", onDisconnect);
   try {
     process.send({ type: "openclaw.ready", buildId }, (error) => {
       if (error) {
@@ -373,7 +374,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
     const confirmed = await promise;
     await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
-    clearTimeout(timer);
     process.off("message", onMessage);
+    process.off("disconnect", onDisconnect);
   }
 }

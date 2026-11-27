@@ -449,6 +449,13 @@ accepted server update or invalidate a published trial. Run `openclaw update sta
 before retrying an unconfirmed request. Preparation and installed-package delegation
 retain their own lifecycle budgets. The installed CLI must contain this repair.
 
+The serving Gateway settles its resident activation run from core readiness, not
+from a detached maintenance tick. It waits for the resident launcher's committed
+trial acknowledgment; if their IPC channel disconnects, it reads the trial once
+from disk instead. A slow acknowledgment cannot spend a one-shot settlement before
+the launcher commits. Required plugin work stays on the Gateway's existing update
+watcher. The candidate must contain this repair; older installed CLIs need no change.
+
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted
 `gateway status` as a start. The candidate must contain this repair. It applies
