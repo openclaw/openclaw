@@ -45,10 +45,13 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 
 ## Chat text size
 
-Chat uses a 13.5-point base text size for a denser transcript. It still follows
-your system or per-app Dynamic Type setting, including accessibility text sizes.
-This makes chat text smaller than the previous 17-point base at the same setting;
-increase the app’s text size in iOS Settings if you prefer larger text.
+Chat text follows the system text styles, like Messages: message text is 17
+points at the default text size and follows your system or per-app Dynamic Type
+setting in both directions, including accessibility text sizes. Chat keeps its
+Inter typeface, which iOS scales on its curve for custom fonts, so message text
+is 15 points at the smallest setting and 37 points at the third accessibility
+size, where the system font would be 14 and 40. Timestamps, captions and other
+secondary chat text never render under 11 points.
 
 At accessibility text sizes, the composer shows a model icon instead of a cramped
 model name. Its accessibility label and value still identify the selected model.

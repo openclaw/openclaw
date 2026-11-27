@@ -238,11 +238,13 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
-  // Configured selectors already choose which MCP tools are deferred.
+  // Configured selectors already choose which MCP tools are deferred. Without a session pin's
+  // choice, every MCP tool stays deferred so the tool list never follows one run's inventory.
+  const pinnedToolNames = params.catalogRef?.sessionPinnedToolNames;
   const directMcpToolNames =
-    config.include || config.exclude
+    config.include || config.exclude || !pinnedToolNames
       ? new Set<string>()
-      : selectDirectMcpToolNames(params.tools, params.catalogRef?.sessionPinnedToolNames);
+      : selectDirectMcpToolNames(params.tools, pinnedToolNames);
   // The MCP directory goes in the system prompt's deferred-tool section, so a server
   // that connects later changes an appended prompt update, never this definition.
   return applyToolCatalogCompaction({

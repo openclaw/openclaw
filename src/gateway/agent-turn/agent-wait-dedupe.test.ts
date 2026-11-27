@@ -31,7 +31,7 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { agentHandlers } from "../server-methods/agent.js";
+import { agentWaitHandler } from "../server-methods/agent.js";
 import { prepareChatAdmission } from "../server-methods/chat-send-admission.test-support.js";
 import { createPendingChatSendReservationAccess } from "../server-methods/chat-send-reservation.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -48,11 +48,10 @@ import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
-import { createAgentTurnService } from "./agent-turn-service.js";
-import { prepareAgentWaitForTurn } from "./agent-wait.js";
+import { prepareAgentWaitForTurn, prepareExactAgentTurnWait } from "./agent-wait.js";
 import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
-type WaitArgs = Parameters<NonNullable<(typeof agentHandlers)["agent.wait"]>>[0];
+type WaitArgs = Parameters<typeof agentWaitHandler>[0];
 function invokeWait(
   context: WaitArgs["context"],
   runId: string,
@@ -61,10 +60,9 @@ function invokeWait(
   isWebchat = false,
   respond = vi.fn(),
 ) {
-  const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
   return {
     respond,
-    promise: handler({
+    promise: agentWaitHandler({
       req: { type: "req", id: runId, method: "agent.wait" },
       params: { runId, timeoutMs },
       respond,
@@ -387,16 +385,16 @@ it("keeps whitespace-distinct protocol run IDs separate", async () => {
     },
   );
   rpcSourceTesting.reset([[spaced, source]]);
-  const service = createAgentTurnService({
-    context: { dedupe } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
-    isWebchatConnect: () => false,
-  });
-  expect((await service.waitForTurn({ runId: spaced, timeoutMs: 0 })).result).toMatchObject({
+  expect(
+    (await prepareExactAgentTurnWait({ dedupe }, { runId: spaced, timeoutMs: 0 }).wait()).result,
+  ).toMatchObject({
     runId: spaced,
     status: "pending",
     timeoutPhase: "queue",
   });
-  expect((await service.waitForTurn({ runId: plain, timeoutMs: 0 })).result).toMatchObject({
+  expect(
+    (await prepareExactAgentTurnWait({ dedupe }, { runId: plain, timeoutMs: 0 }).wait()).result,
+  ).toMatchObject({
     runId: plain,
     status: "ok",
   });
@@ -639,13 +637,7 @@ it("binds queued observation to the queue entry selected after waiting", async (
   };
   writeObservation(new Map(), runId, { status: "ok" }, { session: original });
   rpcSourceTesting.clear();
-  const service = createAgentTurnService({
-    context: {
-      dedupe: new Map(),
-    } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
-    isWebchatConnect: () => false,
-  });
-  const selected = service.waitForTurn({ runId, timeoutMs: 0 });
+  const selected = prepareExactAgentTurnWait({ dedupe: new Map() }, { runId, timeoutMs: 0 }).wait();
   const queued = { sessionKey: "agent:main:queued", sessionId: "queued-session", agentId: "main" };
   const source = createRpcSourceForTest({}, { ...queued, runId, phase: "waiting" });
   const controller = testRpcSourceController(source);
@@ -668,19 +660,18 @@ it("observes later queue admission without completing terminal or another Gatewa
   const otherContext = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   otherContext.resolveGatewayContext = () => otherContext;
-  const service = createAgentTurnService({ context, isWebchatConnect: () => false });
-  const otherService = createAgentTurnService({
-    context: otherContext,
-    isWebchatConnect: () => false,
-  });
   const queuedObserved = vi.fn();
   const terminalObserved = vi.fn();
   const otherObserved = vi.fn();
-  const queuedWait = service.waitForTurn({ runId, timeoutMs: 30_000 }).then(queuedObserved);
+  const queuedWait = prepareExactAgentTurnWait(context, { runId, timeoutMs: 30_000 })
+    .wait()
+    .then(queuedObserved);
   const terminalWait = waitForAgentJob({ runId, timeoutMs: 30_000, source: "chat" }).then(
     terminalObserved,
   );
-  const otherWait = otherService.waitForTurn({ runId, timeoutMs: 30_000 }).then(otherObserved);
+  const otherWait = prepareExactAgentTurnWait(otherContext, { runId, timeoutMs: 30_000 })
+    .wait()
+    .then(otherObserved);
   let queuedSource: RpcSourceRef | undefined;
   const session = {
     sessionKey: "agent:main:queued-after-wait",

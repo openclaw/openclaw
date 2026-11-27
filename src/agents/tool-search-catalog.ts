@@ -231,10 +231,12 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
 }
 
 /**
- * Core file/shell primitives and caller-required names (e.g. message when it is
- * the only reply path) stay visible while remaining searchable. Both must
- * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * Core file/shell primitives, caller-required names (e.g. message when it is
+ * the only reply path) and tools that poll by design stay visible while
+ * remaining searchable. A polling tool behind dispatch_action would hide its
+ * `repeatable` declaration from the repeat guard. All must resolve to trusted
+ * OpenClaw tools: an MCP lookalike must never become a direct delivery or
+ * core-coding tool.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -244,6 +246,7 @@ export function isDirectVisibleCatalogTool(
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
+      (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
 }
@@ -259,11 +262,12 @@ export function isDirectVisibleCatalogTool(
 const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
 
 /**
- * MCP tools declared directly. A series' first request decides from the catalog's schema
- * bytes; later turns keep exactly the MCP tools the session pin already sends, so the
- * provider tool list stays fixed while server inventory changes reach the directory. A name
- * another tool also uses stays deferred: a lookalike never shadows a trusted direct tool. A
- * server with instructions stays deferred too: tool_describe is where the model reads them.
+ * MCP tools a pinning runner declares directly. Without pinned names this chooses by the
+ * catalog's schema bytes, for a series' first request; with them it keeps exactly the MCP tools
+ * the session pin already sends, so the provider tool list stays fixed while server inventory
+ * changes reach the directory. A name another tool also uses stays deferred: a lookalike never
+ * shadows a trusted direct tool. A server with instructions stays deferred too: tool_describe is
+ * where the model reads them.
  */
 export function selectDirectMcpToolNames(
   tools: readonly AnyAgentTool[],

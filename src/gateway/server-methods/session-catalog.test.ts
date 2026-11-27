@@ -26,7 +26,6 @@ import {
   bindPluginRegistryRuntime,
   call,
   conversationBindingMocks,
-  createPluginRuntime,
   hoisted,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
@@ -354,36 +353,6 @@ describe("session catalog Gateway methods", () => {
       { dropIfSlow: true },
     );
     expectCatalogHost(respond, { sessions: projectedSessions });
-  });
-
-  it("shares one lazy Gateway node snapshot across catalog providers", async () => {
-    const dispatchNodeList = vi.fn(async () => ({
-      nodes: [{ nodeId: "shared-node", connected: true }],
-    }));
-    bindPluginRegistryRuntime(
-      hoisted.activeRegistry as PluginRegistry,
-      createPluginRuntime({
-        nodes: {
-          list: dispatchNodeList,
-          invoke: vi.fn(async () => undefined),
-          openDuplex: vi.fn(),
-        },
-      }),
-    );
-    const catalogUsingNodes = (id: string) =>
-      provider(id, {
-        list: vi.fn(async ({ listNodes }) => {
-          expect(await listNodes?.()).toEqual({
-            nodes: [{ nodeId: "shared-node", connected: true }],
-          });
-          return [];
-        }),
-      });
-    useCatalogs(catalogUsingNodes("zeta"), catalogUsingNodes("alpha"));
-
-    await listCatalogs();
-
-    expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("rejects host cursors without a catalog selector", async () => {

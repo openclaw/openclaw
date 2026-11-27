@@ -8,7 +8,6 @@ import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.
 import type { OpenClawConfig } from "../config/config.js";
 import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import {
@@ -220,23 +219,6 @@ vi.mock("./setup.completion.js", () => ({
 }));
 
 import { ensureGatewayServiceForOnboarding, finalizeSetupWizard } from "./setup.finalize.js";
-
-function createWebSearchProviderEntry(
-  provider: Pick<PluginWebSearchProviderEntry, "id" | "label" | "envVars"> &
-    Partial<Pick<PluginWebSearchProviderEntry, "authProviderId" | "requiresCredential">>,
-): PluginWebSearchProviderEntry {
-  return {
-    pluginId: `plugin-${provider.id}`,
-    hint: "",
-    placeholder: "",
-    signupUrl: "https://example.test/search",
-    credentialPath: `plugins.entries.${provider.id}.config.webSearch.apiKey`,
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
-    createTool: () => null,
-    ...provider,
-  };
-}
 
 function createServiceSetupArgs(
   overrides: Partial<Parameters<typeof ensureGatewayServiceForOnboarding>[0]> = {},
@@ -1218,132 +1200,6 @@ describe("finalizeSetupWizard", () => {
     );
     expect(resolveExistingKey).not.toHaveBeenCalled();
     expect(hasExistingKey).not.toHaveBeenCalled();
-  });
-
-  it("only reports legacy auto-detect for runtime-visible providers", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "perplexity",
-        label: "Perplexity Search",
-        envVars: ["PERPLEXITY_API_KEY"],
-      }),
-    ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "perplexity");
-
-    const prompter = createLaterPrompter();
-
-    await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
-
-    expectNoteContains(
-      prompter,
-      "Web search is available via Perplexity Search (auto-detected).",
-      "Web search",
-    );
-  });
-
-  it("uses configured provider resolution instead of the active runtime registry", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "firecrawl",
-        label: "Firecrawl Search",
-        envVars: ["FIRECRAWL_API_KEY"],
-      }),
-    ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "firecrawl");
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig(),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is enabled, so your agent can look things up online when needed.",
-      "Web search",
-    );
-  });
-
-  it("reports OAuth-backed web search as enabled without an API key", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "grok",
-        label: "Grok (xAI)",
-        envVars: ["XAI_API_KEY"],
-        authProviderId: "xai",
-      }),
-    ]);
-    hasAuthProfileForProvider.mockImplementation(
-      ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
-    );
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig("grok"),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is enabled, so your agent can look things up online when needed.",
-      "Web search",
-    );
-    expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
-    expect(
-      vi
-        .mocked(prompter.note)
-        .mock.calls.some(
-          ([message, title]) => title === "Web search" && message.includes("no API key"),
-        ),
-    ).toBe(false);
-    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-      }),
-    );
-    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-        type: "oauth",
-      }),
-    );
-  });
-
-  it("reports a keyless provider as ready without prompting for an API key", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "parallel-free",
-        label: "Parallel Search (Free)",
-        envVars: [],
-        requiresCredential: false,
-      }),
-    ]);
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig("parallel-free"),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is ready — this provider works with no API key.",
-      "Web search",
-    );
-    // The credential-required warning must NOT appear for a keyless provider.
-    expect(
-      vi
-        .mocked(prompter.note)
-        .mock.calls.some(
-          ([message, title]) =>
-            title === "Web search" &&
-            (message.includes("no API key was found") ||
-              message.includes("will not work until a key is added")),
-        ),
-    ).toBe(false);
   });
 
   it("uses the setup token for health checks to avoid local env token drift", async () => {

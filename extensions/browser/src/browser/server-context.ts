@@ -136,6 +136,8 @@ function createProfileContext(
     ensureTabAvailable: async (targetId, options) => {
       if (targetId === undefined) {
         await ensureBrowserAvailable({ signal: options?.signal });
+      } else if (!options?.preserveWarmup) {
+        getProfileLifecycle(profileState).addressWarmupOnly = false;
       }
       return await withLease(options?.signal, async (signal) => {
         // Explicit targets can come from history; lookup must not launch or restart a browser.

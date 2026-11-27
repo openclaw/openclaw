@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,18 +21,10 @@ import type {
   RestartSentinelRowState,
 } from "./restart-sentinel-store.js";
 import type { RestartSentinelWorkerOperations } from "./restart-sentinel.worker-contract.js";
-import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
-import {
-  decodeUpdateFailureReportMutation,
-  decodeUpdateFailureReportReservation,
-  type UpdateFailureReportReceipt,
-} from "./update-failure-report-receipt.js";
 import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 
 export type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 export type VerifiedGitUpdateReceipt = {
   root: string;
@@ -57,7 +48,6 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
   command: { type: Key; input: RestartSentinelWorkerOperations[Key]["input"] },
   context: OpenClawStateWorkerContext,
   assertProducerCurrent?: () => void,
-  decodeCommit?: (value: unknown) => RestartSentinelWorkerOperations[Key]["output"] | undefined,
   existingOnly = false,
 ): Promise<RestartSentinelWorkerOperations[Key]["output"]> {
   const captured = structuredClone(command);
@@ -65,48 +55,26 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
     context.admission.assertCurrent();
     assertProducerCurrent?.();
   };
-  for (let attempt = 0; ; attempt += 1) {
-    let admission: SqliteWorkerOperationAdmission | undefined;
-    let transactionRequested = false;
-    const createAdmission = createSqliteWorkerWriteAdmission(() => {
-      transactionRequested = true;
-      assertCurrent();
-    }, [context.admission.databasePath]);
-    try {
-      const result = await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) => ({ value: await scope.execute(captured) }),
-        {
-          existingOnly,
-          assertCurrent,
-          createAdmission: (operation) => {
-            const retained = createAdmission(operation);
-            admission = retained.admission;
-            return retained;
-          },
-        },
-      );
-      context.admission.assertCurrent();
-      if (!result) {
-        throw new Error("Restart sentinel database is unavailable");
-      }
-      return result.value;
-    } catch (error) {
-      context.admission.assertCurrent();
-      // The admission belongs to this command; committed facts survive a lost ordinary reply.
-      const facts = admission?.committed?.facts;
-      if (decodeCommit && isRecord(facts) && facts.kind === "update-report-result") {
-        const result = decodeCommit(facts.value);
-        if (result !== undefined) {
-          return result;
-        }
-      }
-      // Before the worker requests transaction authority, its domain mutation has not run.
-      if (decodeCommit && attempt === 0 && !transactionRequested && isSqliteLockError(error)) {
-        continue;
-      }
-      throw error;
+  try {
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => ({ value: await scope.execute(captured) }),
+      {
+        existingOnly,
+        assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+          context.admission.databasePath,
+        ]),
+      },
+    );
+    context.admission.assertCurrent();
+    if (!result) {
+      throw new Error("Restart sentinel database is unavailable");
     }
+    return result.value;
+  } catch (error) {
+    context.admission.assertCurrent();
+    throw error;
   }
 }
 
@@ -139,7 +107,6 @@ export function recordManagedHandoffSentinelOutcome(
     { type: "restartSentinel.managedHandoffOutcome", input },
     captureOpenClawStateWorkerContext({ env }),
     assertCurrent,
-    undefined,
     true,
   );
 }
@@ -154,136 +121,6 @@ export async function writeRestartSentinel(
     captureOpenClawStateWorkerContext({ env }),
     assertProducerCurrent,
   );
-}
-
-export function reserveUpdateFailureReportReceipt(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<{ receipt: UpdateFailureReportReceipt | null; reserved: boolean }> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.reserve", input: { attemptId, reservationId, previewDigest } },
-    context,
-    undefined,
-    decodeUpdateFailureReportReservation,
-  );
-}
-
-export function beginUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.beginCleanup", input: { attemptId, reservationId } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function beginStaleUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.beginStaleCleanup", input: { attemptId, reservationId } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function completeUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.completeCleanup", input: { attemptId, reservationId } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function refreshUpdateFailureReportReceiptPreparation(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.refreshPreparation", input: { attemptId, reservationId } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function finalizeUpdateFailureReportReceipt(
-  attemptId: string,
-  receipt: UpdateFailureReportReceipt,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.finalizeReceipt", input: { attemptId, receipt } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function markUpdateFailureReportReceiptPending(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-  assertProducerCurrent?: () => void,
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.markPending", input: { attemptId, reservationId, previewDigest } },
-    context,
-    assertProducerCurrent,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function markUpdateFailureReportReceiptPrepared(
-  attemptId: string,
-  reservationId: string,
-  previewDigest: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    { type: "restartSentinel.markPrepared", input: { attemptId, reservationId, previewDigest } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export async function readUpdateFailureReportReceipt(
-  attemptId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<UpdateFailureReportReceipt | null> {
-  const reply = await executeExistingOpenClawStateRead(
-    { env: context.environment, path: context.admission.databasePath },
-    { type: "restartSentinel.reportReceipt", input: attemptId },
-    { context, current: true },
-  );
-  context.admission.assertCurrent();
-  return reply?.receipt ?? null;
 }
 
 /** Publish an outcome only while its producer and the captured notification are unchanged. */

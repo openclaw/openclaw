@@ -7,6 +7,7 @@ import { resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
 import { isJsonObject } from "./protocol.js";
+import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 
 type CodexIsolatedCompletionParams = Parameters<
@@ -30,6 +31,7 @@ export async function runCodexIsolatedCompletion(
   let baseUrl: string | undefined;
   let authRequirement: "api-key" | "subscription" | undefined;
   let modelId = params.modelId;
+  let supportedReasoningEfforts: readonly string[] | undefined;
   if (authorization.owner === "host") {
     const { model, auth } = authorization;
     // The host resolved this exact endpoint and credential. Never reinterpret
@@ -49,6 +51,8 @@ export async function runCodexIsolatedCompletion(
     modelId = model.id;
     authRequirement = "api-key";
     preparedAuth = { kind: "api-key", apiKey: auth.apiKey };
+    // Codex's own listing may omit `none`; the route row decides, as on main turns.
+    supportedReasoningEfforts = readCodexSupportedReasoningEfforts(model.compat);
   } else {
     authRequirement = authorization.plan.modelRoute?.authRequirement;
     const handoff = await resolveCodexAppServerPreparedAuthHandoff({
@@ -103,6 +107,7 @@ export async function runCodexIsolatedCompletion(
     requireInferenceRoute: authRequirement === "api-key" || hasStreamParams,
     timeoutMs: params.timeoutMs,
     thinkLevel: params.thinkLevel,
+    supportedReasoningEfforts,
     streamParams: params.streamParams,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,

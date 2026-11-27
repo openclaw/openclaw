@@ -392,10 +392,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
           : undefined;
       const promoted = onDemand.filter((tool) => pinnedNames?.has(tool.name)).map((t) => t.name);
       let mcpChanged = false;
-      if (catalogRef && pinnedNames && hasMcp) {
-        // Before a pin the first request chose direct MCP tools by size; the pin now owns that set.
-        catalogRef.sessionPinnedToolNames = pinnedNames;
-        const pinnedMcp = selectDirectMcpToolNames(tools, pinnedNames);
+      if (catalogRef?.current && hasMcp) {
+        // Only a runner that pins the session's tool listing declares MCP tools directly: the
+        // established pin owns the set, and a series' first request chooses it by size.
+        catalogRef.sessionPinnedToolNames =
+          pinnedNames ?? selectDirectMcpToolNames(tools, undefined);
+        const pinnedMcp = selectDirectMcpToolNames(tools, catalogRef.sessionPinnedToolNames);
         const builtMcp = current.effectiveTools.filter(
           (tool) => classifyAgentToolSource(tool).source === "mcp",
         );

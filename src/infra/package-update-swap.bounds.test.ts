@@ -29,7 +29,6 @@ import {
 } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 type SwapFixture = Awaited<ReturnType<typeof createPackageSwapFixture>> & { base: string };
@@ -444,7 +443,7 @@ describe("npm rollback content diagnostics", () => {
   it.each(["rewrite cache", "contents", "cache symlink", "cache during scan"])(
     "verifies retained bytes after %s",
     (change) =>
-      withSwap(async ({ params, packageRoot, launcher, base }) => {
+      withSwap(async ({ params, packageRoot, launcher }) => {
         const modules = path.join(packageRoot, "node_modules");
         await fs.mkdir(modules);
         await fs.writeFile(path.join(modules, ".package-lock.json"), '{"lockfileVersion":3}');
@@ -491,16 +490,6 @@ describe("npm rollback content diagnostics", () => {
           if (change === "contents") {
             expect(rollback.stderrTail).toContain("sha256");
           }
-          const report = await prepareUpdateFailureReport(
-            {
-              attemptId: "content-drift",
-              result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
-              recordedRun: { runId: "content-drift", steps },
-            },
-            { env: {}, stateDir: base },
-          );
-          expect(report.body).toContain(name);
-          expect(report.body).not.toContain(base);
         }
       }),
   );
