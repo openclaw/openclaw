@@ -181,9 +181,13 @@ export function registerManagedUpdateHandoffTriageTests(
       });
       const recovery =
         options.recoveryExitCode === 0 ? "Service recovery succeeded." : "Service recovery failed.";
+      // Without a saved failure export, triage uses the notification still present
+      // after recovery; a replacement notification supplies its own failure reason.
+      const reason =
+        options.recoverySentinel === "replaced" ? "newer update failure" : "build failed";
       expect(state.triageInput).toHaveProperty(
         "error",
-        `Managed update failed: build failed\n${recovery}`,
+        `Managed update failed: ${reason}\n${recovery}`,
       );
       const redaction = { env: { HOME: "/triage-test-home" }, stateDir: "/triage-test-state" };
       const prompt = renderTriagePrompt({
@@ -192,7 +196,7 @@ export function registerManagedUpdateHandoffTriageTests(
         redaction,
         updateFailure: sanitizeTriageUpdateFailure(state.triageInput, redaction),
       });
-      expect(prompt).toContain("Managed update failed: build failed");
+      expect(prompt).toContain(`Managed update failed: ${reason}`);
       expect(prompt).toContain(recovery);
       expect(prompt).not.toContain("handoff.log");
       expect(state.triageInput).not.toHaveProperty("result.before");

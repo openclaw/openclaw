@@ -80,7 +80,7 @@ async function fixture({
     },
   };
   const opts = { json: true, yes: true, run };
-  const reportingRow = { status: "running", origin: {} };
+  const reportingRow = { status: "running", origin: {}, verification: {}, steps: [] };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
     refreshGatewayServiceEnv: false,
