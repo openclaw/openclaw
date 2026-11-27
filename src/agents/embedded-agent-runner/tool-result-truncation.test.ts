@@ -603,7 +603,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       const details =
         kind === "partial"
           ? { spill: { path: spillPath, chars: 2_000_000, truncated: true } }
-          : { fullOutputPath: spillPath };
+          : { spill: { path: spillPath } };
       const messages = [
         toolResult(firstText, "spill_0", details),
         ...Array.from({ length: count - 1 }, (_, index) =>
