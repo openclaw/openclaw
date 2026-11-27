@@ -242,13 +242,12 @@ export function registerBrowserAgentSnapshotRoutes(
     const element = toStringOrEmpty(body.element) || undefined;
     const labels = toBoolean(body.labels) ?? false;
     const type = body.type === "jpeg" ? "jpeg" : "png";
-    let timeoutMs: number;
+    let timeoutMs = DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
     try {
       const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
-      timeoutMs =
-        timeoutMsRaw !== undefined
-          ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
-          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      if (timeoutMsRaw !== undefined) {
+        timeoutMs = normalizeBrowserTimerDelayMs(timeoutMsRaw);
+      }
     } catch (err) {
       return jsonError(res, 400, String(err instanceof Error ? err.message : err));
     }
@@ -262,6 +261,7 @@ export function registerBrowserAgentSnapshotRoutes(
       res,
       ctx,
       targetId,
+      preserveWarmup: toBoolean(req.query.operatorInput) === false,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal }) => {
         const jsonScreenshot = (image: Awaited<ReturnType<typeof saveBrowserScreenshot>>) => {

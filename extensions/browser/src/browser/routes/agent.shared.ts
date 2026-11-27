@@ -111,6 +111,7 @@ type RouteWithTabParams<T> = {
   ctx: BrowserRouteContext;
   profileCtx?: ProfileContext;
   targetId?: string;
+  preserveWarmup?: boolean;
   /**
    * Set for routes that read from or return data scoped to the selected tab.
    * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
@@ -142,6 +143,7 @@ export async function withRouteTabContext<T>(
           allowPlaywrightFallback: true,
           signal,
           timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+          ...(params.preserveWarmup ? { preserveWarmup: true } : {}),
           ...operatorPages,
         });
         if (params.enforceCurrentUrlAllowed) {
