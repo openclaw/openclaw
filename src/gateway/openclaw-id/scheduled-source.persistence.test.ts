@@ -104,6 +104,7 @@ it.each([
       const administrativeProfile = directAdmin
         ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
         : undefined;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const original = principal;
       const editingPeer: OpenClawIdTunnelPrincipal | undefined = directAdmin
         ? {
@@ -249,7 +250,6 @@ it.each([
           setOpenClawIdTunnelPrincipalLookup(lookup);
         }
         if (direct) {
-          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
           const client = createOperatorClient({
             profileId: administrativeProfile?.id ?? profile.id,
             scopes: directAdmin || kind === "owner" ? ["operator.admin"] : ["operator.write"],

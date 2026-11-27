@@ -196,6 +196,7 @@ export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
   | { kind: "session-conflict" }
+  | { kind: "transient-preflight" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
@@ -211,6 +212,7 @@ export type CronFailureNotificationDetail =
     }
   /** A deterministic setup refusal: the operator must record the intended account. */
   | { kind: "inference-account-unrecorded" }
+  | { kind: "human-owner-unavailable"; catalogUnavailable: boolean }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 

@@ -264,7 +264,16 @@ export async function executeJobCore(
       if (!(error instanceof CronHumanOwnerUnavailableError)) {
         throw error;
       }
-      return { status: "error", error: error.message, executionStarted: false };
+      return {
+        status: "error",
+        error: error.message,
+        executionStarted: false,
+        ...(error.retryable ? { errorClassification: { kind: "transient-preflight" } } : {}),
+        failureNotificationDetail: {
+          kind: "human-owner-unavailable",
+          catalogUnavailable: error.retryable,
+        },
+      };
     }
     // One admission per occurrence, shared by its trigger and payload executors.
     occurrence = await admitCronOccurrence(state, job, agentId);

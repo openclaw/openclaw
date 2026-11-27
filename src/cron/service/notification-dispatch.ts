@@ -177,6 +177,9 @@ async function transportFailureAlert(
   const notificationId = params.job.state.lastFailureNotificationId;
   const runAtMs = params.job.state.lastRunAtMs;
   if (!state.deps.sendCronFailureAlert) {
+    if (params.plainOnly) {
+      return;
+    }
     // No transport means no send whose outcome could be recorded: the alert
     // goes straight to the in-app fallback queue and the intent stays
     // "unknown", matching the pre-existing contract for transport-less setups.
@@ -209,7 +212,7 @@ async function transportFailureAlert(
           { jobId, alertAtMs, runAtMs, lifecycleGeneration, notificationId },
           outcome,
         );
-        if (recordResult !== "stale" && outcome.status === "not-delivered") {
+        if (!params.plainOnly && recordResult !== "stale" && outcome.status === "not-delivered") {
           await enqueueCronNotification(
             state,
             params.job,

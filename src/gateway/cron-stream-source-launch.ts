@@ -14,7 +14,7 @@ export function spawnCronStreamSource(params: {
   signal: AbortSignal;
   isCurrent: () => boolean;
   onSandboxOutput: (channel: "stdout" | "stderr", chunk: Buffer) => void;
-  onHostOutput: (channel: "stdout" | "stderr", chunk: Buffer) => void;
+  onHostOutput: (channel: "stdout" | "stderr", chunk: string) => void;
   acquireHostSupervisor: () => ProcessSupervisor;
 }): Promise<ManagedRun> {
   const { job, owner, scheduleKey, sourceIdentity } = params;

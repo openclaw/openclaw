@@ -143,6 +143,26 @@ it("routes required delivery failure outside the failed topic", async () => {
   );
 });
 
+it("does not wake the owner's session when a plain refusal alert has no transport", async () => {
+  const wake = vi.fn(async () => ({ ok: true as const }));
+  const repair = vi.fn(async () => {});
+  const { apply, drain } = routingFixture(
+    { agentId: "main", owner: { sessionKey: "agent:main:owner" } },
+    { sendCronFailureAlert: undefined, enqueueSessionEvent: wake, runCronFailureRepair: repair },
+  );
+  apply({
+    status: "error",
+    error: "The automation's human owner no longer exists.",
+    failureNotificationDetail: { kind: "human-owner-unavailable", catalogUnavailable: false },
+    startedAt: 1_000,
+    endedAt: 2_000,
+  });
+
+  await drain();
+  expect(repair).not.toHaveBeenCalled();
+  expect(wake).not.toHaveBeenCalled();
+});
+
 it("preserves the aliased primary route and run time while starting cooldown at completion", async () => {
   const runAtMs = Date.parse("2026-07-30T00:00:00.000Z");
   const endedAt = runAtMs + 5 * 60_000;
