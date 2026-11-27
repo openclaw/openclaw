@@ -301,7 +301,11 @@ describe("local checkout publication", () => {
       await source.git("add", "shared.txt");
     }
     await source.git("add", "artifact.txt");
-    await source.git("commit", "-m", "Implement the requested change\n\nWhy.\n\nReviewed-by: a");
+    await source.git(
+      "commit",
+      "-m",
+      "Implement the requested change\n\nWhy.\n\nKeep this explanation.\nSigned-off-by: Fixture <fixture@example.invalid>\nMore context.\nReviewed-by: a",
+    );
     if (outcome === "published") {
       await source.git("commit", "--allow-empty", "-m", "Follow-up notes");
     }
@@ -574,7 +578,8 @@ describe("local checkout publication", () => {
     // No caller named a title or body: the PR describes the task's first commit, without its
     // trailers, while the publication commit keeps naming its branch.
     expect(f.publishedTitles[0]).toBe("Implement the requested change");
-    expect(f.publishedBodies[0]).toMatch(/^Why\.\n\n/u);
+    expect(f.publishedBodies[0]).toMatch(/^Why\.\n\nKeep this explanation\.\nMore context\.\n\n/u);
+    expect(f.publishedBodies[0]).not.toContain("Signed-off-by:");
     expect(f.publishedBodies[0]).not.toContain("Reviewed-by:");
     const published = await readPublicationCommit(source.git, result[1].headCommit);
     expect(published.message).toMatch(/^Publish openclaw\//u);

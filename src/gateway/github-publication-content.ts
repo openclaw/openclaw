@@ -4,6 +4,7 @@ import { appendPrAttribution, preparePrAttribution } from "../agents/pr-attribut
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { sanitizeChatDisplayText } from "../shared/text/chat-display.js";
 import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
@@ -26,42 +27,52 @@ type BranchHistory = {
 /**
  * The oldest commit a branch adds to its base, as `gh pr create --fill-first` reads it,
  * within the bounds a request's own title and body must meet.
- * Best effort: a default title and body never fail a publication.
+ * Ordinary read failures leave the defaults available; uncertain command cleanup stops publication.
  */
 async function readFirstBranchCommit({ cwd, base, head, run }: BranchHistory) {
+  const read = async (...args: string[]) => {
+    const result = await run(["git", ...args], { cwd });
+    if (result.error) {
+      return ignoreNonCleanupCommandError(result.error);
+    }
+    return result.code === 0 ? result.stdout.toString("utf8") : null;
+  };
   // Merged-in history and earlier publication commits describe other work.
-  const commits = await run(
-    [
-      "git",
-      "rev-list",
-      "--reverse",
-      "--first-parent",
-      "--no-merges",
-      "--invert-grep",
-      "--grep=^OpenClaw-Publication: ",
-      `${base}..${head}`,
-    ],
-    { cwd },
+  const commits = await read(
+    "rev-list",
+    "--reverse",
+    "--first-parent",
+    "--no-merges",
+    "--invert-grep",
+    "--grep=^OpenClaw-Publication: ",
+    `${base}..${head}`,
   );
-  const commit = commits.code === 0 ? commits.stdout.toString("utf8").split("\n", 1)[0] : "";
+  const commit = commits?.split("\n", 1)[0];
   if (!commit) {
     return undefined;
   }
-  const shown = await run(
-    ["git", "show", "-s", "--no-show-signature", "--format=%s%x00%b%x00%(trailers)", commit],
-    { cwd },
+  // Git includes ordinary lines in mixed trailer blocks. An empty key matches no trailer;
+  // only=false returns those ordinary lines in their original order.
+  const shown = await read(
+    "show",
+    "-s",
+    "--no-show-signature",
+    "--format=%s%x00%b%x00%(trailers)%x00%(trailers:key=,only=false)",
+    commit,
   );
-  if (shown.code !== 0) {
+  if (!shown) {
     return undefined;
   }
-  const [subject = "", message = "", trailerBlock = ""] = shown.stdout.toString("utf8").split("\0");
+  const [subject = "", message = "", trailerBlock = "", nonTrailers = ""] = shown.split("\0");
   const body = message.trimEnd();
   const trailers = trailerBlock.trimEnd();
   return {
     title: truncateUtf16Safe(subject.trim(), 256).trimEnd(),
     // Credit and sign-off trailers belong to the commit; the pull request states its own credit.
     description: truncateUtf16Safe(
-      trailers && body.endsWith(trailers) ? body.slice(0, -trailers.length) : body,
+      trailers && body.endsWith(trailers)
+        ? body.slice(0, -trailers.length) + nonTrailers.trimEnd()
+        : body,
       8 * 1024,
     ).trim(),
   };
