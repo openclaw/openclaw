@@ -31,17 +31,18 @@ export function resolveExplicitSessionEndReason(
 
 export function createReplySessionResetBoundary(params: {
   cwd: string;
-  explicitReason: Extract<SessionResetBoundaryRequest["reason"], "new" | "reset">;
+  /** Explicit resets pass their resolved "new"/"reset" reason here. */
   previousReason?: ReplySessionEndReason;
   resetTriggered: boolean;
+  tailMessages: number;
 }): SessionResetBoundaryWrite {
   const continuityReason =
     params.previousReason === "idle" || params.previousReason === "daily"
       ? params.previousReason
       : "reset";
   const request: SessionResetBoundaryRequest = params.resetTriggered
-    ? { context: "clear", reason: params.explicitReason }
-    : { context: "preserve-tail", reason: continuityReason };
+    ? { context: "clear", reason: params.previousReason === "reset" ? "reset" : "new" }
+    : { context: "preserve-tail", reason: continuityReason, tailMessages: params.tailMessages };
   return {
     boundaryId: createSessionResetBoundaryId(),
     cwd: params.cwd,
