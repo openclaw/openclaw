@@ -5,17 +5,24 @@ import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js
 
 export type PreparedStreamRuntime = {
   abortable: <T>(promise: Promise<T>) => Promise<T>;
+  normalizeToolCallIds?: ReturnType<
+    typeof installEmbeddedAttemptStreamGuards
+  >["normalizeToolCallIds"];
   cache: {
-    observabilityEnabled: boolean;
-    promptTools: ReturnType<typeof installEmbeddedAttemptStreamGuards>["promptCacheTools"];
+    onModelRequest?: ReturnType<typeof installEmbeddedAttemptStreamGuards>["onModelRequest"];
+    getObservation?: ReturnType<
+      typeof installEmbeddedAttemptStreamGuards
+    >["getPromptCacheObservation"];
   };
   history: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   isProbeSession: boolean;
+  /** Whether stopping at the current request boundary leaves the tool batch continuable. */
+  isToolBoundarySafe?: () => boolean;
   onBlockReplyFlush: Parameters<typeof prepareEmbeddedAttemptStream>[0]["onBlockReplyFlush"];
   promptActiveSession: (
     prompt: string,
     options?: Parameters<
-      Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["prompt"]
+      Parameters<typeof prepareEmbeddedAttemptStream>[0]["agentSession"]["activeSession"]["prompt"]
     >[1],
   ) => Promise<void>;
   stream: ReturnType<typeof prepareEmbeddedAttemptStream>;

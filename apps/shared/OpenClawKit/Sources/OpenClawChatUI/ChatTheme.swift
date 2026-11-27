@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension EnvironmentValues {
-    @Entry var openClawChatDesktopLayout = false
+    @Entry public var openClawChatDesktopLayout = false
 }
 
 #if os(macOS)
@@ -18,7 +18,50 @@ extension NSAppearance {
 }
 #endif
 
-enum OpenClawChatTheme {
+public enum OpenClawChatTheme {
+    public static func desktopCanvas(in colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 14 / 255.0, green: 16 / 255.0, blue: 21 / 255.0)
+            : Color(.sRGB, red: 250 / 255.0, green: 249 / 255.0, blue: 247 / 255.0)
+    }
+
+    public static func desktopComposer(in colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 25 / 255.0, green: 28 / 255.0, blue: 36 / 255.0)
+            : .white
+    }
+
+    public static func desktopAccent(in colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 255 / 255.0, green: 92 / 255.0, blue: 92 / 255.0)
+            : Color(.sRGB, red: 189 / 255.0, green: 69 / 255.0, blue: 49 / 255.0)
+    }
+
+    public static func desktopPrimary(in colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 209 / 255.0, green: 60 / 255.0, blue: 60 / 255.0)
+            : self.desktopAccent(in: colorScheme)
+    }
+
+    public static func desktopText(in colorScheme: ColorScheme, contrast: ColorSchemeContrast) -> Color {
+        if contrast == .increased {
+            return colorScheme == .dark
+                ? Color(.sRGB, red: 238 / 255.0, green: 239 / 255.0, blue: 241 / 255.0)
+                : Color(.sRGB, red: 32 / 255.0, green: 33 / 255.0, blue: 36 / 255.0)
+        }
+        return colorScheme == .dark
+            ? Color(.sRGB, red: 200 / 255.0, green: 200 / 255.0, blue: 204 / 255.0)
+            : Color(.sRGB, red: 64 / 255.0, green: 60 / 255.0, blue: 53 / 255.0)
+    }
+
+    /// The user bubble: a muted accent tint over the canvas, like the web `--chat-participant-surface`
+    /// (ui/src/lib/chat/participant-colors.ts:97-100). Bound the accent contribution so even its
+    /// lightest/darkest extremes retain reading contrast for label-coloured text.
+    static func userBubbleSurface(in colorScheme: ColorScheme, accent: Color?) -> Color {
+        self.desktopCanvas(in: colorScheme)
+            .mix(with: accent ?? self.desktopAccent(in: colorScheme), by: 0.15, in: .device)
+    }
+
     #if !os(macOS)
     private enum IOSPalette {
         static let lightCanvasTop = UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
@@ -53,19 +96,9 @@ enum OpenClawChatTheme {
             : NSColor(calibratedWhite: 0.94, alpha: 0.92)
     }
 
-    static func resolvedOnboardingAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
-        appearance.isDarkAqua
-            ? NSColor(calibratedWhite: 0.20, alpha: 0.94)
-            : NSColor(calibratedWhite: 0.97, alpha: 0.98)
-    }
-
     static let assistantBubbleDynamicNSColor = NSColor(
         name: NSColor.Name("OpenClawChatTheme.assistantBubble"),
         dynamicProvider: resolvedAssistantBubbleColor(for:))
-
-    static let onboardingAssistantBubbleDynamicNSColor = NSColor(
-        name: NSColor.Name("OpenClawChatTheme.onboardingAssistantBubble"),
-        dynamicProvider: resolvedOnboardingAssistantBubbleColor(for:))
     #endif
 
     @ViewBuilder
@@ -151,24 +184,8 @@ enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
-        // iMessage-style grey receiver bubble: clearly visible on the white chat surface.
+        // Neutral raised surface for diagrams, notices and swarm rows on the white chat canvas.
         self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised)
-        #endif
-    }
-
-    static var onboardingAssistantBubble: Color {
-        #if os(macOS)
-        Color(nsColor: self.onboardingAssistantBubbleDynamicNSColor)
-        #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
-        #endif
-    }
-
-    static var onboardingAssistantBorder: Color {
-        #if os(macOS)
-        Color.white.opacity(0.12)
-        #else
-        Color.white.opacity(0.12)
         #endif
     }
 

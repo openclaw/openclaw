@@ -1,4 +1,3 @@
-// Discord plugin module implements inbound event delivery behavior.
 import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {

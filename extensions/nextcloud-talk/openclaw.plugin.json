@@ -1,5 +1,6 @@
 {
   "id": "nextcloud-talk",
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true
   },

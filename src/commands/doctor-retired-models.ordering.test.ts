@@ -1,87 +1,68 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../agents/model-selection-shared.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronJobsStore } from "../cron/store.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { runCodexSessionRouteHealth } from "../flows/doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import {
+  currentModel,
+  noSuccessor,
+  readSession,
+  repairConfig,
+  repairPersistedRoutes,
+  retiredModel,
+  seedCronModel,
+  writeSession,
+} from "./doctor-model-repair.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
-import { createRetiredModelFixture as fixture } from "./doctor-retired-models.test-support.js";
-import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
-import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
-import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
+import {
+  createNativeXaiRetirementFixture as nativeFixture,
+  createRetiredModelFixture as fixture,
+} from "./doctor-retired-models.test-support.js";
+import { createRetiredModelRefRepairResolver } from "./doctor/shared/retired-model-ref-repair.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
+
+function expectRouteWarning(warnings: string[], model: string, detail: string) {
+  for (const expected of [
+    model,
+    'agent "main"',
+    detail,
+    "allowed model override",
+    "doctor --fix",
+  ]) {
+    expect.soft(warnings.join("\n")).toContain(expected);
+  }
+}
 
 describe("doctor retirement repair ordering", () => {
   it("retains a pinned session when clearing would keep the exact retired model account", async () => {
     const { cfg, state } = await fixture("api-key");
-    const retiredRef = "openai/retired-without-successor";
+    const retiredRef = noSuccessor;
     cfg.agents!.defaults!.model = retiredRef;
     cfg.agents!.defaults!.models = { [retiredRef]: { alias: "retired-alias" } };
-    const sessions = path.join(state.sessionsDir(), "sessions.json");
     const selections = [
       { source: "user", model: "retired-without-successor", provider: "openai" },
       { source: "user-link", model: "retired-alias", provider: undefined },
     ] as const;
     for (const selection of selections) {
-      await replaceSessionEntry(
-        { storePath: sessions, sessionKey: `agent:main:no-op-${selection.source}`, env: state.env },
-        {
-          sessionId: `no-op-${selection.source}`,
-          updatedAt: 1,
-          providerOverride: selection.provider,
-          modelOverride: selection.model,
-          authProfileOverride: "chatgpt",
-          authProfileOverrideSource: selection.source,
-        },
-      );
-    }
-    const cronStore = resolveCronJobsStorePath();
-    await saveCronJobsStore(cronStore, {
-      version: 1,
-      jobs: [
-        {
-          id: "clear-cron-pin",
-          agentId: "main",
-          name: "Synthetic clearing reminder",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          state: {},
-          payload: {
-            kind: "agentTurn",
-            message: "Synthetic reminder",
-            model: `${retiredRef}@chatgpt`,
-          },
-        },
-      ],
-    });
-    const configRepair = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect(configRepair.changes).toEqual([]);
-    await state.writeConfig(configRepair.config);
-    const result = await maybeRepairCodexSessionRoutes({
-      cfg: configRepair.config,
-      env: state.env,
-      shouldRepair: true,
-    });
-    expect.soft(result.repairedSessions).toBe(0);
-    for (const selection of selections) {
-      const entry = loadSessionEntry({
-        storePath: sessions,
-        sessionKey: `agent:main:no-op-${selection.source}`,
-        env: state.env,
+      await writeSession(state, `agent:main:no-op-${selection.source}`, {
+        providerOverride: selection.provider,
+        modelOverride: selection.model,
+        authProfileOverride: "chatgpt",
+        authProfileOverrideSource: selection.source,
       });
+    }
+    const cronStore = await seedCronModel("clear-cron-pin", `${retiredRef}@chatgpt`);
+    const configRepair = repairConfig(cfg, state.env);
+    expect(configRepair.changes).toEqual([]);
+    const { sessions: result, cron: cronRepair } = await repairPersistedRoutes(
+      configRepair.config,
+      state,
+    );
+    expect.soft(result.changes).toEqual([]);
+    for (const selection of selections) {
+      const entry = readSession(state, `agent:main:no-op-${selection.source}`);
       expect.soft(entry).toMatchObject({
         modelOverride: selection.model,
         authProfileOverride: "chatgpt",
@@ -90,19 +71,7 @@ describe("doctor retirement repair ordering", () => {
       expect.soft(entry?.providerOverride).toBe(selection.provider);
     }
     expect.soft(result.warnings).toHaveLength(1);
-    for (const expected of [
-      retiredRef,
-      'agent "main"',
-      "supported default",
-      "allowed model override",
-      "doctor --fix",
-    ]) {
-      expect.soft(result.warnings.join("\n")).toContain(expected);
-    }
-    const cronRepair = await repairCronCodexModelRefsAfterConfigWrite({
-      cfg: configRepair.config,
-      repairRetiredModelRefs: true,
-    });
+    expectRouteWarning(result.warnings, retiredRef, "supported default");
     const payload = (await loadCronJobsStore(cronStore)).jobs[0]?.payload;
     expect(payload?.kind === "agentTurn" ? payload.model : undefined).toBeUndefined();
     expect(cronRepair.warnings).toEqual([]);
@@ -112,82 +81,36 @@ describe("doctor retirement repair ordering", () => {
     "checks pinned subscription successors against %s owner policy",
     async (policy) => {
       const { cfg, state } = await fixture("api-key");
-      const retiredRef = "openai/retired-with-successor";
-      const successor = "openai/current-model";
+      const retiredRef = retiredModel;
+      const successor = currentModel;
       cfg.agents!.defaults!.model = retiredRef;
       if (policy !== "unrestricted") {
         cfg.agents!.entries!.main!.modelPolicy = {
           allow: policy === "blocked" ? [retiredRef] : [retiredRef, successor],
         };
       }
-      const sessions = path.join(state.sessionsDir(), "sessions.json");
       for (const source of ["user", "user-link"] as const) {
-        await replaceSessionEntry(
-          { storePath: sessions, sessionKey: `agent:main:pinned-${source}`, env: state.env },
-          {
-            sessionId: `pinned-${source}`,
-            updatedAt: 1,
-            providerOverride: "openai",
-            modelOverride: "retired-with-successor",
-            authProfileOverride: "chatgpt",
-            authProfileOverrideSource: source,
-          },
-        );
+        await writeSession(state, `agent:main:pinned-${source}`, {
+          providerOverride: "openai",
+          modelOverride: "retired-with-successor",
+          authProfileOverride: "chatgpt",
+          authProfileOverrideSource: source,
+        });
       }
-      const cronStore = resolveCronJobsStorePath();
-      await saveCronJobsStore(cronStore, {
-        version: 1,
-        jobs: [
-          {
-            id: "pinned-policy",
-            agentId: "main",
-            name: "Synthetic policy reminder",
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            state: {},
-            payload: {
-              kind: "agentTurn",
-              message: "Synthetic reminder",
-              model: `${retiredRef}@chatgpt`,
-            },
-          },
-        ],
-      });
-      const repair = repairStaleAgentModelRefs(cfg, {
-        env: state.env,
-        pluginProviderIds: new Set(["openai"]),
-        persistedProviderIdsByAgentId: new Map(),
-      });
+      const cronStore = await seedCronModel("pinned-policy", `${retiredRef}@chatgpt`);
+      const repair = repairConfig(cfg, state.env);
       expect(repair.config).toEqual(cfg);
-      await state.writeConfig(repair.config);
-      const sessionRepair = await maybeRepairCodexSessionRoutes({
-        cfg: repair.config,
-        env: state.env,
-        shouldRepair: true,
-      });
-      const cronRepair = await repairCronCodexModelRefsAfterConfigWrite({
-        cfg: repair.config,
-        repairRetiredModelRefs: true,
-      });
+      const { sessions: sessionRepair, cron: cronRepair } = await repairPersistedRoutes(
+        repair.config,
+        state,
+      );
       for (const source of ["user", "user-link"] as const) {
-        expect
-          .soft(
-            loadSessionEntry({
-              storePath: sessions,
-              sessionKey: `agent:main:pinned-${source}`,
-              env: state.env,
-            }),
-          )
-          .toMatchObject({
-            providerOverride: "openai",
-            modelOverride: policy === "blocked" ? "retired-with-successor" : "current-model",
-            authProfileOverride: "chatgpt",
-            authProfileOverrideSource: source,
-          });
+        expect.soft(readSession(state, `agent:main:pinned-${source}`)).toMatchObject({
+          providerOverride: "openai",
+          modelOverride: policy === "blocked" ? "retired-with-successor" : "current-model",
+          authProfileOverride: "chatgpt",
+          authProfileOverrideSource: source,
+        });
       }
       const payload = (await loadCronJobsStore(cronStore)).jobs[0]?.payload;
       expect
@@ -195,16 +118,7 @@ describe("doctor retirement repair ordering", () => {
         .toBe(`${policy === "blocked" ? retiredRef : successor}@chatgpt`);
       for (const result of [sessionRepair, cronRepair]) {
         if (policy === "blocked") {
-          const warning = result.warnings.join("\n");
-          for (const expected of [
-            successor,
-            'agent "main"',
-            "agents.entries.main.modelPolicy.allow",
-            "doctor --fix",
-            "allowed model override",
-          ]) {
-            expect.soft(warning).toContain(expected);
-          }
+          expectRouteWarning(result.warnings, successor, "agents.entries.main.modelPolicy.allow");
         } else {
           expect(result.warnings).toEqual([]);
         }
@@ -227,8 +141,8 @@ describe("doctor retirement repair ordering", () => {
     const retiredRef = providerWide
       ? "openai/retired-global-without-successor"
       : scenario === "successor alias policy"
-        ? "openai/retired-with-successor"
-        : "openai/retired-without-successor";
+        ? retiredModel
+        : noSuccessor;
     const rawRef = scenario === "changed default provider" ? "retired-without-successor" : "daily";
     const settings = {
       alias: "daily",
@@ -242,71 +156,29 @@ describe("doctor retirement repair ordering", () => {
       cfg.agents!.defaults!.model = "anthropic/current-model";
       cfg.agents!.entries!.main!.model = retiredRef;
     }
-    const sessionStorePath = path.join(state.sessionsDir(), "sessions.json");
     const sessionKey = "agent:main:retired-ordering";
-    await replaceSessionEntry(
-      { storePath: sessionStorePath, sessionKey, env: state.env },
-      {
-        sessionId: "retired-ordering",
-        updatedAt: 1,
-        modelOverride: rawRef,
-        authProfileOverride: profile,
-        authProfileOverrideSource: "user",
-      },
+    await writeSession(state, sessionKey, {
+      modelOverride: rawRef,
+      authProfileOverride: profile,
+      authProfileOverrideSource: "user",
+    });
+    const cronStorePath = await seedCronModel(
+      "retired-ordering",
+      profile === "platform" ? `${rawRef}@platform` : rawRef,
     );
-    const cronStorePath = resolveCronJobsStorePath();
-    await saveCronJobsStore(cronStorePath, {
-      version: 1,
-      jobs: [
-        {
-          id: "retired-ordering",
-          agentId: "main",
-          name: "Synthetic ordering reminder",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          state: {},
-          payload: {
-            kind: "agentTurn",
-            message: "Synthetic reminder",
-            model: profile === "platform" ? `${rawRef}@platform` : rawRef,
-          },
-        },
-      ],
-    });
-    const repair = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai", "anthropic"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect
-      .soft(repair.config.agents?.entries?.main?.models?.[retiredRef])
-      .toEqual(providerWide ? undefined : settings);
+    const repair = repairConfig(cfg, state.env, ["openai", "anthropic"]);
+    const updatedMain = repair.config.agents?.entries?.main;
+    expect.soft(updatedMain?.models?.[retiredRef]).toEqual(providerWide ? undefined : settings);
     const defaultRef =
-      scenario === "changed default provider" ? "anthropic/current-model" : "openai/current-model";
+      scenario === "changed default provider" ? "anthropic/current-model" : currentModel;
     expect
-      .soft(repair.config.agents?.entries?.main?.modelPolicy?.allow)
+      .soft(updatedMain?.modelPolicy?.allow)
       .toEqual(providerWide ? [defaultRef] : [policyRef, defaultRef]);
     if (scenario === "successor alias policy") {
       const { alias: _alias, ...successorSettings } = settings;
-      expect
-        .soft(repair.config.agents?.entries?.main?.models?.[defaultRef])
-        .toEqual(successorSettings);
+      expect.soft(updatedMain?.models?.[defaultRef]).toEqual(successorSettings);
     }
-    const allowed = buildAllowedModelSet({
-      cfg: repair.config,
-      agentId: "main",
-      catalog: [],
-      defaultProvider: scenario === "changed default provider" ? "anthropic" : "openai",
-      defaultModel: "current-model",
-    });
-    expect.soft(allowed.allowAny).toBe(false);
-    expect.soft(allowed.allowedKeys.has(retiredRef)).toBe(!providerWide);
-    expect.soft(allowed.allowedKeys.has(defaultRef)).toBe(true);
-    expect(repair.config.agents?.entries?.main?.model).toBeUndefined();
+    expect(updatedMain?.model).toBeUndefined();
     await state.writeConfig(repair.config);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const options = { repair: true, nonInteractive: true };
@@ -323,41 +195,190 @@ describe("doctor retirement repair ordering", () => {
     };
     await runCodexSessionRouteHealth(ctx);
     await runWriteConfigHealth(ctx);
-    const savedSession = loadSessionEntry({
-      storePath: sessionStorePath,
-      sessionKey,
-      env: state.env,
-    });
+    const savedSession = readSession(state, sessionKey);
     expect
       .soft(savedSession?.modelOverride)
       .toBe(
         profile === "platform" ? (sharedAlias ? "daily" : "retired-without-successor") : undefined,
       );
     if (profile === "platform") {
-      expect.soft(savedSession).toMatchObject({
-        authProfileOverride: "platform",
-        authProfileOverrideSource: "user",
-      });
+      expect
+        .soft(savedSession)
+        .toMatchObject({ authProfileOverride: "platform", authProfileOverrideSource: "user" });
       expect.soft(savedSession?.providerOverride).toBe(sharedAlias ? undefined : "openai");
-      const interpretation = { cfg: repair.config, agentId: "main", defaultProvider: "openai" };
-      expect(
-        resolveModelRefFromString({
-          ...interpretation,
-          raw: savedSession!.modelOverride!,
-          aliasIndex: buildModelAliasIndex(interpretation),
-        })?.ref,
-      ).toEqual({ provider: "openai", model: retiredRef.slice("openai/".length) });
     }
     const payload = (await loadCronJobsStore(cronStorePath)).jobs[0]?.payload;
     expect(payload?.kind === "agentTurn" ? payload.model : undefined).toBe(
       profile === "platform" ? `${sharedAlias ? rawRef : retiredRef}@platform` : undefined,
     );
-    expect(
-      repairStaleAgentModelRefs(repair.config, {
-        env: state.env,
-        pluginProviderIds: new Set(["openai", "anthropic"]),
-        persistedProviderIdsByAgentId: new Map(),
-      }).changes,
-    ).toEqual([]);
+  });
+});
+
+describe("doctor retirement owner scope", () => {
+  it("preserves the logical account while repairing its native model retirement", async () => {
+    const { cfg, state, repair } = await nativeFixture();
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "personal:fixture": {
+          provider: "personal",
+          type: "api_key",
+          key: "synthetic-personal-key",
+        },
+      },
+    });
+    const ref = "personal/auto";
+    cfg.auth = { order: { personal: ["personal:fixture"] } };
+    cfg.agents!.defaults = {
+      workspace: state.workspaceDir,
+      model: { primary: `${ref}@personal:fixture` },
+      subagents: { model: `${ref}@personal:fixture` },
+      models: { [ref]: { alias: "Personal", params: { temperature: 0.25 } } },
+      modelPolicy: { allow: [ref] },
+    };
+    cfg.models = {
+      providers: {
+        personal: {
+          api: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+          auth: "api-key",
+          models: [createTestModelDefinition("auto", { contextWindow: 16_000 })],
+        },
+      },
+    };
+    const result = repair(cfg);
+    const updated = result.config.agents?.defaults;
+    const expected = "personal/grok-4.7";
+    expect(updated?.model).toEqual({ primary: `${expected}@personal:fixture` });
+    expect(updated?.subagents?.model).toBe(`${expected}@personal:fixture`);
+    expect(updated?.models).toEqual({
+      [expected]: { alias: "Personal", params: { temperature: 0.25 } },
+    });
+    expect(updated?.modelPolicy?.allow).toEqual([expected]);
+    expect(result.config.auth).toEqual(cfg.auth);
+    expect(result.config.models).toEqual(cfg.models);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it.each(["environment", "configured", "implicit-account", "pinned-fallback"] as const)(
+    "repairs native xAI selections while preserving policy and unresolved pins (%s)",
+    async (scenario) => {
+      const { cfg, state } = await nativeFixture();
+      if (scenario === "environment" || scenario === "implicit-account") {
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+        delete cfg.auth!.order;
+      }
+      if (scenario === "environment") {
+        delete cfg.models;
+        delete cfg.auth;
+      }
+      if (scenario === "pinned-fallback") {
+        cfg.agents!.defaults!.model = {
+          primary: "Grok",
+          fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],
+        };
+        cfg.agents!.defaults!.heartbeat = { model: "xai/grok-4.3", every: "30m" };
+        cfg.agents!.entries!.main = { model: "xai/auto@xai:missing" };
+      }
+      const env =
+        scenario === "environment"
+          ? { ...state.env, XAI_API_KEY: "synthetic-env-xai-key" }
+          : state.env;
+      const result = repairConfig(cfg, env, ["xai"]);
+      const updated = result.config.agents?.defaults;
+      expect(updated?.model).toMatchObject({ primary: "xai/grok-4.7" });
+      if (scenario === "pinned-fallback") {
+        expect(updated?.model).toMatchObject({
+          fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],
+        });
+        expect(result.config.agents?.entries?.main).toEqual(cfg.agents?.entries?.main);
+        expect(updated?.heartbeat).toEqual(cfg.agents?.defaults?.heartbeat);
+        expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
+      } else {
+        expect(result.warnings).toEqual([]);
+      }
+    },
+  );
+
+  it("retains env-only model selections when native catalog ownership is ambiguous", async () => {
+    const { cfg, state } = await nativeFixture();
+    delete cfg.models;
+    delete cfg.auth;
+    const env = { ...state.env, XAI_API_KEY: "synthetic-env-xai-key" };
+    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+    const xai = snapshot.byPluginId.get("xai")!;
+    const competing = { ...xai, id: "competing-xai" };
+    cfg.plugins!.allow!.push(competing.id);
+    cfg.plugins!.entries![competing.id] = { enabled: true };
+    const warnings: string[] = [];
+    const resolve = createRetiredModelRefRepairResolver({
+      cfg,
+      env,
+      warnings,
+      metadataSnapshot: {
+        ...snapshot,
+        plugins: [...snapshot.plugins, competing],
+        byPluginId: new Map([...snapshot.byPluginId, [competing.id, competing]]),
+        owners: {
+          ...snapshot.owners,
+          modelCatalogProviders: new Map([
+            ...snapshot.owners.modelCatalogProviders,
+            ["xai", [xai.id, competing.id]],
+          ]),
+        },
+      },
+    });
+
+    expect(resolve({ modelRef: "XAI/auto", agentId: "main" })).toEqual({ kind: "unchanged" });
+    expect(warnings.join("\n")).toContain("authentication route is unavailable");
+  });
+
+  it.each(["missing-ordered-account", "unknown-oauth-endpoint"])(
+    "retains selections when the native authentication route is unavailable (%s)",
+    async (scenario) => {
+      const { cfg, state, repair } = await nativeFixture();
+      if (scenario === "missing-ordered-account") {
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+      } else {
+        delete cfg.models;
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "xai:fixture": {
+              provider: "xai",
+              type: "oauth",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: 9_999_999_999_999,
+            },
+          },
+        });
+      }
+
+      const result = repair(cfg);
+      expect(result.config).toEqual(cfg);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
+    },
+  );
+
+  it("preserves a shared alias when another physical route still accepts its old model", async () => {
+    const { cfg, state } = await fixture();
+    cfg.agents!.defaults!.model = "retired-alias";
+    cfg.agents!.defaults!.models = {
+      [retiredModel]: { alias: "retired-alias", params: { temperature: 0.25 } },
+    };
+    cfg.agents!.defaults!.modelPolicy = { allow: [retiredModel] };
+    const repair = (config: OpenClawConfig) => repairConfig(config, state.env);
+    const result = repair(cfg);
+    const updated = result.config.agents?.defaults;
+
+    expect(updated?.model).toBe(currentModel);
+    expect(updated?.models).toEqual({
+      [retiredModel]: { alias: "retired-alias", params: { temperature: 0.25 } },
+      [currentModel]: { params: { temperature: 0.25 } },
+    });
+    expect(updated?.modelPolicy?.allow).toEqual([retiredModel, currentModel]);
+    expect(result.warnings.join("\n")).toContain("do not share a verified successor");
   });
 });

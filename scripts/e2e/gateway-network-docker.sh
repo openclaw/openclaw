@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+# Bind release proof to the selected checkout even when no compatibility paths apply.
+if [[ -n "${OPENCLAW_SELECTED_SHA:-}" ]]; then
+  node "$ROOT_DIR/scripts/lib/frozen-target-source.mjs" validate \
+    "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" "$OPENCLAW_SELECTED_SHA"
+fi
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
@@ -47,7 +55,7 @@ run_suspension_phase() {
   local stage="$1"
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged_print "gateway-network-suspension-$stage" \
     docker_e2e_docker_cmd exec \
-    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+    ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
     -e "GW_URL=ws://127.0.0.1:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     -e "GW_MODE=suspension-$stage-restart" \
@@ -65,6 +73,8 @@ docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
 docker_e2e_harness_mount_args
+gateway_setup='node "$entry" config set gateway.controlUi.enabled false >/dev/null'
+gateway_setup+='; if [[ ! -f /tmp/gateway-network-configured ]]; then node "$entry" plugins enable admin-http-rpc >/dev/null; touch /tmp/gateway-network-configured; fi'
 docker_e2e_docker_cmd run -d \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$GW_NAME" \
@@ -75,7 +85,7 @@ docker_e2e_docker_cmd run -d \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   "$IMAGE_NAME" \
-  bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; if [[ ! -f /tmp/gateway-network-configured ]]; then node \"\$entry\" plugins enable admin-http-rpc >/dev/null; touch /tmp/gateway-network-configured; fi; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
+  bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; $gateway_setup; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
 if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT"; then
@@ -95,7 +105,7 @@ DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docke
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP" \
   --network "$NET_NAME" \
-  "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+  ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
   -v "$CAPABILITIES_DIR:/tmp/gateway-network-output" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
@@ -126,18 +136,7 @@ rmdir "$CAPABILITIES_DIR"
 CAPABILITIES_PATH=""
 CAPABILITIES_DIR=""
 if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]; then
-  authorization_status=0
-  if openclaw_frozen_target_omissions_authorized; then
-    echo "Target gateway does not advertise cooperative suspension; authorized frozen-target omission."
-    echo "OK"
-    exit 0
-  else
-    authorization_status=$?
-  fi
-  if ((authorization_status == 2)); then
-    exit "$authorization_status"
-  fi
-  echo "Target gateway does not advertise cooperative suspension and frozen-target omissions are not authorized." >&2
+  echo "Target gateway does not advertise cooperative suspension." >&2
   exit 1
 fi
 

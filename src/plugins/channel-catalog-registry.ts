@@ -1,15 +1,19 @@
-// Maintains channel catalog entries advertised by plugins.
 import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getCurrentPluginMetadataSnapshotState,
   getGatewayPluginMetadataSnapshot,
 } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { resolvePluginTrust } from "./installed-plugin-record-match.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+
+const log = createSubsystemLogger("plugins/channel-catalog");
 
 export type PluginChannelCatalogEntry = {
   pluginId: string;
@@ -19,6 +23,7 @@ export type PluginChannelCatalogEntry = {
   rootDir: string;
   channel: PluginPackageChannel;
   install?: PluginPackageInstall;
+  trustedOfficialInstall?: boolean;
 };
 
 type ChannelCatalogParams = {
@@ -42,8 +47,9 @@ export function listChannelCatalogEntries(
   // The discovery owner retains each scope and its raw shadows. A validated
   // Gateway-wide manifest union loses both workspace scope and trust alternatives.
   let discovery = params.discovery;
+  const installRecords =
+    params.installRecords ?? (discovery ? undefined : resolveInstallRecords(params));
   if (!discovery) {
-    const installRecords = resolveInstallRecords(params);
     discovery = discoverOpenClawPlugins({
       workspaceDir: params.workspaceDir,
       env: params.env,
@@ -67,9 +73,20 @@ export function listChannelCatalogEntries(
     if (!pluginId) {
       return [];
     }
+    // Caller-supplied discovery and install records belong to the same metadata generation.
+    // Never reload the ledger behind an already prepared discovery snapshot.
+    const trusted =
+      installRecords &&
+      resolvePluginTrust({
+        candidate,
+        installRecords,
+        env: params.env ?? process.env,
+        registryPath: resolveInstalledPluginIndexStorePath({ env: params.env }),
+      }).reason === "trusted-official";
     return [
       {
         pluginId,
+        ...(trusted ? { trustedOfficialInstall: true } : {}),
         origin: candidate.origin,
         packageName: candidate.packageName,
         workspaceDir: candidate.workspaceDir,
@@ -100,8 +117,12 @@ function resolveInstallRecords(
   }
   try {
     return loadInstalledPluginIndexInstallRecordsSync(params.env ? { env: params.env } : {});
-  } catch {
+  } catch (error) {
     // Failed ledger reads remain retryable within the operation owner.
+    log.warn(
+      "Channel catalog could not load plugin installation records; installed channels may be missing. Run openclaw doctor to inspect plugin state.",
+      { error },
+    );
     return undefined;
   }
 }

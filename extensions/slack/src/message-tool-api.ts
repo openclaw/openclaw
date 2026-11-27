@@ -1,11 +1,11 @@
-// Slack API module exposes the plugin public contract.
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
-  ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type, type TSchema } from "typebox";
+import { SLACK_CONVERSATION_LIST_TYPES } from "./cursor-pages.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const SLACK_MESSAGE_ID_ACTIONS = ["react", "reactions", "edit", "delete", "pin", "unpin"] as const;
@@ -93,7 +93,6 @@ export function describeSlackMessageTool({
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
   const actions = listSlackMessageActions(cfg, accountId);
-  const capabilities = new Set<"presentation">();
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (actions.includes("conversation-open")) {
     schema.push({
@@ -106,52 +105,58 @@ export function describeSlackMessageTool({
             maxItems: 8,
             uniqueItems: true,
             description:
-              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send".',
-          }),
-        ),
-        teamId: Type.Optional(
-          Type.String({
-            pattern: "^T[A-Z0-9]+$",
-            description:
-              "Slack workspace for conversation-open. Defaults to the trusted current workspace for the selected account; required for detached Enterprise operations.",
+              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send". teamId defaults to the trusted current workspace for the selected account; detached Enterprise operations require it.',
           }),
         ),
       },
     });
   }
-  if (actions.includes("send")) {
-    capabilities.add("presentation");
-  }
-  if (actions.includes("download-file")) {
+  if (actions.includes("channel-list")) {
     schema.push({
-      properties: createSlackFileActionSchema(),
-      actions: ["download-file"],
+      actions: ["channel-list"],
+      properties: {
+        types: Type.Optional(
+          Type.Array(stringEnum(SLACK_CONVERSATION_LIST_TYPES), {
+            minItems: 1,
+            uniqueItems: true,
+            description:
+              'Slack channel-list conversation types. Default: ["public_channel","private_channel"]; add "im" or "mpim" to list DMs. Archived conversations need includeArchived. Pass nextPageToken as pageToken until it is absent; a page may hold fewer results than limit. Read a result with action="read" and its id as channelId.',
+          }),
+        ),
+      },
     });
   }
-  if (actions.includes("send")) {
+  const readAsActions = (["read", "channel-list"] as const).filter((action) =>
+    actions.includes(action),
+  );
+  if (readAsActions.length > 0) {
     schema.push({
-      properties: createSlackSendActionSchema(),
-      actions: ["send"],
+      actions: readAsActions,
+      visibility: "all-configured",
+      properties: {
+        readAs: Type.Optional(
+          stringEnum(["bot", "user"] as const, {
+            description:
+              'Slack token for read and channel-list. Omit for the account default (the user token when configured, else the bot token). "bot" forces the bot token; "user" requires a configured user token.',
+          }),
+        ),
+      },
     });
   }
-  if (actions.includes("upload-file")) {
-    schema.push({
-      properties: createSlackTopLevelActionSchema(),
-      actions: ["upload-file"],
-    });
-  }
-  if (actions.includes("react")) {
-    schema.push({
-      properties: createSlackReactionEmojiSchema(actions.includes("emoji-list")),
-      actions: ["react", "reactions"],
-    });
-  }
-  const messageIdActions: ChannelMessageActionName[] = [];
-  for (const action of SLACK_MESSAGE_ID_ACTIONS) {
+  for (const [action, createProperties] of [
+    ["download-file", createSlackFileActionSchema],
+    ["send", createSlackSendActionSchema],
+    ["upload-file", createSlackTopLevelActionSchema],
+    ["react", () => createSlackReactionEmojiSchema(actions.includes("emoji-list"))],
+  ] as const) {
     if (actions.includes(action)) {
-      messageIdActions.push(action);
+      schema.push({
+        properties: createProperties(),
+        actions: action === "react" ? ["react", "reactions"] : [action],
+      });
     }
   }
+  const messageIdActions = SLACK_MESSAGE_ID_ACTIONS.filter((action) => actions.includes(action));
   if (messageIdActions.length > 0) {
     schema.push({
       properties: createSlackMessageIdActionSchema(),
@@ -160,7 +165,7 @@ export function describeSlackMessageTool({
   }
   return {
     actions,
-    capabilities: Array.from(capabilities),
+    capabilities: actions.includes("send") ? ["presentation"] : [],
     schema: schema.length > 0 ? schema : null,
   };
 }

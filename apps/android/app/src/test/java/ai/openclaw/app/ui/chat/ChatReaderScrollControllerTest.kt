@@ -6,6 +6,13 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -53,6 +60,36 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun olderPrependAndRemoteUserTurnPreserveSavedReadingAnchor() {
+    val prompt = user("prompt")
+    val reply = assistant("reply")
+    val before = timeline(prompt, reply)
+    val reading =
+      initialChatReaderTransition(before, "gateway|agent|session").state.copy(
+        followTarget = null,
+        readingItemKey = "message:reply",
+        readingOffset = 37,
+      )
+    val prepended = timeline(user("older"), prompt, reply)
+    val older = reading.onTimelineChanged(prepended)
+    assertEquals(before.latestContentVersion, prepended.latestContentVersion)
+    assertNull(older.scrollIndex)
+    assertFalse(older.state.hasNewerContent)
+    val saver = createChatReaderStateSaver("gateway|agent|session")
+    val saved = with(saver) { SaverScope { true }.save(older.state) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
+    val remote = restored.onTimelineChanged(timeline(user("older"), prompt, reply, user("remote")))
+    assertNull(remote.scrollIndex)
+    assertNull(remote.state.followTarget)
+    assertTrue(remote.state.hasNewerContent)
+    assertEquals("message:reply", remote.state.readingItemKey)
+    assertEquals(37, remote.state.readingOffset)
+    val explicit = remote.state.jumpToLatest(timeline(prompt, reply, user("remote")))
+    assertEquals(0, explicit.scrollIndex)
+    assertNull(explicit.state.readingItemKey)
+  }
+
+  @Test
   fun newUserTurnFollowsLatestContentWhileStreaming() {
     val previous = initialChatReaderTransition(timeline(assistant("assistant-1"))).state
     val active = activeTimeline(user("user-1"), stream = null)
@@ -85,8 +122,7 @@ class ChatReaderScrollControllerTest {
   @Test
   fun removedOptimisticPromptPreservesPositionWithoutOfferingJump() {
     val active =
-      buildChatTimeline(
-        messages = listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")),
+      prepareChatHistory(listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 1,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -152,17 +188,6 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun stateStartsFreshForEachSession() {
-    val oldSession = ChatReaderState(initialized = true, hasNewerContent = true, latestUserMessageId = "old")
-
-    val nextSession = initialChatReaderTransition(timeline(user("new")))
-
-    assertTrue(oldSession.hasNewerContent)
-    assertFalse(nextSession.state.hasNewerContent)
-    assertEquals("new", nextSession.state.latestUserMessageId)
-  }
-
-  @Test
   fun emptyTimelineCanResetReaderStateBeforeSameSessionReload() {
     val previous = ChatReaderState(initialized = true, hasNewerContent = true, latestUserMessageId = "old")
 
@@ -201,9 +226,10 @@ class ChatReaderScrollControllerTest {
         latestUserMessageId = "user-1",
         latestContentVersion = timeline.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(state) }
 
-    val restored = ChatReaderStateSaver.restore(requireNotNull(saved))
+    val restored = saver.restore(requireNotNull(saved))
 
     assertEquals(state, restored)
   }
@@ -216,7 +242,7 @@ class ChatReaderScrollControllerTest {
         initialized = true,
         followTarget = ChatScrollFollowTarget.LatestContent,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saved = with(createChatReaderStateSaver("session-old")) { SaverScope { true }.save(state) }
 
     val restored = createChatReaderStateSaver("session-new").restore(requireNotNull(saved))
 
@@ -238,8 +264,9 @@ class ChatReaderScrollControllerTest {
         latestUserMessageVersion = before.latestUserMessageVersion,
         latestContentVersion = before.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(savedState) }
-    val restored = requireNotNull(ChatReaderStateSaver.restore(requireNotNull(saved)))
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(savedState) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
     val after =
       timeline(
         user("user-after", text = "rewritten prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),
@@ -335,9 +362,143 @@ class ChatReaderScrollControllerTest {
     assertNotEquals(answeredWithoutValues.latestContentVersion, answeredWithValues.latestContentVersion)
   }
 
+  @Test
+  fun staleRowDisposalCannotCancelCurrentReaderAction() = assertRetiredRowCannotCancelCurrentReaderAction { _, row -> row.cancel() }
+
+  @Test
+  fun retiredRowLaunchCannotCancelCurrentReaderAction() =
+    assertRetiredRowCannotCancelCurrentReaderAction { scope, row ->
+      scope.cancel()
+      row.launch { error("Retired row ran") }
+    }
+
+  @Test
+  fun retiredRowPauseCannotCancelCurrentReaderAction() =
+    assertRetiredRowCannotCancelCurrentReaderAction { scope, row ->
+      scope.cancel()
+      row.pause()
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun rowCancellationBeforeDispatchReleasesNavigation() =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val placement = CompletableDeferred<Unit>()
+      var revealed = false
+      try {
+        ChatReaderAction(rowScope, navigation).launch {
+          placement.await()
+          revealed = true
+        }
+        rowScope.cancel()
+        placement.complete(Unit)
+        runCurrent()
+        assertFalse("Disposed row must not reveal", revealed)
+        assertFalse("A never-started job must not retain navigation ownership", navigation.isNavigating)
+      } finally {
+        rowScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun cancelledReaderRejectsStillLiveRowWithoutThrowingFromCallback() =
+    runTest {
+      val readerScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val events = mutableListOf<String>()
+      val navigation = ChatReaderNavigation(readerScope, pauseFollowing = { events += "pause" })
+      try {
+        readerScope.cancel()
+        val request = navigation.launch(rowScope) { events += "reveal" }
+        runCurrent()
+        assertTrue("Retired reader returns a cancelled request", request.isCancelled)
+        assertTrue("Retired reader cannot pause or reveal", events.isEmpty())
+        assertFalse(navigation.isNavigating)
+      } finally {
+        readerScope.cancel()
+        rowScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun assertRetiredRowCannotCancelCurrentReaderAction(onRetiredAction: (CoroutineScope, ChatReaderAction) -> Unit) =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val firstScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val secondScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val first = ChatReaderAction(firstScope, navigation)
+      val second = ChatReaderAction(secondScope, navigation)
+      val gate = CompletableDeferred<Unit>()
+      val events = mutableListOf<String>()
+      try {
+        first.launch {
+          try {
+            gate.await()
+            events += "old reveal"
+          } finally {
+            events += "old retired"
+          }
+        }
+        runCurrent()
+        second.launch {
+          gate.await()
+          events += "current reveal"
+        }
+        runCurrent()
+        onRetiredAction(firstScope, first)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("old retired", "current reveal"), events)
+        assertFalse(navigation.isNavigating)
+      } finally {
+        firstScope.cancel()
+        secondScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun closeAndReaderRetirementFencePendingNavigationWithoutPoisoningReuse() =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val action = ChatReaderAction(rowScope, navigation)
+      val events = mutableListOf<String>()
+      try {
+        val closed = CompletableDeferred<Unit>()
+        action.launch {
+          closed.await()
+          events += "closed reveal"
+        }
+        runCurrent()
+        action.cancel()
+        closed.complete(Unit)
+        runCurrent()
+        assertTrue(events.isEmpty())
+        action.launch { events += "fresh reveal" }
+        runCurrent()
+        assertEquals(listOf("fresh reveal"), events)
+        val disposed = CompletableDeferred<Unit>()
+        action.launch {
+          disposed.await()
+          events += "disposed reveal"
+        }
+        runCurrent()
+        navigation.retire()
+        disposed.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("fresh reveal"), events)
+        assertFalse(navigation.isNavigating)
+      } finally {
+        rowScope.cancel()
+      }
+    }
+
   private fun timeline(vararg messages: ChatMessage): ChatTimeline =
-    buildChatTimeline(
-      messages = messages.toList(),
+    prepareChatHistory(messages.toList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -346,8 +507,7 @@ class ChatReaderScrollControllerTest {
   private fun emptyTimeline(): ChatTimeline = timeline()
 
   private fun questionTimeline(question: ChatQuestionPrompt): ChatTimeline =
-    buildChatTimeline(
-      messages = emptyList(),
+    prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -358,8 +518,7 @@ class ChatReaderScrollControllerTest {
     message: ChatMessage,
     stream: String?,
   ): ChatTimeline =
-    buildChatTimeline(
-      messages = listOf(message),
+    prepareChatHistory(listOf(message), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 1,
       pendingToolCalls = emptyList(),
       streamingAssistantText = stream,

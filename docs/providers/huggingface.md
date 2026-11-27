@@ -87,7 +87,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Accordion title="Model discovery and onboarding dropdown">
     OpenClaw discovers models with:
 
-    ```bash
+    ```http
     GET https://router.huggingface.co/v1/models
     Authorization: Bearer $HUGGINGFACE_HUB_TOKEN   # or $HF_TOKEN
     ```
@@ -197,7 +197,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
-  <Card title="Model selection" href="/concepts/models" icon="brain">
+  <Card title="Models" href="/concepts/models" icon="brain">
     How to choose and configure models.
   </Card>
   <Card title="Inference Providers docs" href="https://huggingface.co/docs/inference-providers" icon="book">

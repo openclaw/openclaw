@@ -1,7 +1,11 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import type { SessionCleanupSummary } from "../config/sessions.js";
+import type { runSessionsCleanup as runSessionsCleanupOperation } from "../config/sessions.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { directSessionReq } from "./test/server-sessions.test-helpers.js";
+
+type SessionCleanupSummary = Awaited<
+  ReturnType<typeof runSessionsCleanupOperation>
+>["appliedSummaries"][number];
 
 const runSessionsCleanup = vi.hoisted(() => vi.fn());
 
@@ -82,7 +86,7 @@ test.each([
       expect.any(Set),
       expect.objectContaining({ dropIfSlow: true }),
     );
-    flushPendingSessionsChangedEvents();
+    await flushPendingSessionsChangedEvents();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(expectedBroadcasts);
   },
 );

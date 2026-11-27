@@ -1,7 +1,6 @@
-// Matrix plugin module implements setup contract behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
-export const matrixSingleAccountKeysToMove = [
+const matrixAuthBootstrapKeys = [
   "homeserver",
   "userId",
   "accessToken",
@@ -11,6 +10,10 @@ export const matrixSingleAccountKeysToMove = [
   "avatarUrl",
   "initialSyncLimit",
   "encryption",
+] as const;
+
+export const matrixSingleAccountKeysToMove = [
+  ...matrixAuthBootstrapKeys,
   "allowlistOnly",
   "dangerouslyAllowNameMatching",
   "allowBots",
@@ -38,15 +41,7 @@ export const matrixNamedAccountPromotionKeys = [
   // When named accounts already exist, only move auth/bootstrap fields into the
   // promoted account. Shared delivery-policy fields stay at the top level.
   "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
+  ...matrixAuthBootstrapKeys,
 ] as const;
 
 export const singleAccountKeysToMove = [...matrixSingleAccountKeysToMove];
@@ -86,13 +81,6 @@ export function resolveSingleAccountPromotionTarget(params: {
     if (onlyAccount) {
       return onlyAccount[0];
     }
-  }
-  if (
-    namedAccounts.length > 1 &&
-    accounts[DEFAULT_ACCOUNT_ID] &&
-    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
-  ) {
-    return DEFAULT_ACCOUNT_ID;
   }
   return DEFAULT_ACCOUNT_ID;
 }

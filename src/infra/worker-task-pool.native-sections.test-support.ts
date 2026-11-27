@@ -1,0 +1,125 @@
+/// <reference lib="es2024.sharedmemory" />
+
+import assert from "node:assert/strict";
+import { mock } from "node:test";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread, threadId, Worker } from "node:worker_threads";
+import { deflateSync } from "node:zlib";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
+import { WorkerTaskPool } from "./worker-task-pool.js";
+import { serveWorkerTasks } from "./worker-task-server.js";
+
+export type NativeCancellation = "close";
+
+type Outcome = PromiseSettledResult<number> | undefined;
+
+function assertRejected(result: Outcome, expected: Error | string) {
+  assert.ok(result?.status === "rejected");
+  assert.equal(typeof expected === "string" ? result.reason.code : result.reason, expected);
+}
+
+if (!isMainThread) {
+  serveWorkerTasks<number>(async (input, _channel, control?: WorkerTaskControl) => {
+    if (input === "successor") {
+      return threadId;
+    }
+    if (input === "exit-native") {
+      assert.ok(control);
+      return control.runNativeSection(() => process.exit(1));
+    }
+    assert.ok(input instanceof SharedArrayBuffer);
+    const gate = new Int32Array(input);
+    const compress = () => {
+      deflateSync(Buffer.from("a synthetic PDF page"), {
+        get rejectGarbageAfterEnd() {
+          // Node reads this option after allocating the zlib handle, before init().
+          if (Atomics.compareExchange(gate, 0, 0, 1) === 0) {
+            Atomics.notify(gate, 0);
+            assert.notEqual(Atomics.wait(gate, 1, 0, 10_000), "timed-out");
+          }
+          return false;
+        },
+      });
+      Atomics.store(gate, 2, 1);
+    };
+    assert.ok(control);
+    await control.runNativeSection(compress);
+    control.throwIfCancelled();
+    Atomics.store(gate, 3, 1);
+    return threadId;
+  });
+} else {
+  const ending = process.argv[2];
+  assert.ok(ending === "close" || ending === "exit");
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const pool = new WorkerTaskPool<SharedArrayBuffer | string, number>({
+    workerUrl: new URL(import.meta.url),
+    maxWorkers: 1,
+    maxPendingTasks: 2,
+  });
+  const terminate = mock.method(Worker.prototype, "terminate");
+  const assertJoined = () => {
+    const worker = terminate.mock.calls[0]?.this;
+    assert.ok(worker instanceof Worker);
+    assert.equal(worker.threadId, -1, "cancellation must join native exit before replacement");
+  };
+  const reason = new Error(`cancel native section by ${ending}`);
+  let activeSettled = false;
+  const active = pool.run(ending === "exit" ? "exit-native" : gate.buffer, {
+    timeoutMs: 10_000,
+  });
+  const outcome = Promise.allSettled([active]).then(([result]) => {
+    activeSettled = true;
+    return result;
+  });
+  try {
+    if (ending === "exit") {
+      assertRejected(await outcome, "unavailable");
+      assertJoined();
+      await pool.run("successor", {});
+      console.log(JSON.stringify({ ending, exitJoined: true }));
+    } else {
+      await Atomics.waitAsync(gate, 0, 0, 10_000).value;
+      assert.equal(Atomics.load(gate, 0), 1, "native allocation must precede cancellation");
+      let successorStarted = false;
+      const successor = pool.run(() => {
+        successorStarted = true;
+        assertJoined();
+        return "successor";
+      }, {});
+      const successorOutcome = Promise.allSettled([successor]);
+      let closeSettled = false;
+      const closed = pool.close(reason).then(() => {
+        closeSettled = true;
+      });
+      await setImmediate();
+      // Against the old owner, keep the gate closed through the native destructor.
+      await terminate.mock.calls[0]?.result;
+      assert.deepEqual(
+        [activeSettled, closeSettled, successorStarted],
+        [false, false, false],
+        "cancellation must retain native custody and the active worker slot",
+      );
+      assert.equal(terminate.mock.callCount(), 0, "native init must not be interrupted");
+      assert.equal(pool.getSnapshot().pendingTasks, 1);
+      Atomics.store(gate, 1, 1);
+      Atomics.notify(gate, 1);
+      const result = await outcome;
+      assertRejected(result, reason);
+      assertJoined();
+      assert.equal(Atomics.load(gate, 2), 1, "native call completion");
+      assert.equal(Atomics.load(gate, 3), 0, "cancellation must stop the next page");
+      const [next] = await successorOutcome;
+      assert.equal(next?.status, "rejected");
+      assert.equal(successorStarted, false);
+      await closed;
+      console.log(JSON.stringify({ ending, outsideNative: false, cancelled: true }));
+    }
+  } finally {
+    Atomics.store(gate, 1, 1);
+    Atomics.notify(gate, 1);
+    await pool.close();
+    await outcome;
+    terminate.mock.restore();
+  }
+}

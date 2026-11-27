@@ -4,23 +4,42 @@ import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRpcMethod
 import android.animation.ValueAnimator
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Looper
 import android.os.Parcel
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.View
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.BroadcastFrameClock
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import com.google.android.gms.wearable.ChannelClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,15 +52,174 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowValueAnimator
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.time.Duration
+import kotlin.coroutines.EmptyCoroutineContext
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class WearTalkAvatarTest {
+  @Test
+  fun stopClosesLocalAudioBeforeStalledRpcWithoutTerminalEvent() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      fixture.activate()
+      // Exercise the real playback owner and capture teardown without a live microphone.
+      client.invokePrivate("writeOutput", fixture.attempt, pcm16Le(samplesForFrames(2), 20_000))
+      @Suppress("UNCHECKED_CAST")
+      val capture = client.talkTestField("_isCapturing") as MutableStateFlow<Boolean>
+      capture.value = true
+      val captureJob = Job()
+      client.setTalkTestField("captureJob", captureJob)
+      val stop = async(start = CoroutineStart.UNDISPATCHED) { client.stop() }
+      try {
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(stop.isCompleted)
+        fixture.mark("assert-local-stopped")
+        assertFalse("capture must stop before RPC reply", client.isCapturing.value)
+        assertFalse("playback must stop before RPC reply", client.isPlaying.value)
+        assertEquals(0f, client.mouthLevel.value, 0f)
+        assertFalse(captureJob.isActive)
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        assertTrue(fixture.events.indexOfFirst { it.endsWith("channel-close") } < fixture.events.indexOfFirst { it.endsWith("rpc-enter") })
+        fixture.rpcReply.complete(Unit)
+        stop.await()
+        client.shutdown()
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        println(fixture.events.joinToString("\n"))
+        stop.cancel()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun stopReleasesRecorderBeforeRpcEvenWhenCaptureJobHasNotRun() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      (client.talkTestField("scope") as CoroutineScope).cancel()
+      client.setTalkTestField("scope", CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)))
+      fixture.activate()
+      client.invokePrivate("startCapture", fixture.attempt)
+      val recorder = client.talkTestField("audioRecord") as android.media.AudioRecord
+      assertTrue(client.isCapturing.value)
+      val stop = async(start = CoroutineStart.UNDISPATCHED) { client.stop() }
+      try {
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(stop.isCompleted)
+        assertFalse(client.isCapturing.value)
+        assertEquals(android.media.AudioRecord.STATE_UNINITIALIZED, recorder.state)
+        assertEquals(null, client.talkTestField("audioRecord"))
+        testScheduler.runCurrent()
+        assertEquals(1, fixture.input.closes.get())
+      } finally {
+        stop.cancel()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun shutdownClosesStreamsAndChannelBeforeQueuedScopeWorkCanRun() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      (client.talkTestField("scope") as CoroutineScope).cancel()
+      val cleanupScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+      client.setTalkTestField("scope", cleanupScope)
+      fixture.activate()
+      client.shutdown()
+      try {
+        assertFalse(cleanupScope.coroutineContext[Job]!!.isActive)
+        assertEquals("input close cannot be queued in a cancelled scope", 1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        client.shutdown()
+        client.disconnectLocal()
+        testScheduler.runCurrent()
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        println(fixture.events.joinToString("\n"))
+      }
+    }
+
+  @Test
+  fun shutdownWaitsForConcurrentLocalStreamClosureBeforeCancellingScope() {
+    val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+    val client = fixture.client
+    val closing = java.util.concurrent.CountDownLatch(1)
+    val releaseClose = java.util.concurrent.CountDownLatch(1)
+    val shutdownStarted = java.util.concurrent.CountDownLatch(1)
+    val shutdownFinished = java.util.concurrent.CountDownLatch(1)
+    val input =
+      object : java.io.InputStream() {
+        override fun read(): Int = -1
+
+        override fun close() {
+          closing.countDown()
+          check(releaseClose.await(2, java.util.concurrent.TimeUnit.SECONDS))
+          fixture.input.close()
+        }
+      }
+    client.invokePrivate("activate", fixture.attempt.copy(resources = fixture.attempt.resources.copy(input = input)))
+    val disconnect = kotlin.concurrent.thread { client.disconnectLocal() }
+    var shutdown: Thread? = null
+    try {
+      assertTrue(closing.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      shutdown =
+        kotlin.concurrent.thread {
+          shutdownStarted.countDown()
+          client.shutdown()
+          shutdownFinished.countDown()
+        }
+      assertTrue(shutdownStarted.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      assertFalse(shutdownFinished.await(100, java.util.concurrent.TimeUnit.MILLISECONDS))
+      assertTrue((client.talkTestField("scope") as CoroutineScope).coroutineContext[Job]!!.isActive)
+      releaseClose.countDown()
+      assertTrue(shutdownFinished.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      assertEquals(1, fixture.input.closes.get())
+      assertEquals(1, fixture.output.closes.get())
+      assertEquals(1, fixture.channelCloses.get())
+    } finally {
+      releaseClose.countDown()
+      disconnect.join(2_000)
+      shutdown?.join(2_000)
+      client.shutdown()
+    }
+  }
+
+  @Test
+  fun shutdownReleasesBlockedReaderAndStaleCallbacksCannotReopenAudio() {
+    val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+    val client = fixture.client
+    fixture.activate()
+    client.invokePrivate("startReader", fixture.attempt)
+    try {
+      assertTrue(fixture.input.entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      client.shutdown()
+      assertTrue(fixture.input.released.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      client.invokePrivate("writeOutput", fixture.attempt, pcm16Le(samplesForFrames(1), 20_000))
+      client.invokePrivate("handleChannelFailure", fixture.attempt)
+      assertFalse(client.isPlaying.value)
+      assertFalse(client.channelFailed.value)
+      assertEquals(1, fixture.input.closes.get())
+      assertEquals(1, fixture.channelCloses.get())
+    } finally {
+      // Release the controlled blocking read even when the original regression fails.
+      fixture.input.released.countDown()
+      client.shutdown()
+    }
+  }
+
   @Test
   fun silenceKeepsTheAvatarMouthClosed() {
     val pcm = ByteArray(samplesForFrames(2) * 2)
@@ -81,8 +259,8 @@ class WearTalkAvatarTest {
     val client = realtimeTalkClient()
     val queuedLevels = Channel<Float>(Channel.UNLIMITED)
     val attempt = realtimeAttempt(generation = 1L)
-    client.setPrivateField("activeAttempt", attempt)
-    client.setPrivateField("mouthFrames", queuedLevels)
+    client.setTalkTestField("activeAttempt", attempt)
+    client.setTalkTestField("mouthFrames", queuedLevels)
 
     try {
       val writeOutput =
@@ -115,11 +293,11 @@ class WearTalkAvatarTest {
       client.invokePrivate("activate", stale)
       client.invokePrivate("handleChannelFailure", stale)
       assertTrue(client.channelFailed.value)
-      assertEquals(null, client.privateField("activeAttempt"))
+      assertEquals(null, client.talkTestField("activeAttempt"))
 
       client.invokePrivate("activate", replacement)
       val replacementReader = Job()
-      client.setPrivateField("readJob", replacementReader)
+      client.setTalkTestField("readJob", replacementReader)
       assertFalse(client.channelFailed.value)
       client.invokePrivate("writeOutput", stale, pcm16Le(samplesForFrames(1), sample = 20_000))
       client.invokePrivate("handleChannelFailure", stale)
@@ -128,7 +306,7 @@ class WearTalkAvatarTest {
       assertFalse(client.isPlaying.value)
       assertFalse(client.channelFailed.value)
       assertTrue(replacementReader.isActive)
-      assertSame(replacement, client.privateField("activeAttempt"))
+      assertSame(replacement, client.talkTestField("activeAttempt"))
     } finally {
       client.shutdown()
     }
@@ -184,139 +362,98 @@ class WearTalkAvatarTest {
   }
 
   @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun effectiveScaleTransitionsStopAndRestartTheClockWhileComposed() {
-    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
     val scaleSource = FakeWearAnimatorScaleSource(initialScale = 1f)
-    val motionDurationScale = FakeMotionDurationScale(initialScale = 1f)
-    val frameClock = FakeWearAvatarFrameClock()
-    val observedStates = mutableListOf<WearAvatarAnimationState>()
+    val motionScale = FakeMotionDurationScale(initialScale = 1f)
+    AvatarFixture(scaleSource, motionScale).use { avatar ->
+      assertEquals(1, scaleSource.subscriptionCount)
+      assertTrue(avatar.hasAnimationFrames)
+      val initial = avatar.pixels()
+      avatar.frame(1_016_000_000L)
+      assertFalse(initial.contentEquals(avatar.pixels()))
 
-    controller.get().setContent {
-      WearTalkAvatar(
-        state = RealtimeVoiceButtonState.SPEAKING,
-        mouthLevel = 1f,
-        syntheticSpeech = false,
-        accent = Color.Cyan,
-        danger = Color.Red,
-        animatorScaleSource = scaleSource,
-        motionDurationScale = motionDurationScale,
-        frameClock = frameClock,
-        onAnimationStateChanged = observedStates::add,
-      )
+      scaleSource.emit(0f)
+      avatar.settle()
+      assertFalse(avatar.hasAnimationFrames)
+      val disabled = avatar.pixels()
+      avatar.recompose()
+      assertFalse(avatar.hasAnimationFrames)
+      assertTrue(disabled.contentEquals(avatar.pixels()))
+      AvatarFixture(FakeWearAnimatorScaleSource(initialScale = 0f), motionScale).use { cold ->
+        assertTrue(disabled.contentEquals(cold.pixels()))
+      }
+
+      scaleSource.emit(1f)
+      avatar.settle()
+      assertTrue(avatar.hasAnimationFrames)
+      avatar.frame(2_000_000_000L)
+      avatar.frame(2_016_000_000L)
+      assertFalse(disabled.contentEquals(avatar.pixels()))
     }
-    idleMainLooper()
-
-    assertEquals(1, scaleSource.subscriptionCount)
-    assertEquals(1f, observedStates.last().durationScale, 0f)
-    frameClock.sendFrame(1_000_000_000L)
-    idleMainLooper()
-    frameClock.sendFrame(1_016_666_667L)
-    idleMainLooper()
-    assertTrue(observedStates.last().animationSeconds > 0f)
-
-    scaleSource.emit(0f)
-    idleMainLooper()
-    assertEquals(0f, observedStates.last().durationScale, 0f)
-    assertEquals(0f, observedStates.last().animationSeconds, 0f)
-    assertEquals(0f, observedStates.last().mouthLevel, 0f)
-    val frameRequestsAtZero = frameClock.awaitCount
-    idleMainLooper(Duration.ofMillis(100))
-    assertEquals(frameRequestsAtZero, frameClock.awaitCount)
-
-    scaleSource.emit(1f)
-    idleMainLooper()
-    assertEquals(1f, observedStates.last().durationScale, 0f)
-    assertTrue(frameClock.awaitCount > frameRequestsAtZero)
-
-    motionDurationScale.scaleFactor = 2f
-    idleMainLooper()
-    assertEquals(2f, observedStates.last().durationScale, 0f)
-
-    controller.pause().stop().destroy()
-    idleMainLooper()
     assertEquals(1, scaleSource.disposeCount)
     assertEquals(0, scaleSource.activeSubscriptionCount)
   }
 
   @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun canonicalScaleChangesTheRenderedAnimationRate() {
+    fun animatedPixels(
+      scale: Float,
+      secondFrame: Long,
+    ): IntArray =
+      AvatarFixture(FakeWearAnimatorScaleSource(1f), FakeMotionDurationScale(scale)).use { avatar ->
+        val initial = avatar.pixels()
+        avatar.frame(secondFrame)
+        avatar.pixels().also { assertFalse(initial.contentEquals(it)) }
+      }
+
+    assertTrue(animatedPixels(1f, 1_016_000_000L).contentEquals(animatedPixels(2f, 1_032_000_000L)))
+  }
+
+  @Test
   @Config(sdk = [32])
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun api31And32CanonicalScaleRestartsClockWithoutEffectiveScaleCallback() {
-    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
     val lifecycleOwner = TestLifecycleOwner()
     val scaleSource = AndroidWearAnimatorScaleSource(RuntimeEnvironment.getApplication(), lifecycleOwner)
-    val motionDurationScale = FakeMotionDurationScale(initialScale = 0f)
-    val frameClock = FakeWearAvatarFrameClock()
-    val observedStates = mutableListOf<WearAvatarAnimationState>()
+    val motionScale = FakeMotionDurationScale(initialScale = 0f)
     setRobolectricAnimatorDurationScale(0f)
-
     try {
-      assertEquals(false, ValueAnimator.areAnimatorsEnabled())
-      controller.get().setContent {
-        WearTalkAvatar(
-          state = RealtimeVoiceButtonState.IDLE,
-          mouthLevel = 0f,
-          syntheticSpeech = false,
-          accent = Color.Cyan,
-          danger = Color.Red,
-          animatorScaleSource = scaleSource,
-          motionDurationScale = motionDurationScale,
-          frameClock = frameClock,
-          onAnimationStateChanged = observedStates::add,
-        )
+      assertFalse(ValueAnimator.areAnimatorsEnabled())
+      AvatarFixture(scaleSource, motionScale).use { avatar ->
+        assertFalse(avatar.hasAnimationFrames)
+        val initial = avatar.pixels()
+        motionScale.scaleFactor = 1f
+        avatar.settle()
+        assertTrue(avatar.hasAnimationFrames)
+        avatar.frame(1_016_000_000L)
+        assertFalse(initial.contentEquals(avatar.pixels()))
       }
-      idleMainLooper()
-
-      assertEquals(0f, observedStates.last().durationScale, 0f)
-      assertEquals(0, frameClock.awaitCount)
-
-      motionDurationScale.scaleFactor = 1f
-      idleMainLooper()
-
-      assertEquals(1f, observedStates.last().durationScale, 0f)
-      assertTrue(frameClock.awaitCount > 0)
     } finally {
-      controller.pause().stop().destroy()
-      idleMainLooper()
       setRobolectricAnimatorDurationScale(1f)
     }
   }
 
   @Test
   @Config(sdk = [33])
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun zeroSystemScaleColdStartUsesTheComposeMotionScaleWithoutCrashing() {
     val context = RuntimeEnvironment.getApplication()
     val originalScale =
       Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
-    val controller = Robolectric.buildActivity(ComponentActivity::class.java)
-    val observedStates = mutableListOf<WearAvatarAnimationState>()
     Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
     setRobolectricAnimatorDurationScale(0f)
-
     try {
-      controller.setup()
-      controller.get().setContent {
-        WearTalkAvatar(
-          state = RealtimeVoiceButtonState.LISTENING,
-          mouthLevel = 0f,
-          syntheticSpeech = false,
-          accent = Color.Cyan,
-          danger = Color.Red,
-          animatorScaleSource = FakeWearAnimatorScaleSource(initialScale = 1f),
-          onAnimationStateChanged = observedStates::add,
-        )
+      AvatarFixture(FakeWearAnimatorScaleSource(initialScale = 1f)).use { avatar ->
+        assertFalse(avatar.hasAnimationFrames)
+        val initial = avatar.pixels()
+        avatar.recompose()
+        assertFalse(avatar.hasAnimationFrames)
+        assertTrue(initial.contentEquals(avatar.pixels()))
       }
-      idleMainLooper()
-
-      assertEquals(0f, observedStates.last().durationScale, 0f)
-      assertEquals(0f, observedStates.last().animationSeconds, 0f)
     } finally {
-      controller.pause().stop().destroy()
-      idleMainLooper()
-      Settings.Global.putFloat(
-        context.contentResolver,
-        Settings.Global.ANIMATOR_DURATION_SCALE,
-        originalScale,
-      )
+      Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalScale)
       setRobolectricAnimatorDurationScale(originalScale)
     }
   }
@@ -388,6 +525,13 @@ class WearTalkAvatarTest {
     assertEquals(WearAvatarMotionInputs(animationSeconds = 12.5f, mouthLevel = 1f), inputs)
   }
 
+  private fun pcm16LeMouthLevels(
+    pcm: ByteArray,
+  ): List<Float> =
+    Pcm16MouthLevelAccumulator().run {
+      append(pcm) + flush()
+    }
+
   private fun samplesForFrames(frameCount: Int): Int = WEAR_REALTIME_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000 * frameCount
 
   private fun pcm16Le(
@@ -418,7 +562,6 @@ class WearTalkAvatarTest {
     WearRealtimeTalkClient.ActiveAttempt(
       nodeId = "watch-a",
       attemptId = "attempt-$generation",
-      generation = generation,
       resources =
         WearRealtimeTalkClient.ChannelResources(
           channel = FakeRealtimeChannel("watch-a", "channel-$generation"),
@@ -444,22 +587,6 @@ class WearTalkAvatarTest {
       .apply { isAccessible = true }
       .invoke(null, scale)
   }
-
-  private fun Any.setPrivateField(
-    name: String,
-    value: Any,
-  ) {
-    javaClass.getDeclaredField(name).apply {
-      isAccessible = true
-      set(this@setPrivateField, value)
-    }
-  }
-
-  private fun Any.privateField(name: String): Any? =
-    javaClass.getDeclaredField(name).run {
-      isAccessible = true
-      get(this@privateField)
-    }
 
   private fun WearRealtimeTalkClient.invokePrivate(
     name: String,
@@ -516,18 +643,80 @@ class WearTalkAvatarTest {
     }
   }
 
-  private class FakeWearAvatarFrameClock : WearAvatarFrameClock {
-    private val frames = Channel<Long>(Channel.UNLIMITED)
-    var awaitCount = 0
-      private set
+  private inner class AvatarFixture(
+    scaleSource: WearAnimatorScaleSource,
+    motionScale: MotionDurationScale? = null,
+  ) : AutoCloseable {
+    private val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+    private val driverClock = BroadcastFrameClock()
+    private val view = ComposeView(controller.get())
+    private val recomposer =
+      view.createLifecycleAwareWindowRecomposer(
+        coroutineContext = driverClock + (motionScale ?: EmptyCoroutineContext),
+        lifecycle = controller.get().lifecycle,
+      )
+    private val effectClock = checkNotNull(recomposer.effectCoroutineContext[MonotonicFrameClock]) as BroadcastFrameClock
+    private var revision by mutableIntStateOf(0)
+    private var frameTime = 999_999_999L
 
-    override suspend fun awaitFrame(onFrame: (Long) -> Unit) {
-      awaitCount += 1
-      onFrame(frames.receive())
+    val hasAnimationFrames: Boolean
+      get() = effectClock.hasAwaiters
+
+    init {
+      view.setParentCompositionContext(recomposer)
+      controller.get().setContentView(view)
+      view.setContent {
+        WearTalkAvatar(
+          state = RealtimeVoiceButtonState.SPEAKING,
+          mouthLevel = 1f,
+          syntheticSpeech = false,
+          accent = Color.Cyan,
+          danger = Color.Red,
+          modifier = Modifier.size(200.dp).testTag("avatar-$revision"),
+          animatorScaleSource = scaleSource,
+        )
+      }
+      settle()
     }
 
-    fun sendFrame(frameNanos: Long) {
-      assertTrue(frames.trySend(frameNanos).isSuccess)
+    fun settle() {
+      idleMainLooper()
+      frame(frameTime + 1)
+      val size = View.MeasureSpec.makeMeasureSpec(200, View.MeasureSpec.EXACTLY)
+      view.measure(size, size)
+      view.layout(0, 0, 200, 200)
+    }
+
+    fun frame(timeNanos: Long) {
+      check(timeNanos > frameTime)
+      driverClock.sendFrame(timeNanos)
+      idleMainLooper()
+      // Render the animation invalidation on the next strictly increasing frame.
+      frameTime = timeNanos + 1
+      driverClock.sendFrame(frameTime)
+      idleMainLooper()
+    }
+
+    fun recompose() {
+      revision += 1
+      settle()
+    }
+
+    fun pixels(): IntArray {
+      val bitmap = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
+      view.draw(Canvas(bitmap))
+      return IntArray(200 * 200).also { pixels ->
+        bitmap.getPixels(pixels, 0, 200, 0, 0, 200, 200)
+        bitmap.recycle()
+        assertTrue("avatar must render nonblank pixels", pixels.any { it != 0 })
+      }
+    }
+
+    override fun close() {
+      view.disposeComposition()
+      recomposer.cancel()
+      controller.pause().stop().destroy()
+      idleMainLooper()
     }
   }
 

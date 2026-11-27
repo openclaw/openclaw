@@ -1,47 +1,15 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
-export type CliHistoryWriter = {
-  target: SessionTranscriptRuntimeTarget;
-  runId: string;
-  authFingerprint: string;
-  lifecycleRevision?: string;
-  expectedWriterRunId?: string;
-  assertCurrent: () => void;
-  assertReadable: () => void;
-};
-
-const cliHistoryWriter = new AsyncLocalStorage<CliHistoryWriter>();
-
-export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined, run: () => T): T {
-  return writer ? cliHistoryWriter.run(writer, run) : cliHistoryWriter.exit(run);
-}
-
-export function getCliHistoryWriter(
-  target: SessionTranscriptRuntimeTarget,
-): CliHistoryWriter | undefined {
-  const writer = cliHistoryWriter.getStore();
-  return writer &&
-    writer.target.agentId === target.agentId &&
-    writer.target.sessionId === target.sessionId &&
-    writer.target.sessionKey === target.sessionKey &&
-    writer.target.storePath === target.storePath
-    ? writer
-    : undefined;
-}
-
-/** Private proof of the account that owns every covered transcript event. */
+/**
+ * Private record of the CLI account a session's saved history belongs to. `known` names the
+ * first identified account that ran the session; `mixed` means another account ran it later,
+ * so the history stays out of every CLI prompt until a new session id starts. Rows from
+ * earlier releases may say `unknown`, which can hide an account switch, so it refuses like
+ * `mixed`; their retired coverage fields are ignored.
+ */
 export type CliHistoryBoundary =
-  | { version: 1; sessionId: string; state: "unknown" }
-  | {
-      version: 1;
-      sessionId: string;
-      state: "known";
-      authFingerprint: string;
-      generation: string | null;
-      maxSeq: number | null;
-      writerRunId: string;
-    };
+  | { version: 1; sessionId: string; state: "unknown" | "mixed" }
+  | { version: 1; sessionId: string; state: "known"; authFingerprint: string };
 
 export function isKnownCliHistoryBoundary(
   boundary: CliHistoryBoundary | undefined,
@@ -52,14 +20,20 @@ export function isKnownCliHistoryBoundary(
     typeof boundary.sessionId === "string" &&
     boundary.sessionId.length > 0 &&
     typeof boundary.authFingerprint === "string" &&
-    /^[a-f0-9]{64}$/.test(boundary.authFingerprint) &&
-    (boundary.generation === null ||
-      (typeof boundary.generation === "string" && boundary.generation.length > 0)) &&
-    (boundary.maxSeq === null ||
-      (boundary.generation !== null &&
-        Number.isSafeInteger(boundary.maxSeq) &&
-        boundary.maxSeq >= 0)) &&
-    typeof boundary.writerRunId === "string" &&
-    boundary.writerRunId.length > 0
+    /^[a-f0-9]{64}$/.test(boundary.authFingerprint)
   );
+}
+
+/**
+ * A fork copies the parent's transcript prefix, so it keeps the parent's account record,
+ * rebound to the child's session id.
+ */
+export function forkCliHistoryBoundary(
+  parent: InternalSessionEntry | undefined,
+  sessionId: string,
+): CliHistoryBoundary | undefined {
+  const boundary = parent?.cliHistoryBoundary;
+  return boundary && boundary.sessionId === parent.sessionId
+    ? { ...boundary, sessionId }
+    : undefined;
 }

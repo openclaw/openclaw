@@ -1,21 +1,20 @@
-// Gateway secret-input path helpers.
 // Lists config locations that may contain plaintext values or SecretRefs.
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Canonical Gateway config paths whose values may be plaintext or secret refs. */
-export type SupportedGatewaySecretInputPath =
-  | "gateway.auth.token"
-  | "gateway.auth.password"
-  | "gateway.remote.token"
-  | "gateway.remote.password";
-
-/** Stable scan order for Gateway secret-ref credential selection. */
-export const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
+export const GATEWAY_AUTH_SURFACE_PATHS = [
   "gateway.auth.token",
   "gateway.auth.password",
   "gateway.remote.token",
   "gateway.remote.password",
+] as const;
+
+export type SupportedGatewaySecretInputPath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
+
+/** Stable scan order for Gateway secret-ref credential selection. */
+export const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
+  ...GATEWAY_AUTH_SURFACE_PATHS,
 ];
 
 /** Narrow an arbitrary error/config path to one of the supported Gateway secret inputs. */
@@ -49,27 +48,12 @@ export function assignResolvedGatewaySecretInput(params: {
   value: string | undefined;
 }): void {
   const { config, path, value } = params;
-  let assigned = false;
-  if (path === "gateway.auth.token") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.token = value;
-      assigned = true;
-    }
-  } else if (path === "gateway.auth.password") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.password = value;
-      assigned = true;
-    }
-  } else if (path === "gateway.remote.token") {
-    if (config.gateway?.remote) {
-      config.gateway.remote.token = value;
-      assigned = true;
-    }
-  } else if (config.gateway?.remote) {
-    config.gateway.remote.password = value;
-    assigned = true;
-  }
-  if (assigned) {
+  const target =
+    path === "gateway.auth.token" || path === "gateway.auth.password"
+      ? config.gateway?.auth
+      : config.gateway?.remote;
+  if (target) {
+    target[isTokenGatewaySecretInputPath(path) ? "token" : "password"] = value;
     copyConfigResolutionFactsExcept(config, config, [path]);
   }
 }

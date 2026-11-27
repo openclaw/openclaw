@@ -55,6 +55,7 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 ## Notes
 
 - `--local` cannot combine with `--url`, `--token`, `--password`, or `--tls-fingerprint`.
+- `--local` refuses while a Gateway owns the state directory. Omit `--local` to connect to that Gateway, or stop it first.
 - Pass only one Gateway target. A URL target cannot combine with `--url`, and
   any positional target cannot combine with `--session` or local mode.
 - A URL or host target never reuses configured credentials or
@@ -74,10 +75,33 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - When the configured remote Gateway is behind an identity-aware proxy, `tui`
   resolves `gateway.remote.edgeAuth` SecretInputs and sends those headers only
   to that configured Gateway scope. URL or host targets for other origins never
-  inherit them.
+  inherit them. When that Gateway uses trusted-proxy auth, the proxy
+  authenticates the connection, so the first connection, with or without
+  `--url`, needs no `--token` or `--password`: it sends a pairing request to
+  approve in that Gateway's Control UI. A Gateway on token or password auth
+  still needs its credential.
+- A device paired with only session scopes (`operator.sessions.*`) connects
+  within that grant instead of requesting the default operator scopes. Until
+  the grant is stored, the first request is refused with a scope-upgrade
+  request that reports the approved scopes, and the TUI reconnects within
+  them. The TUI stores the grant with the device token the Gateway returns; by
+  default a trusted-proxy Gateway returns none to the TUI, so there every start
+  is refused once. With
+  [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants)
+  on, that Gateway connects the TUI within its grant from the first start; that
+  section says when the TUI then keeps a device token. This needs no named
+  operator role (`gateway.roles.default`). The command list and
+  pending approvals need `operator.read` and `operator.approvals` and stay
+  empty.
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
   `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
+- With no explicit target and no running local Gateway, `tui` stops before
+  connecting and points to `openclaw chat` instead of asking for a token. A
+  local Gateway started with a generated token pairs this CLI automatically.
+  A node host has no local Gateway: its pairing has the node role, so
+  operator chat with its Gateway uses `openclaw tui <Gateway URL>` with
+  `--token` or `--password` once, plus a one-time pairing approval.
 - Launched from inside a configured agent workspace directory, TUI auto-selects
   that agent for the session key default (unless `--session` is explicitly
   `agent:<id>:...`).
@@ -90,6 +114,11 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - Local mode adds `/auth [provider]` to the TUI command surface.
 - Plugin approval gates still apply in local mode: tools that require approval
   prompt for a decision in the terminal, nothing is silently auto-approved.
+- [`ask_user` questions](/web/tui#questions) appear as interactive prompts in
+  both modes. Esc collapses a prompt without answering; `/question` reopens it.
+- Gateway mode accepts [`secrets`](/tools/secrets) requests in a masked input
+  with a read-only allowed-host list. Local mode cannot fulfill store-bound
+  requests; use `openclaw secrets store` or the Control UI with a running Gateway.
 - Session [goals](/tools/goal) appear in the footer and can be managed with
   `/goal`.
 
@@ -153,3 +182,5 @@ rerun `openclaw config validate`. See [TUI](/web/tui) and
 - [Control UI URLs](/web/urls)
 - [Devices](/cli/devices)
 - [Goal](/tools/goal)
+- [`openclaw attach`](/cli/attach) — launch Claude Code with a temporary session-scoped Gateway MCP grant
+- [`openclaw resume`](/cli/resume) — attach this TUI to an existing Gateway session

@@ -57,7 +57,8 @@ struct ChatContextUsageTests {
         cacheRead: Int? = nil,
         cacheWrite: Int? = nil,
         total: Int? = nil,
-        costTotal: Double? = nil) throws -> OpenClawChatUsage
+        costTotal: Double? = nil,
+        contextUsage: [String: Any]? = nil) throws -> OpenClawChatUsage
     {
         var payload: [String: Any] = [:]
         payload["input"] = input
@@ -65,11 +66,23 @@ struct ChatContextUsageTests {
         payload["cacheRead"] = cacheRead
         payload["cacheWrite"] = cacheWrite
         payload["total"] = total
+        payload["contextUsage"] = contextUsage
         if let costTotal {
             payload["cost"] = ["total": costTotal]
         }
         let data = try JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
         return try JSONDecoder().decode(OpenClawChatUsage.self, from: data)
+    }
+
+    /// Counters summed over a multi-call turn, far larger than the latest call's prompt.
+    private func wholeTurnUsage(contextUsage: [String: Any]? = nil) throws -> OpenClawChatUsage {
+        try self.usage(
+            input: 100,
+            output: 2000,
+            cacheRead: 140_000,
+            cacheWrite: 6900,
+            total: 149_000,
+            contextUsage: contextUsage)
     }
 
     @Test func `uses newest usage-bearing message, not a sum of runs`() throws {
@@ -100,6 +113,49 @@ struct ChatContextUsageTests {
         #expect(result?.usedTokens == 1000)
         #expect(result?.contextWindowTokens == nil)
         #expect(result?.fractionUsed == nil)
+    }
+
+    @Test func `whole-turn counters report the latest call's context marker`() throws {
+        let marked = try self.wholeTurnUsage(
+            contextUsage: ["state": "available", "promptTokens": 74000, "totalTokens": 75000])
+        let results = try [marked, self.wholeTurnUsage()].map {
+            ChatContextUsageCalculator.usage(
+                messages: [self.message(usage: $0)],
+                sessionEntry: nil,
+                defaults: nil,
+                modelContextWindow: 150_000)
+        }
+
+        #expect(results[0]?.usedTokens == 75000)
+        #expect(results[0]?.percentUsed == 50)
+        #expect(results[1]?.usedTokens == 149_000)
+        // The transcript cache re-decodes its own encoding; the marker must survive it.
+        let restored = try JSONDecoder().decode(OpenClawChatUsage.self, from: JSONEncoder().encode(marked))
+        #expect(restored == marked)
+    }
+
+    @Test(arguments: [
+        #"{"state":"estimated","promptTokens":74000,"totalTokens":75000}"#,
+        #"{"state":"available","promptTokens":74000}"#,
+        #"{"state":"available","promptTokens":"74000","totalTokens":75000}"#,
+        #""available""#,
+    ])
+    func `unusable context marker decodes to nil and keeps the counters`(marker: String) throws {
+        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+        {"role":"assistant","content":"hi","usage":{"input":700,"output":100,"cacheRead":200,"contextUsage":\(marker)}}
+        """.utf8))
+        let result = ChatContextUsageCalculator.usage(
+            messages: [message],
+            sessionEntry: nil,
+            defaults: nil,
+            modelContextWindow: 2000)
+        let presentation = try #require(ChatMessageUsagePresentation.make(
+            message: message,
+            contextWindowTokens: 2000))
+
+        #expect(message.usage?.contextUsage == nil)
+        #expect(result?.usedTokens == 1000)
+        #expect(presentation.context?.percent == 45)
     }
 
     @Test func `falls back to session totals without message usage`() {
@@ -191,13 +247,15 @@ struct ChatContextUsageTests {
 
     @Test @MainActor func `view model resolves context totals through a selected global alias`() {
         let vm = OpenClawChatViewModel(
-            sessionKey: "global",
+            sessionKey: "agent:ops:main",
             transport: ContextUsageTestTransport(),
-            activeAgentId: "ops")
+            activeAgentId: "main",
+            sessionRoutingContract: "global|main|main")
         vm.sessions = [OpenClawChatSessionEntry(
-            key: "agent:ops:global",
+            key: "global",
             kind: nil,
             displayName: nil,
+            agentId: "ops",
             surface: nil,
             subject: nil,
             room: nil,
@@ -219,7 +277,7 @@ struct ChatContextUsageTests {
         #expect(vm.contextUsage?.contextWindowTokens == 10000)
     }
 
-    @Test func `assistant message usage mirrors the compact control UI footer`() throws {
+    @Test func `assistant message usage feeds the context table rows, budget and cost`() throws {
         let message = try self.message(usage: self.usage(
             input: 59,
             output: 13400,
@@ -231,9 +289,70 @@ struct ChatContextUsageTests {
             message: message,
             contextWindowTokens: 3_000_000))
 
-        #expect(presentation.text == "↑59 ↓13.4k R2.2M W43.9k $0.0123 ⚠︎ 75% ctx")
+        #expect(presentation.rows == [
+            .init(component: .cacheRead, tokens: 2_200_000),
+            .init(component: .cacheWrite, tokens: 43900),
+            .init(component: .input, tokens: 59),
+            .init(component: .output, tokens: 13400),
+        ])
+        #expect(presentation.cost == 0.01234)
+        let context = try #require(presentation.context)
+        #expect(context.promptTokens == 2_243_959)
+        #expect(context.windowTokens == 3_000_000)
+        #expect(context.percent == 75)
+        // Output is not part of the prompt, so it never draws on the budget bar.
+        #expect(context.segments.map(\.component) == [.cacheRead, .cacheWrite, .input])
+        #expect(abs(context.segments.map(\.fraction).reduce(0, +) - 2_243_959.0 / 3_000_000) < 0.000_001)
         #expect(presentation.pressure == .warning)
-        #expect(presentation.accessibilityValue.contains("Warning"))
+    }
+
+    @Test func `context table hides zero rows and formats cost like the web panel`() throws {
+        let message = try self.message(usage: self.usage(input: 0, output: 12, cacheRead: 0, costTotal: 0.1587))
+        let presentation = try #require(ChatMessageUsagePresentation.make(message: message, contextWindowTokens: nil))
+
+        #expect(presentation.rows == [.init(component: .output, tokens: 12)])
+        #expect(presentation.context == nil)
+        #expect(ChatMessageUsagePresentation.cost(0.1587) == "$0.159")
+        #expect(ChatMessageUsagePresentation.cost(0.15) == "$0.15")
+        #expect(ChatMessageUsagePresentation.cost(0.0042) == "$0.0042")
+        #expect(ChatMessageUsagePresentation.cost(1.234) == "$1.23")
+        #expect(ChatMessageUsagePresentation.tokens(521_300) == "521.3k")
+    }
+
+    @Test func `usage footer belongs to the reply a run ends on, not its tool steps`() throws {
+        let usage = #""usage":{"input":59,"output":13}"#
+        for (reason, shows) in [("toolUse", false), ("tool_use", false), ("tool_calls", false), ("stop", true)] {
+            let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+            {"role":"assistant","content":[{"type":"text","text":"Reply"}],"timestamp":1,
+             "stopReason":"\(reason)",\(usage)}
+            """.utf8))
+            let presentation = ChatMessageUsagePresentation.make(message: message, contextWindowTokens: nil)
+            #expect((presentation != nil) == shows)
+        }
+    }
+
+    @Test func `usage footer sizes context from the marker and keeps whole-turn counters`() throws {
+        let marked = try self.message(usage: self.wholeTurnUsage(
+            contextUsage: ["state": "available", "promptTokens": 74000, "totalTokens": 75000]))
+        let unmarked = try self.message(usage: self.wholeTurnUsage())
+
+        let markedPresentation = try #require(ChatMessageUsagePresentation.make(
+            message: marked,
+            contextWindowTokens: 150_000))
+        let unmarkedPresentation = try #require(ChatMessageUsagePresentation.make(
+            message: unmarked,
+            contextWindowTokens: 150_000))
+
+        // The marker sizes the budget; its parts scale into it instead of overflowing it.
+        let budget = try #require(markedPresentation.context)
+        #expect(budget.promptTokens == 74000)
+        #expect(budget.percent == 49)
+        let segmentTotal: Double = budget.segments.map(\.fraction).reduce(0, +)
+        #expect(abs(segmentTotal - 74000.0 / 150_000) < 0.000_001)
+        #expect(markedPresentation.pressure == .normal)
+        #expect(unmarkedPresentation.context?.percent == 98)
+        #expect(unmarkedPresentation.pressure == .danger)
+        #expect(markedPresentation.rows == unmarkedPresentation.rows)
     }
 
     @Test func `context pressure excludes output tokens and clamps at one hundred percent`() throws {
@@ -251,11 +370,12 @@ struct ChatContextUsageTests {
             message: danger,
             contextWindowTokens: 1000))
 
-        #expect(warningPresentation.text.hasSuffix("⚠︎ 80% ctx"))
+        #expect(warningPresentation.context?.percent == 80)
         #expect(warningPresentation.pressure == .warning)
-        #expect(dangerPresentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(dangerPresentation.context?.percent == 100)
         #expect(dangerPresentation.pressure == .danger)
-        #expect(dangerPresentation.accessibilityValue.contains("Critical"))
+        // A clamped prompt still fits the bar.
+        #expect((dangerPresentation.context?.segments.map(\.fraction).reduce(0, +) ?? 0) <= 1)
     }
 
     @Test func `extreme decoded usage clamps without integer overflow`() throws {
@@ -265,7 +385,7 @@ struct ChatContextUsageTests {
             message: message,
             contextWindowTokens: 1))
 
-        #expect(presentation.text.hasSuffix("⚠︎ 100% ctx"))
+        #expect(presentation.context?.percent == 100)
         #expect(presentation.pressure == .danger)
     }
 

@@ -22,7 +22,7 @@ type McpApiToolDoc = {
 export type McpApiServerDoc = {
   identifier: string;
   serverName: string;
-  nodeLabel?: string;
+  instructions?: string;
   tools: McpApiToolDoc[];
 };
 
@@ -50,13 +50,13 @@ function escapeDocComment(value: string): string {
   return value.replace(/\*\//gu, "* /").trim();
 }
 
-function normalizeDocLines(value: string | undefined): string[] {
+function normalizeDocLines(value: string | undefined, maxLines = 12): string[] {
   return value
     ? value
         .split(/\r?\n/u)
         .map((line) => line.trim())
         .filter(Boolean)
-        .slice(0, 12)
+        .slice(0, maxLines)
     : [];
 }
 
@@ -78,7 +78,7 @@ function renderDocComment(
     const description = `${normalizeDocLines(param.description).join(" ")}${suffix}`.trim();
     if (description) {
       lines.push(
-        ` * @param ${param.name}${param.required ? "" : "?"} ${escapeDocComment(description)}`,
+        ` * ${escapeDocComment(`@param ${param.name}${param.required ? "" : "?"} ${description}`)}`,
       );
     }
   }
@@ -216,10 +216,7 @@ export function buildMcpParamDocs(schema: unknown, depth = 0): McpApiParamDoc[] 
   });
 }
 
-function renderMcpToolSignature(
-  tool: McpApiToolDoc,
-  functionName = tool.path.at(-1) ?? tool.method,
-): string[] {
+function renderMcpToolSignature(tool: McpApiToolDoc): string[] {
   const resultType = {
     tool: "McpToolResult",
     resources_list: "McpResourcesListResult",
@@ -235,26 +232,30 @@ function renderMcpToolSignature(
   const optional = inputParams.some((param) => param.required) ? "" : "?";
   return [
     ...renderDocComment(tool.description, inputParams),
-    `function ${functionName}(`,
+    `function ${tool.path.at(-1) ?? tool.method}(`,
     `  input${optional}: ${renderInlineObjectType(tool.parameters, inputParams)}`,
     `): Promise<${resultType}>;`,
   ];
 }
 
 function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiToolDoc[]): string {
+  const instructionLines = normalizeDocLines(server.instructions, Number.POSITIVE_INFINITY);
   const lines = [
-    "type McpApiHeader = { header: string; tools?: unknown[]; schemas?: Record<string, unknown> };",
+    "interface McpApiHeader { header: string; tools?: unknown[]; schemas?: Record<string, unknown> }",
     "",
-    "type McpToolResult = {",
+    "interface McpToolResult {",
     "  content: unknown[];",
     "  structuredContent?: unknown;",
     "  isError?: boolean;",
-    "};",
-    "type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };",
-    "type McpResourcesReadResult = { contents: unknown[] };",
-    "type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };",
-    "type McpPromptsGetResult = { messages: unknown[]; description?: string };",
+    "}",
+    "interface McpResourcesListResult { resources: unknown[]; nextCursor?: string }",
+    "interface McpResourcesReadResult { contents: unknown[] }",
+    "interface McpPromptsListResult { prompts: unknown[]; nextCursor?: string }",
+    "interface McpPromptsGetResult { messages: unknown[]; description?: string }",
     "",
+    ...(instructionLines.length > 0
+      ? ["/**", ...instructionLines.map((line) => ` * ${escapeDocComment(line)}`), " */"]
+      : []),
     `declare namespace MCP.${server.identifier} {`,
     "  /** Return this TypeScript-style API header. */",
     "  function $api(toolName?: string, options?: { schema?: boolean }): Promise<McpApiHeader>;",
@@ -273,7 +274,8 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
       nestedGroups.set(groupName, [tool]);
     }
   }
-  for (const [groupName, groupTools] of [...nestedGroups].toSorted((a, b) =>
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is private to this header rendering pass.
+  for (const [groupName, groupTools] of [...nestedGroups].sort((a, b) =>
     a[0].localeCompare(b[0]),
   )) {
     lines.push("", `  namespace ${groupName} {`);
@@ -286,15 +288,14 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
   return lines.join("\n");
 }
 
-function renderMcpRootHeader(servers: readonly McpApiServerDoc[]): string {
+function renderMcpRootHeader(): string {
   return [
-    "type McpApiHeader = { header: string; servers?: unknown[] };",
+    "interface McpRootApiHeader { header: string; servers?: unknown[] }",
     "",
-    "declare const MCP: {",
+    "declare namespace MCP {",
     "  /** List visible MCP servers and request server-specific headers. */",
-    "  $api(): Promise<McpApiHeader>;",
-    ...servers.map((server) => `  readonly ${server.identifier}: typeof MCP.${server.identifier};`),
-    "};",
+    "  function $api(): Promise<McpRootApiHeader>;",
+    "}",
   ].join("\n");
 }
 
@@ -308,7 +309,7 @@ export function buildMcpApiResponse(params: {
     return {
       kind: "mcp_api",
       scope: "root",
-      header: renderMcpRootHeader(params.servers),
+      header: renderMcpRootHeader(),
       servers: params.servers.map((server) => ({
         identifier: server.identifier,
         serverName: server.serverName,
@@ -318,18 +319,20 @@ export function buildMcpApiResponse(params: {
     };
   }
   const selectedName = typeof selector === "string" ? selector.trim() : "";
+  const exactMethod = params.server.tools.find((tool) => tool.method === selectedName);
   const selected = selectedName
-    ? params.server.tools.filter(
-        (tool) =>
-          tool.method === selectedName ||
-          tool.path.join(".") === selectedName ||
-          tool.mcpTool === selectedName,
-      )
+    ? exactMethod
+      ? [exactMethod]
+      : params.server.tools.filter((tool) => tool.mcpTool === selectedName)
     : params.server.tools;
   return {
     kind: "mcp_api",
     scope: selected.length === 1 ? "tool" : "server",
-    server: { identifier: params.server.identifier, serverName: params.server.serverName },
+    server: {
+      identifier: params.server.identifier,
+      serverName: params.server.serverName,
+      ...(params.server.instructions ? { instructions: params.server.instructions } : {}),
+    },
     header: renderMcpServerHeader(params.server, selected),
     tools: selected.map((tool) => ({
       method: tool.method,
@@ -351,10 +354,14 @@ export function createMcpApiVirtualFiles(
   if (servers.length === 0) {
     return [];
   }
+  const indexServer = servers.find((server) => server.identifier === "index");
+  const separateServers = servers.filter((server) => server.identifier !== "index");
+  // Preserve MCP.index and its existing path without overwriting the root API.
   const rootContent = [
-    ...servers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
+    ...separateServers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
     "",
-    renderMcpRootHeader(servers),
+    renderMcpRootHeader(),
+    ...(indexServer ? ["", renderMcpServerHeader(indexServer, indexServer.tools)] : []),
   ].join("\n");
   return [
     {
@@ -363,7 +370,7 @@ export function createMcpApiVirtualFiles(
       content: rootContent,
       bytes: Buffer.byteLength(rootContent, "utf8"),
     },
-    ...servers.map((server) => {
+    ...separateServers.map((server) => {
       const content = renderMcpServerHeader(server, server.tools);
       return {
         path: `mcp/${server.identifier}.d.ts`,

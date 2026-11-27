@@ -1,12 +1,15 @@
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import {
+  asToolParamsRecord,
+  type AnyAgentTool,
   resolveMemorySearchIndexConfig,
   type MemoryPromptSectionBuilder,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export type MemoryToolOptions = {
   config?: OpenClawConfig;
@@ -17,7 +20,8 @@ export type MemoryToolOptions = {
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
 const MemorySearchSchema = {
@@ -68,7 +72,7 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
   if (!cfg) {
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+  const agentId = resolveSessionAgentIdStrict({
     sessionKey: options.agentSessionKey,
     config: cfg,
     agentId: options.agentId,
@@ -81,16 +85,36 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
 }
 
 const SEARCH_CORPUS_OUTCOME_GUIDANCE =
-  "Corpus outcomes cover each requested corpus; a corpus warning means results are partial and must be surfaced to the user.";
+  "Corpus outcomes cover each requested corpus; only a top-level corpus warning means results are partial and must be surfaced to the user. An optional corpus outcome of not-registered in a multi-corpus result is informational.";
 const GET_READ_OUTCOME_GUIDANCE =
-  "status=ok means the requested excerpt was read; status=not_found means every requested available corpus missed.";
+  "status=ok means the requested excerpt was read; status=not_found means every requested available corpus missed; status=error means the requested read failed, not that memory is disabled.";
 
 export const MEMORY_SEARCH_TOOL_CONTRACT = {
   label: "Memory Search",
   name: "memory_search",
   parameters: MemorySearchSchema,
+  prepareArguments: (args: unknown) => {
+    const params = asToolParamsRecord(args);
+    const aliases = [
+      ["min_score", "minScore"],
+      ["max_results", "maxResults"],
+      ["limit", "maxResults"],
+    ] as const;
+    if (!aliases.some(([alias]) => Object.hasOwn(params, alias))) {
+      return args;
+    }
+    const normalized = { ...params };
+    // Precedence: maxResults > max_results > limit, even for invalid values validation must reject.
+    for (const [alias, key] of aliases) {
+      if (Object.hasOwn(normalized, alias) && !Object.hasOwn(normalized, key)) {
+        normalized[key] = normalized[alias];
+      }
+      delete normalized[alias];
+    }
+    return normalized;
+  },
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Semantically search ${search} when an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn. Do not repeat memory retrieval when supplied context fully answers the question. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
@@ -98,34 +122,60 @@ export const MEMORY_GET_TOOL_CONTRACT = {
   name: "memory_get",
   parameters: MemoryGetSchema,
   describe: ({ files }: MemorySourceContract) =>
-    `Safe exact excerpt read from ${files}. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
+    `Safe exact excerpt read from ${files}. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
 } as const;
 
-export type MemoryToolContract =
+export type MemoryToolContract = (
   | typeof MEMORY_SEARCH_TOOL_CONTRACT
-  | typeof MEMORY_GET_TOOL_CONTRACT;
+  | typeof MEMORY_GET_TOOL_CONTRACT
+) & { prepareArguments?: AnyAgentTool["prepareArguments"] };
 
 export function buildMemoryPromptSection({
   availableTools,
   citationsMode,
-  sources,
-}: Parameters<MemoryPromptSectionBuilder>[0] & { sources: MemorySourceContract }): string[] {
+}: Parameters<MemoryPromptSectionBuilder>[0]): string[] {
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
   if (!hasMemorySearch && !hasMemoryGet) {
     return [];
   }
 
+  // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
-    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on ${sources.search}${
-        hasMemoryGet ? "; then use memory_get to pull only the needed lines" : ""
-      }. ${SEARCH_CORPUS_OUTCOME_GUIDANCE}${
-        hasMemoryGet ? ` For memory_get, ${GET_READ_OUTCOME_GUIDANCE}` : ""
-      } If low confidence after search, say you checked.`
-    : `Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific source in ${sources.files}: run memory_get to pull only the needed lines. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If low confidence after reading, say you checked.`;
+    ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn, run memory_search without corpus${
+        hasMemoryGet ? "; memory_get only the needed lines of file hits" : ""
+      }. Skip it when supplied context fully answers. Use corpus=all only when compiled wiki supplements are needed. If unsure after searching, say you checked.`
+    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn and points to a memory file, memory_get only the needed lines. Skip it when supplied context fully answers. If unsure after reading, say you checked.";
+  const sessionGuidance = !hasMemorySearch
+    ? []
+    : [
+        availableTools.has("sessions_search")
+          ? `Session hits: sessions_search with distinctive snippet text (sessionKey = transcript ID when known)${
+              availableTools.has("sessions_history")
+                ? ", then sessions_history with the returned sessionKey, messageId, and sessionId"
+                : "; exact session history is unavailable"
+            }.`
+          : availableTools.has("sessions_history")
+            ? "Session hits: sessions_history with a known session key or transcript ID and a small limit; paginate to the excerpt."
+            : "Session hits are snippets only; exact session history is unavailable.",
+        "Search line numbers are not history offsets; never read raw transcript files.",
+      ];
+  const outcomeGuidance =
+    "Report recall as partial, unavailable, or stale on a top-level warning or action guidance, disabled=true, or stale=true; in a multi-corpus result without one, an optional corpus outcome of not-registered is informational.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
       : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
-  return ["## Memory Recall", guidance, citationGuidance, ""];
+  return ["## Memory Recall", guidance, ...sessionGuidance, outcomeGuidance, citationGuidance, ""];
+}
+
+/** Ask agents to tag repository-specific curated entries with the run's safe project key. */
+export function buildProjectMemoryWriteInstruction(projectKey: string | undefined): string[] {
+  // Keys become HTML comments in curated Markdown, so line breaks or angle brackets are unsafe.
+  return projectKey && !/[\r\n<>]/u.test(projectKey)
+    ? [
+        `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`,
+        "",
+      ]
+    : [];
 }

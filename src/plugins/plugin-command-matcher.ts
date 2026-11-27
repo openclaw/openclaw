@@ -7,30 +7,26 @@ import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 
 type PluginCommandAliasScope = { kind: "all" } | { kind: "provider"; provider: string };
 
-function listInvocationKeys(
+function matchesInvocationName(
   command: RegisteredPluginCommand,
   aliasScope: PluginCommandAliasScope,
-): string[] {
-  const keys = new Set<string>();
-  const add = (value: string | undefined) => {
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (normalized) {
-      keys.add(`/${normalized}`);
-    }
-  };
-  add(command.name);
+  candidateName: string,
+): boolean {
+  // Native aliases remain live; preserve their reads even when the command name matches.
+  let matched = normalizeOptionalLowercaseString(command.name) === candidateName;
   if (aliasScope.kind === "all") {
     for (const alias of Object.values(command.nativeNames ?? {})) {
-      if (typeof alias === "string") {
-        add(alias);
+      if (typeof alias === "string" && normalizeOptionalLowercaseString(alias) === candidateName) {
+        matched = true;
       }
     }
-    return [...keys];
+    return matched;
   }
   const provider = normalizeOptionalLowercaseString(aliasScope.provider);
   const providerAlias = provider ? command.nativeNames?.[provider] : undefined;
-  add(typeof providerAlias === "string" ? providerAlias : command.nativeNames?.default);
-  return [...keys];
+  const aliasName =
+    typeof providerAlias === "string" ? providerAlias : command.nativeNames?.default;
+  return normalizeOptionalLowercaseString(aliasName) === candidateName || matched;
 }
 
 export function parsePluginInvocation(commandBody: string) {
@@ -57,10 +53,11 @@ export function matchRegisteredPluginCommand(params: {
   }
   const { keys, args } = invocation;
   for (const candidateKey of keys) {
+    const candidateName = candidateKey.slice(1);
     const command = params.commands.find(
       (candidate) =>
         pluginCommandSupportsChannel(candidate, params.channel) &&
-        listInvocationKeys(candidate, params.aliasScope).includes(candidateKey),
+        matchesInvocationName(candidate, params.aliasScope, candidateName),
     );
     if (command) {
       // The preferred spelling owns argument rejection; do not try another command.

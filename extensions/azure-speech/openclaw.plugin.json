@@ -1,5 +1,6 @@
 {
   "id": "azure-speech",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
@@ -22,6 +23,26 @@
   "contracts": {
     "speechProviders": ["azure-speech", "azure"]
   },
+  "configGroups": [
+    {
+      "id": "azure-connection",
+      "title": "Azure connection",
+      "order": 10,
+      "properties": ["apiKey", "region", "endpoint", "baseUrl"]
+    },
+    {
+      "id": "voice",
+      "title": "Voice",
+      "order": 20,
+      "properties": ["voice", "lang"]
+    },
+    {
+      "id": "audio-formats",
+      "title": "Audio formats",
+      "order": 30,
+      "properties": ["outputFormat", "voiceNoteOutputFormat"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

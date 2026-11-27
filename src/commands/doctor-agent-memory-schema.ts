@@ -3,14 +3,21 @@ import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
-  migrateOpenClawAgentDatabaseForMaintenance,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { shortenHomePath } from "../utils.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
@@ -29,20 +36,9 @@ type DoctorAgentMemorySchemaRepair = {
   removedTrigger: boolean;
 };
 
-type DoctorAgentMemorySchemaReport = {
-  repaired: readonly DoctorAgentMemorySchemaRepair[];
-  warnings: readonly string[];
-};
+type DoctorAgentMemorySchemaReport = Awaited<ReturnType<typeof repairDoctorAgentMemorySchemas>>;
 
-type MemoryRecallMetadataMigrationState = {
-  columns: LegacyMemoryRecallMetadataColumn[];
-  hasMetadataTable: boolean;
-  hasProvenanceTrigger: boolean;
-};
-
-function readMemoryRecallMetadataMigrationState(
-  database: DatabaseSync,
-): MemoryRecallMetadataMigrationState | null {
+function readMemoryRecallMetadataMigrationState(database: DatabaseSync) {
   const rows =
     /* sqlite-allow-raw -- Read-only schema inspection before doctor maintenance. */ database
       .prepare("PRAGMA table_info(memory_index_chunks)")
@@ -51,24 +47,19 @@ function readMemoryRecallMetadataMigrationState(
     return null;
   }
   const columns = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  const findSchemaObject = database.prepare(
+    "SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ?",
+  );
   return {
     columns: LEGACY_MEMORY_RECALL_METADATA_COLUMNS.filter((column) => columns.has(column)),
-    hasMetadataTable: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(MEMORY_RECALL_METADATA_TABLE),
-    ),
+    hasMetadataTable: Boolean(findSchemaObject.get("table", MEMORY_RECALL_METADATA_TABLE)),
     hasProvenanceTrigger: Boolean(
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-        .get(LEGACY_MEMORY_PROVENANCE_TRIGGER),
+      findSchemaObject.get("trigger", LEGACY_MEMORY_PROVENANCE_TRIGGER),
     ),
   };
 }
 
-function inspectAgentMemoryRecallMetadataMigration(
-  pathname: string,
-): MemoryRecallMetadataMigrationState | null {
+function inspectAgentMemoryRecallMetadataMigration(pathname: string) {
   const stat = fs.lstatSync(pathname);
   if (!stat.isFile()) {
     throw new Error(`OpenClaw agent database is not a regular file: ${pathname}`);
@@ -81,14 +72,58 @@ function inspectAgentMemoryRecallMetadataMigration(
   }
 }
 
+/**
+ * Whether a registered agent database still has the unreleased inline metadata shape. With
+ * `liveStoresOnly`, a database no connection holds open is not opened, since a read-only
+ * open would create its WAL sidecars: it leaves the answer undecidable.
+ */
+function inspectAgentMemorySchemaMaintenance(
+  env: NodeJS.ProcessEnv,
+  liveStoresOnly = false,
+): DoctorMaintenancePending {
+  try {
+    const isHeld = createRetainedAgentDatabaseMatcher(env, () => []);
+    // Doctor discovery must observe registrations committed by another process.
+    invalidateRegisteredAgentDatabasesMemo({ env });
+    let undecidable = false;
+    for (const entry of listOpenClawRegisteredAgentDatabases({
+      env,
+      includeIncompatibleSchemaVersions: true,
+    })) {
+      if (
+        isHeld(entry.path, entry.agentId) ||
+        readAgentDatabaseAdmissionRefusal(entry.agentId, { env })
+      ) {
+        continue;
+      }
+      if (liveStoresOnly && readOnlyOpenWouldCreateSqliteSidecars(entry.path)) {
+        undecidable = true;
+        continue;
+      }
+      const state = inspectAgentMemoryRecallMetadataMigration(entry.path);
+      if (state && (state.columns.length > 0 || state.hasProvenanceTrigger)) {
+        return "work";
+      }
+    }
+    return undecidable ? "undecidable" : "none";
+  } catch {
+    // Uncertain inspection must retain the maintenance path and its diagnostics.
+    return "work";
+  }
+}
+
 /** Move the unreleased inline metadata shape into rollback-safe additive tables. */
 async function repairDoctorAgentMemorySchemas(
   options: { env?: NodeJS.ProcessEnv },
   maintenance: OpenClawStateLeaseContext,
-): Promise<DoctorAgentMemorySchemaReport> {
+) {
   const env = options.env ?? process.env;
+  maintenance.assertOwned();
+  // The preliminary scan may have populated the memo before lease acquisition.
+  invalidateRegisteredAgentDatabasesMemo({ env });
   const repaired: DoctorAgentMemorySchemaRepair[] = [];
   const warnings: string[] = [];
+  const isHeld = createRetainedAgentDatabaseMatcher(env, () => []);
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
   try {
     registered = listOpenClawRegisteredAgentDatabases({
@@ -103,6 +138,12 @@ async function repairDoctorAgentMemorySchemas(
   }
 
   for (const entry of registered) {
+    if (
+      isHeld(entry.path, entry.agentId) ||
+      readAgentDatabaseAdmissionRefusal(entry.agentId, { env })
+    ) {
+      continue;
+    }
     // A lost lease must stop the pass before a later target can close a new owner's handle.
     maintenance.assertOwned();
     try {
@@ -144,6 +185,24 @@ async function repairDoctorAgentMemorySchemas(
   return { repaired, warnings };
 }
 
+/**
+ * Read-only: whether `noteDoctorAgentMemorySchemaHealth` would repair a database. It runs the
+ * repair's own no-op test without the maintenance lock; databases open read-only, and only
+ * while a connection holds their sidecars.
+ */
+export async function checkDoctorAgentMemorySchemaPending(params: {
+  env?: NodeJS.ProcessEnv;
+  shouldRepair: boolean;
+}): Promise<DoctorMaintenancePending> {
+  if (!params.shouldRepair) {
+    return "none";
+  }
+  const env = params.env ?? process.env;
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], () =>
+    inspectAgentMemorySchemaMaintenance(env, true),
+  );
+}
+
 export async function noteDoctorAgentMemorySchemaHealth(
   params: { env?: NodeJS.ProcessEnv; shouldRepair: boolean },
   deps: { note?: typeof note } = {},
@@ -158,10 +217,16 @@ export async function noteDoctorAgentMemorySchemaHealth(
     report = await withDoctorSqliteMaintenanceLock({
       env: params.env,
       operation: "agent memory schema repair",
-      run: () =>
-        withAgentDatabaseMaintenanceLease({ env: params.env }, (maintenance) =>
+      run: () => {
+        // Acquiring the agent lease closes admitted writers. Keep a read-only
+        // no-op cheap; real repairs rediscover every target under that lease.
+        if (inspectAgentMemorySchemaMaintenance(params.env ?? process.env) === "none") {
+          return { repaired: [], warnings: [] };
+        }
+        return withAgentDatabaseMaintenanceLease({ env: params.env }, (maintenance) =>
           repairDoctorAgentMemorySchemas({ env: params.env }, maintenance),
-        ),
+        );
+      },
     });
   } catch (error) {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {

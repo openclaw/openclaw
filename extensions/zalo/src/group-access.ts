@@ -1,24 +1,18 @@
-// Zalo plugin module implements group access behavior.
-import type { GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
+
+export { resolveOpenProviderRuntimeGroupPolicy as resolveZaloRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 
 const ZALO_ALLOW_FROM_PREFIX_RE = /^(zalo|zl):/i;
 
-export function normalizeZaloAllowEntry(value: string): string {
+function normalizeZaloAllowEntry(value: string): string {
   return value.trim().replace(ZALO_ALLOW_FROM_PREFIX_RE, "").trim().toLowerCase();
 }
 
-export function resolveZaloRuntimeGroupPolicy(params: {
-  providerConfigPresent: boolean;
-  groupPolicy?: GroupPolicy;
-  defaultGroupPolicy?: GroupPolicy;
-}): {
-  groupPolicy: GroupPolicy;
-  providerMissingFallbackApplied: boolean;
-} {
-  return resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-  });
-}
+export const zaloIngressIdentity = {
+  key: "zalo-user-id",
+  // Bot API updates come from the secret-token webhook or token-authenticated polling.
+  authentication: "verified",
+  normalize: normalizeZaloAllowEntry,
+  sensitivity: "pii",
+  entryIdPrefix: "zalo-entry",
+} satisfies StableChannelIngressIdentityParams;

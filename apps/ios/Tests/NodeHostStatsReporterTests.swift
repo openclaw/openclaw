@@ -4,21 +4,18 @@ import Testing
 @testable import OpenClaw
 
 struct NodeHostStatsReporterTests {
-    @Test func `snapshot and node event envelope match the wire contract`() throws {
+    @Test func `snapshot matches the wire payload contract`() throws {
         let payload = try NodeHostStatsReporter.makePayload(sampler: Self.sampler())
-        let requestJSON = try NodeHostStatsReporter.makeNodeEventRequestPayloadJSON(payload: payload)
-        let request = try #require(JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: String])
-        #expect(Set(request.keys) == ["event", "payloadJSON"])
-        #expect(request["event"] == "node.host.stats")
-        let payloadJSON = try #require(request["payloadJSON"])
-        let values = try JSONDecoder().decode([String: UInt64].self, from: Data(payloadJSON.utf8))
+        let payloadData = try JSONEncoder().encode(payload)
+        let values = try JSONDecoder().decode([String: UInt64].self, from: payloadData)
+        #expect(NodeHostStatsReporter.eventName == "node.host.stats")
         // Disk fields stay absent by design (Apple required-reason API policy).
         #expect(values == [
             "cpuCount": 6,
             "memoryTotalBytes": 8_000_000_000,
             "memoryFreeBytes": 2_000_000_000,
         ])
-        #expect(payloadJSON.utf8.count < 200)
+        #expect(payloadData.count < 200)
     }
 
     @Test(arguments: [0, 8192])

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
 import { formatNewerExactPinnedNpmDefaultLineMessage } from "./update-attempt.js";
@@ -33,7 +33,7 @@ export async function reconcileUnchangedUpdate(params: {
 
   let config = params.config;
   let changed = false;
-  if (params.syncOfficialInstall) {
+  if (params.syncOfficialInstall || params.hasSpecOverride) {
     const nextRecordSpec = params.recordSpec;
     if (nextRecordSpec !== params.record.spec) {
       const resolutionFields = buildNpmResolutionInstallFields(params.resolution);
@@ -77,6 +77,25 @@ export async function reconcileUnchangedUpdate(params: {
               newer: newerExactPinnedDefaultLine,
             })
           : `${params.pluginId} is up to date (${params.currentVersion}).`,
+    },
+  };
+}
+
+/** Preserve install identity and timestamps when only its selected spec changes. */
+export function reconcileRetainedSpec(
+  config: OpenClawConfig,
+  pluginId: string,
+  record: UpdatablePluginInstallRecord,
+  recordSpec: string | undefined,
+): OpenClawConfig {
+  if (recordSpec === undefined || recordSpec === record.spec) {
+    return config;
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      installs: { ...config.plugins?.installs, [pluginId]: { ...record, spec: recordSpec } },
     },
   };
 }

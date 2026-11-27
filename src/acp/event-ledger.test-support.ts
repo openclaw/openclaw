@@ -1,5 +1,59 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expect } from "vitest";
+import { afterEach, expect } from "vitest";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
+
+type TestAcpLedgerHandle = {
+  tempDir: string;
+};
+
+const testLedgerHandles: TestAcpLedgerHandle[] = [];
+
+/** Creates a test-owned SQLite ACP ledger and registers its DB/tempdir cleanup. */
+export function createTestAcpEventLedger(): AcpEventLedger {
+  const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")));
+  const databasePath = path.join(tempDir, "openclaw.sqlite");
+  testLedgerHandles.push({ tempDir });
+  return createSqliteAcpEventLedger({ path: databasePath });
+}
+
+export async function withTestAcpEventLedgerDatabase<T>(
+  fn: (paths: { databasePath: string }) => T | Promise<T>,
+): Promise<T> {
+  return await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    const databasePath = path.join(dir, "openclaw.sqlite");
+    try {
+      return await fn({ databasePath });
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    }
+  });
+}
+
+async function closeTestAcpEventLedgers(): Promise<void> {
+  const handles = testLedgerHandles.splice(0).toReversed();
+  const errors: unknown[] = [];
+  if (handles.length === 0) {
+    return;
+  }
+  for (const { tempDir } of handles) {
+    try {
+      await closeOpenClawStateDatabaseByPathAsync(path.join(tempDir, "openclaw.sqlite"));
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to clean up ACP test event ledgers");
+  }
+}
+
+afterEach(closeTestAcpEventLedgers);
 
 /** Independent stored-content ground truth, including NUL and replacement characters. */
 export function expectAcpReplayUtf8Accounting(db: DatabaseSync): number {

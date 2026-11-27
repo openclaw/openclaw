@@ -41,8 +41,10 @@ function parkRestartProbe(configPath, snapshotPath, rawPort) {
     throw new Error("park-restart-probe requires a valid port");
   }
   const authoredConfig = fs.readFileSync(configPath);
-  requireObject(JSON.parse(authoredConfig.toString("utf8")), "restart probe config");
+  const parsedConfig = JSON.parse(authoredConfig.toString("utf8"));
+  requireObject(parsedConfig, "restart probe config");
   snapshotAndReplace(configPath, snapshotPath, authoredConfig, {
+    ...parsedConfig,
     plugins: { enabled: false },
     gateway: {
       port,

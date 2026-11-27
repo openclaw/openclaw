@@ -1,5 +1,6 @@
 {
   "id": "anthropic-vertex",
+  "categories": ["models"],
   "name": "Anthropic Vertex",
   "description": "OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.",
   "activation": {

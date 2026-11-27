@@ -1,7 +1,7 @@
 // Test temp directory helper creates and cleans up temporary directories.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveTestTempRoot } from "../../src/test-utils/env.ts";
 
 // Synchronous temporary directory helpers for tests.
 
@@ -11,12 +11,12 @@ type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 const canonicalSystemTempRoots = new Map<string, string>();
 
 function resolveCanonicalSystemTempRoot(): string {
-  const rawRoot = os.tmpdir();
+  const rawRoot = resolveTestTempRoot();
   const cachedRoot = canonicalSystemTempRoots.get(rawRoot);
   if (cachedRoot !== undefined) {
     return cachedRoot;
   }
-  const canonicalRoot = fs.realpathSync(rawRoot);
+  const canonicalRoot = fs.realpathSync.native(rawRoot);
   canonicalSystemTempRoots.set(rawRoot, canonicalRoot);
   return canonicalRoot;
 }

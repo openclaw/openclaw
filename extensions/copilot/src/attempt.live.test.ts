@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   AgentMessage,
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -262,9 +264,19 @@ async function resolveLiveAttemptFacts(
   });
   try {
     await client.start();
-    const available = (await client.listModels()).filter(
-      (model) => model.policy?.state !== "disabled",
-    );
+    const catalog = await client.rpc.models.list({});
+    const available = catalog.models.filter((model) => model.policy?.state !== "disabled");
+    const requestedModel = readNonEmptyEnv("OPENCLAW_COPILOT_AGENT_LIVE_MODEL");
+    if (requestedModel) {
+      const availableRequestedModel =
+        requestedModel === "fusion"
+          ? catalog.auto?.tiers.some((tier) => tier.fusionTier && tier.status.enabled)
+          : available.some((model) => model.id === requestedModel);
+      if (!availableRequestedModel) {
+        throw new Error(`Copilot live smoke model is unavailable: ${requestedModel}`);
+      }
+      return createGitHubAttemptFacts(authMode.gitHubToken, requestedModel);
+    }
     for (const preferred of LIVE_MODEL_PREFERENCES) {
       if (available.some((model) => model.id === preferred)) {
         return createGitHubAttemptFacts(authMode.gitHubToken, preferred);
@@ -350,10 +362,24 @@ async function createAttemptParams(params: {
     authProfileId: params.facts.authProfileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
-    hostCapabilities: createCopilotTestHostCapabilities(),
+    hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
     messages: [userMessage],
     model: params.facts.model,
     modelId: params.facts.model.id,
+    config: {
+      agents: {
+        defaults: {
+          models: {
+            "github-copilot/fusion": {
+              params: {
+                fusionTier:
+                  readNonEmptyEnv("OPENCLAW_COPILOT_AGENT_LIVE_FUSION_TIER") ?? "standard",
+              },
+            },
+          },
+        },
+      },
+    },
     onAgentEvent: params.onAgentEvent,
     onAssistantDelta: params.onAssistantDelta,
     profileVersion,
@@ -409,7 +435,8 @@ describeLive("copilot agent runtime live smoke", () => {
     const copilotHome = await createTempDir("openclaw-copilot-live-");
     const facts = liveAttemptFacts;
     const modelId = facts.model.id;
-    const harness = createCopilotAgentHarness({ pool: createLivePool() });
+    const pool = createLivePool();
+    const harness = createCopilotAgentHarness({ pool });
 
     try {
       expect(
@@ -437,7 +464,10 @@ describeLive("copilot agent runtime live smoke", () => {
         },
         prompt,
       });
-      const settledResult = await harness.runAttempt(attempt);
+      // Gateway runs reach the harness inside an admitted session turn.
+      const settledResult = await runInHarnessToolAuthorityForTest(attempt, "copilot", (admitted) =>
+        harness.runAttempt(admitted),
+      );
       if (!("terminal" in settledResult)) {
         throw new Error("Copilot harness returned the deprecated attempt result shape");
       }
@@ -446,13 +476,14 @@ describeLive("copilot agent runtime live smoke", () => {
       );
       expect(settledResult.terminal).toEqual({ kind: "ok" });
       expect(matchingCalls).toHaveLength(1);
-      expect(
-        settledResult.toolMetas.some(
-          (toolMeta) =>
-            toolMeta.toolName === liveToolState.toolName &&
-            toolMeta.meta?.includes(liveToolState.sentinelPrefix),
-        ),
-      ).toBe(true);
+      const expectedToolResult = `${liveToolState.sentinelPrefix}${liveToolState.expectedText}`;
+      const dispatch = settledResult.toolMetas.find(
+        (meta) => meta.toolName === "dispatch_action" && meta.meta?.includes(expectedToolResult),
+      );
+      expect(JSON.parse(dispatch?.meta ?? "null")).toMatchObject({
+        tool: { name: liveToolState.toolName },
+        result: { content: [{ type: "text", text: expectedToolResult }] },
+      });
 
       const finalPrompt = "Reply with exactly COPILOT-SETTLED-FINALIZER-OK and nothing else.";
       const finalResult = await harness.finalizeSettledTurn?.({
@@ -508,8 +539,12 @@ describeLive("copilot agent runtime live smoke", () => {
       expect(liveToolState.permissionRequests).toBe(0);
       expect(liveToolState.userInputRequests).toBe(0);
     } finally {
-      await harness.dispose?.();
-      await rm(copilotHome, { recursive: true, force: true });
+      try {
+        await harness.dispose?.();
+      } finally {
+        await pool.dispose();
+        await rm(copilotHome, { recursive: true, force: true });
+      }
     }
   }, 180_000);
 
@@ -519,22 +554,25 @@ describeLive("copilot agent runtime live smoke", () => {
     const copilotHome = await createTempDir("openclaw-copilot-live-delegation-");
     const facts = liveAttemptFacts;
     const modelId = facts.model.id;
-    const harness = createCopilotAgentHarness({ pool: createLivePool() });
+    const pool = createLivePool();
+    const harness = createCopilotAgentHarness({ pool });
 
     try {
       const prompt =
         "Investigate how prompt-hook tool narrowing is implemented in this codebase. Delegate exactly one user-followed codebase investigation that produces its own report, then reply with the returned report link.";
-      const result = await harness.runAttempt(
-        await createAttemptParams({
-          copilotHome,
-          facts,
-          onAssistantDelta: ({ text }) => {
-            if (text.trim()) {
-              streamedTexts.push(text);
-            }
-          },
-          prompt,
-        }),
+      const attempt = await createAttemptParams({
+        copilotHome,
+        facts,
+        onAssistantDelta: ({ text }) => {
+          if (text.trim()) {
+            streamedTexts.push(text);
+          }
+        },
+        prompt,
+      });
+      // Gateway runs reach the harness inside an admitted session turn.
+      const result = await runInHarnessToolAuthorityForTest(attempt, "copilot", (admitted) =>
+        harness.runAttempt(admitted),
       );
       if (!("terminal" in result)) {
         throw new Error("Copilot harness returned the deprecated attempt result shape");
@@ -555,8 +593,12 @@ describeLive("copilot agent runtime live smoke", () => {
       expect(liveToolState.spawnCalls[0]?.task).not.toBe("");
       expect(assistantText).toContain("https://example.test/session/live-proof");
     } finally {
-      await harness.dispose?.();
-      await rm(copilotHome, { recursive: true, force: true });
+      try {
+        await harness.dispose?.();
+      } finally {
+        await pool.dispose();
+        await rm(copilotHome, { recursive: true, force: true });
+      }
     }
   }, 180_000);
 });

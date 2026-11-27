@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -210,7 +210,7 @@ class ChatControllerTerminalAckTest {
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
       assertFalse(controller.isCurrentComposerOwner(ambiguousOwner))
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "unbound main alias",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -225,7 +225,7 @@ class ChatControllerTerminalAckTest {
       assertFalse(controller.isCurrentComposerOwner(owner.copy(gatewayStableId = "gateway-b")))
 
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "wrong gateway",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -233,7 +233,7 @@ class ChatControllerTerminalAckTest {
         ),
       )
       assertFalse(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "wrong session",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -241,7 +241,7 @@ class ChatControllerTerminalAckTest {
         ),
       )
       assertTrue(
-        controller.sendMessageForOwnerAwaitAcceptance(
+        controller.sendMessageAwaitAcceptance(
           message = "correct owner",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -287,7 +287,7 @@ class ChatControllerTerminalAckTest {
 
       val accepted =
         async {
-          controller.sendMessageForOwnerAwaitAcceptance(
+          controller.sendMessageAwaitAcceptance(
             message = "stale after settings",
             thinkingLevel = "high",
             attachments = emptyList(),
@@ -314,7 +314,7 @@ class ChatControllerTerminalAckTest {
         listOf<suspend () -> String>(
           { """{"runId":"run-timeout","status":"timeout"}""" },
           { """{"runId":"run-error","status":"error"}""" },
-          { throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected")) },
+          { throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "message rejected")) },
         )
       for ((index, outcome) in outcomes.withIndex()) {
         val controller =

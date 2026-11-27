@@ -1,9 +1,21 @@
 import Foundation
+import HealthKit
 import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 struct HealthSummaryServiceTests {
+    @Test func `authorization requests only the four disclosed summary types`() {
+        let identifiers = Set(HealthAuthorization.readTypes.map(\.identifier))
+
+        #expect(identifiers == Set([
+            "HKWorkoutTypeIdentifier",
+            "HKQuantityTypeIdentifierStepCount",
+            "HKCategoryTypeIdentifierSleepAnalysis",
+            "HKQuantityTypeIdentifierRestingHeartRate",
+        ]))
+    }
+
     @Test func `date range covers the current calendar day`() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))

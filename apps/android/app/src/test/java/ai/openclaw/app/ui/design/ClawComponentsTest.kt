@@ -88,6 +88,103 @@ class ClawComponentsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun statusRowsKeepCompleteLabelsAndValuesAtLargeFont() {
+    val title = mutableStateOf("Phone Node")
+    val value = mutableStateOf("Online")
+    val fontScale = mutableStateOf(1f)
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item { ClawStatusRow(title.value, value.value, healthy = false) }
+          }
+        }
+      }
+    }
+    composeRule.onNodeWithText(title.value).assertCompleteText(title.value)
+    composeRule.onNodeWithText(value.value).assertCompleteText(value.value)
+    val normalTitle = composeRule.onNodeWithText(title.value).fetchSemanticsNode().boundsInRoot
+    val normalValue = composeRule.onNodeWithText(value.value).fetchSemanticsNode().boundsInRoot
+    assertTrue("Fitting status remains beside its title", normalTitle.right <= normalValue.left && normalValue.top < normalTitle.bottom)
+
+    composeRule.runOnIdle {
+      title.value = "Mémoire des conversations"
+      value.value = "Connexion interrompue : nouvelle tentative nécessaire"
+      fontScale.value = 2f
+    }
+    composeRule.onNodeWithText(title.value).assertCompleteText(title.value)
+    composeRule.onNodeWithText(value.value).assertCompleteText(value.value)
+    val largeTitle = composeRule.onNodeWithText(title.value).fetchSemanticsNode().boundsInRoot
+    val largeValue = composeRule.onNodeWithText(value.value).fetchSemanticsNode().boundsInRoot
+    assertTrue("Long status moves below the complete title", largeValue.top >= largeTitle.bottom)
+  }
+
+  @Test
+  fun standaloneStatusPillWrapsItsCompleteValueAtLargeFont() {
+    val label = "Connexion interrompue : nouvelle tentative nécessaire"
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item { ClawStatusPill(label, ClawStatus.Warning, Modifier.testTag("status-pill")) }
+          }
+        }
+      }
+    }
+    val text = composeRule.onNodeWithText(label)
+    text.assertCompleteText(label)
+    val textBounds = text.fetchSemanticsNode().boundsInRoot
+    val pillBounds = composeRule.onNodeWithTag("status-pill").fetchSemanticsNode().boundsInRoot
+    assertTrue("All status lines stay inside the pill", textBounds.left >= pillBounds.left && textBounds.right <= pillBounds.right && textBounds.top >= pillBounds.top && textBounds.bottom <= pillBounds.bottom)
+  }
+
+  @Test
+  fun avatarMarksKeepBothGlyphsInsideTheirCircleAtLargeFont() {
+    val fontScale = mutableStateOf(1f)
+    val marks = listOf("OC", "WW")
+    val evidence = File("build/outputs/avatar-monogram", UUID.randomUUID().toString())
+    assertTrue(evidence.mkdirs())
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+        ClawDesignTheme {
+          Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            marks.forEach { ClawAvatarMark(text = it.lowercase(), modifier = Modifier.testTag("avatar-$it")) }
+          }
+        }
+      }
+    }
+    val failures = mutableListOf<String>()
+    for (scale in listOf(1f, 2f)) {
+      composeRule.runOnIdle { fontScale.value = scale }
+      for (mark in marks) {
+        val container = composeRule.onNodeWithTag("avatar-$mark")
+        val text = composeRule.onNodeWithText(mark, useUnmergedTree = true)
+        val layouts = mutableListOf<TextLayoutResult>()
+        text.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        val layout = layouts.single()
+        val node = text.fetchSemanticsNode()
+        val circle = container.fetchSemanticsNode().boundsInRoot
+        val glyphs = mark.indices.map { layout.getBoundingBox(it).translate(node.positionInRoot) }
+        println("AVATAR_MONOGRAM scale=$scale text=$mark lines=${layout.lineCount} layout=${layout.size} paragraph=${layout.multiParagraph.height} circle=$circle glyphs=$glyphs")
+        File(evidence, "$scale-$mark.png").outputStream().use {
+          assertTrue(container.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+        try {
+          text.assertCompleteText(mark)
+          assertEquals("Initials must remain one line", 1, layout.lineCount)
+          for (glyph in glyphs) {
+            assertTrue("Each initial needs positive glyph geometry", glyph.width > 0 && glyph.height > 0)
+            assertTrue("Both initials must fit inside the avatar bounds", glyph.left >= circle.left && glyph.top >= circle.top && glyph.right <= circle.right && glyph.bottom <= circle.bottom)
+          }
+        } catch (error: AssertionError) {
+          failures += "$scale: $mark: ${error.message}"
+        }
+      }
+    }
+    assertTrue("Avatar marks must retain their complete initials:\n${failures.joinToString("\n")}", failures.isEmpty())
+  }
+
+  @Test
   fun detailRowKeepsInstallOnlyTrustWarningVisible() {
     val results =
       parseClawHubSearchResults(
@@ -628,7 +725,7 @@ class ClawComponentsTest {
 
   @Test
   fun emptySegmentedOptionsProduceNoRows() {
-    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList()))
+    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList<String>()))
   }
 
   @Test

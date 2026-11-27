@@ -1,4 +1,3 @@
-// Discord plugin module implements interactive dispatch behavior.
 import type { ChannelStructuredComponents } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChannelInteractiveDispatcher,

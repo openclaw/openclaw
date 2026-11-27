@@ -3,12 +3,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { registerChannelsCli } from "./channels-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
-const requireValidConfigFileSnapshot = vi.hoisted(() => vi.fn(async () => null));
+const requireValidConfigForWrite = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("../commands/config-validation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/config-validation.js")>()),
-  requireValidConfigFileSnapshot,
+  requireValidConfigForWrite,
 }));
 
 async function runChannelMutation(verb: string, account?: string) {
@@ -36,17 +37,14 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
 
   afterEach(() => {
     vi.restoreAllMocks();
-    requireValidConfigFileSnapshot.mockClear();
+    requireValidConfigForWrite.mockClear();
   });
 
   it.each(["", "   "])("rejects an explicit blank before loading config", async (account) => {
-    await runChannelMutation(verb, account);
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--account must not be blank"),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(requireValidConfigFileSnapshot).not.toHaveBeenCalled();
+    const run = runChannelMutation(verb, account);
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow("--account must not be blank");
+    expect(requireValidConfigForWrite).not.toHaveBeenCalled();
   });
 
   it("keeps an omitted account on the default-selection path", async () => {
@@ -54,6 +52,6 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
 
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(requireValidConfigFileSnapshot).toHaveBeenCalledTimes(1);
+    expect(requireValidConfigForWrite).toHaveBeenCalledTimes(1);
   });
 });

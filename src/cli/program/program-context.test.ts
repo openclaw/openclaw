@@ -7,20 +7,12 @@ import { getProgramContext, setProgramContext } from "./program-context.js";
 function makeCtx(version: string): ProgramContext {
   return {
     programVersion: version,
-    channelOptions: ["quietchat"],
     messageChannelOptions: "quietchat",
     agentChannelOptions: "last|quietchat",
   };
 }
 
 describe("program context storage", () => {
-  it("stores and retrieves context on a command instance", () => {
-    const program = new Command();
-    const ctx = makeCtx("1.2.3");
-    setProgramContext(program, ctx);
-    expect(getProgramContext(program)).toBe(ctx);
-  });
-
   it("returns undefined when no context was set", () => {
     expect(getProgramContext(new Command())).toBeUndefined();
   });

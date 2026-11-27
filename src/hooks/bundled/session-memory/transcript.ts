@@ -3,6 +3,7 @@ import { classifySessionMessageOrigin } from "../../../../packages/memory-host-s
 import type { MemoryOriginClass } from "../../../../packages/memory-host-sdk/src/host/types.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import { prepareAssistantTranscriptText } from "../../../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
@@ -14,7 +15,6 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 );
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
-const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
 const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
 
 function quoteSessionMemoryText(text: string): string {
@@ -26,20 +26,11 @@ function quoteSessionMemoryText(text: string): string {
   );
 }
 
-function isNoReplyMarker(text: string): boolean {
-  const trimmed = text.trim();
-  return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
-}
-
 function sanitizeSessionMemoryTranscriptText(text: string): string | null {
-  if (isNoReplyMarker(text)) {
-    return null;
-  }
   const withoutArtifacts = sanitizeModelSpecialTokens(text)
     .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
-    .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
     .trim();
 
   return withoutArtifacts || null;
@@ -52,78 +43,14 @@ function extractTextMessageContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  for (const block of content) {
+  const texts = content.flatMap((block) => {
     if (!block || typeof block !== "object") {
-      continue;
+      return [];
     }
     const candidate = block as { type?: unknown; text?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      return candidate.text;
-    }
-  }
-  return undefined;
-}
-
-type RenderedSessionMemoryMessage = {
-  isDeliveryMirror: boolean;
-  originClass: MemoryOriginClass;
-  role: "assistant" | "user";
-  text?: string;
-};
-
-type SessionMemoryMessageRenderResult = {
-  message?: RenderedSessionMemoryMessage;
-  turnOrigin: MemoryOriginClass;
-};
-
-function renderSessionMemoryMessage(
-  entry: unknown,
-  turnOrigin: MemoryOriginClass,
-): SessionMemoryMessageRenderResult {
-  if (!entry || typeof entry !== "object") {
-    return { turnOrigin };
-  }
-  const record = entry as {
-    message?: {
-      content?: unknown;
-      provenance?: unknown;
-      role?: unknown;
-    } & Record<string, unknown>;
-    type?: unknown;
-  };
-  if (record.type !== "message" || !record.message) {
-    return { turnOrigin };
-  }
-  const role = record.message.role;
-  if ((role !== "user" && role !== "assistant") || !("content" in record.message)) {
-    return { turnOrigin };
-  }
-  const nextTurnOrigin =
-    role === "user" ? classifySessionMessageOrigin(record.message, turnOrigin) : turnOrigin;
-  const originClass = classifySessionMessageOrigin(record.message, nextTurnOrigin);
-  if (role === "user" && hasInterSessionUserProvenance(record.message)) {
-    return { turnOrigin: nextTurnOrigin };
-  }
-  const text = extractTextMessageContent(record.message.content);
-  const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
-  if (!sanitized) {
-    return { turnOrigin: nextTurnOrigin };
-  }
-  if (sanitized.startsWith("/")) {
-    return {
-      turnOrigin: nextTurnOrigin,
-      ...(role === "user" ? { message: { isDeliveryMirror: false, originClass, role } } : {}),
-    };
-  }
-  return {
-    turnOrigin: nextTurnOrigin,
-    message: {
-      isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
-      originClass,
-      role,
-      text: sanitized,
-    },
-  };
+    return candidate.type === "text" && typeof candidate.text === "string" ? [candidate.text] : [];
+  });
+  return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
 type SessionMemoryRecord = {
@@ -136,32 +63,65 @@ function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRe
   let lastAssistantText: string | undefined;
   let turnOrigin: MemoryOriginClass = "untrusted";
   for (const event of events) {
-    const result = renderSessionMemoryMessage(event, turnOrigin);
-    turnOrigin = result.turnOrigin;
-    const rendered = result.message;
-    if (!rendered) {
+    if (!event || typeof event !== "object") {
       continue;
     }
-    if (rendered.role === "user") {
+    const record = event as {
+      message?: {
+        content?: unknown;
+        provenance?: unknown;
+        role?: unknown;
+      } & Record<string, unknown>;
+      type?: unknown;
+    };
+    if (record.type !== "message" || !record.message) {
+      continue;
+    }
+    const role = record.message.role;
+    if ((role !== "user" && role !== "assistant") || !("content" in record.message)) {
+      continue;
+    }
+    if (role === "user") {
+      turnOrigin = classifySessionMessageOrigin(record.message, turnOrigin);
+    }
+    const originClass = classifySessionMessageOrigin(record.message, turnOrigin);
+    if (role === "user" && hasInterSessionUserProvenance(record.message)) {
+      continue;
+    }
+    if (record.message.display === false) {
+      continue;
+    }
+    const text = prepareAssistantTranscriptText(
+      record.message,
+      extractTextMessageContent(record.message.content),
+    );
+    const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
+    if (!sanitized) {
+      continue;
+    }
+    if (role === "user") {
       // New turn: reset even when slash commands are omitted from memory, so
       // later standalone delivery mirrors are preserved.
       lastAssistantText = undefined;
     }
-    if (!rendered.text) {
+    if (sanitized.startsWith("/")) {
       continue;
     }
     // Skip delivery-mirror rows only when they duplicate the preceding
     // assistant text. Delivery-mirror rows with unique visible content
     // (e.g., message-tool replies) are preserved.
-    if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
+    if (
+      isOpenClawDeliveryMirrorAssistantMessage(record.message) &&
+      sanitized === lastAssistantText
+    ) {
       continue;
     }
     allMessages.push({
-      line: `${rendered.role}: ${quoteSessionMemoryText(rendered.text)}`,
-      originClass: rendered.originClass,
+      line: `${role}: ${quoteSessionMemoryText(sanitized)}`,
+      originClass,
     });
-    if (rendered.role === "assistant") {
-      lastAssistantText = rendered.text;
+    if (role === "assistant") {
+      lastAssistantText = sanitized;
     }
   }
   return allMessages;

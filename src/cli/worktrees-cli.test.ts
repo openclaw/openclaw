@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorktreeRecordNotFoundError } from "../agents/worktrees/errors.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
 
 afterEach(() => {
@@ -10,41 +16,221 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
+async function run(args: string[]) {
+  const program = new Command().name("openclaw").exitOverride();
+  program.configureOutput({ writeErr: () => undefined });
+  registerWorktreesCli(program);
+  return program.parseAsync(["worktrees", ...args], { from: "user" });
+}
+const admission = { signal: expect.any(AbortSignal), commitGuard: expect.any(Function) };
+const owner = ManagedWorktreeService.prototype;
+const muteOutput = (json = true) =>
+  vi.spyOn(defaultRuntime, json ? "writeJson" : "log").mockImplementation(() => undefined);
+
 describe("worktrees cli", () => {
-  it("maps --force only to snapshot-loss permission", async () => {
-    const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    const program = new Command().name("openclaw");
-    registerWorktreesCli(program);
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-    await program.parseAsync(["worktrees", "remove", "worktree-id", "--force"], {
-      from: "user",
-    });
-
+  it.each(["list", "create"] as const)(
+    "escapes %s output but preserves raw JSON",
+    async (command) => {
+      const repoRoot = await fs.realpath(tempDirs.make("openclaw-terminal-worktree-"));
+      const record = makeWorktreeRecord(
+        command === "list" ? "/repo/café\x1b[31m\nforged" : repoRoot,
+        "worktree-id",
+        {
+          path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
+          gcProtection: "preserved: nested-repository",
+          cleanup: {
+            state: "preserved",
+            reason: "nested-repository",
+            attempts: 1,
+            nextAttemptAt: null,
+          },
+        },
+      );
+      if (command === "list") {
+        vi.spyOn(owner, "list").mockResolvedValue([record]);
+      } else {
+        vi.spyOn(owner, "create").mockResolvedValue(record);
+      }
+      const args = command === "list" ? [command] : [command, repoRoot];
+      const text = muteOutput(false);
+      await run(args);
+      if (command === "list") {
+        const output = text.mock.calls.map(([line]) => String(line)).join("\n");
+        expect(output).toContain("/repo/café\\nforged");
+        expect(output).toContain(record.branch);
+        expect(output).toContain("preserved:");
+        expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      } else {
+        expect(text).toHaveBeenCalledWith("worktree-id\t/state/café\\nforged\\tpath\\r");
+      }
+      const json = muteOutput();
+      await run([...args, "--json"]);
+      expect(json).toHaveBeenCalledWith(command === "list" ? { worktrees: [record] } : record);
+    },
+  );
+  it("passes explicit force permission to the removal owner", async () => {
+    const remove = vi.spyOn(owner, "remove").mockResolvedValue({ removed: true });
+    muteOutput(false);
+    await run(["remove", "worktree-id", "--force"]);
     expect(remove).toHaveBeenCalledWith({
       id: "worktree-id",
       reason: "manual-delete",
+      ...admission,
       allowSnapshotLoss: true,
+      retryPreserved: undefined,
     });
   });
+  it.each([false, true])(
+    "reports preservation and retries only with the flag (JSON: %s)",
+    async (json) => {
+      const preserved = {
+        state: "preserved",
+        reason: "nested-repository",
+        attempts: 1,
+        nextAttemptAt: null,
+      };
+      const result = { removed: false, preserved };
+      const remove = vi.spyOn(owner, "remove").mockResolvedValue(result);
+      const output = muteOutput(json);
+      const args = ["remove", "worktree-id", ...(json ? ["--json"] : [])];
+      await expect(run(args)).rejects.toMatchObject({ code: 1 });
+      expect(output).toHaveBeenCalledWith(
+        json ? result : expect.stringContaining("nested-repository"),
+      );
+      remove.mockResolvedValue({ removed: true });
+      await run([...args, "--retry-preserved"]);
+      expect(remove).toHaveBeenLastCalledWith(expect.objectContaining({ retryPreserved: true }));
+    },
+  );
+  it.each([
+    ["remove", "--exact-state", "/missing-request", "--force"],
+    ["remove", "--exact-state", "/missing-request", "--if-lossless"],
+    ["remove", "--if-lossless", "--force"],
+    ["remove", "--if-lossless", "--retry-preserved"],
+    ["remove", "--exact-state", "."],
+    ["restore", "--recover-exact-state", "."],
+    ["create", "--source-profile"],
+  ])("rejects invalid %s requests before mutation", async (command, ...flags) => {
+    const methods = ["remove", "removeIfLossless", "restore", "create"] as const;
+    const mutations = methods.map((method) => vi.spyOn(owner, method));
+    for (const content of flags.includes(".") ? [undefined, "{", "{}"] : [undefined]) {
+      const file = path.join(tempDirs.make("openclaw-exact-state-"), "request.json");
+      if (content !== undefined) {
+        await fs.writeFile(file, content);
+      }
+      const args = flags.map((flag) => (flag === "." && content !== undefined ? file : flag));
+      const error = flags.includes(".") ? /regular.*file/ : /with option|argument missing/;
+      await expect(run([command, "worktree-id", ...args])).rejects.toThrow(error);
+    }
+    expect(mutations.some((spy) => spy.mock.calls.length)).toBe(false);
+  });
+  it("requires an exact pending commit and returns recovery's actual outcome", async () => {
+    const snapshot = "a".repeat(40);
+    const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
+      removed: true,
+      snapshotRef: "refs/openclaw/snapshots/worktree-id",
+    };
+    const recover = vi.spyOn(owner, "recoverRemoval").mockResolvedValue(result);
+    const output = muteOutput();
+    const recoverArgs = ["recover-removal", "worktree-id"];
+    await expect(run(recoverArgs)).rejects.toThrow(/required option/);
+    expect(recover).not.toHaveBeenCalled();
+    await run([...recoverArgs, "--snapshot", snapshot, "--json"]);
+    expect(recover).toHaveBeenCalledWith({ id: "worktree-id", snapshot, ...admission });
+    expect(output).toHaveBeenCalledWith(result);
+  });
 
-  it("passes session owner activity and built-in limits to gc", async () => {
+  it.each(["1700000000100ms", "-1", "", "9007199254740993"])(
+    "rejects the malformed --removed-at value %j before retiring a snapshot",
+    async (removedAt) => {
+      setRuntimeConfigSnapshot({}, {});
+      const retire = vi.spyOn(owner, "retireSnapshot");
+      const pending = run([
+        "retire-snapshot",
+        "worktree-id",
+        ...Object.entries({
+          "--expected-ref": "refs/openclaw/snapshots/worktree-id",
+          "--expected-oid": "a".repeat(40),
+          "--removed-at": removedAt,
+          "--retained-ref": "refs/heads/main",
+          "--retained-oid": "b".repeat(40),
+        }).flatMap(([flag, value]) => [flag, value]),
+      ]);
+      await expect(pending).rejects.toThrow(
+        "--removed-at must be a non-negative integer (epoch milliseconds).",
+      );
+      expect(retire).not.toHaveBeenCalled();
+      expect(
+        formatCliFailureLines({
+          title: "The CLI command failed.",
+          error: await pending.catch((cause: unknown) => cause),
+          argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
+          env: {},
+        }),
+      ).toEqual([
+        `--removed-at must be a non-negative integer (epoch milliseconds). Got: ${JSON.stringify(removedAt)}`,
+      ]);
+    },
+  );
+
+  it.each([
+    [["gc", "--job", "", "--json"], "--job must not be empty."],
+    [["remove", "nope"], "unknown active worktree: nope"],
+    [["restore", "nope"], "worktree nope is not restorable"],
+  ])("reports %j as %j", async (args, message) => {
     setRuntimeConfigSnapshot({}, {});
-    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
-      removed: [],
+    const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
+    vi.spyOn(owner, "remove").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    vi.spyOn(owner, "restore").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    await expect(run(args)).rejects.toMatchObject({ humanOutput: message, machineOutput: message });
+    expect(gc).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("reports cleanup and signals partial failure: %s", async (partial) => {
+    setRuntimeConfigSnapshot({}, {});
+    const result = {
+      removed: partial ? ["removed"] : [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
-    });
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    const program = new Command().name("openclaw");
-    registerWorktreesCli(program);
-
-    await program.parseAsync(["worktrees", "gc"], { from: "user" });
-
-    expect(gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
-      shouldProtectOwner: expect.any(Function),
-      shouldRemoveOwner: expect.any(Function),
-    });
+      outcome: partial ? ("partial" as const) : ("completed" as const),
+      issues: partial
+        ? [
+            {
+              id: "retained",
+              stage: "idle" as const,
+              outcome: "failed" as const,
+              reason: "cleanup-failed: repository unavailable",
+            },
+          ]
+        : [],
+      issueCount: partial ? 1 : 0,
+      eligibleCount: partial ? 2 : 0,
+      deferredCount: 0,
+      failedCount: partial ? 1 : 0,
+      protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
+      limitsSatisfied: !partial,
+    };
+    const gc = vi.spyOn(owner, "gc").mockResolvedValue(result);
+    const output = muteOutput(partial);
+    const pending = run(["gc", ...(partial ? ["--json", "--retry-deferred"] : [])]);
+    if (partial) {
+      await expect(pending).rejects.toThrow();
+      expect(output).toHaveBeenCalledWith(result);
+    } else {
+      await pending;
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("cleanup completed: removed 0"));
+    }
+    expect(gc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...admission,
+        retryDeferred: partial,
+        readOwnerState: expect.any(Function),
+      }),
+    );
   });
 });

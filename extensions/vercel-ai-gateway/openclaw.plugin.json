@@ -1,11 +1,28 @@
 {
   "id": "vercel-ai-gateway",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "vercel-ai-gateway",
+      "hosts": ["ai-gateway.vercel.sh"]
+    }
+  ],
   "modelCatalog": {
+    "modelsDev": {
+      "vercel-ai-gateway": "vercel"
+    },
+    "providers": {
+      "vercel-ai-gateway": {
+        "baseUrl": "https://ai-gateway.vercel.sh",
+        "api": "anthropic-messages",
+        "models": []
+      }
+    },
     "discovery": {
       "vercel-ai-gateway": "refreshable"
     }
@@ -29,6 +46,10 @@
   "modelPricing": {
     "providers": {
       "vercel-ai-gateway": {
+        "modelsDev": {
+          "provider": "vercel",
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },

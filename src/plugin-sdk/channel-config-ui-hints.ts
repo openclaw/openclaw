@@ -1,4 +1,3 @@
-/** Shared UI-hint groups for channel config schemas. */
 import type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 
 type HintMap = Record<string, ChannelConfigUiHint>;
@@ -135,7 +134,7 @@ function createChannelProgressUiHints(params: {
     },
     "streaming.progress.toolProgress": {
       label: `${channelLabel} Progress Tool Lines`,
-      help: "Show individual tool activity in progress drafts (default: false). Quiet drafts retain plans, approval requests, failures, and authored progress text.",
+      help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Quiet drafts retain plans, approval requests, and authored progress text. Terminal task errors remain visible.",
     },
     ...(params.includeCommentary && params.commentaryOrder !== "after-command"
       ? commentaryHint
@@ -207,7 +206,6 @@ function createChannelRetryUiHints(channelLabel: string): HintMap {
   };
 }
 
-// Builds reusable channel config UI-hint groups from one channel descriptor.
 export function createChannelConfigUiHints(params: {
   channelLabel: string;
   dmPolicy?: {

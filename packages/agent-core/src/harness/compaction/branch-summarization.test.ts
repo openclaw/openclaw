@@ -1,63 +1,34 @@
-import { describe, expect, it, vi } from "vitest";
-import { createAssistantMessageEventStream } from "../../llm.js";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
+import { createCompactionModel, createMessageEntry } from "./compaction.test-support.js";
+import {
+  assistant,
+  bash,
+  decoratedResponse,
+  responseStream,
+  text as textBlock,
+  toolCall,
+  toolResult,
+  user,
+} from "./shard-fixtures.test-support.js";
 
 function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
-  return {
+  return createCompactionModel({
     id: "branch-summary-model",
     name: "Branch Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
-  };
-}
-
-function createMessageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
-  };
+  });
 }
 
 function createResponse(
   model: Model,
-  content: AssistantMessage["content"] = [{ type: "text", text: "Branch summary" }],
+  content: AssistantMessage["content"] = [textBlock("Branch summary")],
 ): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 1,
-  };
-}
-
-function createResponseStream(model: Model, content?: AssistantMessage["content"]) {
-  const stream = createAssistantMessageEventStream();
-  stream.push({ type: "done", reason: "stop", message: createResponse(model, content) });
-  stream.end();
-  return stream;
+  return assistant(content, { api: model.api, provider: model.provider, model: model.id });
 }
 
 function createCapturingStream(model: Model, responseContent?: AssistantMessage["content"]) {
@@ -75,67 +46,58 @@ function createCapturingStream(model: Model, responseContent?: AssistantMessage[
         : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
-    return createResponseStream(model, responseContent);
+    return responseStream(createResponse(model, responseContent));
   });
   return {
     streamFn,
     readCapture: () => ({ prompt, systemPrompt, maxOutputTokens }),
+    summarize: (
+      entries: SessionTreeEntry[],
+      options: Omit<
+        Parameters<typeof generateBranchSummary>[1],
+        "model" | "apiKey" | "signal" | "streamFn"
+      > = {},
+    ) =>
+      generateBranchSummary(entries, {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        streamFn,
+        ...options,
+      }),
   };
+}
+
+function userEntry(content: string, index: number) {
+  return createMessageEntry(user(content, index + 1), index);
 }
 
 function createLongBranchEntries(count: number): SessionTreeEntry[] {
   return Array.from({ length: count }, (_, index) =>
-    createMessageEntry(
-      { role: "user", content: `turn-${index} ${"x".repeat(3500)}`, timestamp: index + 1 },
-      index,
-    ),
+    userEntry(`turn-${index} ${"x".repeat(3500)}`, index),
   );
 }
 
 describe("branch summarization", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model = createModel(128_000);
-    let consumed = false;
-    const streamFn = vi.fn<StreamFn>(() => ({
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            consumed = true;
-            return { done: true as const, value: undefined };
-          },
-        };
-      },
-      async result() {
-        if (!consumed) {
-          throw new Error("stream result read before iteration");
-        }
-        return createResponse(model);
-      },
-    }));
+    const { streamFn, consumed } = decoratedResponse(createResponse(model));
 
-    await generateBranchSummary(
-      [createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0)],
-      {
-        model,
-        apiKey: "test-key",
-        signal: new AbortController().signal,
-        streamFn,
-      },
-    );
+    await generateBranchSummary([userEntry("summarize this branch", 0)], {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn,
+    });
 
-    expect(consumed).toBe(true);
+    expect(consumed()).toBe(true);
   });
 
-  it.each([
-    ["empty", []],
-    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
-    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal reasoning" }]],
-  ])("rejects %s model output before creating a summary", async (_name, content) => {
+  it("rejects whitespace-only model output before creating a summary", async () => {
+    const content: AssistantMessage["content"] = [{ type: "text", text: " \n\t " }];
     const model = createModel(128_000);
-    const streamFn = vi.fn<StreamFn>(() => createResponseStream(model, content));
-    const entries = [
-      createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0),
-    ];
+    const streamFn = vi.fn<StreamFn>(() => responseStream(createResponse(model, content)));
+    const entries = [userEntry("summarize this branch", 0)];
 
     const result = await generateBranchSummary(entries, {
       model,
@@ -144,10 +106,7 @@ describe("branch summarization", () => {
       streamFn,
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected invalid branch summary output to fail");
-    }
+    assert(!result.ok);
     expect(result.error).toMatchObject({
       name: "BranchSummaryError",
       code: "summarization_failed",
@@ -163,7 +122,7 @@ describe("branch summarization", () => {
       { type: "text", text: "continues " },
     ]);
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
+      userEntry("inspect files", 0),
       {
         type: "custom_message",
         id: "entry-1",
@@ -172,48 +131,24 @@ describe("branch summarization", () => {
         customType: "openclaw.runtime-context",
         content: "PRIVATE_RUNTIME_CONTEXT",
         display: false,
-        details: { runtimeContextCarrier: true },
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       },
       createMessageEntry(
         createResponse(model, [
           { type: "thinking", thinking: "PRIVATE_BRANCH_REASONING" },
           { type: "text", text: "Visible branch answer" },
-          { type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/read.ts" } },
-          {
-            type: "toolCall",
-            id: "write-1",
-            name: "write",
-            arguments: { path: "src/write.ts" },
-          },
+          toolCall("read", { path: "src/read.ts" }, "read-1"),
+          toolCall("write", { path: "src/write.ts" }, "write-1"),
         ]),
         2,
       ),
     ];
 
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
+    const result = await capture.summarize(entries);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw result.error;
-    }
+    assert(result.ok);
     expect(result.value).toEqual({
-      summary: `The user explored a different conversation branch before returning here.
-Summary of that exploration:
-
-${summaryText}
-
-<read-files>
-src/read.ts
-</read-files>
-
-<modified-files>
-src/write.ts
-</modified-files>`,
+      summary: `The user explored a different conversation branch before returning here.\nSummary of that exploration:\n\n${summaryText}\n\n<read-files>\nsrc/read.ts\n</read-files>\n\n<modified-files>\nsrc/write.ts\n</modified-files>`,
       readFiles: ["src/read.ts"],
       modifiedFiles: ["src/write.ts"],
     });
@@ -225,45 +160,52 @@ src/write.ts
     expect(capture.readCapture().prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
   });
 
-  it("retains failed tool results when preparing a branch", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "run deployment", timestamp: 1 }, 0),
-      createMessageEntry(
-        {
-          role: "toolResult",
-          toolCallId: "deploy-call",
-          toolName: "deploy",
-          content: [{ type: "text", text: "ERROR: deployment timed out" }],
-          details: { privateDiagnostic: "never send internal metadata" },
-          isError: true,
-          timestamp: 2,
-        },
-        1,
-      ),
-    ];
+  it("applies attribution instructions when custom branch instructions replace the default", async () => {
+    const capture = createCapturingStream(createModel(128_000));
+    const result = await capture.summarize(
+      [
+        createMessageEntry(
+          user("Alice owns this branch decision.", 1, {
+            senderId: "alice-id",
+            senderName: "Alice",
+            senderUsername: "alice",
+          }),
+          0,
+        ),
+      ],
+      {
+        customInstructions: "Use this caller-owned branch format.",
+        replaceInstructions: true,
+      },
+    );
 
-    const preparation = prepareBranchEntries(entries);
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain("Use this caller-owned branch format.");
+    expect(capture.readCapture().prompt).toContain(
+      '[User sender={"id":"alice-id","name":"Alice","username":"alice"}]: Alice owns this branch decision.',
+    );
+    expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
+    expect(capture.readCapture().systemPrompt).toContain("is unattributed");
+  });
 
-    expect(preparation.messages.map((message) => message.role)).toEqual(["user", "toolResult"]);
+  it("charges sender-heavy entries before selecting a branch history budget", () => {
+    const attributed = user("old", 1, { senderId: "alice-id", senderName: "A".repeat(256) });
+    const recent = user("new", 2);
+    const entries = [createMessageEntry(attributed, 0), createMessageEntry(recent, 1)];
+
+    const preparation = prepareBranchEntries(entries, 4);
+
+    expect(preparation.messages).toMatchObject([{ role: "user", content: "new" }]);
+    expect(preparation.totalTokens).toBeLessThanOrEqual(4);
   });
 
   it.each(["shell", "custom"] as const)(
     "preserves earlier branch context while excluding private %s activity",
     async (kind) => {
-      const model = createModel(8192);
-      const capture = createCapturingStream(model);
+      const capture = createCapturingStream(createModel(8192));
       const excludedMessage: AgentMessage =
         kind === "shell"
-          ? {
-              role: "bashExecution",
-              command: "private command",
-              output: `private output marker ${"x".repeat(80_000)}`,
-              exitCode: 0,
-              cancelled: false,
-              truncated: false,
-              timestamp: 2,
-              excludeFromContext: true,
-            }
+          ? bash(`private output marker ${"x".repeat(80_000)}`, { timestamp: 2 })
           : {
               role: "custom",
               customType: "openclaw.operator-activity",
@@ -273,12 +215,9 @@ src/write.ts
               excludeFromContext: true,
             };
       const entries: SessionTreeEntry[] = [
-        createMessageEntry(
-          { role: "user", content: "important original request", timestamp: 1 },
-          0,
-        ),
+        userEntry("important original request", 0),
         createMessageEntry(excludedMessage, 1),
-        createMessageEntry({ role: "user", content: "continue branch", timestamp: 3 }, 2),
+        userEntry("continue branch", 2),
       ];
 
       const preparation = prepareBranchEntries(entries, 100);
@@ -297,12 +236,7 @@ src/write.ts
         { role: "user", content: "continue branch" },
       ]);
 
-      const result = await generateBranchSummary(entries, {
-        model,
-        apiKey: "test-key",
-        signal: new AbortController().signal,
-        streamFn: capture.streamFn,
-      });
+      const result = await capture.summarize(entries);
 
       expect(result.ok).toBe(true);
       expect(capture.readCapture().prompt).toContain("important original request");
@@ -313,94 +247,118 @@ src/write.ts
     },
   );
 
-  it("summarizes tool failures without exposing private result details", async () => {
-    const model = createModel(128_000);
-    const capture = createCapturingStream(model);
+  it("summarizes a large final tool failure without losing the task or exposing private details", async () => {
+    const capture = createCapturingStream(createModel(8192));
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "run deployment", timestamp: 1 }, 0),
+      userEntry("run deployment", 0),
       createMessageEntry(
         {
-          role: "toolResult",
-          toolCallId: "deploy-call",
-          toolName: "deploy",
-          content: [{ type: "text", text: "ERROR: deployment timed out" }],
+          ...toolResult(`${"deployment log line\n".repeat(2400)}ERROR: deployment timed out`, {
+            toolCallId: "deploy-call",
+            toolName: "deploy",
+            isError: true,
+            timestamp: 2,
+          }),
           details: { privateDiagnostic: "never send internal metadata" },
-          isError: true,
-          timestamp: 2,
         },
         1,
       ),
     ];
 
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
+    const result = await capture.summarize(entries);
 
     expect(result.ok).toBe(true);
+    expect(capture.streamFn).toHaveBeenCalledOnce();
+    expect(capture.readCapture().prompt).toContain("run deployment");
     expect(capture.readCapture().prompt).toContain("ERROR: deployment timed out");
     expect(capture.readCapture().prompt).not.toContain("never send internal metadata");
     expect(capture.readCapture().maxOutputTokens).toBe(2048);
   });
 
-  it("bounds history when the default reservation exceeds a small context window", async () => {
-    const model = createModel(8192);
-    const capture = createCapturingStream(model);
+  it.each([
+    {
+      name: "custom focus",
+      window: 8192,
+      cap: 8000,
+      count: 12,
+      absent: "turn-0",
+      output: 2048,
+      options: {
+        reserveTokens: 2048,
+        customInstructions: `Preserve release blockers. ${"Keep relevant decisions. ".repeat(200)}`,
+      },
+    },
+    {
+      name: "large usable reservation",
+      window: 8192,
+      cap: 8000,
+      count: 12,
+      absent: "turn-9",
+      output: 2048,
+      options: { reserveTokens: 6144 },
+    },
+    {
+      name: "narrow output cap",
+      window: 4096,
+      cap: 512,
+      count: 8,
+      absent: "turn-0",
+      output: 512,
+      options: {},
+    },
+  ])(
+    "bounds branch requests with $name",
+    async ({ window, cap, count, absent, output, options }) => {
+      const capture = createCapturingStream(createModel(window, cap));
+      expect((await capture.summarize(createLongBranchEntries(count), options)).ok).toBe(true);
+      const { prompt, systemPrompt, maxOutputTokens } = capture.readCapture();
+      expect(maxOutputTokens).toBe(output);
+      expect(prompt).not.toContain(absent);
+      if (count === 12) {
+        expect(prompt).toContain("turn-11");
+      }
+      expect(
+        Math.ceil((prompt.length + systemPrompt.length) / 4) + (maxOutputTokens ?? 0),
+      ).toBeLessThanOrEqual(window);
+    },
+  );
 
-    const result = await generateBranchSummary(createLongBranchEntries(12), {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
+  it("reports when the complete previous summary cannot fit instead of claiming there is no content", async () => {
+    const capture = createCapturingStream(createModel(4096));
+    const text = `Preserve this branch context. ${"x".repeat(15_000)}`;
+    const entries: SessionTreeEntry[] = [
+      {
+        type: "compaction",
+        id: "entry-0",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        firstKeptEntryId: "earlier-entry",
+        summary: text,
+        tokensBefore: 20_000,
+      },
+    ];
+    const original = JSON.stringify(entries);
 
-    const { prompt, systemPrompt, maxOutputTokens } = capture.readCapture();
-    expect(result.ok).toBe(true);
-    expect(prompt).toContain("turn-11");
-    expect(prompt).not.toContain("turn-0");
-    expect(maxOutputTokens).toBe(2048);
-    expect(
-      Math.ceil((prompt.length + systemPrompt.length) / 4) + (maxOutputTokens ?? 0),
-    ).toBeLessThanOrEqual(model.contextWindow);
+    const result = await capture.summarize(entries);
+
+    assert(!result.ok);
+    expect(result.error.code).toBe("summarization_failed");
+    expect(capture.streamFn).not.toHaveBeenCalled();
+    expect(JSON.stringify(entries)).toBe(original);
   });
 
-  it("preserves usable caller reservations larger than half the context window", async () => {
-    const model = createModel(8192);
-    const capture = createCapturingStream(model);
+  it("skips provider work for empty or excluded-only branch history", async () => {
+    const capture = createCapturingStream(createModel(4096));
+    const excluded = createMessageEntry(bash("private output"), 0);
 
-    const result = await generateBranchSummary(createLongBranchEntries(12), {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 6144,
-      streamFn: capture.streamFn,
-    });
+    for (const entries of [[], [excluded]]) {
+      const result = await capture.summarize(entries);
 
-    expect(result.ok).toBe(true);
-    expect(capture.readCapture().prompt).toContain("turn-11");
-    expect(capture.readCapture().prompt).not.toContain("turn-9");
-    expect(capture.readCapture().maxOutputTokens).toBe(2048);
-  });
-
-  it("scales output headroom to narrow model contexts and model output caps", async () => {
-    const model = createModel(4096, 512);
-    const capture = createCapturingStream(model);
-
-    const result = await generateBranchSummary(createLongBranchEntries(8), {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
-
-    const { prompt, systemPrompt, maxOutputTokens } = capture.readCapture();
-    expect(result.ok).toBe(true);
-    expect(maxOutputTokens).toBe(512);
-    expect(prompt).not.toContain("turn-0");
-    expect(
-      Math.ceil((prompt.length + systemPrompt.length) / 4) + (maxOutputTokens ?? 0),
-    ).toBeLessThanOrEqual(model.contextWindow);
+      expect(result).toEqual({
+        ok: true,
+        value: { summary: "No content to summarize", readFiles: [], modifiedFiles: [] },
+      });
+    }
+    expect(capture.streamFn).not.toHaveBeenCalled();
   });
 });

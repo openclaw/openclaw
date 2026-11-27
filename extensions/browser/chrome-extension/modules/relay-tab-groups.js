@@ -1,6 +1,7 @@
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 
-async function isOpenClawGroupId(groupId) {
+export async function isTabSelected(tab) {
+  const groupId = tab?.groupId;
   if (!Number.isInteger(groupId) || groupId < 0) {
     return false;
   }
@@ -10,10 +11,6 @@ async function isOpenClawGroupId(groupId) {
   } catch {
     return false;
   }
-}
-
-export async function isTabSelected(tab) {
-  return await isOpenClawGroupId(tab?.groupId);
 }
 
 export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created }) {

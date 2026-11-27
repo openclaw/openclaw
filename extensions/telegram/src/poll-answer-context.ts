@@ -1,6 +1,7 @@
 // Telegram public-poll answer context prepared before sequentialization.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
-  findTelegramPollRegistryEntrySync,
+  findTelegramPollRegistryEntry,
   telegramPollRegistryKey,
   type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
@@ -34,10 +35,8 @@ export function beginTelegramPollRegistration(params: {
   complete: (entry: TelegramPollRegistryEntry | null) => void;
 } {
   const key = telegramPollRegistryKey(params.accountId, params.entry.pollId);
-  let completeRegistration: (entry: TelegramPollRegistryEntry | null) => void = () => {};
-  const completion = new Promise<TelegramPollRegistryEntry | null>((resolve) => {
-    completeRegistration = resolve;
-  });
+  const { promise: completion, resolve: completeRegistration } =
+    createDeferred<TelegramPollRegistryEntry | null>();
   const registration = { entry: params.entry, completion };
   pendingPollRegistrations.set(key, registration);
   return {
@@ -50,27 +49,33 @@ export function beginTelegramPollRegistration(params: {
   };
 }
 
-export function prepareTelegramPollAnswerContext(params: {
-  update: object;
-  accountId?: string;
-}): void {
-  if (!isEligibleTelegramPollAnswerUpdate(params.update)) {
-    return;
-  }
-  if (preparedPollAnswers.has(params.update)) {
-    return;
+type TelegramPollAnswerContextParams = { update: object; accountId?: string };
+
+function resolveUnpreparedPollId(params: TelegramPollAnswerContextParams): string | undefined {
+  if (
+    !isEligibleTelegramPollAnswerUpdate(params.update) ||
+    preparedPollAnswers.has(params.update)
+  ) {
+    return undefined;
   }
   const pollId = params.update.poll_answer.poll_id;
   const pending = pendingPollRegistrations.get(telegramPollRegistryKey(params.accountId, pollId));
-  const prepared: PreparedTelegramPollAnswer = pending
-    ? { entry: pending.entry, registrationPending: true }
-    : {
-        entry: findTelegramPollRegistryEntrySync({
-          pollId,
-          accountId: params.accountId,
-        }),
-      };
-  preparedPollAnswers.set(params.update, prepared);
+  if (pending) {
+    preparedPollAnswers.set(params.update, { entry: pending.entry, registrationPending: true });
+    return undefined;
+  }
+  return pollId;
+}
+
+export async function prepareTelegramPollAnswerContextAsync(
+  params: TelegramPollAnswerContextParams,
+): Promise<void> {
+  const pollId = resolveUnpreparedPollId(params);
+  if (pollId === undefined) {
+    return;
+  }
+  const entry = await findTelegramPollRegistryEntry({ pollId, accountId: params.accountId });
+  preparedPollAnswers.set(params.update, { entry });
 }
 
 export async function settleTelegramPollAnswerContext(params: {
@@ -85,7 +90,7 @@ export async function settleTelegramPollAnswerContext(params: {
   const pending = pendingPollRegistrations.get(telegramPollRegistryKey(params.accountId, pollId));
   const entry = pending
     ? await pending.completion
-    : findTelegramPollRegistryEntrySync({ pollId, accountId: params.accountId });
+    : await findTelegramPollRegistryEntry({ pollId, accountId: params.accountId });
   preparedPollAnswers.set(params.update, { entry });
 }
 

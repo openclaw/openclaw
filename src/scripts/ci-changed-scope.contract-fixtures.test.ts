@@ -1,20 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 
-describe("shared Apple contract fixture CI scope", () => {
-  it.each([
-    "test/fixtures/device-identity-coordinator-contract.json",
-    "test/fixtures/talk-config-contract.json",
-  ])("runs macOS contract tests for %s", (fixturePath) => {
+describe("shared native contract fixture CI scope", () => {
+  it("runs Android and macOS contract tests for the shared Talk fixture", () => {
+    const fixturePath = "test/fixtures/talk-config-contract.json";
     expect(detectChangedScope([fixturePath])).toEqual({
       runNode: true,
       runMacos: true,
       runMacosNode: true,
       runIosBuild: false,
-      runAndroid: false,
+      runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
-      runChangedSmoke: false,
+      runControlUiI18n: false,
+      runUiTests: false,
+    });
+  });
+
+  it("runs Android and Node checks for the realtime relay fixture only", () => {
+    expect(detectChangedScope(["test/fixtures/talk-realtime-relay-contract.json"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runMacosNode: false,
+      runIosBuild: false,
+      runAndroid: true,
+      runWindows: false,
+      runSkillsPython: false,
       runControlUiI18n: false,
       runUiTests: false,
     });

@@ -1,0 +1,44 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/fixture/workspace"
+    },
+    "entries": {
+      "main": {
+        "name": "main",
+        "workspace": "/home/fixture/workspace",
+        "agentDir": "/home/fixture/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "main"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "anthropic": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      },
+      "codex": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      }
+    }
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true
+    },
+    "lastTouchedVersion": "2026.9.3"
+  },
+  "gateway": {
+    "mode": "local"
+  }
+}

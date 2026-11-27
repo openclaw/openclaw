@@ -1,7 +1,8 @@
 // Resolves canonical group policy scopes prepared by channel plugins.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-import { resolveChannelGroups, resolveToolsBySender } from "./group-policy.js";
+import { resolveChannelGroups } from "./channel-groups.js";
+import { resolveToolsBySender, type GroupToolPolicySender } from "./tools-by-sender.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -27,8 +28,6 @@ export const encodeScopeSegment = (value: string) => `${value.length}:${value}`;
 export function scopeKey(...segments: Array<readonly [prefix: string, value: string]>): string {
   return segments.map(([prefix, value]) => `${prefix}:${encodeScopeSegment(value)}`).join("/");
 }
-
-type ScopeToolPolicySender = Omit<Parameters<typeof resolveToolsBySender>[0], "toolsBySender">;
 
 export function buildChannelGroupsScopeTree(
   cfg: OpenClawConfig,
@@ -120,7 +119,7 @@ export function resolveScopeToolsPolicy(
   params: {
     tree: ScopeTree;
     path: ScopePath;
-  } & ScopeToolPolicySender,
+  } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
   return resolveFromScopes({
     tree: params.tree,

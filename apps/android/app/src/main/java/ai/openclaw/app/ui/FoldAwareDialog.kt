@@ -1,9 +1,6 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.ui.design.ClawTheme
-import android.app.Activity
-import android.view.View
-import android.view.ViewTreeObserver
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -25,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,10 +47,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
-import androidx.window.layout.WindowMetricsCalculator
 
 @Composable
 internal fun FoldAwareDialog(
@@ -72,7 +66,7 @@ internal fun FoldAwareDialog(
   val dismiss by rememberUpdatedState(onDismissRequest)
   val outsideEnabled by rememberUpdatedState(dismissOnClickOutside)
 
-  Dialog(
+  AppDialog(
     onDismissRequest = onDismissRequest,
     properties =
       DialogProperties(
@@ -84,35 +78,11 @@ internal fun FoldAwareDialog(
         decorFitsSystemWindows = false,
       ),
   ) {
-    val geometry = rememberDialogWindowGeometry(activity, activityView, LocalView.current)
+    val geometry = rememberOverlayWindowGeometry(activity, activityView, LocalView.current)
     Layout(
       modifier =
-        Modifier.fillMaxSize().pointerInput(Unit) {
-          awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            val initialBounds = promptBounds
-            if (!initialBounds.contains(down.position)) {
-              down.consume()
-              var tap = !initialBounds.isEmpty
-              do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.changes.size != 1 || promptBounds != initialBounds) tap = false
-                for (change in event.changes) {
-                  if (change.isConsumed || initialBounds.contains(change.position) ||
-                    (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                  ) {
-                    tap = false
-                  }
-                  change.consume()
-                }
-                if (event.changes.all { !it.pressed } && tap &&
-                  event.changes.single().changedToUpIgnoreConsumed() && outsideEnabled
-                ) {
-                  dismiss()
-                }
-              } while (event.changes.any { it.pressed })
-            }
-          }
+        Modifier.fillMaxSize().dismissOnOutsideTap(Unit, { promptBounds }) {
+          if (outsideEnabled) dismiss()
         },
       content = {
         Box(
@@ -143,7 +113,7 @@ internal fun FoldAwareDialog(
         val origin = coordinates?.positionInWindow()?.round() ?: IntOffset.Zero
         val pane =
           geometry?.let {
-            foldSafeRegion(it.activityExtent, features, layoutDirection).translate(it.activityToDialog - origin)
+            foldSafeRegion(it.activityExtent, features, layoutDirection).translate(it.activityToOverlay - origin)
           } ?: IntRect.Zero
         val left = pane.left.coerceIn(0, width)
         val top = pane.top.coerceIn(0, height)
@@ -155,61 +125,34 @@ internal fun FoldAwareDialog(
   }
 }
 
-private data class DialogWindowGeometry(
-  val activityExtent: IntRect,
-  val activityToDialog: IntOffset,
-)
-
-@Composable
-private fun rememberDialogWindowGeometry(
-  activity: Activity?,
-  activityView: View,
-  dialogView: View,
-): DialogWindowGeometry? {
-  var geometry by remember(activity, activityView, dialogView) { mutableStateOf<DialogWindowGeometry?>(null) }
-  DisposableEffect(activity, activityView, dialogView) {
-    val calculator = WindowMetricsCalculator.getOrCreate()
-
-    fun sample() {
-      val displayId = activityView.display?.displayId
-      geometry =
-        if (activity != null && activityView.isAttachedToWindow && dialogView.isAttachedToWindow &&
-          displayId != null && displayId == dialogView.display?.displayId
-        ) {
-          val extent = calculator.computeCurrentWindowMetrics(activity).bounds
-          DialogWindowGeometry(
-            IntRect(0, 0, extent.width(), extent.height()),
-            activityView.windowScreenOrigin() - dialogView.windowScreenOrigin(),
-          )
-        } else {
-          null
-        }
-    }
-    // A window can move without changing Compose constraints. Both references must be current
-    // and attached to the same display; never retain an offset from a previous Activity.
-    val observer =
-      ViewTreeObserver.OnPreDrawListener {
-        sample()
-        true
+internal fun Modifier.dismissOnOutsideTap(
+  key: Any?,
+  bounds: () -> Rect,
+  onDismiss: () -> Unit,
+): Modifier =
+  pointerInput(key) {
+    awaitEachGesture {
+      val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+      val initialBounds = bounds()
+      if (!initialBounds.contains(down.position)) {
+        down.consume()
+        var tap = !initialBounds.isEmpty
+        do {
+          val event = awaitPointerEvent(PointerEventPass.Initial)
+          if (event.changes.size != 1 || bounds() != initialBounds) tap = false
+          for (change in event.changes) {
+            if (change.isConsumed || initialBounds.contains(change.position) ||
+              (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+            ) {
+              tap = false
+            }
+            change.consume()
+          }
+          if (event.changes.all { !it.pressed } && tap && event.changes.single().changedToUpIgnoreConsumed()) onDismiss()
+        } while (event.changes.any { it.pressed })
       }
-    val activityObserver = activityView.viewTreeObserver
-    val dialogObserver = dialogView.viewTreeObserver
-    activityObserver.addOnPreDrawListener(observer)
-    dialogObserver.addOnPreDrawListener(observer)
-    sample()
-    onDispose {
-      if (activityObserver.isAlive) activityObserver.removeOnPreDrawListener(observer)
-      if (dialogObserver.isAlive) dialogObserver.removeOnPreDrawListener(observer)
     }
   }
-  return geometry
-}
-
-private fun View.windowScreenOrigin(): IntOffset {
-  val screen = IntArray(2).also(::getLocationOnScreen)
-  val window = IntArray(2).also(::getLocationInWindow)
-  return IntOffset(screen[0] - window[0], screen[1] - window[1])
-}
 
 @Composable
 internal fun FoldAwarePrompt(

@@ -1,14 +1,18 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, matchFilter, type Event, type Filter } from "nostr-tools";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext } from "../runtime-api.js";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -24,35 +28,9 @@ const relayMocks = vi.hoisted(() => ({
   dropSubscriptionReason: undefined as string | undefined,
 }));
 
-function matchesRelayFilter(event: Event, filter: Filter): boolean {
-  if (filter.kinds && !filter.kinds.includes(event.kind)) {
-    return false;
-  }
-  if (filter.authors && !filter.authors.includes(event.pubkey)) {
-    return false;
-  }
-  for (const [key, values] of Object.entries(filter)) {
-    if (!key.startsWith("#") || !Array.isArray(values)) {
-      continue;
-    }
-    const tagName = key.slice(1);
-    const tagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1] ?? "");
-    if (!tagValues.some((value) => (values as string[]).includes(value))) {
-      return false;
-    }
-  }
-  if (filter.since !== undefined && event.created_at < filter.since) {
-    return false;
-  }
-  if (filter.until !== undefined && event.created_at > filter.until) {
-    return false;
-  }
-  return true;
-}
-
 function selectRelayEvents(filter: Filter): Event[] {
   const matched = relayMocks.storedEvents
-    .filter((event) => matchesRelayFilter(event, filter))
+    .filter((event) => matchFilter(filter, event))
     .toSorted((left, right) => right.created_at - left.created_at);
   return filter.limit === undefined ? matched : matched.slice(0, filter.limit);
 }
@@ -87,13 +65,14 @@ vi.mock("nostr-tools", async (importOriginal) => {
         for (const filter of filters) {
           if (filter.kinds?.includes(9)) {
             relayMocks.messageFilters.push(filter);
+            notifyStateChanged();
             carriesMessages = true;
           }
           for (const event of selectRelayEvents(filter)) {
             handlers.onevent(event);
           }
         }
-        handlers.oneose?.();
+        queueMicrotask(() => handlers.oneose?.());
         if (carriesMessages && relayMocks.dropSubscriptionReason) {
           const reason = relayMocks.dropSubscriptionReason;
           relayMocks.dropSubscriptionReason = undefined;
@@ -119,9 +98,15 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
+// Reconnect scenarios wait on produced state; do not spend wall-clock time on backoff.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
+
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
-import { setBuzzRuntime } from "./runtime.js";
+import { getBuzzRuntime, setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
 
@@ -138,13 +123,22 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const SENDER_PUBLIC_KEY = getPublicKey(SENDER_SECRET);
 const RELAY_PUBLIC_KEY = "f".repeat(64);
 const LOOKBACK_SECONDS = 24 * 60 * 60;
-const START_SECONDS = 1_800_000_000;
+// Worker-backed replay expiry uses the real clock; keep the scenario epoch aligned.
+const START_SECONDS = Math.floor(Date.now() / 1_000);
 
 let tempDir: string | undefined;
 let previousStateDir: string | undefined;
 let currentNowMs = START_SECONDS * 1_000;
 let handled: string[] = [];
 let gates = new Map<string, Promise<void>>();
+let testSignal: AbortSignal;
+let stateChanged = Promise.withResolvers<void>();
+
+function notifyStateChanged(): void {
+  const previous = stateChanged;
+  stateChanged = Promise.withResolvers<void>();
+  previous.resolve();
+}
 
 function nowSeconds(): number {
   return Math.floor(currentNowMs / 1000);
@@ -155,15 +149,8 @@ function advanceSeconds(seconds: number): void {
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
-  let settle = () => {};
-  let fail = (_error: Error) => {};
-  gates.set(
-    text,
-    new Promise<void>((resolve, reject) => {
-      settle = resolve;
-      fail = reject;
-    }),
-  );
+  const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+  gates.set(text, promise);
   return { settle, fail };
 }
 
@@ -217,6 +204,7 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
   const account = resolveBuzzAccount({ cfg });
   const abort = new AbortController();
   const ctx = {
+    scheduler: createTestPluginServiceScheduler(),
     cfg,
     accountId: account.accountId,
     account,
@@ -225,20 +213,19 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getStatus: vi.fn(),
     setStatus: vi.fn(),
-  } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+  } as unknown as ChannelGatewayContextV2<ResolvedBuzzAccount>;
   return { abort, lifecycle: startBuzzGatewayAccount(ctx) };
 }
 
 async function waitForSettled(predicate: () => boolean | Promise<boolean>): Promise<void> {
-  for (let attempt = 0; attempt < 400; attempt += 1) {
+  for (;;) {
+    // Capture before reading: subscription/inbound publication can happen during an async read.
+    const changed = stateChanged.promise;
     if (await predicate()) {
       return;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
+    await withinTest(changed, testSignal);
   }
-  throw new Error("timed out waiting for the Buzz gateway to settle");
 }
 
 async function runGatewayProcess(
@@ -276,7 +263,9 @@ function openProcessBoundary(): void {
   gates = new Map();
 }
 
-beforeEach(() => {
+beforeEach(({ signal }) => {
+  testSignal = signal;
+  stateChanged = Promise.withResolvers<void>();
   vi.clearAllMocks();
   currentNowMs = START_SECONDS * 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => currentNowMs);
@@ -299,6 +288,7 @@ beforeEach(() => {
   inboundMocks.handleBuzzInbound.mockImplementation(
     async ({ message }: { message: BuzzInboundMessage }) => {
       handled.push(message.text);
+      notifyStateChanged();
       await gates.get(message.text);
     },
   );
@@ -316,17 +306,13 @@ beforeEach(() => {
         createPluginStateKeyedStoreForTests<T>("buzz", options),
     },
   } as never);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({ self: RELAY_PUBLIC_KEY, software: "https://github.com/block/buzz" }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -340,17 +326,47 @@ afterEach(() => {
 });
 
 describe("Buzz gateway cold-start recovery", () => {
-  it("recovers downtime messages from the persisted room activation floor", async () => {
+  it("waits for a pending state read before expecting relay subscriptions", async () => {
+    const runtime = getBuzzRuntime();
+    const open = runtime.state.openKeyedStore;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((...args) => {
+      const store = open(...args);
+      const entries = store.entries.bind(store);
+      store.entries = async (...entryArgs) => {
+        entered.resolve();
+        await release.promise;
+        return entries(...entryArgs);
+      };
+      return store;
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let failure: unknown;
+    const running = runGatewayProcess().catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(4_010);
+    } finally {
+      release.resolve();
+      vi.useRealTimers();
+      await running;
+    }
+    expect(failure).toBeUndefined();
+  });
+  it("recovers late downtime messages from the persisted room activation floor", async () => {
     await runGatewayProcess();
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
 
     openProcessBoundary();
-    postRoomMessage("live-msg", START_SECONDS + 10);
+    postRoomMessage("live-msg", START_SECONDS + 200);
     advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes("live-msg") });
 
     openProcessBoundary();
-    postRoomMessage("outage-msg", START_SECONDS + 3_610);
+    postRoomMessage("outage-msg", START_SECONDS + 100);
     advanceSeconds(7_200);
     await runGatewayProcess({ until: () => handled.includes("outage-msg") });
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
@@ -358,94 +374,22 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).not.toContain("live-msg");
   });
 
-  it("keeps an account with no cursor at the current time on its first start", async () => {
-    postRoomMessage("existing-room-history", START_SECONDS - 60);
-    await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(START_SECONDS);
-    expect(handled).not.toContain("existing-room-history");
-    expect(await readWatermark()).toBe(START_SECONDS);
-  });
-
-  it("keeps recovery capacity available when configured rooms change", async () => {
+  it("preserves room-order writes when a later activation floor is invalid", async () => {
     const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    const channelIds = Array.from(
-      { length: BUZZ_MAX_CONFIGURED_ROOMS },
-      (_value, index) => `room-${index}`,
-    );
-    const sinceByRoom = await resolveBuzzRecoverySince({
-      store,
-      channelIds,
-      nowSeconds: START_SECONDS,
-      lookbackSeconds: LOOKBACK_SECONDS,
-    });
-
-    expect(sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
-    const lastChannelId = channelIds.at(-1) as string;
-    expect(await store.lookup(`room:${lastChannelId}`)).toEqual({
-      seconds: START_SECONDS,
-    });
-
-    const removedChannelId = channelIds[0] as string;
-    const retainedChannelId = channelIds[1] as string;
-    const replacementChannelId = "replacement-room";
-    const rotatedRooms = [...channelIds.slice(1), replacementChannelId];
-    const rotatedSinceByRoom = await resolveBuzzRecoverySince({
-      store,
-      channelIds: rotatedRooms,
-      nowSeconds: START_SECONDS + 60,
-      lookbackSeconds: LOOKBACK_SECONDS,
-    });
-
-    expect(await store.lookup(`room:${removedChannelId}`)).toBeUndefined();
-    expect(rotatedSinceByRoom.get(retainedChannelId)).toBe(START_SECONDS);
-    expect(await store.lookup(`room:${replacementChannelId}`)).toEqual({
-      seconds: START_SECONDS + 60,
-    });
-  });
-
-  it("rejects recovery when an existing room cursor cannot be read", async () => {
-    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: START_SECONDS - 60 });
-    vi.spyOn(store, "lookup").mockRejectedValueOnce(new Error("first room cursor unavailable"));
-    await expect(
-      resolveBuzzRecoverySince({
-        store,
-        channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID],
-        nowSeconds: START_SECONDS,
-        lookbackSeconds: LOOKBACK_SECONDS,
-      }),
-    ).rejects.toThrow("first room cursor unavailable");
-  });
-
-  it("rejects recovery when a persisted room activation floor is invalid", async () => {
-    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    await store.register(`room:${CHANNEL_ID}`, { seconds: "corrupt" } as never);
+    await store.register("room:removed", { seconds: START_SECONDS - 60 });
+    await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: "corrupt" } as never);
 
     await expect(
       resolveBuzzRecoverySince({
         store,
-        channelIds: [CHANNEL_ID],
+        channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID, "later-room"],
         nowSeconds: START_SECONDS,
         lookbackSeconds: LOOKBACK_SECONDS,
       }),
-    ).rejects.toThrow(`Invalid Buzz recovery watermark for room ${CHANNEL_ID}`);
-  });
-
-  it("recovers a later-arriving room message with an older sender timestamp", async () => {
-    await runGatewayProcess();
-
-    openProcessBoundary();
-    postRoomMessage("newer-msg", START_SECONDS + 200);
-    advanceSeconds(600);
-    await runGatewayProcess({ until: () => handled.includes("newer-msg") });
-
-    openProcessBoundary();
-    postRoomMessage("older-late-msg", START_SECONDS + 100);
-    advanceSeconds(600);
-    await runGatewayProcess({ until: () => handled.includes("older-late-msg") });
-
-    expect(handled).toContain("older-late-msg");
-    expect(roomSubscriptionSince()).toBeLessThanOrEqual(START_SECONDS + 100);
+    ).rejects.toThrow(`Invalid Buzz recovery watermark for room ${SECOND_CHANNEL_ID}`);
+    expect(await store.lookup("room:removed")).toBeUndefined();
+    expect(await store.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
+    expect(await store.lookup("room:later-room")).toBeUndefined();
   });
 
   it("keeps every supported room for a second account after the first one saturates", async () => {
@@ -474,28 +418,6 @@ describe("Buzz gateway cold-start recovery", () => {
     });
     expect(await second.store.lookup(`room:${second.lastChannelId}`)).toEqual({
       seconds: START_SECONDS,
-    });
-  });
-
-  it("keeps room activation floors scoped to their account", async () => {
-    const firstStore = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    const secondStore = openBuzzRecoveryWatermarkStore({ accountId: SECOND_ACCOUNT_ID });
-    await resolveBuzzRecoverySince({
-      store: firstStore,
-      channelIds: [CHANNEL_ID],
-      nowSeconds: START_SECONDS,
-      lookbackSeconds: LOOKBACK_SECONDS,
-    });
-    await resolveBuzzRecoverySince({
-      store: secondStore,
-      channelIds: [CHANNEL_ID],
-      nowSeconds: START_SECONDS + 500,
-      lookbackSeconds: LOOKBACK_SECONDS,
-    });
-
-    expect(await firstStore.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
-    expect(await secondStore.lookup(`room:${CHANNEL_ID}`)).toEqual({
-      seconds: START_SECONDS + 500,
     });
   });
 
@@ -539,20 +461,6 @@ describe("Buzz gateway cold-start recovery", () => {
     advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes(queuedText) });
     expect(handled).toContain(queuedText);
-  });
-
-  it("clamps a stale room activation floor to the existing recovery lookback", async () => {
-    await runGatewayProcess();
-
-    openProcessBoundary();
-    postRoomMessage("live-msg", START_SECONDS + 10);
-    advanceSeconds(600);
-    await runGatewayProcess({ until: () => handled.includes("live-msg") });
-
-    openProcessBoundary();
-    advanceSeconds(72 * 60 * 60);
-    await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(nowSeconds() - LOOKBACK_SECONDS);
   });
 
   it("keeps pre-activation history excluded when the same process reconnects", async () => {

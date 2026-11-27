@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -23,7 +24,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okio.ByteString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,9 +38,11 @@ import org.robolectric.annotation.Implements
 import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.util.ReflectionHelpers.ClassParameter
+import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Hold only the factory return; the real OkHttp socket and callbacks keep running. */
 @Implements(value = OkHttpClient::class, isInAndroidSdk = false)
@@ -85,6 +90,198 @@ class GatewaySocketPublicationTest {
 
   @Test
   fun disconnectWhileTheFactoryReturnsDoesNotPublishTheConnection() = verifyPublication(disconnectBeforeReturn = true)
+
+  @Test
+  fun cancellationDuringFactoryRetainsTransportOwnership() = verifyFactoryRetirement(terminalBeforeReturn = false)
+
+  @Test
+  fun terminalCallbackBeforeFactoryReturnCannotFinishOrRepublishTransport() = verifyFactoryRetirement(terminalBeforeReturn = true)
+
+  @Test
+  fun throwingFactoryReleasesItsCreationReservation() =
+    runBlocking {
+      val scheduler = TestCoroutineScheduler()
+      val sessionJob = SupervisorJob()
+      val failure = CompletableDeferred<String>()
+      val calls = AtomicInteger()
+      val session =
+        createFactorySession(
+          sessionJob,
+          scheduler,
+          onDisconnected = { if (it.contains("factory failed")) failure.complete(it) },
+          factory = { _, _, _ ->
+            calls.incrementAndGet()
+            throw IllegalStateException("factory failed")
+          },
+        )
+      try {
+        connectFactorySession(session)
+        withTimeout(5_000) { failure.await() }
+        assertFalse(session.isReady())
+        assertEquals(1, calls.get())
+      } finally {
+        val cleanup =
+          async(Dispatchers.Default) {
+            session.disconnectAndJoin()
+            sessionJob.cancelAndJoin()
+          }
+        withTimeout(5_000) {
+          while (!cleanup.isCompleted) {
+            scheduler.runCurrent()
+            delay(1)
+          }
+          cleanup.await()
+        }
+      }
+    }
+
+  private fun verifyFactoryRetirement(terminalBeforeReturn: Boolean) =
+    runBlocking {
+      val scheduler = TestCoroutineScheduler()
+      val sessionJob = SupervisorJob()
+      val created = CompletableDeferred<UnpublishedSocket>()
+      val release = CountDownLatch(1)
+      val connected = AtomicBoolean()
+      val session =
+        createFactorySession(
+          sessionJob,
+          scheduler,
+          onConnected = { connected.set(true) },
+          factory = { _, request, listener ->
+            val socket = UnpublishedSocket(request, listener)
+            created.complete(socket)
+            if (terminalBeforeReturn) listener.onFailure(socket, IOException("early failure"), null)
+            release.await()
+            socket
+          },
+        )
+      var socket: UnpublishedSocket? = null
+      try {
+        connectFactorySession(session)
+        val createdSocket = withTimeout(5_000) { created.await() }
+        socket = createdSocket
+        val connection = readField<Any>(session, "currentConnection")
+        val closed = readField<CompletableDeferred<Unit>>(connection, "closedDeferred")
+        if (terminalBeforeReturn) {
+          withTimeout(5_000) {
+            while (!readField<Boolean>(connection, "transportFinished")) {
+              scheduler.runCurrent()
+              delay(1)
+            }
+          }
+        }
+        session.disconnect()
+        assertFalse("The factory still owns a transport even though no socket is published", closed.isCompleted)
+        val cleanup = async(Dispatchers.Default) { session.disconnectAndJoin() }
+        assertFalse(cleanup.isCompleted)
+        release.countDown()
+        if (!terminalBeforeReturn) {
+          withTimeout(5_000) { createdSocket.cancelled.await() }
+          assertFalse("Cancellation alone is not a terminal callback", closed.isCompleted)
+          assertFalse(cleanup.isCompleted)
+          createdSocket.listener.onFailure(createdSocket, IOException("cancelled"), null)
+        }
+        withTimeout(5_000) {
+          while (!cleanup.isCompleted) {
+            scheduler.runCurrent()
+            delay(1)
+          }
+          cleanup.await()
+        }
+        assertTrue(closed.isCompleted)
+        assertEquals(null, readField<WebSocket?>(connection, "socket"))
+        assertFalse(connected.get())
+        assertFalse(session.isReady())
+        assertEquals(0, createdSocket.sends.get())
+      } finally {
+        release.countDown()
+        socket?.let { it.listener.onFailure(it, IOException("test cleanup"), null) }
+        val cleanup =
+          async(Dispatchers.Default) {
+            session.disconnectAndJoin()
+            sessionJob.cancelAndJoin()
+          }
+        withTimeout(5_000) {
+          while (!cleanup.isCompleted) {
+            scheduler.runCurrent()
+            delay(1)
+          }
+          cleanup.await()
+        }
+      }
+    }
+
+  private class UnpublishedSocket(
+    private val request: Request,
+    val listener: WebSocketListener,
+  ) : WebSocket {
+    val cancelled = CompletableDeferred<Unit>()
+    val sends = AtomicInteger()
+
+    override fun request(): Request = request
+
+    override fun queueSize(): Long = 0
+
+    override fun send(text: String): Boolean = false.also { sends.incrementAndGet() }
+
+    override fun send(bytes: ByteString): Boolean = false.also { sends.incrementAndGet() }
+
+    override fun close(
+      code: Int,
+      reason: String?,
+    ): Boolean = false
+
+    override fun cancel() {
+      cancelled.complete(Unit)
+    }
+  }
+
+  private fun createFactorySession(
+    job: Job,
+    scheduler: TestCoroutineScheduler,
+    onConnected: () -> Unit = {},
+    onDisconnected: (String) -> Unit = {},
+    factory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
+  ): GatewaySession {
+    val app = RuntimeEnvironment.getApplication()
+    return GatewaySession(
+      scope = CoroutineScope(job + StandardTestDispatcher(scheduler)),
+      identityStore = testDeviceIdentityStore(app),
+      deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("factory-retirement", 0))),
+      onConnected = { onConnected() },
+      onDisconnected = onDisconnected,
+      onEvent = { _, _ -> },
+      webSocketFactory = factory,
+    )
+  }
+
+  private fun connectFactorySession(session: GatewaySession) {
+    session.connect(
+      endpoint = GatewayEndpoint.manual("127.0.0.1", 9),
+      token = "test-token",
+      bootstrapToken = null,
+      password = null,
+      options =
+        GatewayConnectOptions(
+          role = "operator",
+          scopes = listOf("operator.read"),
+          caps = emptyList(),
+          commands = emptyList(),
+          permissions = emptyMap(),
+          client = GatewayClientInfo("openclaw-android", "Test", "1.0.0-test", "android", "ui", "factory-retirement", "android", "test"),
+        ),
+    )
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  private fun <T> readField(
+    instance: Any,
+    name: String,
+  ): T =
+    instance.javaClass
+      .getDeclaredField(name)
+      .apply { isAccessible = true }
+      .get(instance) as T
 
   private fun verifyPublication(disconnectBeforeReturn: Boolean) =
     runBlocking {

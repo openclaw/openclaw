@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.nativeText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -9,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -16,12 +18,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.lang.reflect.Field
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CronRuntimeGuardTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -42,7 +50,7 @@ class CronRuntimeGuardTest {
     assertEquals(
       GatewayCronActionState.Notice(
         id = "job-1",
-        message = "Cron changes require operator.admin access.",
+        message = nativeText("Cron changes require operator.admin access."),
         kind = GatewayCronNoticeKind.Error,
       ),
       runtime.cronActionState.value,
@@ -69,7 +77,7 @@ class CronRuntimeGuardTest {
         assertEquals(
           GatewayCronActionState.Notice(
             id = "job-1",
-            message = "Another cron action is still finishing.",
+            message = nativeText("Another cron action is still finishing."),
             kind = GatewayCronNoticeKind.Warning,
           ),
           runtime.cronActionState.value,
@@ -107,7 +115,7 @@ class CronRuntimeGuardTest {
     val notice =
       GatewayCronActionState.Notice(
         id = "job-a",
-        message = "Automation updated.",
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
       )
     actionState.value = notice
@@ -243,7 +251,7 @@ class CronRuntimeGuardTest {
     }
 
   @Test
-  fun refreshCronJobsRetriesWhenSnapshotRevisionChangesBetweenPages() =
+  fun refreshCronJobsAcceptsChangesBetweenPagesWithoutRetrying() =
     runBlocking {
       val runtime = createTestRuntime()
       seedConnectedRuntime(runtime)
@@ -261,25 +269,15 @@ class CronRuntimeGuardTest {
                 .getValue("offset")
                 .jsonPrimitive.content
                 .toInt()
-            val requestIndex = requestedOffsets.size
             requestedOffsets += offset
-            when (requestIndex) {
+            when (offset) {
               0 -> {
                 val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
                 """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
               }
 
-              1 -> {
-                """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
-              }
-
-              2 -> {
-                val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
-                """{"jobs":[$jobs],"snapshotRevision":"rev-2","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
-              }
-
               else -> {
-                """{"jobs":[${cronJobSummaryJson(200)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+                """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
               }
             }
           }
@@ -297,7 +295,8 @@ class CronRuntimeGuardTest {
 
       assertEquals(null, runtime.cronErrorText.value)
       assertEquals(201, runtime.cronJobs.value.size)
-      assertEquals(listOf(0, 200, 0, 200), requestedOffsets)
+      assertEquals(listOf(0, 200), requestedOffsets)
+      assertEquals(true, runtime.cronJobs.value.any { it.id == "job-999" })
     }
 
   @Test
@@ -326,7 +325,7 @@ class CronRuntimeGuardTest {
         "openclaw.node.cron.guard.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime) {
@@ -344,7 +343,7 @@ class CronRuntimeGuardTest {
     name: String,
     value: Any?,
   ) {
-    findField(target, name).set(target, value)
+    findTestField(target, name).set(target, value)
   }
 
   private fun <T> readField(
@@ -352,22 +351,7 @@ class CronRuntimeGuardTest {
     name: String,
   ): T {
     @Suppress("UNCHECKED_CAST")
-    return findField(target, name).get(target) as T
-  }
-
-  private fun findField(
-    target: Any,
-    name: String,
-  ): Field {
-    var type: Class<*>? = target.javaClass
-    while (type != null) {
-      try {
-        return type.getDeclaredField(name).apply { isAccessible = true }
-      } catch (_: NoSuchFieldException) {
-        type = type.superclass
-      }
-    }
-    error("Field $name not found on ${target.javaClass.name}")
+    return findTestField(target, name).get(target) as T
   }
 
   private fun invokeStringMethod(

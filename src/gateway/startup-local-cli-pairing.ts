@@ -3,10 +3,8 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
@@ -15,10 +13,10 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 
 type StartupLocalCliPairingResult = "created" | "reused" | "unavailable";
 
-function cacheOperatorToken(params: {
+async function cacheOperatorToken(params: {
   deviceId: string;
   paired: Awaited<ReturnType<typeof getPairedDevice>>;
-}): boolean {
+}): Promise<boolean> {
   const token = params.paired?.tokens?.operator;
   if (
     !token?.token ||
@@ -30,7 +28,7 @@ function cacheOperatorToken(params: {
   ) {
     return false;
   }
-  storeDeviceAuthToken({
+  await storeDeviceAuthToken({
     deviceId: params.deviceId,
     role: "operator",
     token: token.token,
@@ -45,14 +43,14 @@ function cacheOperatorToken(params: {
  * authenticated loopback access without writing generated auth into config.
  */
 export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPairingResult> {
-  const identity = loadOrCreateDeviceIdentity();
+  const identity = await loadOrCreateDeviceIdentityAsync();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const existing = await getPairedDevice(identity.deviceId);
   if (existing) {
     if (existing.publicKey !== publicKey) {
       throw new Error("local CLI pairing identity does not match the canonical device key");
     }
-    return cacheOperatorToken({ deviceId: identity.deviceId, paired: existing })
+    return (await cacheOperatorToken({ deviceId: identity.deviceId, paired: existing }))
       ? "reused"
       : "unavailable";
   }
@@ -80,7 +78,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
     },
   });
   if (approved?.status === "approved") {
-    if (!cacheOperatorToken({ deviceId: identity.deviceId, paired: approved.device })) {
+    if (!(await cacheOperatorToken({ deviceId: identity.deviceId, paired: approved.device }))) {
       throw new Error("local CLI pairing approval did not issue an operator token");
     }
     return "created";
@@ -91,7 +89,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
   const pairedAfterApproval = await getPairedDevice(identity.deviceId);
   if (
     pairedAfterApproval?.publicKey === publicKey &&
-    cacheOperatorToken({ deviceId: identity.deviceId, paired: pairedAfterApproval })
+    (await cacheOperatorToken({ deviceId: identity.deviceId, paired: pairedAfterApproval }))
   ) {
     return "reused";
   }

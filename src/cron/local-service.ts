@@ -1,41 +1,57 @@
-import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getChildLogger } from "../logging/logger.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { getChildLogger, getFileLogLevel, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
-import { resolveCronJobsStorePath } from "./store.js";
+import { resolveCronJobsStorePathAsync } from "./store.js";
+
+/** Offline custody is supplied by the caller; this owner never starts scheduled execution. */
+export async function withLocalCronService<T>(
+  getRuntimeConfig: () => OpenClawConfig,
+  run: (service: CronService) => Promise<T>,
+): Promise<T> {
+  const cfg = getRuntimeConfig();
+  const storePath = await resolveCronJobsStorePathAsync();
+  const scheduler = new GatewayScheduler();
+  const service = new CronService({
+    scheduler,
+    storePath,
+    cronEnabled: cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED,
+    cronConfig: cfg.cron,
+    log: toPinoLikeLogger(
+      getChildLogger({ module: "cron", storeKey: storePath }),
+      getFileLogLevel(),
+    ),
+    defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
+    resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
+    isAgentAvailable: (id, facts) =>
+      !facts.deletionBlocked &&
+      listAgentIds(getRuntimeConfig()).some(
+        (configuredId) => normalizeAgentId(configuredId) === id,
+      ),
+    enqueueSystemEvent: () => false,
+    runIsolatedAgentJob: async () => {
+      throw new Error("Cron execution is unavailable in local service context.");
+    },
+  });
+  service.pauseScheduling();
+  try {
+    return await run(service);
+  } finally {
+    service.stop();
+    await service.waitForIdle();
+    await scheduler.stop();
+  }
+}
 
 export async function withLocalAgentCronJobsRemoved<T>(
   agentId: string,
   getRuntimeConfig: () => OpenClawConfig,
   commit: () => Promise<T>,
 ): Promise<T> {
-  const cfg = getRuntimeConfig();
-  const storePath = resolveCronJobsStorePath();
-  const service = new CronService({
-    storePath,
-    cronEnabled: cfg.cron?.enabled !== false,
-    cronConfig: cfg.cron,
-    log: getChildLogger({ module: "cron", storeKey: storePath }),
-    defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
-    legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
-    resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
-    isAgentAvailable: (id) =>
-      !isAgentDeletionBlocked(id) &&
-      listAgentIds(getRuntimeConfig()).some(
-        (configuredId) => normalizeAgentId(configuredId) === id,
-      ),
-    enqueueSystemEvent: () => false,
-    requestHeartbeat: () => {},
-    runIsolatedAgentJob: async () => {
-      throw new Error("Cron execution is unavailable in local service context.");
-    },
-  });
-  try {
-    return await service.removeAgentJobsTransactional(agentId, commit);
-  } finally {
-    service.stop();
-  }
+  return await withLocalCronService(getRuntimeConfig, async (service) =>
+    service.removeAgentJobsTransactional(agentId, commit),
+  );
 }

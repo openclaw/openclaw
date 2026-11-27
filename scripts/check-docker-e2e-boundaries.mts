@@ -21,6 +21,7 @@ const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 const livePackageBackedLanes = new Set([
   "install-e2e-anthropic",
   "install-e2e-openai",
+  "live-anthropic-cache",
   "live-codex-npm-plugin",
   "live-mcp-code-mode-gateway",
   "live-plugin-tool",
@@ -31,6 +32,7 @@ const livePackageBackedLanes = new Set([
 // These lanes intentionally build a focused source-checkout image instead of
 // consuming the shared package E2E images.
 const sourceCheckoutImageLanes = new Set([
+  "container-image-upgrade",
   "docker-selected-plugins",
   "plugin-binding-command-escape",
 ]);
@@ -76,7 +78,7 @@ function isPathWithin(parent: string, candidate: string) {
 }
 
 for (const relativePath of walk("scripts/e2e")) {
-  if (!/\.(?:sh|ts|mjs|js)$/u.test(relativePath)) {
+  if (!/\.(?:sh|ts|mts|mjs|js)$/u.test(relativePath)) {
     continue;
   }
   const text = readText(relativePath);

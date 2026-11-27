@@ -1,0 +1,173 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import * as stateOwner from "../../infra/gateway-state-owner.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
+
+const runner = vi.hoisted(() =>
+  vi.fn<(params: { agentDir: string; abortSignal?: AbortSignal }) => Promise<{ text: string }>>(),
+);
+// mock-isolation: Controlled completion tails exercise cleanup without starting inference.
+vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
+
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+const provider = { apiKey: "config-key", baseUrl: "https://probe.invalid", models: [] };
+async function expectOwnership(held: boolean) {
+  const owner = await readActiveGatewayLockIdentity({ env: state.env, includeEmbedded: true });
+  expect(owner?.pid).toBe(held ? process.pid : undefined);
+}
+beforeEach(async () => {
+  state = await createOpenClawTestState({
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  runner.mockReset();
+  await state.cleanup();
+});
+
+async function probeParams(concurrency: number) {
+  const cfg: OpenClawConfig = { models: { providers: { "probe-control": provider } } };
+  await state.writeConfig(cfg);
+  return {
+    cfg,
+    agentId: "main",
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    providers: ["probe-control"],
+    modelCandidates: ["probe-control/probe-model"],
+    options: {
+      provider: "probe-control",
+      includeDirectKeys: true,
+      timeoutMs: 10_000,
+      concurrency,
+      maxTokens: 8,
+    },
+    stateOwnership: { mode: "exclusive" as const },
+  };
+}
+
+it("holds state ownership until an in-flight sibling settles after progress rejects the batch", async () => {
+  const params = await probeParams(2);
+  const profile = { type: "api_key", provider: "probe-control", key: "stored-key" };
+  await state.writeAuthProfiles({ version: 1, profiles: { "probe-control:stored": profile } });
+  const firstStarted = createDeferredCore<AbortSignal | undefined>();
+  const finishFirst = createDeferredCore();
+  runner.mockImplementation(async ({ abortSignal }) => {
+    firstStarted.resolve(abortSignal);
+    await finishFirst.promise;
+    return { text: "OK" };
+  });
+  const parent = new AsyncWorkScope();
+  const original = new Error("synthetic progress failure");
+  let starts = 0;
+  let operation: Promise<unknown> | undefined;
+  try {
+    operation = parent.track(() =>
+      runAuthProbes({
+        ...params,
+        onProgress(update) {
+          if (update.label && ++starts === 2) {
+            throw original;
+          }
+        },
+      }),
+    );
+    await firstStarted.promise;
+    await expectOwnership(true);
+    finishFirst.resolve();
+    await expect(operation).rejects.toBe(original);
+    await parent.drain();
+    await expectOwnership(false);
+  } finally {
+    finishFirst.resolve();
+    await operation?.catch(() => {});
+    await parent.drain();
+  }
+});
+
+it("retains failed probe custody until disposal is explicitly settled", async () => {
+  const params = await probeParams(1);
+  const original = new Error("synthetic database disposal failure");
+  let stagedDir: string | undefined;
+  runner.mockImplementation(async ({ agentDir }) => {
+    stagedDir = agentDir;
+    return { text: "OK" };
+  });
+  const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
+  const close = vi
+    .spyOn(agentDatabaseDisposal, "disposeOpenClawAgentDatabaseByPath")
+    .mockImplementation(async (pathname, options) => {
+      const closed = await dispose(pathname, options);
+      if (stagedDir && pathname.startsWith(stagedDir + path.sep)) {
+        throw original;
+      }
+      return closed;
+    });
+  const borrow = stateOwner.tryBorrowGatewayStateOwner;
+  let retained: ReturnType<typeof borrow>;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((databasePath) => {
+    const lease = borrow(databasePath);
+    if (lease) {
+      retained = lease;
+    }
+    return lease;
+  });
+  const cleanup = createAgentCleanupScope();
+  try {
+    await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
+      cause: original,
+    });
+    expect(fs.existsSync(stagedDir!)).toBe(true);
+    await expectOwnership(true);
+    expect(cleanup.outcome).toBe("uncertain");
+    expect(() => agentDatabase.listOpenClawRegisteredAgentDatabases({ env: state.env })).toThrow(
+      "maintenance ownership without an active schema lease or maintenance scope",
+    );
+    if (!retained) {
+      throw new Error("Failed probe cleanup did not retain its actual state lease");
+    }
+    expect(
+      retained.run(() =>
+        agentDatabase
+          .listOpenClawRegisteredAgentDatabases({ env: state.env })
+          .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
+      ),
+    ).toBe(false);
+  } finally {
+    close.mockRestore();
+    const directory = stagedDir;
+    if (directory) {
+      const settle = async () => {
+        await dispose(path.join(directory, "openclaw-agent.sqlite"), { env: state.env });
+        await fs.promises.rm(directory, { recursive: true, force: true });
+      };
+      // The fixture observes the real retained lease; only settled disposal releases it.
+      await (retained ? retained.run(settle) : settle());
+    }
+    retained?.release();
+  }
+  await expectOwnership(false);
+});
+
+it("does not acquire probe state from a closed caller scope", async () => {
+  const parent = new AsyncWorkScope();
+  const inParent = parent.run(() => AsyncLocalStorage.snapshot());
+  await parent.drain();
+  const run = vi.fn(async () => undefined);
+  await expect(
+    inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, run)),
+  ).rejects.toThrow("Async work scope is closed");
+  expect(run).not.toHaveBeenCalled();
+  await expectOwnership(false);
+});

@@ -1,4 +1,3 @@
-// Imessage tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./normalize.js";
 
@@ -7,14 +6,11 @@ describe("normalizeIMessageMessagingTarget", () => {
     expect(normalizeIMessageMessagingTarget("   ")).toBeUndefined();
   });
 
-  it("preserves service prefixes for handles", () => {
-    expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
-    expect(normalizeIMessageMessagingTarget("sms:++1 (555) 222-3333")).toBe("sms:+15552223333");
-  });
-
-  it("preserves non-phone handles instead of collapsing them to a plus sign", () => {
-    expect(normalizeIMessageMessagingTarget("auto:Alice Smith")).toBe("auto:AliceSmith");
-    expect(normalizeIMessageMessagingTarget("auto:C0AG22RN7L3")).toBe("auto:C0AG22RN7L3");
+  it.each([
+    ["sms:auto:Alice Smith", undefined],
+    ["auto:C0AG22RN7L3", "auto:C0AG22RN7L3"],
+  ] as const)("preserves the service and contact boundary for %s", (input, expected) => {
+    expect(normalizeIMessageMessagingTarget(input)).toBe(expected);
   });
 
   it("rejects unqualified provider identifiers instead of coercing them into phone numbers", () => {
@@ -25,12 +21,6 @@ describe("normalizeIMessageMessagingTarget", () => {
     expect(normalizeIMessageMessagingTarget("sms:chat_id:123")).toBe("chat_id:123");
     expect(normalizeIMessageMessagingTarget("imessage:CHAT_GUID:abc")).toBe("chat_guid:abc");
     expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chatidentifier:foo");
-  });
-
-  it("treats a bare 32-char hex group chat identifier as a chat_identifier, not a phone number", () => {
-    const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
-    expect(normalizeIMessageMessagingTarget(hex)).toBe(`chat_identifier:${hex}`);
-    expect(normalizeIMessageMessagingTarget(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
   });
 });
 

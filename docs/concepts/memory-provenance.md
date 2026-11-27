@@ -75,6 +75,10 @@ Three records serve different purposes:
 | Entry origins         | Tracked entry | Session ingestion, backfill, and consolidation | Finding entries derived from a selected session |
 | Curated-write records | Memory file   | The memory write observer                      | Identifying files to review during a purge      |
 
+Curated-write lookups read only the requested physical workspace. Corrupt JSON
+in another workspace's records does not block that lookup; corrupt JSON in a
+live record in the selected workspace still reports a storage error.
+
 [Chunk provenance](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from)
 describes the origin class and session kind. Entry origins instead associate
 an entry key with an agent and source session in SQLite. Promotion markers in
@@ -84,6 +88,11 @@ When [dreaming](/concepts/dreaming) merges or supersedes tracked entries,
 reconciliation transfers the parents' origins to the surviving entry. It
 runs in code around the model call, including for participating agents that
 share a workspace; the model does not own the origin rows.
+
+A file replacement can succeed before a later file error is reported. In that
+case, or when publication is uncertain, consolidation keeps the replacement's
+origins so a later `memory forget` can still target it. It does not automatically
+retry an uncertain replacement as an append.
 
 Origins for replaced entries remain while retained rewrite preimages still
 reference their promotion markers. Backup rotation prunes those origins only
@@ -192,9 +201,14 @@ merged prose. Surviving sources may support a new entry later, but automatic
 reconstruction is not guaranteed.
 
 The cleanup covers matching promoted entries, session-corpus lines, memory
-index chunks and their full-text/vector rows, cached embeddings, short-term
-state, ingestion deduplication state, and dreaming rewrite preimages. It also
-removes whole lines containing exact selected corpus snippets from scanned
+index chunks and their full-text/vector rows, short-term state, ingestion
+deduplication state, and dreaming rewrite preimages. A nonempty session selection
+also clears the selected agent's entire embedding cache, including results from
+unfinished rebuilds that are not yet linked to published chunks. Unrelated
+published index entries remain usable; later indexing may need to regenerate
+cached embeddings. Dry runs report this removal without applying it.
+
+The purge also removes whole lines containing exact selected corpus snippets from scanned
 memory files and dream diaries. The
 [command reference](/cli/memory#memory-forget) describes the counters and
 selection limits.
@@ -206,6 +220,10 @@ agent's SQLite database before removing its artifacts. Automatic ingestion,
 historical session backfill, and transcript indexing, including
 `memory index --force`, check these records. Automatic ingestion records the
 reason `forgotten`.
+
+Transcript updates check forgotten-session membership only for the selected
+sessions. Startup catch-up, dreaming, and backfill check their candidates in
+bounded batches, preserving exclusions across the complete selection.
 
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior
@@ -242,7 +260,8 @@ or hook source. Keep an admission rule for future matching sessions, within
   not delete a file or identify contributing lines. Supported write/edit/patch
   transcript records supplement the latest file-level observer record, but
   can include unsuccessful attempts. Arbitrary shell writes and external edits
-  are not fully tracked.
+  are not fully tracked. See [Freeform edits and quarantine](#freeform-edits-and-quarantine)
+  for how they affect the file's trust record.
 - **Paraphrases and other copies.** Exact corpus quotations can be removed,
   but untracked paraphrases, exports, external backups, other plugins' stores,
   and independently copied files are outside this cleanup. A reported curated
@@ -253,6 +272,40 @@ or hook source. Keep an admission rule for future matching sessions, within
 
 An empty preview means no more artifacts were found by those selectors and
 matching rules. It is not a certificate that no related information remains.
+
+## Freeform edits and quarantine
+
+Root `MEMORY.md`, `USER.md`, and personal `users/<profile-id>/USER.md` keep
+one trust record per file with the file hash, origin class, time, and session
+of the latest tracked write. Tracked writes are the agent `write`, `edit`, and
+`apply_patch` tools, dreaming promotion, and `memory forget` rewrites. A tool
+write records `untrusted` when the turn is not an owner turn or when the turn
+is tainted by network-sourced tool results.
+
+A record applies only to the exact content it hashed. A Control UI save, a
+shell command, an editor, git, or a sync client changes the file without a
+tracked write, so the record no longer matches and counts as no record: the
+file is owner-controlled again. A tracked write on top of unchanged
+`untrusted` content keeps the file `untrusted`, including dreaming promotion
+and `memory forget` rewrites.
+
+Automatic context excludes one of these files while its content is exactly
+what an `untrusted` write produced. To restore it, review the file and save
+any edit in the Control UI or an editor. Saving identical content does not
+restore it; a one-character change does.
+
+Daily `memory/*.md` files stay quarantined: once a memory flush records a
+daily file as `untrusted`, its lines stay out of promotion even after an edit.
+
+To detect an excluded file:
+
+- The Gateway log contains `excluding MEMORY.md from automatic memory context:
+  memory provenance is untrusted` (or `USER.md`), once per file and process.
+- `openclaw doctor` reports the check `core/doctor/memory-provenance` with the
+  file (including personal `users/<profile-id>/USER.md` files), the origin
+  class, and the time and session of the last recorded tracked write. The
+  record names only the latest tracked write, not necessarily the write that
+  quarantined the file.
 
 ## Purging a person or a source end to end
 

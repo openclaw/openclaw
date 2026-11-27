@@ -1,10 +1,11 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -26,7 +27,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.lang.reflect.Field
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -55,18 +55,18 @@ class ClawHubSkillRuntimeTest {
   @Test
   fun installResultsPreserveGatewayMessagesAndAuditWarnings() {
     val success =
-      GatewaySession.RpcResult(
+      RpcResult(
         ok = true,
         payloadJson = """{"message":"Installed @alice/alpha.","warning":"  ClawHub audit details.\n "}""",
         error = null,
       )
     val rejections =
       listOf("Blocked by ClawHub.", "Security verification unavailable.").map { message ->
-        GatewaySession.RpcResult(
+        RpcResult(
           ok = false,
           payloadJson = null,
           error =
-            GatewaySession.ErrorShape(
+            ErrorShape(
               code = "UNAVAILABLE",
               message = message,
               details =
@@ -190,7 +190,7 @@ class ClawHubSkillRuntimeTest {
         listOf(
           GatewayRequestOutcomeUnknown("response lost"),
           GatewayRequestRejected(
-            GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "Install still running", details = null),
+            ErrorShape(code = "UNAVAILABLE", message = "Install still running", details = null),
           ),
           null,
         )
@@ -233,7 +233,6 @@ class ClawHubSkillRuntimeTest {
           assertNull(runtime.clawHubSkillSearchState.value.errorText)
           assertTrue(
             checkNotNull(runtime.skillsState.value.summary)
-              .skills
               .isEmpty(),
           )
           assertEquals(1, installCalls.get())
@@ -315,27 +314,12 @@ class ClawHubSkillRuntimeTest {
     name: String,
     value: Any?,
   ) {
-    field(target, name).set(target, value)
+    findTestField(target, name).set(target, value)
   }
 
   @Suppress("UNCHECKED_CAST")
   private fun <T> readField(
     target: Any,
     name: String,
-  ): T = field(target, name).get(target) as T
-
-  private fun field(
-    target: Any,
-    name: String,
-  ): Field {
-    var type: Class<*>? = target.javaClass
-    while (type != null) {
-      try {
-        return type.getDeclaredField(name).apply { isAccessible = true }
-      } catch (_: NoSuchFieldException) {
-        type = type.superclass
-      }
-    }
-    error("Field $name not found on ${target.javaClass.name}")
-  }
+  ): T = findTestField(target, name).get(target) as T
 }

@@ -1,12 +1,19 @@
-/**
- * Runtime SDK subpath for interactive replies and message presentation helpers.
- */
+import { reduceLegacyInteractiveReply } from "../interactive/payload.js";
+
+export {
+  agentControlText,
+  stampAgentControlValue,
+  stampAgentControls,
+} from "../interactive/agent-control.js";
+
 export {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
   presentationPageSize,
-  reduceInteractiveReply,
-} from "../channels/plugins/outbound/interactive.js";
+} from "../channels/plugins/outbound/presentation-limits.js";
+
+/** @deprecated Use MessagePresentation helpers for new rendering paths. */
+export const reduceInteractiveReply = reduceLegacyInteractiveReply;
 export type {
   InteractiveButtonStyle,
   InteractiveReply,

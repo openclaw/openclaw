@@ -1,4 +1,3 @@
-// OpenClaw SDK module implements event hub behavior.
 import type { GatewayEvent } from "./types.js";
 
 // Async event hub with bounded replay for SDK event streams.
@@ -77,7 +76,14 @@ export class EventHub<T> {
           wake: () => void;
         };
         const pendingReads: PendingRead[] = [];
-        const finishPendingReads = () => {
+        const cleanup = () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          // Iterator retirement discards its backlog; hub close alone still permits draining.
+          queue.length = 0;
+          this.listeners.delete(listener);
           for (const pending of pendingReads.splice(0)) {
             this.waiters.delete(pending.wake);
             if (hasStreamError) {
@@ -88,16 +94,6 @@ export class EventHub<T> {
               pending.resolve({ done: true, value: undefined });
             }
           }
-        };
-        const cleanup = () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          // Iterator retirement discards its backlog; hub close alone still permits draining.
-          queue.length = 0;
-          this.listeners.delete(listener);
-          finishPendingReads();
         };
         const listener = (event: T) => {
           let matches: boolean;
@@ -126,16 +122,7 @@ export class EventHub<T> {
 
         return {
           next: async (): Promise<IteratorResult<T>> => {
-            if (stopped) {
-              if (hasStreamError) {
-                throw streamError;
-              }
-              if (this.hasCloseError) {
-                throw this.closeError;
-              }
-              return { done: true, value: undefined };
-            }
-            if (queueHead < queue.length) {
+            if (!stopped && queueHead < queue.length) {
               const value = queue[queueHead] as T;
               // Release consumed payloads immediately; lagging consumers compact only
               // after a substantial prefix reaches half the buffer, amortizing dequeue.
@@ -146,7 +133,7 @@ export class EventHub<T> {
               }
               return { done: false, value };
             }
-            if (!this.closed) {
+            if (!stopped && !this.closed) {
               return await new Promise<IteratorResult<T>>((resolve, reject) => {
                 const pending: PendingRead = {
                   resolve,
@@ -158,6 +145,9 @@ export class EventHub<T> {
               });
             }
             cleanup();
+            if (hasStreamError) {
+              throw streamError;
+            }
             if (this.hasCloseError) {
               throw this.closeError;
             }

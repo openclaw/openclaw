@@ -1,22 +1,34 @@
-/**
- * Channel account summary helpers.
- *
- * Builds safe status snapshots and resolves enabled/configured account state.
- */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildRuntimeAccountStatusSnapshot } from "../plugin-sdk/status-helpers.js";
-import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
+import { readChannelAccountConfigured } from "./account-configuration.js";
+import { describeChannelAccount } from "./account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
+
+export { resolveChannelAccountEnabled } from "./account-configuration.js";
+
+/** Projects an admitted lifetime without resolving its potentially stale account configuration. */
+export function buildChannelAccountSnapshotFromRuntime(
+  runtime: ChannelAccountSnapshot,
+): ChannelAccountSnapshot {
+  return {
+    ...buildRuntimeAccountStatusSnapshot({ runtime }),
+    ...projectSafeChannelAccountSnapshotFields(runtime),
+    accountId: runtime.accountId,
+    enabled: runtime.enabled,
+    configured: runtime.configured,
+    stateReason: runtime.stateReason,
+  };
+}
 
 /** Projects diagnostic inspection metadata without treating it as a runtime account. */
 export function buildChannelAccountSnapshotFromInspection(params: {
@@ -47,7 +59,7 @@ export function buildChannelAccountSnapshotFromInspection(params: {
     if (!enabled) {
       snapshot.running = false;
     }
-    return redactChannelAccountSnapshotBaseUrl(snapshot);
+    return redactChannelStatusSummaryBaseUrl(snapshot);
   }
   const reason = normalizeOptionalString(inspected?.stateReason);
   applyChannelAccountState(
@@ -61,22 +73,19 @@ export function buildChannelAccountSnapshotFromInspection(params: {
       unconfiguredReason: reason,
     }),
   );
-  return redactChannelAccountSnapshotBaseUrl(snapshot);
+  return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
-/**
- * Builds the safe account snapshot shown by CLI, gateway, and status summaries.
- */
-export function buildChannelAccountSummary(params: {
+export async function buildChannelAccountSummary(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
   accountId: string;
   enabled: boolean;
   configured: boolean;
-}): ChannelAccountSnapshot {
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
-  return redactChannelAccountSnapshotBaseUrl({
+}): Promise<ChannelAccountSnapshot> {
+  const described = await describeChannelAccount(params);
+  return redactChannelStatusSummaryBaseUrl({
     enabled: params.enabled,
     configured: params.configured,
     ...projectSafeChannelAccountSnapshotFields(params.account),
@@ -85,9 +94,6 @@ export function buildChannelAccountSummary(params: {
   });
 }
 
-/**
- * Formats allowFrom entries with a plugin formatter when one exists.
- */
 export function formatChannelAllowFrom(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -104,38 +110,32 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
-/**
- * Resolves whether a channel account should be treated as enabled.
- */
-export function resolveChannelAccountEnabled(params: {
-  plugin: ChannelPlugin;
-  account: unknown;
-  cfg: OpenClawConfig;
-}): boolean {
-  if (params.plugin.config.isEnabled) {
-    return params.plugin.config.isEnabled(params.account, params.cfg);
-  }
-  const enabled = isRecord(params.account) ? params.account.enabled : undefined;
-  return enabled !== false;
+export function buildChannelAccountNotes(
+  snapshot: ChannelAccountSnapshot,
+  credentialNote?: string,
+): string[] {
+  const sources = [
+    ["token", snapshot.tokenSource],
+    ["bot", snapshot.botTokenSource],
+    ["app", snapshot.appTokenSource],
+    ["signing", snapshot.signingSecretSource],
+  ].flatMap(([label, source]) => (source && source !== "none" ? [`${label}:${source}`] : []));
+  return [
+    snapshot.enabled === false ? "disabled" : undefined,
+    snapshot.dmPolicy ? `dm:${snapshot.dmPolicy}` : undefined,
+    ...sources,
+    credentialNote,
+    snapshot.baseUrl,
+    snapshot.port != null ? `port:${snapshot.port}` : undefined,
+    snapshot.cliPath ? `cli:${snapshot.cliPath}` : undefined,
+    snapshot.dbPath ? `db:${snapshot.dbPath}` : undefined,
+  ].filter((note): note is string => Boolean(note));
 }
 
-/**
- * Resolves whether a channel account has enough configuration to run.
- */
 export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
-  readAccountConfiguredField?: boolean;
 }): Promise<boolean> {
-  if (params.plugin.config.isConfigured) {
-    return await params.plugin.config.isConfigured(params.account, params.cfg);
-  }
-  if (params.readAccountConfiguredField) {
-    // Status inspection can project an explicit configured=false marker. Normal runtime
-    // account objects default to configured unless the plugin owns a stricter check.
-    const configured = isRecord(params.account) ? params.account.configured : undefined;
-    return configured !== false;
-  }
-  return true;
+  return await readChannelAccountConfigured(params);
 }

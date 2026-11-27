@@ -17,43 +17,43 @@ describe("tool meta formatting", () => {
       expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
       expect(formatToolAggregate("fs", [`${home}/a.txt:12`])).toContain("~/a.txt:12");
       expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain("cd ~/dir && ls");
-      expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
+      expect(formatToolAggregate("fs", [""])).toBe("Fs");
     });
   });
 
-  it("formats aggregates with grouping and brace-collapse", () => {
+  it("preserves path spelling and group order after raw metadata", () => {
     withHome(() => {
-      const out = formatToolAggregate("  fs  ", [
-        `${home}/dir/a.txt`,
-        `${home}/dir/b.txt`,
-        "note",
-        "a→b",
-      ]);
-      expect(out).toMatch(/^🧩 Fs/);
-      expect(out).toContain("~/dir/{a.txt, b.txt}");
-      expect(out).toContain("note");
-      expect(out).toContain("a→b");
+      expect(
+        formatToolAggregate("fs", [
+          "/z/a",
+          "/2/a",
+          "/z/b",
+          "relative/file",
+          "/a→b",
+          "/1/a",
+          "/root",
+          "/leaf",
+          "/double//file",
+          "/trailing/",
+        ]),
+      ).toBe(
+        "Fs: relative/file; /a→b; /z/{a, b}; /2/a; /1/a; /{root, leaf}; /double//file; /trailing/",
+      );
     });
   });
 
-  it("wraps aggregate meta in backticks when markdown is enabled", () => {
-    withHome(() => {
-      const out = formatToolAggregate("fs", [`${home}/dir/a.txt`], { markdown: true });
-      expect(out).toContain("`~/dir/a.txt`");
-    });
-  });
+  it("returns promptly for a deep path followed by a space", () => {
+    const command = `${"/a".repeat(28)}/notes file.txt --help`;
+    expect(formatToolAggregate("exec", [command])).toBe(command);
+  }, 1_000);
 
-  it("uses a longer inline code delimiter when meta contains backticks", () => {
-    const out = formatToolAggregate("fs", ["name `with` ticks"], { markdown: true });
-    expect(out).toBe("🧩 Fs: ``name `with` ticks``");
-  });
-
-  it("keeps exec flags outside markdown and moves them to the front", () => {
+  it("wraps meta in markdown and keeps exec flags outside it", () => {
     withHome(() => {
-      const out = formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], {
-        markdown: true,
-      });
-      expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
+      const markdown = { markdown: true };
+      expect(formatToolAggregate("fs", [`${home}/dir/a.txt`], markdown)).toBe("Fs: `~/dir/a.txt`");
+      expect(
+        formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], markdown),
+      ).toBe("elevated · `cd ~/dir && gemini 2>&1`");
     });
   });
 });

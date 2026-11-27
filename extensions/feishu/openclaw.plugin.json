@@ -1,5 +1,6 @@
 {
   "id": "feishu",
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true
   },
@@ -114,5 +115,10 @@
     }
   },
   "skills": ["./skills"],
-  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "recommendedPrompts": [
+    "Help me plan Feishu or Lark access for this agent.",
+    "Answer a question about a Feishu document or wiki page without editing it.",
+    "Inspect a Feishu Bitable and summarize findings without changing records."
+  ]
 }

@@ -62,8 +62,9 @@ defineDiscordVoiceTests(
         hostTurn,
         consult,
         async close() {
-          fixture.entry.stop();
+          const stopped = fixture.entry.stop();
           hostTurn.resolve({ payloads: [] });
+          await stopped;
           await Promise.all(submissions);
           // Forced consult timers launch work without returning its promise. Drain its
           // rejection/delivery continuations before the shared mocks are reset.
@@ -74,45 +75,15 @@ defineDiscordVoiceTests(
     }
 
     it.each([
-      { mode: "bidi", path: "native", abort: "signal", suppression: true, rejectDelivery: false },
-      {
-        mode: "agent-proxy",
-        path: "native",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "late",
-        abort: "signal",
-        suppression: true,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "signal",
-        suppression: true,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: true,
-      },
+      ["bidi", "native", "signal", true, false],
+      ["agent-proxy", "native", "named", false, false],
+      ["agent-proxy", "late", "signal", true, false],
+      ["agent-proxy", "joined", "signal", true, false],
+      ["agent-proxy", "joined", "named", false, false],
+      ["agent-proxy", "joined", "named", false, true],
     ] as const)(
-      "terminally cancels $mode $path host $abort abort (suppression=$suppression, delivery rejection=$rejectDelivery)",
-      async ({ mode, path, abort, suppression, rejectDelivery }) => {
+      "terminally cancels %s %s host %s abort (suppression=%s, delivery rejection=%s)",
+      async (mode, path, abort, suppression, rejectDelivery) => {
         const fixture = await createPendingConsultFixture(mode);
         const { bridgeParams, entry, hostTurn, consult } = fixture;
         const deliveryError = new Error("native delivery rejected");
@@ -133,7 +104,7 @@ defineDiscordVoiceTests(
           }
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
           expect(agentCommandArgsAt(0)).toMatchObject({
-            senderIsOwner: true,
+            runContext: { senderId: "u-owner" },
             extraSystemPrompt: "owner context",
           });
           if (rejectDelivery) {
@@ -186,7 +157,7 @@ defineDiscordVoiceTests(
             });
             expect(agentCommandMock).toHaveBeenCalledTimes(2);
             expect(agentCommandArgsAt(1)).toMatchObject({
-              senderIsOwner: false,
+              runContext: { senderId: "u-guest" },
               extraSystemPrompt: "guest context",
             });
             expect(guest.session.submitToolResult.mock.calls.at(-1)).toEqual([
@@ -269,7 +240,7 @@ defineDiscordVoiceTests(
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
 
           if (transition === "teardown") {
-            entry.stop();
+            await entry.stop();
             await manager.join({ guildId: "g1", channelId: "1001" });
             entry = getSessionEntry(manager);
           } else {
@@ -293,7 +264,7 @@ defineDiscordVoiceTests(
           await consult("call-fresh-deduped", fresh);
           expect(agentCommandMock).toHaveBeenCalledTimes(2);
           expect(agentCommandArgsAt(1)).toMatchObject({
-            senderIsOwner: false,
+            runContext: { senderId: "u-guest" },
             extraSystemPrompt: "fresh guest",
           });
           expect(fresh.session.submitToolResult.mock.calls).toEqual([

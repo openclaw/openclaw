@@ -41,7 +41,7 @@ export function renderMarkdownCodeTable(headers: readonly string[], rows: readon
   const widths: number[] = [];
   for (const row of measured) {
     for (const [index, cell] of row.entries()) {
-      widths[index] = Math.max(widths[index] ?? 0, cell.width);
+      widths[index] = Math.max(widths[index] ?? 3, cell.width);
     }
   }
   if (widths.length === 0) {
@@ -49,8 +49,7 @@ export function renderMarkdownCodeTable(headers: readonly string[], rows: readon
   }
   const renderRow = (row: (typeof measured)[number]) =>
     `|${widths.map((width, index) => ` ${row[index]?.text ?? ""}${" ".repeat(width - (row[index]?.width ?? 0))} |`).join("")}`;
-  const divider = `|${widths.map((width) => ` ${"-".repeat(Math.max(3, width))} |`).join("")}`;
-  return [renderRow(measured[0] ?? []), divider, ...measured.slice(1).map(renderRow), ""].join(
-    "\n",
-  );
+  const divider = widths.map((width) => ({ text: "-".repeat(width), width }));
+  measured.splice(1, 0, divider);
+  return [...measured.map(renderRow), ""].join("\n");
 }

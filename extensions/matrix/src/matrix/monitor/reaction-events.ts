@@ -1,8 +1,7 @@
-// Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
@@ -14,8 +13,7 @@ import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
-import { resolveMatrixInboundRoute } from "./route.js";
-import type { PluginRuntime } from "./runtime-api.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
@@ -28,8 +26,6 @@ const loadExecApprovalResolver = createLazyRuntimeModule(
 );
 
 const loadMatrixSend = createLazyRuntimeModule(() => import("../send.js"));
-
-type MatrixReactionNotificationMode = "off" | "own";
 
 function buildMatrixApprovalTerminalText(result: ApprovalResolveResult): string {
   const approval = result.approval;
@@ -44,131 +40,6 @@ function buildMatrixApprovalTerminalText(result: ApprovalResolveResult): string 
           ? "Expired"
           : "Cancelled";
   return `${result.applied ? "Resolved" : "Already resolved"}: ${terminalLabel}\n\nID: ${approval.id}`;
-}
-
-async function retireMatrixApprovalReactionTargets(params: {
-  cfg: CoreConfig;
-  accountId: string;
-  client: MatrixClient;
-  roomId: string;
-  targetEventId: string;
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  result: ApprovalResolveResult;
-  logVerboseMessage: (message: string) => void;
-}): Promise<void> {
-  const accountId = normalizeAccountId(params.accountId);
-  const registeredTargets = await unregisterMatrixApprovalReactionTargetsForApproval({
-    accountId,
-    approvalId: params.approvalId,
-    approvalKind: params.approvalKind,
-  });
-  const targets = new Map<string, { accountId: string; roomId: string; eventId: string }>();
-  for (const target of [
-    ...registeredTargets,
-    { accountId, roomId: params.roomId, eventId: params.targetEventId },
-  ]) {
-    targets.set(JSON.stringify([target.accountId, target.roomId, target.eventId]), target);
-  }
-  const { editMessageMatrix } = await loadMatrixSend();
-  const terminalText = buildMatrixApprovalTerminalText(params.result);
-  const updates = await Promise.allSettled(
-    Array.from(targets.values(), async (target) => {
-      await editMessageMatrix(target.roomId, target.eventId, terminalText, {
-        cfg: params.cfg,
-        accountId: target.accountId,
-        client: params.client,
-      });
-    }),
-  );
-  const failedUpdates = updates.filter((update) => update.status === "rejected").length;
-  if (failedUpdates > 0) {
-    params.logVerboseMessage(
-      `matrix: failed to terminalize ${failedUpdates} approval prompt(s) id=${params.approvalId}`,
-    );
-  }
-}
-
-function resolveMatrixReactionNotificationMode(params: {
-  cfg: CoreConfig;
-  accountId: string;
-}): MatrixReactionNotificationMode {
-  const matrixConfig = params.cfg.channels?.matrix;
-  const accountConfig = resolveMatrixAccountConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  return accountConfig.reactionNotifications ?? matrixConfig?.reactionNotifications ?? "own";
-}
-
-async function maybeResolveMatrixApprovalReaction(params: {
-  cfg: CoreConfig;
-  accountId: string;
-  senderId: string;
-  target: Awaited<ReturnType<typeof resolveMatrixApprovalReactionTargetWithPersistence>>;
-  targetEventId: string;
-  roomId: string;
-  client: MatrixClient;
-  logVerboseMessage: (message: string) => void;
-}): Promise<boolean> {
-  if (!params.target) {
-    return false;
-  }
-  const { isMatrixApprovalReactionAuthorizedSender } = await loadApprovalReactionAuth();
-  if (
-    !isMatrixApprovalReactionAuthorizedSender({
-      ...params,
-      approvalKind: params.target.approvalKind,
-    })
-  ) {
-    return false;
-  }
-  const { resolveApprovalOverGateway } = await loadExecApprovalResolver();
-  try {
-    const result = await resolveApprovalOverGateway({
-      cfg: params.cfg,
-      approvalId: params.target.approvalId,
-      approvalKind: params.target.approvalKind,
-      decision: params.target.decision,
-      channel: "matrix",
-      accountId: params.accountId,
-      senderId: params.senderId,
-    });
-    // Retire every delivered anchor; losing surfaces also need the canonical
-    // terminal presentation because their original resolved event may have raced.
-    await retireMatrixApprovalReactionTargets({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      client: params.client,
-      roomId: params.roomId,
-      targetEventId: params.targetEventId,
-      approvalId: params.target.approvalId,
-      approvalKind: params.target.approvalKind,
-      result,
-      logVerboseMessage: params.logVerboseMessage,
-    });
-    const canonicalDecision = "decision" in result.approval ? result.approval.decision : "none";
-    params.logVerboseMessage(
-      `matrix: approval reaction resolved id=${params.target.approvalId} sender=${params.senderId} applied=${result.applied} status=${result.approval.status} decision=${canonicalDecision}`,
-    );
-    return true;
-  } catch (err) {
-    if (isApprovalNotFoundError(err)) {
-      await unregisterMatrixApprovalReactionTargetsForApproval({
-        accountId: params.accountId,
-        approvalId: params.target.approvalId,
-        approvalKind: params.target.approvalKind,
-      });
-      params.logVerboseMessage(
-        `matrix: approval reaction ignored for expired approval id=${params.target.approvalId} sender=${params.senderId}`,
-      );
-      return true;
-    }
-    params.logVerboseMessage(
-      `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
-    );
-    throw err;
-  }
 }
 
 export async function handleInboundMatrixReaction(params: {
@@ -197,24 +68,100 @@ export async function handleInboundMatrixReaction(params: {
     eventId: reaction.eventId,
     reactionKey: reaction.key,
   });
+  const { cfg, accountId, senderId, client, roomId, logVerboseMessage } = params;
+  const targetEventId = reaction.eventId;
   if (
-    await maybeResolveMatrixApprovalReaction({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      target: approvalTarget,
-      targetEventId: reaction.eventId,
-      roomId: params.roomId,
-      client: params.client,
-      logVerboseMessage: params.logVerboseMessage,
-    })
+    await (async () => {
+      if (!approvalTarget) {
+        return false;
+      }
+      const { isMatrixApprovalReactionAuthorizedSender } = await loadApprovalReactionAuth();
+      if (
+        !isMatrixApprovalReactionAuthorizedSender({
+          cfg,
+          accountId,
+          senderId,
+          approvalKind: approvalTarget.approvalKind,
+        })
+      ) {
+        return false;
+      }
+      const { resolveApprovalOverGateway } = await loadExecApprovalResolver();
+      try {
+        const result = await resolveApprovalOverGateway({
+          cfg,
+          approvalId: approvalTarget.approvalId,
+          approvalKind: approvalTarget.approvalKind,
+          decision: approvalTarget.decision,
+          channel: "matrix",
+          accountId,
+          senderId,
+        });
+        // Retire every delivered anchor; losing surfaces also need the canonical
+        // terminal presentation because their original resolved event may have raced.
+        const retiredAccountId = normalizeAccountId(accountId);
+        const registeredTargets = await unregisterMatrixApprovalReactionTargetsForApproval({
+          accountId: retiredAccountId,
+          approvalId: approvalTarget.approvalId,
+          approvalKind: approvalTarget.approvalKind,
+        });
+        const targets = new Map<string, { accountId: string; roomId: string; eventId: string }>();
+        for (const target of [
+          ...registeredTargets,
+          { accountId: retiredAccountId, roomId, eventId: targetEventId },
+        ]) {
+          targets.set(JSON.stringify([target.accountId, target.roomId, target.eventId]), target);
+        }
+        const { editMessageMatrix } = await loadMatrixSend();
+        const terminalText = buildMatrixApprovalTerminalText(result);
+        const updates = await Promise.allSettled(
+          Array.from(targets.values(), async (target) => {
+            await editMessageMatrix(target.roomId, target.eventId, terminalText, {
+              cfg,
+              accountId: target.accountId,
+              client,
+            });
+          }),
+        );
+        const failedUpdates = updates.filter((update) => update.status === "rejected").length;
+        if (failedUpdates > 0) {
+          logVerboseMessage(
+            `matrix: failed to terminalize ${failedUpdates} approval prompt(s) id=${approvalTarget.approvalId}`,
+          );
+        }
+        const canonicalDecision = "decision" in result.approval ? result.approval.decision : "none";
+        logVerboseMessage(
+          `matrix: approval reaction resolved id=${approvalTarget.approvalId} sender=${senderId} applied=${result.applied} status=${result.approval.status} decision=${canonicalDecision}`,
+        );
+        return true;
+      } catch (err) {
+        if (isApprovalNotFoundError(err)) {
+          await unregisterMatrixApprovalReactionTargetsForApproval({
+            accountId,
+            approvalId: approvalTarget.approvalId,
+            approvalKind: approvalTarget.approvalKind,
+          });
+          logVerboseMessage(
+            `matrix: approval reaction ignored for expired approval id=${approvalTarget.approvalId} sender=${senderId}`,
+          );
+          return true;
+        }
+        logVerboseMessage(
+          `matrix: approval reaction failed id=${approvalTarget.approvalId} sender=${senderId}: ${String(err)}`,
+        );
+        throw err;
+      }
+    })()
   ) {
     return;
   }
-  const notificationMode = resolveMatrixReactionNotificationMode({
+  const matrixConfig = params.cfg.channels?.matrix;
+  const notificationAccountConfig = resolveMatrixAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,
   });
+  const notificationMode =
+    notificationAccountConfig.reactionNotifications ?? matrixConfig?.reactionNotifications ?? "own";
   if (notificationMode === "off") {
     return;
   }
@@ -252,7 +199,7 @@ export async function handleInboundMatrixReaction(params: {
     messageId: reaction.eventId,
     threadRootId,
   });
-  const { route, runtimeBindingId } = resolveMatrixInboundRoute({
+  const { route, runtimeBindingId } = await resolveMatrixInboundRouteAsync({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
@@ -263,7 +210,7 @@ export async function handleInboundMatrixReaction(params: {
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
   if (runtimeBindingId) {
-    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts, {
+    await getSessionBindingService().touchAsync(runtimeBindingId, params.event.origin_server_ts, {
       channel: "matrix",
       accountId: params.accountId,
     });
@@ -271,6 +218,7 @@ export async function handleInboundMatrixReaction(params: {
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
+    agentId: route.agentId,
     contextKey: `matrix:reaction:add:${params.roomId}:${reaction.eventId}:${params.senderId}:${reaction.key}`,
   });
   params.logVerboseMessage(

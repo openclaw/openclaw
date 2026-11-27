@@ -2,7 +2,12 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
-import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  GatewayDrainingError,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { getGatewayInstallationReplacement } from "../stale-install.js";
 
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
 
@@ -38,7 +43,7 @@ export async function runWithGatewayHttpWorkAdmission(
       res.end(
         JSON.stringify({
           error: {
-            message: "Gateway is temporarily unavailable while suspending or restarting",
+            message: new GatewayDrainingError().message,
             type: "service_unavailable",
             code: "gateway_unavailable",
           },
@@ -59,16 +64,15 @@ export function rejectGatewayUpgradeServiceUnavailable(
   socket: Pick<Duplex, "end" | "destroy">,
   body: string,
 ): void {
-  // Reused HTTP sockets can buffer upgrade writes; destroy only after flushing.
-  socket.end(
-    "HTTP/1.1 503 Service Unavailable\r\n" +
-      "Connection: close\r\n" +
-      "Content-Type: text/plain; charset=utf-8\r\n" +
-      `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
-      "\r\n" +
-      body,
-    () => socket.destroy(),
-  );
+  const replacement = getGatewayInstallationReplacement();
+  rejectWebSocketUpgrade(socket, {
+    status: 503,
+    headers: { "Cache-Control": "no-store", "Retry-After": "1" },
+    body: {
+      contentType: "text/plain; charset=utf-8",
+      text: replacement ? `${body}. ${replacement.message}` : body,
+    },
+  });
 }
 
 /** Holds upgrade admission until one plugin handler owns or declines the socket. */

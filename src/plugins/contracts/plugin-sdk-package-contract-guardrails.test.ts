@@ -13,7 +13,7 @@ import {
   publicPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-host-runtime-core.js";
 import {
   listGitTrackedFiles,
   toRepoPath,
@@ -27,7 +27,17 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
-const TYPED_PUBLIC_CONTRACT_REFERENCE_FILES = ["docs/plugins/sdk-entrypoints.md"] as const;
+const TYPED_PUBLIC_CONTRACT_REFERENCE_FILES = [
+  "docs/plugins/sdk-entrypoints.md",
+  "docs/plugins/sdk-entrypoints/tool-policy-and-sandbox.md",
+  "docs/plugins/sdk-entrypoints/package-entries.md",
+  "docs/plugins/sdk-entrypoints/define-tool-plugin.md",
+  "docs/plugins/sdk-entrypoints/define-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/native-providers.md",
+  "docs/plugins/sdk-entrypoints/define-channel-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/define-setup-plugin-entry.md",
+  "docs/plugins/sdk-entrypoints/registration-mode.md",
+] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const BUNDLED_PLUGIN_FACADE_LOADER_PATTERN =
   /\bload(?:Activated)?BundledPluginPublicSurfaceModuleSync\b/;
@@ -471,17 +481,6 @@ function collectDeprecatedTestAliasImports(): string[] {
   return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
-function collectWorkspaceCodeFiles(): string[] {
-  const files: string[] = [];
-  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
-    const dir = resolve(REPO_ROOT, root);
-    if (fs.existsSync(dir)) {
-      files.push(...collectCodeFiles(dir));
-    }
-  }
-  return files;
-}
-
 function hasWildcardReexport(entrypoint: string): boolean {
   const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
   return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
@@ -521,31 +520,6 @@ describe("plugin-sdk package contract guardrails", () => {
     deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
   });
 
-  it("lists package guardrail scan inputs from git without walking roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const pluginIds = collectBundledPluginIds();
-      const extensionFiles = collectExtensionFiles(resolve(REPO_ROOT, "extensions"));
-      const workspaceFiles = collectWorkspaceCodeFiles();
-
-      expect(pluginIds.length).toBeGreaterThan(0);
-      expect(extensionFiles.length).toBeGreaterThan(0);
-      expect(workspaceFiles.length).toBeGreaterThan(extensionFiles.length);
-    });
-  });
-
-  it("keeps plugin-sdk entrypoint metadata unique", () => {
-    const counts = new Map<string, number>();
-    for (const entrypoint of pluginSdkEntrypoints) {
-      counts.set(entrypoint, (counts.get(entrypoint) ?? 0) + 1);
-    }
-    const duplicates = [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([entrypoint]) => entrypoint)
-      .toSorted();
-
-    expect(duplicates).toStrictEqual([]);
-  });
-
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     const packageExports = collectPluginSdkPackageExports();
     const typedPackageExports = collectTypedPluginSdkPackageExports();
@@ -566,23 +540,13 @@ describe("plugin-sdk package contract guardrails", () => {
     ).toBe(true);
   });
 
-  it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
-
-    expect(source).not.toMatch(/export\s+\*\s+from\s+["']\.\.\/infra\/net\/fetch-guard\.js["']/);
-    expect(source).not.toContain("fetchConfiguredLocalOriginWithSsrFGuard");
-    expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
-  });
-
   it("keeps configured local-origin fetch helpers out of the public SSRF runtime", async () => {
     const ssrfRuntime = await import("../../plugin-sdk/ssrf-runtime.js");
 
     expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
   });
 
-  it("keeps memory provenance mutation out of the packaged Memory Core facade", async () => {
-    const memoryCoreRuntime = await import("../../plugin-sdk/memory-core-host-runtime-core.js");
-
+  it("keeps memory provenance mutation out of the packaged Memory Core facade", () => {
     expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
   });
 

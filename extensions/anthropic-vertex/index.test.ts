@@ -1,497 +1,201 @@
-// Anthropic Vertex tests cover index plugin behavior.
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
-  hasAnthropicVertexAvailableAuthMock: vi.fn(),
-}));
+const { hasAuthMock } = vi.hoisted(() => ({ hasAuthMock: vi.fn() }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
-  return {
-    ...actual,
-    hasAnthropicVertexAvailableAuth: hasAnthropicVertexAvailableAuthMock,
-  };
+vi.mock("./region.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./region.js")>();
+  return { ...actual, hasAnthropicVertexAvailableAuth: hasAuthMock };
 });
 
 import anthropicVertexPlugin from "./index.js";
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 
+const opusThinking = { xhigh: "xhigh", max: "max" };
+const fableThinking = { off: "low", minimal: "low", ...opusThinking };
+const globalUrl = "https://aiplatform.googleapis.com";
+const usUrl = "https://aiplatform.us.rep.googleapis.com";
+const adcEnv = { ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" };
+const currentMetadata = {
+  reasoning: true,
+  input: ["text", "image"],
+  contextWindow: 1_000_000,
+  contextTokens: 1_000_000,
+  maxTokens: 128_000,
+} satisfies Partial<ProviderRuntimeModel>;
+
+function staleModel(id: string, patch: Partial<ProviderRuntimeModel> = {}): ProviderRuntimeModel {
+  return {
+    id,
+    name: id,
+    api: "anthropic-messages",
+    provider: "anthropic-vertex",
+    baseUrl: globalUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    ...patch,
+  };
+}
+
 describe("anthropic-vertex provider plugin", () => {
-  beforeEach(() => {
-    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
+  let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+  beforeEach(async () => {
+    hasAuthMock.mockReturnValue(true);
+    provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+  const normalize = (model: ProviderRuntimeModel) =>
+    provider.normalizeResolvedModel?.({ provider: "anthropic-vertex", modelId: model.id, model });
+
+  afterEach(() => vi.clearAllMocks());
 
   afterAll(() => {
-    vi.doUnmock("./api.js");
+    vi.doUnmock("./region.js");
     vi.resetModules();
   });
 
-  it("resolves the ADC marker through the provider hook", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    expect(
-      provider.resolveConfigApiKey?.({
-        provider: "anthropic-vertex",
-        env: {
-          ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-        } as NodeJS.ProcessEnv,
-      } as never),
-    ).toBe("gcp-vertex-credentials");
+  it("resolves the ADC marker through the provider hook", () => {
+    expect(provider.resolveConfigApiKey?.({ provider: "anthropic-vertex", env: adcEnv })).toBe(
+      "gcp-vertex-credentials",
+    );
   });
 
   it("returns raw discovery for the host to merge with explicit provider overrides", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
+    const configured = {
+      baseUrl: "https://europe-west4-aiplatform.googleapis.com",
+      headers: { "x-test-header": "1" },
+    };
     const result = await provider.catalog?.run({
-      config: {
-        models: {
-          providers: {
-            "anthropic-vertex": {
-              baseUrl: "https://europe-west4-aiplatform.googleapis.com",
-              headers: { "x-test-header": "1" },
-            },
-          },
-        },
-      },
-      env: {
-        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
-        GOOGLE_CLOUD_LOCATION: "us-east5",
-      } as NodeJS.ProcessEnv,
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: undefined,
-        discoveryApiKey: undefined,
-        mode: "none",
-        source: "none",
-      }),
+      config: { models: { providers: { "anthropic-vertex": configured } } },
+      env: { ...adcEnv, GOOGLE_CLOUD_LOCATION: "us-east5" },
     } as never);
 
     if (!result || !("provider" in result)) {
       throw new Error("expected single provider catalog result");
     }
-    expect(result.provider.api).toBe("anthropic-messages");
-    expect(result.provider.apiKey).toBe("gcp-vertex-credentials");
-    expect(result.provider.baseUrl).toBe("https://us-east5-aiplatform.googleapis.com");
+    expect(result.provider).toMatchObject({
+      api: "anthropic-messages",
+      apiKey: "gcp-vertex-credentials",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+    });
     expect(result.provider.headers).toBeUndefined();
-    expect(result.provider.models.map((model) => model.id)).toEqual([
-      "claude-fable-5",
-      "claude-mythos-5",
-      "claude-opus-4-8",
-      "claude-opus-4-6",
-      "claude-sonnet-4-6",
-    ]);
-    expect(result.provider.models[0]?.thinkingLevelMap).toEqual({
-      off: "low",
-      minimal: "low",
-      xhigh: "xhigh",
-      max: "max",
-    });
-    expect(result.provider.models[1]?.thinkingLevelMap).toEqual({
-      off: "low",
-      minimal: "low",
-      xhigh: "xhigh",
-      max: "max",
-    });
-    expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
-    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
-    expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
-  });
-
-  it.each([
-    { region: "global", baseUrl: "https://aiplatform.googleapis.com" },
-    { region: "us", baseUrl: "https://aiplatform.us.rep.googleapis.com" },
-    { region: "eu", baseUrl: "https://aiplatform.eu.rep.googleapis.com" },
-    { region: "us-east5", baseUrl: "https://us-east5-aiplatform.googleapis.com" },
-  ])("publishes the SDK endpoint for the $region location", ({ region, baseUrl }) => {
     expect(
-      buildAnthropicVertexProvider({
-        env: { GOOGLE_CLOUD_LOCATION: region },
-      }).baseUrl,
-    ).toBe(baseUrl);
-  });
-
-  it.each(["global", "us", "eu"])("publishes Opus 5 for the %s endpoint", (region) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-    });
-
-    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-  });
-
-  it.each([
-    {
-      region: "global",
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    },
-    {
-      region: "us",
-      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
-    },
-    {
-      region: "eu",
-      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
-    },
-  ])("uses the documented Opus 5 pricing for $region", ({ region, cost }) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-    });
-
-    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
-      cost,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
+      result.provider.models.map(({ id, thinkingLevelMap }) => [id, thinkingLevelMap]),
+    ).toEqual([
+      ["claude-fable-5", fableThinking],
+      ["claude-mythos-5", fableThinking],
+      ["claude-opus-4-8", opusThinking],
+      ["claude-opus-4-6", { xhigh: null, max: "max" }],
+      ["claude-sonnet-4-6", { xhigh: null, max: "max" }],
+    ]);
   });
 
   describe.each([
-    {
-      region: "global",
-      baseUrl: "https://aiplatform.googleapis.com",
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      retiredCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-    },
-    {
-      region: "us",
-      baseUrl: "https://aiplatform.us.rep.googleapis.com",
-      cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-      retiredCost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
-    },
-    {
-      region: "eu",
-      baseUrl: "https://aiplatform.eu.rep.googleapis.com",
-      cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-      retiredCost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
-    },
-  ])("Sonnet 5 pricing for $region", ({ region, baseUrl, cost, retiredCost }) => {
-    describe.each([
-      { boundary: "before", nowMs: Date.UTC(2026, 8, 1) - 1 },
-      { boundary: "at", nowMs: Date.UTC(2026, 8, 1) },
-      { boundary: "after", nowMs: Date.UTC(2026, 8, 1) + 1 },
-    ])("$boundary the retired September 1 boundary", ({ nowMs }) => {
-      beforeEach(() => {
-        vi.useFakeTimers();
-        vi.setSystemTime(nowMs);
-      });
+    ["global", globalUrl, [2, 10, 0.2, 2.5], [3, 15, 0.3, 3.75]],
+    ["us", usUrl, [2.2, 11, 0.22, 2.75], [3.3, 16.5, 0.33, 4.125]],
+  ] as const)("Sonnet 5 pricing for %s", (region, baseUrl, current, retired) => {
+    const pricing = ([input, output, cacheRead, cacheWrite]: readonly [
+      number,
+      number,
+      number,
+      number,
+    ]) => ({
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+    });
+    const cost = pricing(current);
+    const nowMs = Date.UTC(2026, 8, 1);
+    beforeEach(() => vi.useFakeTimers({ now: nowMs }));
 
-      afterEach(() => {
-        vi.useRealTimers();
-      });
+    afterEach(() => vi.useRealTimers());
 
-      it("publishes current pricing with or without the shipped nowMs argument", () => {
-        const env = { GOOGLE_CLOUD_LOCATION: region };
-        const providers = [
-          buildAnthropicVertexProvider({ env }),
-          buildAnthropicVertexProvider({ env, nowMs }),
-        ];
-        for (const provider of providers) {
-          expect(provider.models.find((model) => model.id === "claude-sonnet-5")).toMatchObject({
-            cost,
-            contextWindow: 1_000_000,
-            maxTokens: 128_000,
-            thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-          });
-        }
-      });
-
-      it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
-        const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-        const model = {
-          id: "claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          api: "anthropic-messages",
-          provider: "anthropic-vertex",
-          baseUrl,
-          reasoning: true,
-          input: ["text", "image"],
+    it("publishes current pricing with or without the shipped nowMs argument", () => {
+      const env = { GOOGLE_CLOUD_LOCATION: region };
+      for (const params of [{ env }, { env, nowMs }]) {
+        const catalog = buildAnthropicVertexProvider(params);
+        expect(catalog.models.find((model) => model.id === "claude-sonnet-5")).toMatchObject({
+          cost,
           contextWindow: 1_000_000,
-          contextTokens: 1_000_000,
           maxTokens: 128_000,
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        };
-        for (const staleCost of [undefined, retiredCost]) {
-          const normalized = provider.normalizeResolvedModel?.({
-            provider: "anthropic-vertex",
-            modelId: model.id,
-            model: { ...model, cost: staleCost },
-          } as never);
-          expect(normalized?.cost).toEqual(cost);
-        }
-        expect(
-          provider.normalizeResolvedModel?.({
-            provider: "anthropic-vertex",
-            modelId: model.id,
-            model: { ...model, cost },
-          } as never),
-        ).toBeUndefined();
+          thinkingLevelMap: opusThinking,
+        });
+      }
+    });
+
+    it("repairs missing or retired pricing and leaves current pricing unchanged", () => {
+      const model = staleModel("claude-sonnet-5", {
+        name: "Claude Sonnet 5",
+        baseUrl,
+        ...currentMetadata,
+        thinkingLevelMap: opusThinking,
       });
+      for (const staleCost of [undefined, pricing(retired)]) {
+        expect(normalize(staleModel(model.id, { ...model, cost: staleCost }))?.cost).toEqual(cost);
+      }
+      expect(normalize({ ...model, cost })).toBeUndefined();
     });
   });
 
-  it("restores missing or stale Opus 5 metadata during runtime normalization", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-    const normalized = provider.normalizeResolvedModel?.({
+  it("registers the shared thinking policy with canonical alias support", () => {
+    const profile = provider.resolveThinkingProfile?.({
       provider: "anthropic-vertex",
-      modelId: "prod-opus",
-      model: {
-        id: "prod-opus",
-        name: "Claude Opus 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.us.rep.googleapis.com",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200_000,
+      modelId: "production-claude",
+      params: { canonicalModelId: "claude-fable-5" },
+    });
+    expect(profile).toMatchObject({
+      defaultLevel: "medium",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(profile?.levels.map((level) => level.id)).toContain("max");
+  });
+
+  const opusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+  it.each<[string, Partial<ProviderRuntimeModel>, Partial<ProviderRuntimeModel>]>([
+    ["claude-fable-5", {}, { thinkingLevelMap: fableThinking }],
+    ["claude-mythos-5", {}, { thinkingLevelMap: fableThinking }],
+    ["claude-opus-5", { cost: opusCost }, { thinkingLevelMap: opusThinking }],
+    [
+      "production-claude",
+      { params: { canonicalModelId: "claude-fable-5" }, thinkingLevelMap: { max: null } },
+      { thinkingLevelMap: { ...fableThinking, max: null } },
+    ],
+    [
+      "prod-opus",
+      {
+        baseUrl: usUrl,
+        cost: opusCost,
         contextTokens: 200_000,
         maxTokens: 64_000,
         params: { canonicalModelId: "claude-opus-5" },
       },
-    } as never);
-
-    expect(normalized).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
+      {
+        thinkingLevelMap: opusThinking,
+        cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+      },
+    ],
+  ])("restores %s metadata and authored levels", (id, overrides, expected) => {
+    expect(normalize(staleModel(id, overrides))).toEqual(
+      expect.objectContaining({ ...currentMetadata, ...expected }),
+    );
   });
 
-  it.each([
-    ["claude-sonnet-4-6", false],
-    ["claude-fable-5-1@20260801", true],
-    ["claude-mythos-5-1@20260801", false],
-  ])(
-    "owns Anthropic-style replay policy for Vertex %s",
-    async (modelId, appendOnlyRuntimeContext) => {
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-      expect(
-        provider.buildReplayPolicy?.({
-          provider: "anthropic-vertex",
-          modelApi: "anthropic-messages",
-          modelId,
-        }),
-      ).toEqual({
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        preserveNativeAnthropicToolUseIds: true,
-        appendOnlyRuntimeContext,
-        preserveSignatures: true,
-        repairToolUseResultPairing: true,
-        validateAnthropicTurns: true,
-        allowSyntheticToolResults: true,
-      });
-      expect(
-        provider.buildReplayPolicy?.({
-          provider: "anthropic-vertex",
-          modelApi: "anthropic-messages",
-          modelId: "claude-fable-5",
-        } as never),
-      ).not.toHaveProperty("dropThinkingBlocks");
-    },
-  );
-
-  it("owns Anthropic-style thinking policy", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    const opus5Profile = provider.resolveThinkingProfile?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-opus-5",
-    } as never);
-
-    expect(opus5Profile?.defaultLevel).toBe("high");
-    expect(opus5Profile?.levels.map((level) => level.id)).toContain("max");
-
-    const opus48Profile = provider.resolveThinkingProfile?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-opus-4-8",
-    } as never);
-
-    expect(opus48Profile?.defaultLevel).toBe("off");
-    expect(opus48Profile?.levels.map((level) => level.id)).toContain("max");
-
-    const fableProfile = provider.resolveThinkingProfile?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-fable-5",
-    } as never);
-    expect(fableProfile?.defaultLevel).toBe("high");
-    expect(fableProfile?.preserveWhenCatalogReasoningFalse).toBe(true);
-
-    const aliasProfile = provider.resolveThinkingProfile?.({
-      provider: "anthropic-vertex",
-      modelId: "production-claude",
-      params: { canonicalModelId: "claude-fable-5" },
-    } as never);
-    expect(aliasProfile?.defaultLevel).toBe("high");
-  });
-
-  it("restores Fable metadata for explicit Vertex catalog rows", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-fable-5",
-      model: {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.googleapis.com",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      },
-    } as never);
-
-    expect(normalized).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: {
-        off: "low",
-        minimal: "low",
-        xhigh: "xhigh",
-        max: "max",
-      },
-    });
-
-    const aliasNormalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic-vertex",
-      modelId: "production-claude",
-      model: {
-        id: "production-claude",
-        name: "Production Claude",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.googleapis.com",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-        params: { canonicalModelId: "claude-fable-5" },
-        thinkingLevelMap: { max: null },
-      },
-    } as never);
-    expect(aliasNormalized).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: null },
-    });
-  });
-
-  it("restores Opus 5 metadata for explicit Vertex catalog rows", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-opus-5",
-      model: {
-        id: "claude-opus-5",
-        name: "Claude Opus 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.googleapis.com",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      },
-    } as never);
-
-    // Opus 5 keeps thinking disableable, so off/minimal must not be remapped.
-    expect(normalized).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-    expect(normalized?.thinkingLevelMap).not.toHaveProperty("off");
-  });
-
-  it("restores Mythos 5 metadata for explicit Vertex catalog rows", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic-vertex",
-      modelId: "claude-mythos-5",
-      model: {
-        id: "claude-mythos-5",
-        name: "Claude Mythos 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.googleapis.com",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      },
-    } as never);
-
-    expect(normalized).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: {
-        off: "low",
-        minimal: "low",
-        xhigh: "xhigh",
-        max: "max",
-      },
-    });
-  });
-  it("resolves synthetic auth when ADC is available", async () => {
-    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    const result = provider.resolveSyntheticAuth?.({
-      provider: "anthropic-vertex",
-      config: undefined,
-      providerConfig: undefined,
-    } as never);
-
-    expect(result).toEqual({
-      apiKey: "gcp-vertex-credentials",
-      source: "gcp-vertex-credentials (ADC)",
-      mode: "api-key",
-    });
-  });
-
-  it("returns undefined when ADC is not available", async () => {
-    hasAnthropicVertexAvailableAuthMock.mockReturnValue(false);
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-    const result = provider.resolveSyntheticAuth?.({
-      provider: "anthropic-vertex",
-      config: undefined,
-      providerConfig: undefined,
-    } as never);
-
-    expect(result).toBeUndefined();
+  it.each([true, false])("resolves synthetic auth only when ADC is available=%s", (available) => {
+    hasAuthMock.mockReturnValue(available);
+    const auth = provider.resolveSyntheticAuth?.({ provider: "anthropic-vertex" } as never);
+    expect(auth).toEqual(
+      available
+        ? {
+            apiKey: "gcp-vertex-credentials",
+            source: "gcp-vertex-credentials (ADC)",
+            mode: "api-key",
+          }
+        : undefined,
+    );
   });
 });

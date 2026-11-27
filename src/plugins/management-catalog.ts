@@ -1,23 +1,26 @@
 // Prepares presentation-only catalog facts and owns their metadata-scoped cache.
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  PluginCatalogEntry,
-  PluginsListResult,
-} from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { PluginCatalogEntry } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import {
+  fetchClawHubPluginDetail,
+  fetchClawHubPluginVersionCategories,
+} from "../infra/clawhub-plugin-catalog.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -26,9 +29,9 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginInstallSources,
-  type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import {
   getPluginCache,
   getPluginMetadataSnapshotCache,
@@ -37,19 +40,131 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
+import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
+
+/** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
+export function resolveManagedSetupCatalogIconUrl(params: {
+  config: OpenClawConfig;
+  iconUrl: string;
+}): string | undefined {
+  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
+  if (!requested) {
+    return undefined;
+  }
+  const allowedUrls = [
+    ...resolveManifestProviderAuthChoices({
+      config: params.config,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    }).map((choice) => choice.icon),
+    ...listRecommendedToolInstalls().map((install) => install.icon),
+  ];
+  return allowedUrls.some(
+    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
+  )
+    ? requested
+    : undefined;
+}
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
-export type ManagedPluginCatalog = PluginsListResult;
 
-export type OfficialCatalogResult = Pick<
-  HostedOfficialExternalPluginCatalogLoadResult,
-  "entries"
-> & {
-  error?: string;
-  hostedFeaturedAuthoritative?: boolean;
+export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
+export type ManagedPluginClawHubIconSource = {
+  kind: "clawhub";
+  baseUrl: string;
+  packageName: string;
 };
 
-export function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
+export function resolveInstalledPluginClawHubIconSource(params: {
+  installRecord?: PluginInstallRecord;
+  clawhubPackage?: string;
+}): ManagedPluginClawHubIconSource | undefined {
+  const record = params.installRecord;
+  const recordedPackage =
+    record?.source === "clawhub" && normalizeOptionalString(record.clawhubPackage);
+  const recordedUrl = record?.source === "clawhub" && normalizeOptionalString(record.clawhubUrl);
+  if (recordedPackage && recordedUrl) {
+    return {
+      kind: "clawhub",
+      baseUrl: resolveClawHubBaseUrl(recordedUrl),
+      packageName: recordedPackage,
+    };
+  }
+  return params.clawhubPackage
+    ? { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: params.clawhubPackage }
+    : undefined;
+}
+
+export function resolvePluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
+  }
+  return undefined;
+}
+
+export async function resolvePluginIconSources(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource>> {
+  const { metadata, env } = params;
+  const pluginId = metadata.normalizePluginId(params.pluginId);
+  const file = resolvePluginIconSource({ metadata, pluginId });
+  const sources: Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource> = file
+    ? [file]
+    : [];
+  const record = metadata.index.plugins.find(
+    (candidate) => metadata.normalizePluginId(candidate.pluginId) === pluginId,
+  );
+  if (!record) {
+    return sources;
+  }
+  const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolvePackage(
+    record.pluginId,
+  );
+  const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+  const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
+  const officialCatalog = await loadOfficialCatalog();
+  const { clawhubPackage } = resolveInstalledHostedOfficialEntry({
+    record,
+    installOwner,
+    installRecord,
+    officialEntries: prepareCatalogEntries(officialCatalog.entries),
+    bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
+  });
+  const remote = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
+  if (remote) {
+    sources.push(remote);
+  }
+  return sources;
+}
+
+export function resolvePluginActivityIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+  toolName?: string;
+}): ManagedPluginIconSource | undefined {
+  const pluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(pluginId);
+  if (!manifest) {
+    return undefined;
+  }
+  const overrides = manifest.toolActivityIconPaths;
+  const override =
+    params.toolName && overrides && Object.hasOwn(overrides, params.toolName)
+      ? overrides[params.toolName]
+      : undefined;
+  const iconPath = override ?? manifest.activityIconPath;
+  return iconPath ? { kind: "file", path: iconPath, rootPath: manifest.rootDir } : undefined;
+}
+function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
   if (metadata) {
     return getPluginMetadataSnapshotCache(metadata);
   }
@@ -71,9 +186,12 @@ export function withManagedPluginCache<
   return (params) => withPluginCache(getManagedPluginCache(params.metadata), () => run(params));
 }
 
-/** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
-export function clearManagedPluginOfficialCatalogCache(): void {
-  getManagedPluginCache().officialCatalog = undefined;
+/** Clear process-stable catalog snapshots after an explicit owner reload. */
+export function clearManagedPluginCatalogCache(): void {
+  const cache = getManagedPluginCache();
+  cache.officialCatalog = undefined;
+  cache.pluginVersionCategories = undefined;
+  cache.pluginPublisherHandles = undefined;
 }
 
 function mergeCatalogMetadata(
@@ -148,12 +266,10 @@ export function prepareCatalogEntries(entries: readonly OfficialExternalPluginCa
  */
 function overlayBundledOfficialPluginCatalogMetadata(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
-  options: { hostedFeaturedAuthoritative: boolean } = {
-    hostedFeaturedAuthoritative: false,
-  },
+  options: { hostedFeaturedAuthoritative: boolean },
 ): OfficialExternalPluginCatalogEntry[] {
-  const bundledFacts = entries.length > 0 ? bundledEntries.map(prepareCatalogEntry) : [];
+  const bundledFacts =
+    entries.length > 0 ? listOfficialExternalPluginCatalogEntries().map(prepareCatalogEntry) : [];
   return entries.map((entry) => {
     const { clawhub, npmPackage } = prepareCatalogEntry(entry);
     const matches = bundledFacts.filter(
@@ -185,29 +301,117 @@ function overlayBundledOfficialPluginCatalogMetadata(
   });
 }
 
-export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
+export async function loadOfficialCatalog(cachedOnly = false): Promise<OfficialCatalogResult> {
   const cache = getManagedPluginCache();
-  if (!cache.officialCatalog) {
-    const promise = Promise.resolve().then(() =>
-      loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
-    );
-    cache.officialCatalog = promise;
-    void promise.catch(() => {
-      if (cache.officialCatalog === promise) {
+  let fact = cache.officialCatalog;
+  if (!fact) {
+    const prepared: NonNullable<typeof cache.officialCatalog> = {
+      value: {
+        entries: overlayBundledOfficialPluginCatalogMetadata(
+          listOfficialExternalPluginCatalogEntries(),
+          { hostedFeaturedAuthoritative: false },
+        ),
+        error: "catalog refresh pending; refresh the plugin list to see completed enrichment",
+      },
+    };
+    prepared.pending = loadConfiguredHostedOfficialExternalPluginCatalogEntries().then((result) => {
+      const hostedFeaturedAuthoritative =
+        result.source === "hosted" || result.source === "hosted-snapshot";
+      prepared.value = {
+        entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, {
+          hostedFeaturedAuthoritative,
+        }),
+        hostedFeaturedAuthoritative,
+        ...("error" in result ? { error: result.error } : {}),
+      };
+      prepared.pending = undefined;
+      return prepared.value;
+    });
+    fact = prepared;
+    cache.officialCatalog = fact;
+    void prepared.pending.catch(() => {
+      if (cache.officialCatalog === fact) {
         cache.officialCatalog = undefined;
       }
     });
   }
-  const result = await cache.officialCatalog;
-  const hostedFeaturedAuthoritative =
-    result.source === "hosted" || result.source === "hosted-snapshot";
-  return {
-    entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, undefined, {
-      hostedFeaturedAuthoritative,
-    }),
-    hostedFeaturedAuthoritative,
-    ...("error" in result ? { error: result.error } : {}),
-  };
+  // Remote presentation never holds the Gateway's installed inventory behind network I/O.
+  return cachedOnly ? fact.value : (fact.pending ?? fact.value);
+}
+
+export function pluginVersionKey(name: string, version: string): string {
+  return JSON.stringify([name, version]);
+}
+
+/** Publisher identity is registry-owned, never inferred from package names or manifests. */
+export async function loadInstalledPluginPublisherHandle(
+  source: ManagedPluginClawHubIconSource,
+  cachedOnly = false,
+): Promise<string | undefined> {
+  const cache = (getManagedPluginCache().pluginPublisherHandles ??= new Map());
+  const key = JSON.stringify([source.baseUrl, source.packageName]);
+  let fact = cache.get(key);
+  if (!fact) {
+    const pending = fetchClawHubPluginDetail({
+      baseUrl: source.baseUrl,
+      packageName: source.packageName,
+      skipAuth: true,
+    })
+      .then(
+        (detail) => ({
+          value: normalizeOptionalString(detail.owner?.handle ?? detail.ownerHandle)?.toLowerCase(),
+        }),
+        () => ({ value: undefined }),
+      )
+      .then((ready) => {
+        cache.set(key, ready);
+        return ready;
+      });
+    fact = { pending };
+    cache.set(key, fact);
+  }
+  // Retain unavailable facts until explicit refresh, just like category enrichment.
+  return "value" in fact ? fact.value : cachedOnly ? undefined : (await fact.pending).value;
+}
+
+/** Undefined is pending, null is unavailable until this catalog generation is refreshed. */
+export async function loadInstalledPluginCategories(params: {
+  baseUrl: string;
+  packages: Array<{ name: string; version: string }>;
+  cachedOnly?: boolean;
+}): Promise<Map<string, string[] | null> | null | undefined> {
+  const cache = (getManagedPluginCache().pluginVersionCategories ??= new Map());
+  const packages = params.packages.toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
+  );
+  const key = JSON.stringify([params.baseUrl, packages]);
+  let fact = cache.get(key);
+  if (!fact) {
+    const pending = fetchClawHubPluginVersionCategories({
+      baseUrl: params.baseUrl,
+      skipAuth: true,
+      packages,
+    })
+      .then(
+        (results) =>
+          new Map(
+            results.map((result) => [
+              pluginVersionKey(result.name, result.version),
+              result.categories,
+            ]),
+          ),
+        () => null,
+      )
+      .then((value) => {
+        const ready = { value };
+        cache.set(key, ready);
+        return ready;
+      });
+    fact = { pending };
+    cache.set(key, fact);
+  }
+  return "value" in fact ? fact.value : params.cachedOnly ? undefined : (await fact.pending).value;
 }
 
 export function normalizeKinds(kind: string | readonly string[] | undefined): string[] | undefined {
@@ -217,29 +421,34 @@ export function normalizeKinds(kind: string | readonly string[] | undefined): st
   return values.length > 0 ? [...new Set(values)] : undefined;
 }
 
-export function normalizeCatalogMetadata(
-  value: unknown,
-): { featured?: boolean; order?: number } | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
-  const order =
-    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
-  return featured === undefined && order === undefined
-    ? undefined
-    : {
-        ...(featured !== undefined ? { featured } : {}),
-        ...(order !== undefined ? { order } : {}),
-      };
-}
-
 export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
-/** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-export function derivePluginCategory(
+/** Keep authored purpose separate from capability-derived discovery memberships. */
+export function projectPluginCatalogCategoryFacts(
+  manifest: PluginManifestRecord | undefined,
+  enabled: boolean,
+): Pick<PluginCatalogEntry, "categories" | "category" | "capabilityCategories"> {
+  const category = deriveLegacyPluginCategory(manifest);
+  const categories = manifest?.categories;
+  // Speech/transcription alone belongs in Voice; only generation contracts add Media.
+  const mediaGeneration =
+    enabled &&
+    Boolean(
+      manifest?.contracts?.imageGenerationProviders?.length ||
+      manifest?.contracts?.videoGenerationProviders?.length ||
+      manifest?.contracts?.musicGenerationProviders?.length,
+    );
+  return {
+    ...(categories?.length ? { categories: [...categories] } : {}),
+    ...(category ? { category } : {}),
+    ...(mediaGeneration ? { capabilityCategories: ["media"] } : {}),
+  };
+}
+
+/** Preserve the shipped coarse category projection for older catalog clients. */
+function deriveLegacyPluginCategory(
   manifest: PluginManifestRecord | undefined,
 ): string | undefined {
   if (!manifest) {
@@ -295,20 +504,14 @@ export function compareCatalogEntries(
   if (featured !== 0) {
     return featured;
   }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
+  if (left.featured && right.featured && left.featuredAt !== right.featuredAt) {
+    if (left.featuredAt === undefined) {
+      return 1;
     }
+    if (right.featuredAt === undefined) {
+      return -1;
+    }
+    return right.featuredAt - left.featuredAt;
   }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
@@ -372,16 +575,16 @@ export function resolveInstalledHostedOfficialEntry(params: {
 } {
   const identityPluginId = params.installOwner ?? params.record.pluginId;
   const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
+    ? resolveTrustedSourceLinkedOfficialClawHubInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.clawhubSpec
     : undefined;
   const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
+    ? resolveTrustedSourceLinkedOfficialNpmInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.npmSpec
     : undefined;
   const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
     ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name

@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for provider group policy resolution.
- */
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,

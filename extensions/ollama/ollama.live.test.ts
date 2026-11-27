@@ -1,3 +1,4 @@
+/// <reference lib="esnext.array" />
 // Ollama tests cover ollama plugin behavior.
 import { spawnSync } from "node:child_process";
 import * as fsSync from "node:fs";
@@ -9,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl } from "./src/discovery-shared.js";
 import { createOllamaEmbeddingProvider } from "./src/embedding-provider.js";
 import { createOllamaStreamFn } from "./src/stream.runtime.js";
-import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
+import { createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_OLLAMA === "1";
 const OLLAMA_BASE_URL =
@@ -83,14 +84,6 @@ function ollamaModelNameMatches(candidate: unknown, expected: string): boolean {
       .toLowerCase()
       .replace(/:latest$/u, "");
   return normalize(candidate) === normalize(expected);
-}
-
-async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
-  const events: T[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
 }
 
 async function withTempOpenClawState<T>(run: (paths: { root: string }) => Promise<T>): Promise<T> {
@@ -283,7 +276,13 @@ describe.skipIf(!LIVE)("ollama live", () => {
           model?: string;
           think?: boolean;
           keep_alive?: string;
-          options?: { num_ctx?: number; top_p?: number };
+          options?: {
+            num_ctx?: number;
+            top_p?: number;
+            seed?: number;
+            frequency_penalty?: number;
+            presence_penalty?: number;
+          };
           tools?: Array<{
             function?: {
               parameters?: {
@@ -294,7 +293,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         }
       | undefined;
 
-    const runNativeChat = () =>
+    const runNativeChat = (temperature = 0) =>
       streamFn(
         {
           id: `${PROVIDER_ID}/${CHAT_MODEL}`,
@@ -302,7 +301,15 @@ describe.skipIf(!LIVE)("ollama live", () => {
           provider: PROVIDER_ID,
           input: ["text"],
           contextWindow: 8192,
-          params: { num_ctx: 4096, top_p: 0.9, thinking: false, keep_alive: "5m" },
+          params: {
+            num_ctx: 4096,
+            top_p: 0.9,
+            seed: 7,
+            frequency_penalty: 0.5,
+            presence_penalty: 0.75,
+            thinking: false,
+            keep_alive: "5m",
+          },
           requestTimeoutMs: 120_000,
         } as never,
         {
@@ -328,7 +335,11 @@ describe.skipIf(!LIVE)("ollama live", () => {
         } as never,
         {
           maxTokens: 32,
-          temperature: 0,
+          temperature,
+          topP: 0.7,
+          seed: 0,
+          frequencyPenalty: 0,
+          presencePenalty: 0,
           onPayload: (body: unknown) => {
             payload = body as NonNullable<typeof payload>;
           },
@@ -336,8 +347,15 @@ describe.skipIf(!LIVE)("ollama live", () => {
         } as never,
       );
 
-    const events = await collectStreamEvents(await Promise.resolve(runNativeChat()));
-    const warmEvents = await collectStreamEvents(await Promise.resolve(runNativeChat()));
+    const events = await Array.fromAsync(await Promise.resolve(runNativeChat()));
+    expect(payload?.options).toMatchObject({
+      num_ctx: 4096,
+      top_p: 1,
+      seed: 0,
+      frequency_penalty: 0,
+      presence_penalty: 0,
+    });
+    const warmEvents = await Array.fromAsync(await Promise.resolve(runNativeChat(0.8)));
     const error = events.find((event) => (event as { type?: string }).type === "error");
     const warmError = warmEvents.find((event) => (event as { type?: string }).type === "error");
     const warmDone = warmEvents.find((event) => event.type === "done");
@@ -362,8 +380,14 @@ describe.skipIf(!LIVE)("ollama live", () => {
       })}`,
     );
     expect(payload?.model).toBe(CHAT_MODEL);
-    expect(payload?.options?.num_ctx).toBe(4096);
-    expect(payload?.options?.top_p).toBe(1);
+    expect(payload?.options).toMatchObject({
+      num_ctx: 4096,
+      top_p: 0.7,
+      seed: 0,
+      frequency_penalty: 0,
+      presence_penalty: 0,
+    });
+    console.info(`[ollama:live] sampling ${JSON.stringify(payload?.options)}`);
     expect(payload?.think).toBe(false);
     expect(payload?.keep_alive).toBe("5m");
     const properties = payload?.tools?.[0]?.function?.parameters?.properties;

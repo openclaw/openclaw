@@ -1,20 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
-import type { SlackMediaResult } from "../media-types.js";
 import {
   discardSlackPreflightMedia,
-  findCaptionlessSlackAudioFile,
+  findSlackPreflightAudioFile,
   formatSlackAudioTranscriptForAgent,
   resolveSlackPreflightAudioTranscript,
 } from "./preflight-audio.js";
 
-const { transcribeFirstAudioMock } = vi.hoisted(() => ({
-  transcribeFirstAudioMock: vi.fn(),
-}));
+const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
   const actual =
@@ -31,43 +27,20 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal
   };
 });
 
-function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
-  return {
-    type: "message",
-    channel: "C1",
-    channel_type: "channel",
-    user: "U1",
-    text: "",
-    ts: "1.000",
-    ...overrides,
-  } as SlackMessageEvent;
-}
-
 describe("Slack captionless audio preflight", () => {
-  beforeEach(() => {
-    transcribeFirstAudioMock.mockReset();
-  });
-
   it("recognizes captionless Slack audio independently of Slack's video MIME", () => {
-    const voiceClip = createSlackMessage({
-      files: [
-        {
-          id: "F1",
-          name: "voice.mp4",
-          mimetype: "video/mp4",
-          subtype: "slack_audio",
-        },
-      ],
-    });
-
-    expect(findCaptionlessSlackAudioFile(voiceClip)).toEqual(voiceClip.files?.[0]);
-    expect(findCaptionlessSlackAudioFile({ ...voiceClip, text: "typed caption" })).toBeUndefined();
+    const voiceClip: SlackMessageEvent = {
+      type: "message",
+      channel: "C1",
+      files: [{ name: "voice.mp4", mimetype: "video/mp4", subtype: "slack_audio" }],
+    };
+    expect(findSlackPreflightAudioFile(voiceClip)).toEqual(voiceClip.files?.[0]);
+    expect(findSlackPreflightAudioFile({ ...voiceClip, text: "typed caption" })).toBeUndefined();
     expect(
-      findCaptionlessSlackAudioFile(
-        createSlackMessage({
-          files: [{ id: "F2", name: "screen.mp4", mimetype: "video/mp4" }],
-        }),
-      ),
+      findSlackPreflightAudioFile({
+        ...voiceClip,
+        files: [{ name: "screen.mp4", mimetype: "video/mp4" }],
+      }),
     ).toBeUndefined();
   });
 
@@ -85,25 +58,22 @@ describe("Slack captionless audio preflight", () => {
 
   it("transcribes the first audio attachment and returns its ordered media index", async () => {
     transcribeFirstAudioMock.mockResolvedValue("Bill please review this");
-    const cfg = {} as OpenClawConfig;
-    const media: SlackMediaResult[] = [
+    const cfg = {};
+    const media = [
       { path: "/tmp/image.png", contentType: "image/png", placeholder: "[image]" },
       { path: "/tmp/voice.mp4", contentType: "audio/mp4", placeholder: "[voice]" },
     ];
 
-    await expect(
-      resolveSlackPreflightAudioTranscript({
-        media,
-        cfg,
-        accountId: "work",
-        originatingTo: "channel:C1",
-        sessionKey: "agent:main:slack:channel:c1",
-        messageThreadId: "1.000",
-      }),
-    ).resolves.toEqual({ transcript: "Bill please review this", mediaIndex: 1 });
-
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+    const result = await resolveSlackPreflightAudioTranscript({
+      media,
+      cfg,
+      accountId: "work",
+      originatingTo: "channel:C1",
+      sessionKey: "agent:main:slack:channel:c1",
+      messageThreadId: "1.000",
+    });
+    expect(result).toEqual({ transcript: "Bill please review this", mediaIndex: 1 });
+    expect(transcribeFirstAudioMock).toHaveBeenCalledExactlyOnceWith({
       ctx: expect.objectContaining({
         media,
         OriginatingChannel: "slack",
@@ -116,18 +86,13 @@ describe("Slack captionless audio preflight", () => {
     });
   });
 
-  it("removes preflight downloads when the transcript does not admit the message", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slack-audio-preflight-"));
-    const audioPath = path.join(root, "voice.mp4");
-    await fs.writeFile(audioPath, "voice");
-
-    try {
+  it("removes preflight downloads when the transcript does not admit the message", () =>
+    withTempDir("openclaw-slack-audio-preflight-", async (root) => {
+      const audioPath = path.join(root, "voice.mp4");
+      await fs.writeFile(audioPath, "voice");
       await discardSlackPreflightMedia([
         { path: audioPath, contentType: "audio/mp4", placeholder: "[voice]" },
       ]);
       await expect(fs.stat(audioPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+    }));
 });

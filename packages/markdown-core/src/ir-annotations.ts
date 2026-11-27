@@ -3,6 +3,7 @@ import type {
   AssistantTranscriptRoleImageMeta,
   AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
+import { copyHtmlTags } from "./ir-metadata.js";
 import { mergeAnnotationSpans, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import type { MarkdownIR } from "./ir.js";
 
@@ -35,13 +36,13 @@ export function annotateAssistantTranscriptRoleMessageBoundary(ir: MarkdownIR): 
     ...boundarySpan,
     type: "assistant_transcript_role",
   };
-  return {
+  return copyHtmlTags(ir, {
     ...ir,
     // A role-looking link must not remain clickable after its label becomes a
     // message-leading transcript header.
     links: ir.links.filter((link) => !rangesOverlap(link, annotation)),
     annotations: mergeAnnotationSpans([...(ir.annotations ?? []), annotation]),
-  };
+  });
 }
 
 export function appendAssistantTranscriptRoleText(
@@ -63,10 +64,37 @@ export function appendAssistantTranscriptRoleText(
   });
 }
 
-export function appendAssistantTranscriptRoleImage(
+type ImageToken = { type: string; content?: string; markup?: string; children?: ImageToken[] };
+
+/** Image labels keep only their plain text: emphasis and link markup drops, code and HTML stay literal. */
+function imageAlternativeText(token: ImageToken): string {
+  // token.content is the raw label source, so `**bold**` would leak its delimiters.
+  if (!token.children) {
+    return token.content ?? "";
+  }
+  let text = "";
+  for (const child of token.children) {
+    if (child.type === "underline_open" || child.type === "underline_close") {
+      text += child.markup ?? "";
+      continue;
+    }
+    text +=
+      child.type === "image"
+        ? imageAlternativeText(child)
+        : child.type === "softbreak" || child.type === "hardbreak"
+          ? "\n"
+          : (child.content ?? "");
+  }
+  return text;
+}
+
+/** Image alternatives are plain text, including labels projected for annotations. */
+export function appendImageAlternative(
   target: AnnotationTarget,
-  meta: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"],
+  annotated: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"] | undefined,
+  token: ImageToken,
 ): void {
+  const meta = annotated ?? { text: imageAlternativeText(token), spans: [] };
   if (!meta.text) {
     return;
   }

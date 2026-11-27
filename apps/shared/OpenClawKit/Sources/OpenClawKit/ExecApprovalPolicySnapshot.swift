@@ -2,18 +2,6 @@ import Foundation
 
 /// Canonical persisted-policy snapshot carried with delayed exec authority.
 public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equatable {
-    public enum Security: String, Codable, Sendable, Hashable {
-        case deny
-        case allowlist
-        case full
-    }
-
-    public enum Ask: String, Codable, Sendable, Hashable {
-        case off
-        case onMiss = "on-miss"
-        case always
-    }
-
     public enum RuleSource: String, Codable, Sendable, Hashable {
         case allowAlways = "allow-always"
     }
@@ -30,9 +18,9 @@ public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equata
         }
     }
 
-    public let security: Security
-    public let ask: Ask
-    public let askFallback: Security
+    public let security: ExecApprovalsSecurity
+    public let ask: ExecApprovalsAsk
+    public let askFallback: ExecApprovalsSecurity
     public let autoAllowSkills: Bool
     public let allowlistRules: [Rule]
 
@@ -49,9 +37,9 @@ public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equata
     }
 
     public init(
-        security: Security,
-        ask: Ask,
-        askFallback: Security,
+        security: ExecApprovalsSecurity,
+        ask: ExecApprovalsAsk,
+        askFallback: ExecApprovalsSecurity,
         autoAllowSkills: Bool,
         allowlistRules: [Rule])
     {
@@ -64,31 +52,14 @@ public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equata
             uniquingKeysWith: { first, _ in first }).values.sorted(by: Self.rulePrecedes)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case security
-        case ask
-        case askFallback
-        case autoAllowSkills
-        case allowlistRules
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
-            security: container.decode(Security.self, forKey: .security),
-            ask: container.decode(Ask.self, forKey: .ask),
-            askFallback: container.decode(Security.self, forKey: .askFallback),
+            security: container.decode(ExecApprovalsSecurity.self, forKey: .security),
+            ask: container.decode(ExecApprovalsAsk.self, forKey: .ask),
+            askFallback: container.decode(ExecApprovalsSecurity.self, forKey: .askFallback),
             autoAllowSkills: container.decode(Bool.self, forKey: .autoAllowSkills),
             allowlistRules: container.decode([Rule].self, forKey: .allowlistRules))
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.security, forKey: .security)
-        try container.encode(self.ask, forKey: .ask)
-        try container.encode(self.askFallback, forKey: .askFallback)
-        try container.encode(self.autoAllowSkills, forKey: .autoAllowSkills)
-        try container.encode(self.allowlistRules, forKey: .allowlistRules)
     }
 
     private static func rulePrecedes(_ lhs: Rule, _ rhs: Rule) -> Bool {

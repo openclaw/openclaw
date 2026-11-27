@@ -6,15 +6,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
-import {
-  invalidateChatMetadataStore,
-  revalidateChatMetadata,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-session-skill-library.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateSessionSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { invalidateSessionSlashCommands } from "./chat-commands.ts";
 
-registerSkillLibraryEnglish();
+registerSessionSkillLibraryEnglish();
 
 export type LibrarySessionTarget = {
   client: GatewayBrowserClient;
@@ -28,7 +26,6 @@ export type ComposerLibraryProps = {
   loading: boolean;
   busy: boolean;
   error: string | null;
-  notice: string | null;
   canWrite: boolean;
   onReload: () => void;
   onRead: (skillId: string, revision: string) => void;
@@ -45,7 +42,6 @@ export class ComposerLibrarySession {
   loading = false;
   busy = false;
   error: string | null = null;
-  notice: string | null = null;
   read: SkillsLibraryReadResult | null = null;
   selectedFile = "SKILL.md";
   private target: LibrarySessionTarget | null = null;
@@ -68,11 +64,16 @@ export class ComposerLibrarySession {
     this.loading = false;
     this.busy = false;
     this.error = null;
-    this.notice = null;
     this.closeRead();
   }
   private current(target: LibrarySessionTarget) {
     return this.target === target && target.isCurrent();
+  }
+  private finish(target: LibrarySessionTarget, flag: "loading" | "busy") {
+    if (this.current(target)) {
+      this[flag] = false;
+      this.notify();
+    }
   }
   closeRead() {
     this.readOwner = null;
@@ -100,10 +101,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.loading = false;
-        this.notify();
-      }
+      this.finish(target, "loading");
     }
   }
 
@@ -132,10 +130,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 
@@ -143,14 +138,13 @@ export class ComposerLibrarySession {
     action: SkillsLibraryActivateParams["action"],
     skillId?: string,
     revision?: string,
-  ) {
+  ): Promise<string | null> {
     const target = this.target;
     if (!target || !this.current(target) || this.busy || this.loading) {
-      return;
+      return null;
     }
     this.busy = true;
     this.error = null;
-    this.notice = null;
     this.notify();
     try {
       await target.client.request<SkillsLibraryActivateResult>("skills.library.activate", {
@@ -160,9 +154,8 @@ export class ComposerLibrarySession {
         ...(revision ? { revision } : {}),
       });
       if (!this.current(target)) {
-        return;
+        return null;
       }
-      this.notice = t("skillLibrary.session.queued");
       this.result = null;
       this.closeRead();
       // Both catalog owners must retire their previous pins after an explicit activation.
@@ -170,15 +163,14 @@ export class ComposerLibrarySession {
       invalidateSessionSlashCommands(target.client, scope);
       invalidateChatMetadataStore(target.client, scope);
       await Promise.all([this.load(), revalidateChatMetadata(target.client, scope)]);
+      return this.current(target) && !this.error ? t("skillLibrary.session.queued") : null;
     } catch (error) {
       if (this.current(target)) {
         this.error = formatUiError(error);
       }
+      return null;
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 }

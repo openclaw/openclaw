@@ -1,14 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-/** Pure legacy transcript repair shared by standalone Doctor and its import spool. */
+/** Legacy transcript classification and provider repair shared by Doctor and its import spool. */
 import {
   hasInternalRuntimeContext,
   stripInternalRuntimeContext,
 } from "../../agents/internal-runtime-context.js";
 import { isLegacyCodexProviderId } from "../legacy-codex-provider.js";
 import {
-  isSessionTranscriptLeafControl,
   mergeSessionTranscriptTreePaths,
-  mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
@@ -20,9 +18,6 @@ export type TranscriptEntry = Record<string, unknown> & {
 };
 type ActiveTranscriptPath = {
   entries: TranscriptEntry[];
-  entriesToPersist: TranscriptEntry[];
-  terminalLeafControl: TranscriptEntry | null;
-  appendParentId: string | null;
 };
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
@@ -106,9 +101,6 @@ export function selectActivePath(entries: TranscriptEntry[]): ActiveTranscriptPa
     return active.length > 0
       ? {
           entries: active,
-          entriesToPersist: active,
-          terminalLeafControl: null,
-          appendParentId: getEntryId(active.at(-1) ?? {}),
         }
       : null;
   }
@@ -116,28 +108,10 @@ export function selectActivePath(entries: TranscriptEntry[]): ActiveTranscriptPa
     return null;
   }
   const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const appendPath = selectSessionTranscriptTreePathNodes(tree, tree.appendParentId);
   const visibleEntries = mergeSessionTranscriptTreePaths([visiblePath]).map((node) =>
     withSelectedParent(node.entry, node.selectedParentId),
   );
-  const persistedPath = mergeSessionTranscriptVisiblePathWithOpaqueAppendPath({
-    visiblePath,
-    appendPath,
-    appendParentId: tree.appendParentId,
-  });
-  const entriesToPersist = persistedPath.nodes.map((node) =>
-    withSelectedParent(node.entry, node.selectedParentId),
-  );
-  const lastLeafUpdateEntry = tree.nodes.findLast((node) => node.leafId !== undefined)?.entry;
-  const terminalLeafControl = isSessionTranscriptLeafControl(lastLeafUpdateEntry)
-    ? lastLeafUpdateEntry
-    : null;
-  return {
-    entries: visibleEntries,
-    entriesToPersist,
-    terminalLeafControl,
-    appendParentId: persistedPath.appendParentId,
-  };
+  return { entries: visibleEntries };
 }
 
 export function hasBrokenPromptRewriteBranch(
@@ -155,29 +129,6 @@ export function hasBrokenPromptRewriteBranch(
       !activeIds.has(getEntryId(entry) ?? "") &&
       keys.has(transcriptRepairUserKey(entry, true) ?? ""),
   );
-}
-
-export function selectActiveTranscriptEntries(params: {
-  entries: TranscriptEntry[];
-  activePath: ActiveTranscriptPath;
-}): TranscriptEntry[] {
-  const header = params.entries.find((entry) => entry.type === "session");
-  if (!header) {
-    throw new Error("missing session header");
-  }
-  const lastPersistedId = getEntryId(params.activePath.entriesToPersist.at(-1) ?? {});
-  const terminalLeafControl = params.activePath.terminalLeafControl
-    ? {
-        ...params.activePath.terminalLeafControl,
-        parentId: lastPersistedId,
-        appendParentId: params.activePath.appendParentId,
-      }
-    : null;
-  return [
-    header,
-    ...params.activePath.entriesToPersist,
-    ...(terminalLeafControl ? [terminalLeafControl] : []),
-  ];
 }
 
 export function transcriptRepairUserKey(

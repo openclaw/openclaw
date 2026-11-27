@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -28,6 +28,126 @@ import org.robolectric.RobolectricTestRunner
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class WearRealtimeTalkControllerTest {
+  @Test
+  fun fullReplySurvivesBeyondTheWirePreview() =
+    runTest {
+      val controller = testTalkController()
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      val text = "Grüße 👩🏽‍🚀".repeat(400) + "TRAILING SENTINEL"
+      controller.handleGatewayEvent(
+        "talk.event",
+        buildJsonObject {
+          put("relaySessionId", JsonPrimitive("relay-1"))
+          put("type", JsonPrimitive("transcript"))
+          put("role", JsonPrimitive("assistant"))
+          put("text", JsonPrimitive(text))
+          put("final", JsonPrimitive(true))
+        }.toString(),
+      )
+      try {
+        val entry =
+          controller.snapshot.value.conversation
+            .single()
+        assertTrue(entry.textTruncated)
+        assertTrue(entry.fullTextAvailable)
+        val first = controller.readReply("watch-a", "session-a", "attempt-a", entry.id, 0, null)
+        val second = controller.readReply("watch-a", "session-a", "attempt-a", entry.id, first.nextOffset!!, first.revision)
+        assertEquals(text, first.text + second.text)
+        assertEquals(
+          ai.openclaw.wear.shared.WearReplyTextStatus.Unavailable,
+          controller.readReply("watch-b", "session-a", "attempt-a", entry.id, 0, null).status,
+        )
+      } finally {
+        controller.stop("watch-a", "attempt-a")
+      }
+    }
+
+  @Test
+  fun replyPagesRejectRevisionsFromGrowthAndOwnersFromReplacedTalk() =
+    runTest {
+      val controller = testTalkController()
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+
+      fun emit(
+        text: String,
+        final: Boolean,
+      ) {
+        controller.handleGatewayEvent(
+          "talk.event",
+          buildJsonObject {
+            put("relaySessionId", JsonPrimitive("relay-1"))
+            put("type", JsonPrimitive("transcript"))
+            put("role", JsonPrimitive("assistant"))
+            put("text", JsonPrimitive(text))
+            put("final", JsonPrimitive(final))
+          }.toString(),
+        )
+      }
+      val text = "first ".repeat(1000)
+      emit(text, false)
+      val id =
+        controller.snapshot.value.conversation
+          .single()
+          .id
+      val first = controller.readReply("watch-a", "session-a", "attempt-a", id, 0, null)
+      val previewBefore =
+        controller.snapshot.value.conversation
+          .single()
+      emit(text + "TRAILING SENTINEL", true)
+      val previewAfter =
+        controller.snapshot.value.conversation
+          .single()
+      assertEquals(previewBefore.text, previewAfter.text)
+      assertTrue(previewAfter.textRevision > previewBefore.textRevision)
+      assertEquals(
+        id,
+        controller.snapshot.value.conversation
+          .single()
+          .id,
+      )
+      assertEquals(
+        ai.openclaw.wear.shared.WearReplyTextStatus.Changed,
+        controller.readReply("watch-a", "session-a", "attempt-a", id, first.nextOffset!!, first.revision).status,
+      )
+      val fresh = controller.readReply("watch-a", "session-a", "attempt-a", id, 0, null)
+      val tail = controller.readReply("watch-a", "session-a", "attempt-a", id, fresh.nextOffset!!, fresh.revision)
+      assertEquals(text + "TRAILING SENTINEL", fresh.text + tail.text)
+      controller.stop("watch-a", "attempt-a")
+      assertTrue(controller.start("watch-b", "session-b", "attempt-b", "de"))
+      assertEquals(
+        ai.openclaw.wear.shared.WearReplyTextStatus.Unavailable,
+        controller.readReply("watch-a", "session-a", "attempt-a", id, 0, null).status,
+      )
+      controller.stop("watch-b", "attempt-b")
+    }
+
+  @Test
+  fun oversizedTalkTextIsExplicitlyUnavailableRatherThanACompletePreview() =
+    runTest {
+      val controller = testTalkController()
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      controller.handleGatewayEvent(
+        "talk.event",
+        buildJsonObject {
+          put("relaySessionId", JsonPrimitive("relay-1"))
+          put("type", JsonPrimitive("transcript"))
+          put("role", JsonPrimitive("assistant"))
+          put("text", JsonPrimitive("x".repeat(1_000_001)))
+          put("final", JsonPrimitive(true))
+        }.toString(),
+      )
+      val entry =
+        controller.snapshot.value.conversation
+          .single()
+      assertTrue(entry.textTruncated)
+      assertFalse(entry.fullTextAvailable)
+      assertEquals(
+        ai.openclaw.wear.shared.WearReplyTextStatus.TooLarge,
+        controller.readReply("watch-a", "session-a", "attempt-a", entry.id, 0, null).status,
+      )
+      controller.stop("watch-a", "attempt-a")
+    }
+
   @Test
   fun `playback deadline counts only audio remaining after slow chunk delivery`() {
     val chunkBytes = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ / 10 * 2
@@ -415,7 +535,7 @@ class WearRealtimeTalkControllerTest {
               createParams += params
               if (createParams.size == 1) {
                 throw GatewayRequestRejected(
-                  GatewaySession.ErrorShape(
+                  ErrorShape(
                     code = "INVALID_REQUEST",
                     message =
                       "invalid talk.session.create params: at root: unexpected property 'language'",
@@ -449,7 +569,7 @@ class WearRealtimeTalkControllerTest {
             if (method == "talk.session.create") {
               createAttempts += 1
               throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message = "invalid talk.session.appendAudio params",
                 ),

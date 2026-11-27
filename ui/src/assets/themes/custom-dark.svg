@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a2a2a2"/>
+      <stop offset="0.7" stop-color="#a2a2a2"/>
+      <stop offset="1" stop-color="#a2a2a2"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.04" mask="url(#edges)">
+    <path d="m860-60 800 800m-840-800 800 800m-840-800 800 800m-840-800 800 800m-840-800 800 800m-840-800 800 800m-840-800 800 800"/>
+<path d="m-100 690 490 490m-450-490 490 490m-450-490 490 490m-450-490 490 490m-450-490 490 490m-450-490 490 490"/>
+  </g>
+</svg>

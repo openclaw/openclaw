@@ -6,6 +6,32 @@ import {
 } from "./session-panel-toggle-buffer.ts";
 
 describe("session panel toggle buffer", () => {
+  it("lets a buffered close cancel all earlier reader opens", () => {
+    const open = (url: string) =>
+      new CustomEvent("openclaw:link-reader-toggle", { detail: { url, open: true } });
+    rememberSessionPanelToggle("link-reader", open("https://forge.example/items/1"));
+    rememberSessionPanelToggle("link-reader", open("https://forge.example/items/2"));
+    const close = new CustomEvent("openclaw:link-reader-toggle", { detail: { open: false } });
+    rememberSessionPanelToggle("link-reader", close);
+    expect(takeSessionPanelToggle("link-reader")).toBe(close);
+    expect(takeSessionPanelToggle("link-reader")).toBeNull();
+  });
+
+  it("keeps each conversation's target until that conversation claims it", () => {
+    const first = new CustomEvent("openclaw:portal-toggle", {
+      detail: { sessionKey: "agent:main:first", open: true, portalId: "first-app" },
+    });
+    const second = new CustomEvent("openclaw:portal-toggle", {
+      detail: { sessionKey: "agent:main:second", open: true, portalId: "second-app" },
+    });
+    rememberSessionPanelToggle("portal", first);
+    rememberSessionPanelToggle("portal", second);
+
+    expect(takeSessionPanelToggle("portal", "agent:main:unrelated")).toBeNull();
+    expect(takeSessionPanelToggle("portal", "agent:main:second")).toBe(second);
+    expect(takeSessionPanelToggle("portal", "agent:main:first")).toBe(first);
+  });
+
   it("keeps an early route-startup intent until the pane claims it", () => {
     const event = new CustomEvent("openclaw:desktop-toggle", {
       detail: { open: true, environmentId: "worker-desktop-1" },
@@ -26,4 +52,13 @@ describe("session panel toggle buffer", () => {
 
     expect(takeSessionPanelToggle("browser")).toBe(newer);
   });
+});
+
+it("keeps plugin panel intents separate for global sessions owned by different agents", () => {
+  const event = new CustomEvent("plugin-panel", {
+    detail: { sessionKey: "global", agentId: "writer", open: true },
+  });
+  rememberSessionPanelToggle("plugin:review/document", event);
+  expect(takeSessionPanelToggle("plugin:review/document", "global", "main")).toBeNull();
+  expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).toBe(event);
 });

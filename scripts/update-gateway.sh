@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Updates a self-hosted OpenClaw gateway that runs from this source checkout.
 #
 # Reference workflow for team-operated servers (see docs/install/updating.md).
@@ -11,15 +15,66 @@
 #
 # Environment:
 #   OPENCLAW_UPDATE_RESTART_CMD  restart command (default: openclaw gateway restart)
-#                                set to "" to skip the restart step
+#                                set to "" for operator-owned manual lifecycle
+#   OPENCLAW_UPDATE_STOP_CMD     stop command (default: openclaw gateway stop --force)
+#                                custom automatic stop/restart must be set together
 #   OPENCLAW_UPDATE_REMOTE       git remote to update from (default: origin)
 set -euo pipefail
 
+trim_command() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+# Preserve the documented exact-empty restart override as manual lifecycle.
+# Validate automatic commands before even Corepack/Git can have side effects.
+restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
+stop_cmd="${OPENCLAW_UPDATE_STOP_CMD-openclaw gateway stop --force}"
+manual_lifecycle=0
+if [ "${OPENCLAW_UPDATE_RESTART_CMD+x}" = x ] && [ -z "$restart_cmd" ]; then
+  if [ "${OPENCLAW_UPDATE_STOP_CMD+x}" = x ]; then
+    echo "[update-gateway] manual lifecycle must not set OPENCLAW_UPDATE_STOP_CMD" >&2
+    exit 1
+  fi
+  manual_lifecycle=1
+else
+  if [ "${OPENCLAW_UPDATE_RESTART_CMD+x}" != "${OPENCLAW_UPDATE_STOP_CMD+x}" ]; then
+    echo "[update-gateway] automatic OPENCLAW_UPDATE_STOP_CMD and OPENCLAW_UPDATE_RESTART_CMD must be set together" >&2
+    exit 1
+  fi
+  restart_cmd="$(trim_command "$restart_cmd")"
+  stop_cmd="$(trim_command "$stop_cmd")"
+  for command_name in RESTART STOP; do
+    if { [ "$command_name" = RESTART ] && [ -z "$restart_cmd" ]; } ||
+      { [ "$command_name" = STOP ] && [ -z "$stop_cmd" ]; }; then
+      echo "[update-gateway] OPENCLAW_UPDATE_${command_name}_CMD is blank" >&2
+      exit 1
+    fi
+  done
+fi
+
 pnpm_dir=""
+automatic_adapter_started=0
 log() { echo "[update-gateway] $*"; }
+check_build_roots() {
+  for build_path in dist dist-runtime .artifacts; do
+    if [ -L "$build_path" ]; then
+      log "$build_path is a symlink; refusing to clean through it"
+      return 1
+    fi
+  done
+}
 on_exit() {
   local code=$?
-  if [ -n "$pnpm_dir" ]; then rm -rf "$pnpm_dir"; fi
+  if [ -n "$pnpm_dir" ]; then
+    if [ "$code" -ne 0 ] && [ "$automatic_adapter_started" -eq 1 ]; then
+      log "retained scoped pnpm launcher at $pnpm_dir; remove it only after all update children have stopped"
+    else
+      rm -rf "$pnpm_dir"
+    fi
+  fi
   if [ "$code" -ne 0 ]; then
     echo "[update-gateway] FAILED (exit $code)" >&2
   fi
@@ -106,6 +161,17 @@ if ! target_sha="$(git rev-parse --verify 'FETCH_HEAD^{commit}')" ||
 fi
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
+# Current automatic updates prepare privately and stop before publishing source
+# or dependencies. The old three-argument adapter remains for shipped callers.
+if [ "$manual_lifecycle" -eq 0 ]; then
+  check_build_roots
+  automatic_adapter_started=1
+  node --import ./scripts/tsx.mjs \
+    scripts/update-gateway-build.mts "$stop_cmd" "$restart_cmd" "$pnpm_dir" "$target_sha"
+  log "OK $(git rev-parse --short HEAD) ($branch)"
+  exit 0
+fi
+
 if [ "$branch" = "main" ]; then
   log "fast-forwarding main"
   git merge --ff-only "$target_sha"
@@ -130,23 +196,9 @@ run_pnpm install --frozen-lockfile
 log "clean building"
 # These deletes must stay inside the checkout: a symlinked build dir would
 # redirect the recursion into its target, so refuse symlinks outright.
-for build_path in dist dist-runtime .artifacts; do
-  if [ -L "$build_path" ]; then
-    log "$build_path is a symlink; refusing to clean through it"
-    exit 1
-  fi
-done
-# The build owns cleanup under its checkout-local artifact lock. Deleting here
-# would race declaration writers and readers before that ownership is acquired.
-# Match CLI updates: build runtime artifacts unless declarations were explicitly requested.
+check_build_roots
+# Manual lifecycle remains operator-owned, including recovery after failure.
+log "manual lifecycle: automatic stop/restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
 OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
-
-restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
-if [ -n "$restart_cmd" ]; then
-  log "restarting gateway: $restart_cmd"
-  bash -c "$restart_cmd"
-else
-  log "restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
-fi
 
 log "OK $(git rev-parse --short HEAD) ($branch)"

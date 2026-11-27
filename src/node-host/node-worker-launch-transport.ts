@@ -1,44 +1,82 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
-import { createChildAdapter } from "../process/supervisor/adapters/child.js";
-import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
 import {
-  buildWorkerProcessTurn,
+  WORKER_LINEAGE_START_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
+import {
+  createChildAdapter,
+  type AwaitedStdoutChildAdapter,
+} from "../process/supervisor/adapters/child.js";
+import { assertProcessGroupControl } from "../process/supervisor/service-child-group-ownership.js";
+import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
+import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
+import type { SpawnSecretInput } from "../process/supervisor/types.js";
+import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  WORKER_NATIVE_INFERENCE_STARTUP_ARG,
+  WORKER_NATIVE_INFERENCE_STARTUP_FD,
+  WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES,
+} from "../worker/native-inference-startup.js";
+import {
+  parseNodeWorkerConnectionFailureMessage,
+  type NodeWorkerLaunchInput,
+} from "../worker/node-supervisor-protocol.js";
+import {
   serializeWorkerProcessInput,
   type WorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import {
-  buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
+import type { NodeWorkerCleanupMode } from "./node-worker-launch-receipt.js";
 import type {
   NodeWorkerContainerIdentity,
   NodeWorkerLaunchReceipt,
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
+  projectNodeWorkerNativeInference,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
+import {
   sanitizeNodeWorkerDiagnostic,
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
-import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import type { NodeWorkerWorkspaceLaunchReference } from "./node-worker-workspace-identity.js";
 
-export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>;
+export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
+  confirmExtinction?: () => boolean;
+};
 
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
+  placement: NodeWorkerWorkspaceLaunchReference;
   descriptor: WorkerLaunchDescriptor;
+  planHash: string;
+  supervisor: NodeWorkerProcessIdentity;
   connectionFailure: { errorText?: string };
   scrubber: NodeWorkerCredentialScrubber;
   store: NodeWorkerLaunchStore;
   containerEngine?: NodeWorkerContainerEngine;
   containerLifecycle?: NodeWorkerContainerLifecycle;
   containerImage?: string;
+  filesystemIsolation?: boolean;
 };
 
 type NodeWorkerLaunchTransport =
@@ -46,41 +84,182 @@ type NodeWorkerLaunchTransport =
   | {
       kind: "started";
       adapter: NodeWorkerChildAdapter;
+      cleanupMode: NodeWorkerCleanupMode | null;
       container?: NodeWorkerContainerIdentity;
     };
+
+/** Resolves one exact Gateway-managed worker bundle from its isolated namespace. */
+function resolveNodeWorkerEntry(params: {
+  bundleRoot: string;
+  expectedBundleHash: string;
+  gatewayNamespace: string;
+}): string {
+  const root = fs.realpathSync.native(params.bundleRoot);
+  const bundle = fs.realpathSync.native(
+    path.join(root, params.gatewayNamespace, "bundles", params.expectedBundleHash),
+  );
+  if (!isPathInside(root, bundle)) {
+    throw new Error("node worker bundle resolves outside its configured root");
+  }
+  const entry = fs.realpathSync.native(
+    fileURLToPath(resolveRuntimeDeployEntrypointUrl("worker", bundle)),
+  );
+  if (!isPathInside(bundle, entry) || !fs.statSync(entry).isFile()) {
+    throw new Error("node worker entry must be a regular file inside its bundle");
+  }
+  return entry;
+}
 
 /** Keep local IPC and container stdio as transport choices of one launch state machine. */
 export async function prepareNodeWorkerLaunchTransport(
   options: NodeWorkerLaunchTransportOptions,
 ): Promise<NodeWorkerLaunchTransport> {
+  // Only the trusted snapshot can grant inference custody. Never forward a
+  // caller-provided carrier, including to ordinary proxied children.
+  const workerEnv = { ...options.workerEnv };
+  let secretInput: SpawnSecretInput | undefined;
+  if (options.descriptor.assignment.inference === "runtime-local") {
+    if (options.containerEngine) {
+      throw new Error(
+        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none" or "filesystem"; ' +
+          "nested-container worker isolation is unsupported.",
+      );
+    }
+    if (!options.nativeInferenceSnapshot) {
+      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
+    }
+    const startup = projectNodeWorkerNativeInference(
+      options.nativeInferenceSnapshot,
+      options.descriptor,
+    );
+    const encoded = JSON.stringify(startup);
+    if (Buffer.byteLength(encoded) > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
+      throw new Error(
+        "Worker-local inference startup data exceeds 2 MiB. Reduce the configured node models " +
+          "or headers, then restart the node host.",
+      );
+    }
+    secretInput = {
+      fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
+      createData: () => Buffer.from(encoded),
+    };
+  }
   const entry = resolveNodeWorkerEntry({
     bundleRoot: options.bundleRoot,
     expectedBundleHash: options.input.expectedBundleHash,
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
+    const args = [
+      ...resolveRuntimeArgs(),
+      entry,
+      "--internal-worker-ipc",
+      "--internal-worker-session",
+      ...(secretInput ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
+    ];
+    const workerOptions = {
+      env: resolveRuntimeWorkerEnv(pathToFileURL(entry), workerEnv),
+      secretInput,
+      ownedWorker: true,
+      stdinMode: "pipe-open",
+      stdoutConsumption: "awaited",
+      onWorkerMessage: (message: unknown) => {
+        const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
+        if (!diagnostic) {
+          return;
+        }
+        options.connectionFailure.errorText = diagnostic.cause
+          ? sanitizeNodeWorkerDiagnostic(
+              diagnostic.cause,
+              "node worker gateway connection failed",
+              options.scrubber.scrub,
+            )
+          : undefined;
+      },
+    } as const;
+    // Released v2026.9.4 workers require type-only IPC and must lead their own process group.
+    if (
+      supportsNodeWorkerProcessOwner() &&
+      options.descriptor.admission.handshake.protocolFeatures.includes(
+        WORKER_LINEAGE_START_PROTOCOL_FEATURE,
+      )
+    ) {
+      const features = options.descriptor.admission.handshake.protocolFeatures;
+      const nativeProcessOwnerSupported =
+        features.includes(WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE) ||
+        (process.platform === "linux" &&
+          features.includes(WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE));
+      if (options.filesystemIsolation && !nativeProcessOwnerSupported) {
+        throw new Error("Filesystem-isolated workers require the native lineage process owner");
+      }
+      const cleanupBinding = await options.store.cleanupBinding({
+        launchId: options.input.launchId,
+        planHash: options.planHash,
+        supervisor: options.supervisor,
+      });
+      const filesystem = options.filesystemIsolation
+        ? await (
+            await import("./node-worker-filesystem.js")
+          ).prepareNodeWorkerFilesystem({
+            workspaceDir: options.descriptor.assignment.workspaceDir,
+            bundleRoot: options.bundleRoot,
+            placement: options.placement,
+            entry,
+            homeDir: options.homeDir,
+            env: workerOptions.env,
+            args,
+          })
+        : undefined;
+      let ownedAdapter: NodeWorkerChildAdapter | undefined;
+      try {
+        const { adapter, ready } = await createServiceChildRelayAdapter({
+          ...workerOptions,
+          ...(nativeProcessOwnerSupported ? { nativeProcessOwnerSupported: true as const } : {}),
+          cleanupBinding,
+          command: filesystem?.command ?? process.execPath,
+          args: filesystem?.args ?? args,
+          oomScoreWrapperSelected: false,
+        });
+        ownedAdapter = adapter;
+        if (filesystem) {
+          // Attach before readiness: failed startup must release scratch too,
+          // but only the existing owner may certify descendant extinction.
+          // Filesystem mode is Linux-only; this native owner resolves on extinction.
+          const cleaned = adapter.waitForExtinction().then(async () => {
+            await filesystem.cleanup();
+          });
+          void cleaned.catch(() => undefined);
+          adapter.waitForExtinction = () => cleaned;
+        }
+        await ready;
+        return { kind: "started", adapter, cleanupMode: adapter.treeOwnership ?? "owned-anchor" };
+      } catch (error) {
+        if (!filesystem) {
+          throw error;
+        }
+        if (!ownedAdapter) {
+          await filesystem.cleanup();
+        } else {
+          ownedAdapter.kill("SIGKILL");
+          await ownedAdapter.waitForExtinction?.().catch(() => undefined);
+        }
+        throw error;
+      }
+    }
+    if (options.filesystemIsolation) {
+      throw new Error("Filesystem-isolated workers require the native lineage process owner");
+    }
+    assertProcessGroupControl();
+    const { adapter, ready } = await createChildAdapter({
+      ...workerOptions,
+      argv: [process.execPath, ...args],
+      exactEnv: true,
+    });
+    await ready;
     return {
       kind: "started",
-      adapter: await createChildAdapter({
-        argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
-        env: options.workerEnv,
-        exactEnv: true,
-        ownedWorker: true,
-        onWorkerMessage: (message) => {
-          const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
-          if (!diagnostic) {
-            return;
-          }
-          options.connectionFailure.errorText = diagnostic.cause
-            ? sanitizeNodeWorkerDiagnostic(
-                diagnostic.cause,
-                "node worker gateway connection failed",
-                options.scrubber.scrub,
-              )
-            : undefined;
-        },
-        stdinMode: "pipe-open",
-      }),
+      adapter,
+      cleanupMode: adapter.jobKillOnClose ? "windows-job" : "process-group",
     };
   }
 
@@ -109,12 +288,13 @@ export async function prepareNodeWorkerLaunchTransport(
       bundleRoot: options.bundleRoot,
       bundleEntry: entry,
       workspaceDir: options.descriptor.assignment.workspaceDir,
+      homeDir: options.homeDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
-      env: options.workerEnv,
+      env: workerEnv,
       ...(options.containerImage ? { image: options.containerImage } : {}),
     });
-    const claimed = options.store.get(options.input.launchId);
+    const claimed = await options.store.get(options.input.launchId);
     if (claimed?.state !== "pending") {
       await lifecycle.remove(container, options.input);
       if (!claimed) {
@@ -122,38 +302,27 @@ export async function prepareNodeWorkerLaunchTransport(
       }
       return { kind: "terminal", receipt: claimed };
     }
-    const adapter = await createChildAdapter({
-      argv: buildNodeWorkerContainerStartArgv(options.containerEngine, container.containerId),
+    const { adapter, ready } = await createChildAdapter({
+      argv: [
+        options.containerEngine.command,
+        "start",
+        "--attach",
+        "--interactive",
+        container.containerId,
+      ],
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",
+      stdoutConsumption: "awaited",
     });
-    return { kind: "started", adapter, container };
+    await ready;
+    return { kind: "started", adapter, container, cleanupMode: null };
   } catch (error) {
     if (container) {
       await lifecycle.remove(container, options.input);
     }
     throw error;
   }
-}
-
-/** Both transports admit turns only after the physical owner has been journaled. */
-export async function startNodeWorkerLaunchTransport(params: {
-  adapter: NodeWorkerChildAdapter;
-  descriptor: WorkerLaunchDescriptor;
-  container?: NodeWorkerContainerIdentity;
-  isCurrent: () => boolean;
-}): Promise<void> {
-  if (!params.isCurrent()) {
-    throw new Error("node worker admission closed before startup");
-  }
-  if (!params.container) {
-    await params.adapter.openStartGate?.();
-  }
-  if (!params.isCurrent()) {
-    throw new Error("node worker admission closed before descriptor dispatch");
-  }
-  await sendNodeWorkerInput(params.adapter, buildWorkerProcessTurn(params.descriptor));
 }
 
 export async function sendNodeWorkerInput(

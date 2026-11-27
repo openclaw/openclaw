@@ -1,8 +1,15 @@
+import { existsSync } from "node:fs";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import { updateExecApprovalsSync } from "./exec-approvals-store.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
+import {
+  readExecApprovalsForMaintenance,
+  updateExecApprovalsForMaintenance,
+} from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 // Detects and removes generated exec grants that predate cwd-bound authorization.
 import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
+import { readOnlyOpenWouldCreateSqliteSidecars } from "./sqlite-files.js";
 
 function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
   // Doctor owns only the grants allow-always wrote. A manual entry that is
@@ -10,9 +17,15 @@ function isObsoleteGeneratedEntry(entry: ExecAllowlistEntry): boolean {
   return entry.source === "allow-always" && classifyExecAllowlistScope(entry) === "inactive";
 }
 
+export function countObsoleteGeneratedExecApprovalRules(
+  rules: readonly ExecAllowlistEntry[],
+): number {
+  return rules.filter(isObsoleteGeneratedEntry).length;
+}
+
 export function countObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): number {
   return Object.values(file.agents ?? {}).reduce(
-    (count, agent) => count + (agent.allowlist ?? []).filter(isObsoleteGeneratedEntry).length,
+    (count, agent) => count + countObsoleteGeneratedExecApprovalRules(agent.allowlist ?? []),
     0,
   );
 }
@@ -37,14 +50,35 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
   return removed === 0 ? { file, removed } : { file: { ...file, agents }, removed };
 }
 
+/** Read-only: the grants `repairObsoleteGeneratedExecApprovals` would remove from the store. */
+export function countStoredObsoleteGeneratedExecApprovals(): number {
+  const file = readExecApprovalsForMaintenance();
+  return file ? countObsoleteGeneratedExecApprovals(file) : 0;
+}
+
 export function repairObsoleteGeneratedExecApprovals(): number {
+  const statePath = resolveOpenClawStateSqlitePath();
+  try {
+    // Read first: a store without such grants needs no write transaction. A store no
+    // connection holds open goes straight to the write transaction, which removes its
+    // sidecars on close; a read-only open would create them and leave them behind.
+    if (
+      !(existsSync(statePath) && readOnlyOpenWouldCreateSqliteSidecars(statePath)) &&
+      countStoredObsoleteGeneratedExecApprovals() === 0
+    ) {
+      return 0;
+    }
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      throw error;
+    }
+    // The write transaction below reports an unreadable store.
+  }
   let removed = 0;
-  updateExecApprovalsSync({
-    update: (file) => {
-      const result = removeObsoleteGeneratedExecApprovals(file);
-      removed = result.removed;
-      return result.removed > 0 ? result.file : null;
-    },
+  updateExecApprovalsForMaintenance((file) => {
+    const result = removeObsoleteGeneratedExecApprovals(file);
+    removed = result.removed;
+    return result.removed > 0 ? result.file : null;
   });
   return removed;
 }

@@ -1,94 +1,182 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   resolveBaseSessionMutationRequiredScope,
-  type SessionMutationOperatorScope,
+  resolveSessionMethodScope,
 } from "../../../src/shared/session-method-scopes-base.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { invitedSessionAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { isSessionDeferredPatch } from "./sessions/patch.ts";
 
-type SessionMethodOperatorScope = "operator.read" | SessionMutationOperatorScope;
+type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole" | "invitedAccess" | "permissionMode">;
 
 export type SessionMethodAccess =
-  | { allowed: true; requiredScope: SessionMethodOperatorScope }
+  | { allowed: true; requiredScope: OperatorScope }
   | {
       allowed: false;
-      requiredScope: SessionMethodOperatorScope;
+      requiredScope: OperatorScope;
       reason: string;
-      cause: "disconnected" | "method-unavailable" | "missing-scope";
+      cause: "disconnected" | "method-unavailable" | "missing-scope" | "session-not-owned";
     };
 
-type SessionMethodAccessRequest = {
+export type SessionMethodAccessRequest = {
   method: string;
   params?: unknown;
-  requiredScope?: SessionMethodOperatorScope;
+  requiredScope?: OperatorScope;
+  /** Optional UI copy for a missing grant; other denials keep their own explanation. */
+  missingScopeReasonKey?: string;
+  /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
+  sessionScope?: boolean;
+  /** Opt into the explicit desired-state mutation allowlist. */
+  allowDeferred?: boolean;
+  session?: SessionAccessRow;
+  /** A read proved no session row exists yet; the Gateway binds the first turn to the caller. */
+  sessionAbsent?: boolean;
 };
 
-function sessionMethodAccessReason(
-  cause: Exclude<SessionMethodAccess, { allowed: true }>["cause"],
-  requiredScope: SessionMethodOperatorScope,
-): string {
-  if (cause === "disconnected") {
-    return t("sessionsView.actionRequiresConnection");
-  }
-  if (cause === "method-unavailable") {
-    return t("sessionsView.actionUnavailable");
-  }
-  return t(
-    requiredScope === "operator.admin"
-      ? "sessionsView.actionRequiresAdmin"
-      : requiredScope === "operator.write"
-        ? "sessionsView.actionRequiresWrite"
-        : "sessionsView.actionRequiresRead",
-  );
+export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
+  return rows.find((row) => row.sharingRole !== "owner" && row.sharingRole !== "admin") ?? rows[0];
 }
 
-/**
- * Resolves browser-safe shared mutation policy or a caller-supplied placement
- * scope, plus connection and advertised-method state.
- */
+function deniedAccess(
+  requiredScope: OperatorScope,
+  cause: Exclude<SessionMethodAccess, { allowed: true }>["cause"],
+  missingScopeReasonKey?: string,
+): SessionMethodAccess {
+  return {
+    allowed: false,
+    requiredScope,
+    cause,
+    reason: t(
+      {
+        disconnected: "sessionsView.actionRequiresConnection",
+        "method-unavailable": "sessionsView.actionUnavailable",
+        "session-not-owned": "sessionsView.actionRequiresOwnership",
+        "missing-scope": missingScopeReasonKey ?? "sessionsView.actionPermissionDenied",
+      }[cause],
+    ),
+  };
+}
+
+/** Local draft presentation uses the same grant and ownership decision while offline. */
+export function readSessionMethodScopeAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null | undefined,
+  request: SessionMethodAccessRequest,
+): SessionMethodAccess {
+  const broadScope =
+    request.requiredScope === "operator.admin"
+      ? request.requiredScope
+      : (resolveBaseSessionMutationRequiredScope(request.method, request.params) ??
+        request.requiredScope);
+  const requiredScope =
+    (request.sessionScope && broadScope !== "operator.admin"
+      ? resolveSessionMethodScope(request.method, request.params)
+      : undefined) ?? broadScope;
+  if (!requiredScope) {
+    throw new Error(`Missing session method scope: ${request.method}`);
+  }
+  const invitation = invitedSessionAccess(request.session);
+  if (request.sessionScope && invitation === "send" && broadScope !== "operator.admin") {
+    const params = request.params;
+    const stricterPermission =
+      request.method === "sessions.patch" &&
+      isRecord(params) &&
+      Object.keys(params).every((key) =>
+        ["key", "agentId", "expectedSessionId", "permissionMode"].includes(key),
+      ) &&
+      (params.permissionMode === "read-only" ||
+        (params.permissionMode === "guarded" && request.session?.permissionMode !== "read-only"));
+    // The Gateway checks the initiating participant against this exact run;
+    // invitation evidence never grants session-wide cancellation authority.
+    const exactChatAbort =
+      request.method === "chat.abort" &&
+      isRecord(params) &&
+      typeof params.runId === "string" &&
+      params.runId.trim().length > 0 &&
+      roleScopesAllow({
+        role: auth?.role ?? "operator",
+        requestedScopes: ["operator.sessions.read"],
+        allowedScopes: auth?.scopes ?? [],
+      });
+    if (request.method === "chat.send" || stricterPermission || exactChatAbort) {
+      return { allowed: true, requiredScope };
+    }
+  }
+  const scopes = auth?.scopes;
+  const role = auth?.role ?? "operator";
+  if (
+    !Array.isArray(scopes) ||
+    !roleScopesAllow({ role, requestedScopes: [requiredScope], allowedScopes: scopes })
+  ) {
+    return deniedAccess(requiredScope, "missing-scope", request.missingScopeReasonKey);
+  }
+  const patch =
+    request.method === "sessions.patchMany" && isRecord(request.params)
+      ? request.params.patch
+      : request.method === "sessions.patch"
+        ? request.params
+        : undefined;
+  // The Gateway's sharing role records creator authority, including solo ownership.
+  // A broad write grant permits collaboration, but cannot archive or change
+  // communication policy for another creator's session.
+  const patchNeedsOwner =
+    isRecord(patch) &&
+    (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
+    !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
+  // Parentless creation, and the first turn of a session proven absent, have no existing
+  // row whose ownership must be checked: the Gateway records the caller as its creator.
+  const createsWithoutParent =
+    (request.method === "sessions.create" &&
+      !(
+        isRecord(request.params) &&
+        typeof request.params.parentSessionKey === "string" &&
+        request.params.parentSessionKey.trim()
+      )) ||
+    (request.method === "chat.send" && request.sessionAbsent === true && !request.session);
+  if (
+    (patchNeedsOwner ||
+      (requiredScope === "operator.sessions.write" &&
+        !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
+        !createsWithoutParent)) &&
+    request.session?.sharingRole !== "owner" &&
+    request.session?.sharingRole !== "admin"
+  ) {
+    return deniedAccess(requiredScope, "session-not-owned");
+  }
+  return { allowed: true, requiredScope };
+}
+
+/** Combines action access with live dispatch or explicit same-identity deferred admission. */
 export function readSessionMethodAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   request: SessionMethodAccessRequest,
 ): SessionMethodAccess {
-  const requiredScope =
-    resolveBaseSessionMutationRequiredScope(request.method, request.params) ??
-    request.requiredScope;
-  if (!requiredScope) {
-    throw new Error(`Missing required scope for session mutation method: ${request.method}`);
-  }
-  if (snapshot?.phase !== "connected" || !snapshot.client) {
-    return {
-      allowed: false,
-      requiredScope,
-      reason: sessionMethodAccessReason("disconnected", requiredScope),
-      cause: "disconnected",
-    };
+  const access = readSessionMethodScopeAccess(snapshot?.hello?.auth, request);
+  const deferredMutation =
+    request.allowDeferred &&
+    isRecord(request.params) &&
+    ((request.method === "sessions.patch" &&
+      isSessionDeferredPatch(
+        Object.fromEntries(
+          Object.entries(request.params).filter(
+            ([key]) => key !== "key" && key !== "agentId" && key !== "expectedSessionId",
+          ),
+        ),
+      )) ||
+      request.method === "sessions.delete") &&
+    snapshot?.hello &&
+    snapshot.client &&
+    snapshot.phase !== "stopped" &&
+    !snapshot.client.offlineRecoveryRetired;
+  if ((!deferredMutation && snapshot?.phase !== "connected") || !snapshot?.client) {
+    return deniedAccess(access.requiredScope, "disconnected");
   }
   if (isGatewayMethodAdvertised(snapshot, request.method) !== true) {
-    return {
-      allowed: false,
-      requiredScope,
-      reason: sessionMethodAccessReason("method-unavailable", requiredScope),
-      cause: "method-unavailable",
-    };
+    return deniedAccess(access.requiredScope, "method-unavailable");
   }
-  const auth = snapshot.hello?.auth;
-  if (
-    auth &&
-    Array.isArray(auth.scopes) &&
-    roleScopesAllow({
-      role: auth.role,
-      requestedScopes: [requiredScope],
-      allowedScopes: auth.scopes,
-    })
-  ) {
-    return { allowed: true, requiredScope };
-  }
-  return {
-    allowed: false,
-    requiredScope,
-    reason: sessionMethodAccessReason("missing-scope", requiredScope),
-    cause: "missing-scope",
-  };
+  return access;
 }

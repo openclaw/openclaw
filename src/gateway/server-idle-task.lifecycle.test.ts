@@ -1,81 +1,176 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as factsBackfill from "../config/sessions/session-transcript-facts-backfill.js";
+import * as agentRuns from "../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import * as commandQueue from "../process/command-queue.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import * as historyPrewarm from "./server-history-prewarm.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
+import * as lazyCoreHandlers from "./server-methods/lazy-core-handlers.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import { createGatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 
-afterEach(() => {
-  vi.useRealTimers();
-  resetGatewayWorkAdmission();
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: GatewayScheduler;
+beforeEach(() => {
+  clock = createGatewaySchedulerClock();
+  scheduler = createTestGatewayScheduler(clock.clock);
+  vi.spyOn(lazyCoreHandlers, "prepareGatewayRequestHandler").mockImplementation(
+    async (handler) => handler,
+  );
 });
 
-it.each(["idle", "handler", "context"] as const)(
+afterEach(async () => {
+  await scheduler.stop();
+  resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
+});
+
+function scheduleIdle(run: () => Promise<void>, log = { warn: vi.fn() }, retryDelayMs = 1) {
+  return scheduleGatewayIdleTask({
+    id: "test:idle",
+    scheduler,
+    delayMs: 0,
+    retryDelayMs,
+    isClosing: () => false,
+    isBusy: () => false,
+    run,
+    log,
+    errorMessage: "idle task failed",
+  });
+}
+
+function scheduleHandler(load: () => Promise<void>, log: { warn: (message: string) => void }) {
+  vi.spyOn(historyPrewarm, "prewarmGatewaySessionHistory").mockImplementation(load);
+  return scheduleGatewayHandlerPrewarm({
+    scheduler,
+    getConfig: () => ({}),
+    log,
+  });
+}
+
+it.each(["complete", "shutdown"] as const)(
+  "paces facts backfill during foreground work after recovery and stops on %s",
+  async (outcome) => {
+    vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
+    const recoveryReady = createDeferred();
+    let recovering = false;
+    // A resumed turn stays active for hours; only recovery still waiting for a slot gates.
+    vi.spyOn(commandQueue, "getQueueSize").mockReturnValue(1);
+    const snapshot = commandQueue.getCommandLaneSnapshot;
+    vi.spyOn(commandQueue, "getCommandLaneSnapshot").mockImplementation((lane) => ({
+      ...snapshot(lane),
+      queuedCount: lane === CommandLane.RestartRecovery ? Number(recovering) : 1,
+      activeCount: 1,
+    }));
+    const entered = createDeferred();
+    let passSignal: AbortSignal;
+    const runBatch = vi.fn(async () => {
+      if (runBatch.mock.calls.length === 1) {
+        return { complete: false, delayMs: 750 };
+      }
+      entered.resolve();
+      if (outcome === "shutdown") {
+        await new Promise<void>((resolve) => {
+          passSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        expect(passSignal.aborted).toBe(true);
+      }
+      return { complete: outcome === "complete", delayMs: 250 };
+    });
+    vi.spyOn(factsBackfill, "createSessionTranscriptFactsBackfill").mockImplementation((params) => {
+      passSignal = params.signal;
+      return { runBatch, close: async () => {} };
+    });
+    const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground");
+    expect(foreground).not.toBeNull();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    createGatewaySessionFactsBackfillScheduler({
+      scheduler,
+      signal: scheduler.signal,
+      waitForReady: () => recoveryReady.promise,
+      log,
+    })([
+      {
+        database: { agentId: "main", path: "/synthetic/agent.sqlite" },
+        assertCurrent() {},
+        backfillSource: { assertCurrent() {}, readCustody: [] },
+      },
+    ]);
+    const initialTick = clock.advanceBy(250);
+    await nextTurn();
+    expect(runBatch).not.toHaveBeenCalled();
+    recovering = true;
+    recoveryReady.resolve();
+    await initialTick;
+    expect(runBatch).not.toHaveBeenCalled();
+    for (let second = 0; second < 120; second++) {
+      await clock.advanceBy(1_000);
+    }
+    expect(runBatch).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledExactlyOnceWith(
+      "session: transcript facts backfill waiting for 1 queued restart-recovery turn(s)",
+    );
+    recovering = false;
+    await clock.advanceBy(1_000);
+    expect(runBatch).toHaveBeenCalledOnce();
+    await clock.advanceBy(749);
+    expect(runBatch).toHaveBeenCalledOnce();
+    const tick = clock.advanceBy(1);
+    await entered.promise;
+    if (outcome === "shutdown") {
+      await scheduler.stop();
+    }
+    await tick;
+    expect(runBatch).toHaveBeenCalledTimes(2);
+    foreground!.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    await clock.advanceBy(60_000);
+    expect(runBatch).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",
   async (kind) => {
-    vi.useFakeTimers();
     const released = createDeferred();
+    const started = createDeferred();
     const events: string[] = [];
     const run = async () => {
       events.push("started");
+      started.resolve();
       await released.promise;
       events.push("finished");
     };
     const log = { warn: vi.fn() };
-    const later = vi.fn(async () => {});
-    const handle =
-      kind === "idle"
-        ? scheduleGatewayIdleTask({
-            delayMs: 0,
-            retryDelayMs: 1,
-            isClosing: () => false,
-            isBusy: () => false,
-            run,
-            log,
-            errorMessage: "idle lifecycle test failed",
-          })
-        : kind === "handler"
-          ? scheduleGatewayHandlerPrewarm({
-              cfgAtStart: {},
-              log,
-              items: [
-                { name: "first", load: run },
-                { name: "later", load: later },
-              ],
-            })
-          : scheduleContextCachePrewarm({
-              getConfig: () => ({}),
-              log,
-              startupTrace: {
-                measure: async (_name, warm) => {
-                  await run();
-                  return warm();
-                },
-              },
-            });
-    let registered: GatewayPostReadySidecarHandle[] = [handle];
-    const owner = createGatewaySidecarStopOwner({
-      getRegistered: () => registered,
-      setRegistered: (next) => {
-        registered = next;
-      },
-    });
+    const handle = kind === "idle" ? scheduleIdle(run, log) : scheduleHandler(run, log);
+    const owner = createGatewaySidecarStopOwner();
+    owner.publish(handle);
     let stopping: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(kind === "context" ? 5_000 : 0);
+      await Promise.resolve();
+      void clock.advanceBy(0);
+      await started.promise;
       expect([...events]).toEqual(["started"]);
       owner.beginClose();
       stopping = owner.stop().then(() => {
         events.push("closed");
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.advanceBy(0);
       expect([...events]).toEqual(["started"]);
     } finally {
       owner.beginClose();
@@ -84,7 +179,10 @@ it.each(["idle", "handler", "context"] as const)(
       await stopping;
     }
     expect(events).toEqual(["started", "finished", "closed"]);
-    expect(later).not.toHaveBeenCalled();
+    if (kind === "handler") {
+      expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+      expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
+    }
     expect(log.warn).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   },
@@ -93,29 +191,14 @@ it.each(["idle", "handler", "context"] as const)(
 it.each(["suspension", "restart signal"] as const)(
   "stops idle work without reopening the %s fence",
   async (kind) => {
-    vi.useFakeTimers();
     const suspension = kind === "suspension" ? tryBeginGatewaySuspendAdmission(() => {}) : null;
     const restart = kind === "restart signal" ? beginGatewayRestartSignalAdmission() : null;
     expect(suspension?.commit() ?? Boolean(restart)).toBe(true);
     const run = vi.fn(async () => {});
-    const handle = scheduleGatewayIdleTask({
-      delayMs: 0,
-      retryDelayMs: 10,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn: vi.fn() },
-      errorMessage: "idle task failed",
-    });
-    let stopping: Promise<void> | undefined;
+    const handle = scheduleIdle(run, undefined, 10);
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      let closed = false;
-      stopping = Promise.resolve(handle.stop()).then(() => {
-        closed = true;
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(closed).toBe(true);
+      await clock.advanceBy(0);
+      await expect(Promise.resolve(handle.stop())).resolves.toBeUndefined();
       expect(run).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
@@ -123,17 +206,14 @@ it.each(["suspension", "restart signal"] as const)(
       suspension?.release();
       restart?.rollback();
       await closing;
-      await stopping;
     }
-    await vi.advanceTimersByTimeAsync(10);
+    await clock.advanceBy(10);
     expect(run).not.toHaveBeenCalled();
   },
 );
 
 it("joins the outgoing handler when shutdown begins in its warning callback", async () => {
-  vi.useFakeTimers();
   const events: string[] = [];
-  const later = vi.fn(async () => {});
   let rootsAfterStop: number | undefined;
   let stopping: Promise<void> | undefined;
   const warn = vi.fn(() => {
@@ -143,29 +223,19 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
       events.push("closed");
     });
   });
-  const sidecar = scheduleGatewayHandlerPrewarm({
-    cfgAtStart: {},
-    log: { warn },
-    items: [
-      {
-        name: "first",
-        load: async () => {
-          events.push("started");
-          throw new Error("cold load failed");
-        },
-      },
-      { name: "later", load: later },
-    ],
-  });
-  try {
-    await vi.advanceTimersByTimeAsync(0);
-    await stopping;
-    expect(warn).toHaveBeenCalledOnce();
-    expect(events).toEqual(["started", "warning", "closed"]);
-    expect(rootsAfterStop).toBe(0);
-    expect(later).not.toHaveBeenCalled();
-  } finally {
-    await sidecar.stop();
-    await stopping;
-  }
+  const sidecar = scheduleHandler(
+    async () => {
+      events.push("started");
+      throw new Error("cold load failed");
+    },
+    { warn },
+  );
+  await Promise.resolve();
+  await clock.advanceBy(0);
+  await stopping;
+  expect(warn).toHaveBeenCalledOnce();
+  expect(events).toEqual(["started", "warning", "closed"]);
+  expect(rootsAfterStop).toBe(0);
+  expect(historyPrewarm.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(lazyCoreHandlers.prepareGatewayRequestHandler).not.toHaveBeenCalled();
 });

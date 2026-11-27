@@ -13,10 +13,15 @@ export function observeAgentRunApprovalWait(params: {
 }): AgentRunApprovalWait {
   const approvals = new Set<string>();
   let pausedAtMs = 0;
+  let completedPausedMs = 0;
   let unsubscribe = () => {};
   const state: AgentRunApprovalWait = {
     pending: false,
-    pausedMs: 0,
+    // Include an open interval so each exec/wait can take its own baseline;
+    // time spent parked before that call never becomes execution credit.
+    get pausedMs() {
+      return completedPausedMs + (state.pending ? performance.now() - pausedAtMs : 0);
+    },
     dispose: () => {
       unsubscribe();
       state.onChange = undefined;
@@ -28,7 +33,6 @@ export function observeAgentRunApprovalWait(params: {
   // Lifecycle facts pause scheduling only; the original admitted run retains all authority.
   unsubscribe = onAgentEventForRun(params.runId, (event) => {
     if (
-      event.runId !== params.runId ||
       event.stream !== "lifecycle" ||
       (params.sessionId && event.sessionId && event.sessionId !== params.sessionId)
     ) {
@@ -52,7 +56,7 @@ export function observeAgentRunApprovalWait(params: {
     if (pending) {
       pausedAtMs = performance.now();
     } else {
-      state.pausedMs += Math.max(0, performance.now() - pausedAtMs);
+      completedPausedMs += performance.now() - pausedAtMs;
     }
     state.pending = pending;
     state.onChange?.(pending);

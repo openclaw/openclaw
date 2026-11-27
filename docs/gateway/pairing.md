@@ -19,8 +19,8 @@ Gateway's SQLite state database:
   reject pending requests.
 
 The former standalone node pairing store (`nodes/paired.json` with a per-node
-token, retired from the connect path in January 2026) is gone: gateways fold
-any remaining rows into the device records once at startup and archive the
+token, retired from the connect path in January 2026) is gone: `openclaw doctor --fix`
+folds remaining rows into the device records and archives the
 legacy files with a `.migrated` suffix. Legacy TCP bridge support has been
 removed.
 
@@ -45,6 +45,17 @@ operator scopes for the requested commands. Before updating a live connection,
 the Gateway checks its pairing identity and generation against the persisted
 approval and limits access to the capabilities and commands that connection
 declared.
+
+Node-originated agent requests and voice transcripts retain the pairing identity
+and generation that admitted them. If a turn waits in the session queue, the
+Gateway rechecks that authority when the turn is selected, before preflight or
+model execution. Removing and re-pairing the node does not restore an older
+queued turn. Reconnecting with the same pairing remains valid, and work that
+already started may finish.
+
+An initial unapproved surface has no effective commands. While a later expansion
+waits, previously approved commands remain effective only if the node still
+declares them and Gateway command policy allows them.
 
 The **5-minute expiry** still applies to **device-pairing** requests,
 not to capability approvals on an already-paired device.
@@ -85,17 +96,99 @@ leaf certificate. The bootstrap token expires after 10 minutes. Explicit
 The bootstrap token and resulting device credential are separate, like a
 short-lived Tailscale auth key and the durable device identity it admits.
 Revoking or expiring the setup link does not revoke the paired device; remove
-the device separately when needed. The link never pre-approves `system.run` or
-folder sync. Those operations still use pending approval or
+the device separately when needed. Administrator-minted bootstrap enrollment
+approves the device and its first declared command surface, including `system.run`
+when declared, like
 [SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+Later command, capability, or permission expansion still requires approval.
+Gateway command policy and [node-local exec approvals](/tools/exec-approvals)
+remain separate gates. Local exec approvals default to `full` with `ask: "off"`;
+configure them before using a link if that access is too broad.
+
+## OpenClaw ID nodes (Labs)
+
+An owner-approved OpenClaw ID node invitation replaces the initial manual device
+pairing and command-surface approval. The owner must compare the six-digit code
+and explicitly approve the signed redemption, which includes the node's
+self-reported name, platform, commands, and capabilities.
+
+On the first connection for each newly approved node listing, the Gateway
+automatically pairs the node device once. Only commands and capabilities within
+the description the owner approved qualify for automatic surface approval. The
+OS permission states the node reports on that first connection are recorded with
+the approved surface, so reconnects that declare the same or less access need no
+approval. Additional commands, capabilities, or newly granted OS permissions use
+the normal `node.pair` approval flow. Gateway command policy, node-local execution
+approvals, and OS permissions still apply.
+
+The approval records `approvedVia: "openclaw-id-node"` and its tunnel-key
+provenance. Removing the pairing with `openclaw nodes remove` keeps subsequent
+pairing requests for that key manual, including after a Gateway restart. It does
+not silently repeat the invitation's one-time approval. A second device using the
+same key also needs manual approval.
+
+Removing or revoking the node's OpenClaw ID key ends its listing. If the owner
+later approves the same key again with a new invitation, the new listing pairs
+automatically once more. Approving another invitation for a key that is still
+listed keeps the existing listing and does not repeat automatic pairing.
+
+Removing or revoking the node's OpenClaw ID key disconnects it, invalidates its
+tunnel-bound device tokens, and removes node-role pairings and approved surfaces
+associated with that key. Unrelated device roles remain intact. Synthetic tunnel
+addresses are never evidence for trusted-CIDR or SSH-verified auto-approval.
+
+For connection setup, see [OpenClaw ID nodes](/gateway/remote#openclaw-id-nodes-labs).
+
+### Gateway API for owner clients
+
+- Register the signed cap with `openclawId.authority`, action
+  `register_node_invite`, using `{cap, proofKey}`; `proofKey` is base64url.
+  Owner tunnel clients can also use `POST /_openclaw-id/v1/node-invites` with
+  `{cap, proof_key}`. The RPC response includes `discoveryUrl` (null when not
+  configured) and `version` so the UI can build ready-to-paste commands locally.
+  The secret-bearing join link stays in the browser and is never sent to this
+  RPC. Both UI-generated commands must include the configured `--discovery-url`;
+  there is no inferred Discovery default.
+- Approve, remove, or deny through the same authority RPC's `submit` action,
+  carrying an owner-signed `MembershipChange` (`add_node`, `remove_node`, or
+  `deny_invite`). The Gateway verifies the signer, capability, and sequence.
+- Read `openclawId.people` for the owner-only `{link}` projection. `link.nodes`
+  lists admitted nodes; `link.nodeInvites` includes each pending description,
+  `verificationCode`, `peerKey`, `requestedAt`, and `decideBy`. Proof keys are
+  never returned. Tunnel membership uses the field names `nodes` and
+  `node_invites`.
+- Refetch this view on the existing keyless `openclawId.people.changed` event.
+  Receiving an event or opening the view must not submit an approval.
 
 ## CLI workflow (headless friendly)
 
+For manual device admission, first run on the Gateway:
+
+```bash
+openclaw devices list
+openclaw devices approve <deviceRequestId>
+```
+
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates the separate command-surface request:
+
 ```bash
 openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes reject <requestId>
+openclaw nodes approve <nodeRequestId>
 openclaw nodes status
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+command once.
+
+The device and node request IDs are distinct. To reject a surface request or
+manage an existing node instead:
+
+```bash
+openclaw nodes reject <nodeRequestId>
 openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
@@ -150,13 +243,13 @@ top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 
 <Warning>
-Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
+Node surface approval records the durable command/capability ceiling. It does
+not grant commands that the node adds later or no longer declares.
 
-- Live node commands come from what the node declares on connect, filtered by
-  the gateway's global node command policy (`gateway.nodes.commands.allow` and
-  `gateway.nodes.commands.deny`).
-- Per-node `system.run` allow and ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live commands must be both declared and approved, then pass the Gateway's
+  command policy (`gateway.nodes.commands.allow` and `gateway.nodes.commands.deny`).
+- Shell allowlist and ask policy for `system.run` live in the node's
+  [exec approvals](/tools/exec-approvals), not in the pairing record.
 
 </Warning>
 
@@ -206,8 +299,22 @@ Gateway token.
 
 By default, trusted local connections silently approve first-time device
 pairing plus role and scope upgrades. This keeps normal same-host and SSH
-tunnel reconnects convenient. Operators using shell-less, port-forward-only
-SSH keys or a multi-user Mac can require explicit approval for every device:
+tunnel reconnects convenient. A native app that already paired as an operator
+can add its first node role with the same device identity without a device
+approval prompt, including retries of a pending request labeled as a repair.
+This preserves its operator token. The Gateway also approves the initial node
+capability surface directly for a silently paired, non-browser local device,
+including a native app using remote mode to connect to a Gateway on the same
+machine. No app-side SSH check or approval panel is needed.
+
+This uses the same-machine, same-user trust boundary. Gateway command denies
+and node-local OS permissions and exec approvals still apply. Later capability
+surface upgrades and explicitly revoked node tokens still require approval.
+Remote, trusted-CIDR, browser, and proxy connections do not gain local approval
+from a device's earlier silent pairing.
+
+Operators using shell-less, port-forward-only SSH keys or a multi-user Mac can
+require explicit approval for every device:
 
 ```json5
 {
@@ -221,9 +328,11 @@ SSH keys or a multi-user Mac can require explicit approval for every device:
 }
 ```
 
-With this setting, new pairing requests, role upgrades, and scope upgrades use
-the normal approval flow even when the connection is local. Metadata-only
-reconnect refreshes remain automatic so routine client or OS metadata changes
+With this setting, new pairing requests, role upgrades, scope upgrades, and
+initial node capability requests use the normal approval flow even when the
+connection is local. Re-enabling local auto-approval allows an unapproved initial
+surface to be approved on reconnect, including one previously rejected.
+Metadata-only reconnect refreshes remain automatic so routine client or OS metadata changes
 do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
@@ -248,15 +357,15 @@ Enabled by default. Requirements for it to fire:
 - Same eligibility floor as trusted-CIDR approval: fresh scopeless node
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
-While a probe is running, the node client is told to keep retrying
-(`wait_then_retry`) instead of pausing for manual approval; if the probe
-fails, the next attempt falls back to the normal prompt flow. Failed targets
-get a short cooldown (5 minutes after a key mismatch).
+While device approval is pending, the node client is told to keep retrying
+(`wait_then_retry`), including while an SSH check is running. If the check fails,
+the request remains available for manual approval and the node keeps retrying.
+Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH
-probe or store lock was already pending when the policy changed. Changes to SSH
-verification settings use a fresh probe and do not inherit the previous policy’s
+check or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh check and do not inherit the previous policy’s
 cooldown. Already paired devices remain paired.
 
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
@@ -274,8 +383,8 @@ Harden or disable:
       pairing: {
         // Disable entirely:
         sshVerify: false,
-        // ...or scope/tune the probe:
-        // sshVerify: { user: "me", identity: "~/.ssh/probe", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
+        // ...or scope/tune the check:
+        // sshVerify: { user: "me", identity: "~/.ssh/check", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
       },
     },
   },
@@ -340,6 +449,8 @@ Security boundary:
   network locality alone.
 - Only a fresh `role: node` device pairing request with no requested scopes is
   eligible.
+- This approves the device only. Its first command surface still needs
+  `openclaw nodes pending` and `openclaw nodes approve <nodeRequestId>`.
 - Operator, browser, Control UI, and WebChat clients stay manual.
 - Role, scope, metadata, and public-key upgrades stay manual.
 - Same-host loopback trusted-proxy header paths are not eligible, because that
@@ -381,6 +492,10 @@ Boundaries:
 
 ## Metadata-upgrade auto-approval
 
+On an already-paired Mac, the CLI and probe can use `macos` or `darwin`
+alongside the native app's versioned macOS label without re-pairing. The pinned
+device family must still match.
+
 When an already-paired device reconnects with only non-sensitive metadata
 changes (for example display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
@@ -391,10 +506,23 @@ still use the explicit re-approval flow. Scope upgrades (read to
 write/admin) and public key changes are **not** eligible for
 metadata-upgrade auto-approval; they stay explicit re-approval requests.
 
+The Gateway loads paired devices once during startup. Reconnects use those
+committed, process-owned records for pairing lookups. Pairing writes publish updated records before the next authorization
+check. Access metadata is recorded after the hello response and coalesced across
+tabs of the same device; last-seen-only refreshes within one minute may be skipped.
+This bookkeeping never grants access and cannot update a replacement approval.
+
 ## QR pairing helpers
 
 `/pair qr` renders the pairing payload as structured media so mobile and
 browser clients can scan it directly.
+
+In Control UI, the QR image stays beside the pairing details during chat history
+refreshes until it expires. The setup secret is not saved in the transcript or
+the browser's disk cache. Reloading, reconnecting, or changing authentication
+discards the live QR; run `/pair qr` again for a fresh code.
+Browser snapshots saved by older versions also discard QR credentials on restore;
+the remaining history is preserved and the sanitized snapshot replaces the old cache entry.
 
 Deleting a device also sweeps any stale pending pairing requests for that
 device id, so `nodes pending` does not show orphaned rows after a revoke.
@@ -419,9 +547,12 @@ database under the Gateway state directory (default `~/.openclaw`):
   approved node surfaces, pending surface requests, pending device pairing
   requests, and bootstrap tokens)
 
-If you override `OPENCLAW_STATE_DIR`, the database moves with it. Gateways
-upgraded from releases with JSON stores import them at startup and leave
-`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind.
+If you override `OPENCLAW_STATE_DIR`, the database moves with it. Stop the Gateway
+and run `openclaw doctor --fix` to import stores from older releases. Doctor leaves
+`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind. It imports
+device approvals before folding node capabilities; existing SQLite approvals
+take precedence. Normal Gateway startup reports pending legacy stores without
+changing them.
 
 Security notes:
 
@@ -438,5 +569,6 @@ Security notes:
 ## Related
 
 - [Channel pairing](/channels/pairing)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract for device identity, pairing signatures, and device tokens
 - [Nodes CLI](/cli/nodes)
 - [Devices CLI](/cli/devices)

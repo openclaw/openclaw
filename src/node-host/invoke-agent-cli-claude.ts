@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { logWarn } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -20,12 +21,10 @@ const STDERR_TAIL_BYTES = 20_000;
 const TERMINAL_EVENT_MAX_BYTES = 1024 * 1024;
 
 function isClaudeResultLine(line: string): boolean {
-  try {
-    const value = JSON.parse(line) as { type?: unknown };
-    return value?.type === "result";
-  } catch {
+  if (Buffer.byteLength(line, "utf8") > TERMINAL_EVENT_MAX_BYTES) {
     return false;
   }
+  return safeParseJsonRecord(line)?.type === "result";
 }
 
 /** Spawn the node-resolved Claude binary and stream bounded UTF-8 stdout. */
@@ -39,6 +38,7 @@ export async function runClaudeCliNodeCommand(params: {
   secretInput?: SpawnSecretInput;
   timeoutMs: number | undefined;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   skillIo?: OpenClawPluginNodeHostCommandIo;
 }): Promise<RunResult> {
   const cancelledResult = (): RunResult => ({
@@ -56,6 +56,8 @@ export async function runClaudeCliNodeCommand(params: {
   let promptDir: string | undefined;
   let skillSession: Awaited<ReturnType<typeof prepareNodeClaudeSkillSession>> | undefined;
   let cleanupSkillArtifacts: (() => Promise<void>) | undefined;
+  let artifactCleanup: Promise<void> | undefined;
+  let artifactCleanupStarted = false;
   let argv = params.argv;
   try {
     if (params.request.skillRuntime) {
@@ -96,6 +98,7 @@ export async function runClaudeCliNodeCommand(params: {
       client: params.client,
       frame: params.frame,
       idleTimeoutMs: params.request.idleTimeoutMs,
+      signal: params.signal,
       onError: () => supervisor.cancel(runId),
     });
     // The runtime owns one progress sequence for duplex invocations. Do not
@@ -126,11 +129,7 @@ export async function runClaudeCliNodeCommand(params: {
       for (let newline = terminalLineBuffer.indexOf("\n"); newline >= 0;) {
         const line = terminalLineBuffer.slice(0, newline).replace(/\r$/u, "");
         terminalLineBuffer = terminalLineBuffer.slice(newline + 1);
-        if (
-          terminalLineTouchesTruncation &&
-          Buffer.byteLength(line, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-          isClaudeResultLine(line)
-        ) {
+        if (terminalLineTouchesTruncation && isClaudeResultLine(line)) {
           terminalResultLine = line;
         }
         terminalLineTouchesTruncation = touchesTruncation;
@@ -149,6 +148,7 @@ export async function runClaudeCliNodeCommand(params: {
       const runPromise = supervisor.spawn({
         runId,
         mode: "child",
+        beforeSpawn: params.assertCurrent,
         argv,
         cwd: params.cwd,
         // Apply the cache-stable Git policy locally without extending the node wire contract.
@@ -192,9 +192,13 @@ export async function runClaudeCliNodeCommand(params: {
         promptDir = undefined;
         cleanupSkillArtifacts = undefined;
         // Descendants may still own this file after their root result is already visible.
-        void run
+        artifactCleanup = run
           .waitForExtinction()
-          .then(async () => {
+          .then(async (outcome) => {
+            if (outcome && outcome.status === "uncertain") {
+              throw new Error(`Retaining Claude artifacts: ${outcome.reason}`, { cause: outcome });
+            }
+            artifactCleanupStarted = true;
             if (ownedPromptDir) {
               await fs.rm(ownedPromptDir, { recursive: true, force: true });
             }
@@ -215,11 +219,7 @@ export async function runClaudeCliNodeCommand(params: {
     void writeProgress(decoder.end());
     terminalLineBuffer += terminalDecoder.end();
     stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.end()}`, STDERR_TAIL_BYTES);
-    if (
-      terminalLineTouchesTruncation &&
-      Buffer.byteLength(terminalLineBuffer, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-      isClaudeResultLine(terminalLineBuffer)
-    ) {
+    if (terminalLineTouchesTruncation && isClaudeResultLine(terminalLineBuffer)) {
       terminalResultLine = terminalLineBuffer;
     }
     if (truncated && terminalResultLine) {
@@ -268,6 +268,10 @@ export async function runClaudeCliNodeCommand(params: {
       } finally {
         if (promptDir) {
           await fs.rm(promptDir, { recursive: true, force: true });
+        }
+        // Join admitted removal without waiting for descendants that are still running.
+        if (artifactCleanupStarted) {
+          await artifactCleanup;
         }
       }
     }

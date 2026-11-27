@@ -2,22 +2,20 @@
 import { incrementCompactionCount } from "../../../auto-reply/reply/session-updates.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
-import {
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-} from "../../agent-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
+import { clearBoundaryMaintenance } from "../../context-pressure.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
 import { clearProviderPromptState } from "../provider-prompt-state.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { CompactionAccountingFact } from "./internal-params.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 export async function settleEmbeddedRun(input: {
   runInput: Pick<PreparedEmbeddedRunInput, "runParams" | "progressController">;
@@ -27,7 +25,13 @@ export async function settleEmbeddedRun(input: {
   >;
   compaction: {
     state: Pick<EmbeddedRunContextRecoveryState, "autoCompactionCount" | "currentContextSnapshot">;
-    session: Pick<SessionPromptState, "committedCompactionSuccessor" | "sessionWriterFence">;
+    session: Pick<
+      SessionPromptState,
+      | "sessionId"
+      | "committedCompactionSuccessor"
+      | "committedCompactionTransitions"
+      | "sessionWriterFence"
+    >;
     originalTarget: NonNullable<SessionPromptState["sessionTarget"]>;
     durable: boolean;
     authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
@@ -62,6 +66,10 @@ export async function settleEmbeddedRun(input: {
           ...(committed?.previousSessionId !== undefined
             ? { previousSessionId: committed.previousSessionId }
             : {}),
+          ...(committed ? { hostCompactionCommitted: true } : {}),
+          ...(compaction.session.committedCompactionTransitions.length
+            ? { admissionTransitions: compaction.session.committedCompactionTransitions }
+            : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,
@@ -87,6 +95,7 @@ export async function settleEmbeddedRun(input: {
         expectedSession: fact.target,
         amount: fact.count,
         tokensAfter: fact.currentContextSnapshot?.tokens,
+        transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&
@@ -99,8 +108,11 @@ export async function settleEmbeddedRun(input: {
   if (params.isFinalFallbackAttempt !== false) {
     await runInput.progressController.maybeEmitFastModeAutoResetBestEffort();
   }
-  forgetPromptBuildDrainCacheForRun(params.runId);
+  if (ownedContextEngineLease) {
+    forgetPromptBuildDrainCacheForRun(params.runId);
+  }
   clearProviderPromptState(params.runId);
+  clearBoundaryMaintenance(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
   await ownedContextEngineLease?.dispose();
   if (params.cleanupBundleMcpOnRunEnd === true) {
@@ -116,21 +128,17 @@ export async function settleEmbeddedRun(input: {
             `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
           );
         };
-        const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-          sessionKey: params.sessionKey,
-          reason: "embedded-run-end",
-          // MCP App views hold bounded leases so their bridge can remain
-          // usable after a one-shot gateway run returns.
-          preserveActiveLeases: true,
-          onError,
-        });
-        if (!retiredBySessionKey) {
-          await retireSessionMcpRuntime({
-            sessionId: params.sessionId,
-            reason: "embedded-run-end",
-            preserveActiveLeases: true,
-            onError,
-          });
+        // This run owns its original ID and its accepted successor;
+        // its mutable session key may already belong to another run.
+        for (const sessionId of new Set([params.sessionId, compaction.session.sessionId])) {
+          if (sessionId) {
+            await retireSessionMcpRuntime({
+              sessionId,
+              reason: "embedded-run-end",
+              preserveActiveLeases: true,
+              onError,
+            });
+          }
         }
       },
     });

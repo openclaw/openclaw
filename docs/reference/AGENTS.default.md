@@ -37,10 +37,10 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 }
 ```
 
-## Safety defaults
+## Care defaults
 
-- Don't dump directories or secrets into chat.
-- Don't run destructive commands unless explicitly asked.
+- Don't repeat secrets in shared chats unless the user explicitly asks you to share them. Deliver login and pairing codes privately.
+- Confirm destructive or irreversible actions the user didn't ask for.
 - Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
 - Don't send partial/streaming replies to external messaging surfaces (only final replies).
 
@@ -61,13 +61,13 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 
 ## Shared spaces (recommended)
 
-- You're not the user's voice; be careful in group chats or public channels.
-- Don't share private data, contact info, or internal notes.
+- Speak as yourself in group chats or public channels unless the user asks you to send or post on their behalf.
+- Share private data, contact info, or internal notes only with the people or services the user requested.
 
 ## Memory system (recommended)
 
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
-- User model: `USER.md` for dated active or superseded directives about stable preferences and profile facts.
+- User model: `USER.md` for current directives about stable preferences and profile facts, without date/status metadata. Replace outdated directives; keep useful dated history in daily memory.
 - Long-term memory: `MEMORY.md` for durable non-profile facts and decisions.
 - Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
 - On session start, read today + yesterday + `MEMORY.md` when present.
@@ -102,7 +102,7 @@ git commit -m "Add workspace"
 
 ## Core skills (enable in Settings → Skills)
 
-Example roster for a personal-assistant workspace; swap in whichever skills fit your setup.
+Example roster for a personal-assistant workspace, last reviewed for 2026.9.3; swap in whichever skills fit your setup. These are third-party skills, so availability changes independently of OpenClaw releases.
 
 - **mcporter** - tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** - fast macOS screenshots with optional AI vision analysis.

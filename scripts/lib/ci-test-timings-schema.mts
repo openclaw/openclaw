@@ -1,7 +1,94 @@
+import { createHash } from "node:crypto";
+
+export const CI_TIMING_PROFILES = ["blacksmith", "github", "boat"] as const;
+export type CiTimingProfile = (typeof CI_TIMING_PROFILES)[number];
+
+export function ciTimingRunnerProfile(labels: readonly string[]): CiTimingProfile | undefined {
+  if (labels.includes("boat-xlarge")) {
+    return labels.every((label) => ["boat-xlarge", "self-hosted", "Linux", "X64"].includes(label))
+      ? "boat"
+      : undefined;
+  }
+  const blacksmith = new Set(
+    labels.filter((label) => /^blacksmith-\d+vcpu-ubuntu-2404$/u.test(label)),
+  );
+  if (blacksmith.size > 0) {
+    return blacksmith.size === 1 &&
+      labels.every(
+        (label) => blacksmith.has(label) || ["self-hosted", "Linux", "X64"].includes(label),
+      )
+      ? "blacksmith"
+      : undefined;
+  }
+  return labels.length > 0 && labels.every((label) => label === "ubuntu-24.04")
+    ? "github"
+    : undefined;
+}
+
+export type RuntimePlacementTiming = {
+  configs: string[];
+  env: Record<string, string>;
+  includePatterns: string[];
+  pretestBuildMode: "runtime" | "private-qa";
+  seconds: number;
+};
+
+export function runtimePlacementTimingIdentity(
+  group: Omit<RuntimePlacementTiming, "seconds">,
+): string {
+  return JSON.stringify({
+    configs: group.configs,
+    env: Object.entries(group.env).toSorted(([a], [b]) => a.localeCompare(b)),
+    includePatterns: group.includePatterns.toSorted(),
+    pretestBuildMode: group.pretestBuildMode,
+  });
+}
+
+export const NATIVE_SOLO_TIMING_PROFILE = {
+  runner: "blacksmith-32vcpu-ubuntu-2404",
+  logicalCpuCount: 8,
+  minTotalMemoryBytes: 28 * 1024 ** 3,
+  maxTotalMemoryBytes: 32 * 1024 ** 3,
+  maxWorkers: 8,
+} as const;
+
+export function createNativeSoloTimingKey(group: unknown): string | undefined {
+  if (
+    !isRecord(group) ||
+    !isNonemptyStrings(group.configs) ||
+    group.configs.length !== 1 ||
+    !/^test\/vitest\/vitest\.[a-z0-9-]+\.config\.ts$/u.test(group.configs[0]!) ||
+    !isRuntimePlacementIncludePatterns(group.includePatterns) ||
+    group.includePatterns.length !== 1 ||
+    /^(?:\/|\.\.?(?:\/|$))|\\|(?:^|\/)\.\.?(?:\/|$)/u.test(group.includePatterns[0]!) ||
+    (group.requiresDist !== undefined && group.requiresDist !== false) ||
+    group.pretestBuildMode !== undefined ||
+    group.fallbackMaxWorkers !== undefined ||
+    group.minTotalMemoryBytes !== undefined ||
+    (group.env !== undefined &&
+      (!isRecord(group.env) ||
+        Object.entries(group.env).some(
+          ([key, value]) => key !== "OPENCLAW_VITEST_MAX_WORKERS" || value !== "8",
+        )))
+  ) {
+    return undefined;
+  }
+  // Shard ordinals and selector generations change when siblings are added;
+  // this profile describes only the exact solo workload and allocation.
+  const identity = JSON.stringify({
+    configs: group.configs,
+    includePatterns: group.includePatterns,
+    env: {},
+  });
+  return `native-solo-8cpu-8workers:${createHash("sha256").update(identity).digest("hex")}`;
+}
+
 export type CiTestTimings = {
-  compactGroupSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
+  compactGroupSeconds: Record<CiTimingProfile, Record<string, number>>;
+  runtimePlacementTimings: Record<CiTimingProfile, RuntimePlacementTiming[]>;
   repoE2eFileSeconds: Record<string, number>;
   source: string;
+  toolingFileSeconds: Record<CiTimingProfile, Record<string, number>>;
   uiE2e: { fileSeconds: Record<string, number>; perFileOverheadSeconds: number };
   updatedAt: string;
   version: 1;
@@ -36,13 +123,59 @@ function isSecondsMap(value: unknown): value is Record<string, number> {
   );
 }
 
+function isNonemptyStrings(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "string" && entry.length > 0)
+  );
+}
+
+export function isRuntimePlacementIncludePatterns(value: unknown): value is string[] {
+  return (
+    isNonemptyStrings(value) &&
+    // Match explicit test-target syntax without importing the test-project planner.
+    value.every(
+      (file) => /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file) && !/[*?[\]{}]|[@+!]\(/u.test(file),
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+export function isRuntimePlacementTiming(value: unknown): value is RuntimePlacementTiming {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["configs", "env", "includePatterns", "pretestBuildMode", "seconds"]) &&
+    isNonemptyStrings(value.configs) &&
+    isRecord(value.env) &&
+    Object.entries(value.env).every(
+      ([key, entry]) => key.length > 0 && typeof entry === "string",
+    ) &&
+    isRuntimePlacementIncludePatterns(value.includePatterns) &&
+    (value.pretestBuildMode === "runtime" || value.pretestBuildMode === "private-qa") &&
+    typeof value.seconds === "number" &&
+    Number.isSafeInteger(value.seconds) &&
+    value.seconds > 0
+  );
+}
+
+function isRuntimePlacementTimings(value: unknown): value is RuntimePlacementTiming[] {
+  return (
+    Array.isArray(value) &&
+    value.every(isRuntimePlacementTiming) &&
+    new Set(value.map(runtimePlacementTimingIdentity)).size === value.length
+  );
+}
+
 function isCiTestTimings(value: unknown): value is CiTestTimings {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
       "compactGroupSeconds",
+      "runtimePlacementTimings",
       "repoE2eFileSeconds",
       "source",
+      "toolingFileSeconds",
       "uiE2e",
       "updatedAt",
       "version",
@@ -50,7 +183,16 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
   ) {
     return false;
   }
-  const { compactGroupSeconds, repoE2eFileSeconds, source, uiE2e, updatedAt, version } = value;
+  const {
+    compactGroupSeconds,
+    runtimePlacementTimings,
+    repoE2eFileSeconds,
+    source,
+    toolingFileSeconds,
+    uiE2e,
+    updatedAt,
+    version,
+  } = value;
   return (
     version === 1 &&
     typeof source === "string" &&
@@ -68,10 +210,17 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     uiE2e.perFileOverheadSeconds <= 5 &&
     isSecondsMap(uiE2e.fileSeconds) &&
     isSecondsMap(repoE2eFileSeconds) &&
+    isRecord(toolingFileSeconds) &&
+    hasExactKeys(toolingFileSeconds, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) => isSecondsMap(toolingFileSeconds[profile])) &&
     isRecord(compactGroupSeconds) &&
-    hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
-    isSecondsMap(compactGroupSeconds.blacksmith) &&
-    isSecondsMap(compactGroupSeconds.github)
+    hasExactKeys(compactGroupSeconds, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) => isSecondsMap(compactGroupSeconds[profile])) &&
+    isRecord(runtimePlacementTimings) &&
+    hasExactKeys(runtimePlacementTimings, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) =>
+      isRuntimePlacementTimings(runtimePlacementTimings[profile]),
+    )
   );
 }
 

@@ -1,5 +1,4 @@
-// Resolves context visibility policy for accounts and sessions.
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { ContextVisibilityMode } from "./types.base.js";
@@ -14,24 +13,6 @@ type ChannelContextVisibilityConfig = {
    */
   accounts?: Record<string, { contextVisibility?: ContextVisibilityMode }>;
 };
-
-type ContextVisibilityDefaultsConfig = {
-  channels?: {
-    defaults?: {
-      /**
-       * Global default supplemental context visibility for channels without a local override.
-       */
-      contextVisibility?: ContextVisibilityMode;
-    };
-  };
-};
-
-/** Reads the global channel default supplemental context visibility mode. */
-export function resolveDefaultContextVisibility(
-  cfg: ContextVisibilityDefaultsConfig,
-): ContextVisibilityMode | undefined {
-  return cfg.channels?.defaults?.contextVisibility;
-}
 
 /** Resolves supplemental context visibility using explicit, account, channel, default precedence. */
 export function resolveChannelContextVisibilityMode(params: {
@@ -51,13 +32,17 @@ export function resolveChannelContextVisibilityMode(params: {
     | ChannelContextVisibilityConfig
     | undefined;
   const accountId = normalizeAccountId(params.accountId);
-  const accountMode = resolveAccountEntry(channelConfig?.accounts, accountId)?.contextVisibility;
+  const accountMode = resolveChannelAccountEntry(
+    channelConfig?.accounts,
+    accountId,
+    params.channel,
+  )?.contextVisibility;
   // Preserve the public precedence order: adapter override, account override,
   // channel override, global default, then permissive legacy default.
   return (
     accountMode ??
     channelConfig?.contextVisibility ??
-    resolveDefaultContextVisibility(params.cfg) ??
+    params.cfg.channels?.defaults?.contextVisibility ??
     "all"
   );
 }

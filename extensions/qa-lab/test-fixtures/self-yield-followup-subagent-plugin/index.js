@@ -1,26 +1,19 @@
 import { randomUUID } from "node:crypto";
 
 const TRIGGER = "qa self yield follow-up";
-const RESTART_TRIGGER = "qa interrupted task restart";
-const RESTART_SESSION_PREFIX = "agent:qa:subagent:qa-restart-task-";
 const FOLLOW_UP_MESSAGE =
   "Subagent self yield qa remote job finished. Reply with only the exact marker.";
+const QA_SPAWNED_REPLY = "QA-SELF-YIELD-SPAWNED";
 const stateKey = Symbol.for("openclaw.qaSelfYieldFollowupState");
 
 function getState() {
   if (globalThis[stateKey]) {
     return globalThis[stateKey];
   }
-  let resolveFinalReply;
-  const finalReply = new Promise((resolve) => {
-    resolveFinalReply = resolve;
-  });
   return (globalThis[stateKey] = {
     childSessionKey: undefined,
-    finalReply,
     followUpRunId: undefined,
     kickoffRunId: undefined,
-    resolveFinalReply,
     yieldEntered: false,
     releaseYield: undefined,
   });
@@ -51,51 +44,19 @@ function writeJson(res, statusCode, body) {
 export default {
   id: "qa-self-yield-followup-subagent",
   register(api) {
-    api.registerHttpRoute({
-      path: "/qa/self-yield/restart",
-      auth: "gateway",
-      match: "exact",
-      gatewayRuntimeScopeSurface: "trusted-operator",
-      async handler(req, res) {
-        const sessionKey = new URL(req.url, "http://localhost").searchParams.get("sessionKey");
-        const task = sessionKey
-          ? api.runtime.tasks.runs
-              .bindSession({ sessionKey })
-              .list()
-              .find((candidate) => candidate.childSessionKey?.startsWith(RESTART_SESSION_PREFIX))
-          : undefined;
-        const flow = task?.flowId
-          ? api.runtime.tasks.flows.bindSession({ sessionKey }).get(task.flowId)
-          : undefined;
-        writeJson(res, 200, {
-          task,
-          flow,
-        });
-        return true;
-      },
-    });
-
     api.on("before_tool_call", async (event) => {
       if (event.toolName !== "sessions_yield") {
         return;
       }
       const state = getState();
       state.yieldEntered = true;
+      // Admit the continuation before the paused turn can publish its requester notice.
       await new Promise((resolve) => {
         state.releaseYield = resolve;
       });
     });
 
     api.on("before_dispatch", async (event) => {
-      if (event.content.toLowerCase().includes(RESTART_TRIGGER)) {
-        const result = await api.runtime.subagent.run({
-          sessionKey: `${RESTART_SESSION_PREFIX}${randomUUID()}`,
-          message: "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.",
-          deliver: false,
-          completionDelivery: "current-requester",
-        });
-        return { handled: true, text: `QA-RESTART-TASK-SPAWNED ${result.runId}` };
-      }
       if (!event.content.toLowerCase().includes(TRIGGER)) {
         return undefined;
       }
@@ -115,8 +76,9 @@ export default {
           completionDelivery: "current-requester",
         });
         getState().kickoffRunId = result.runId;
-        const finalReply = await getState().finalReply;
-        return { handled: true, text: finalReply };
+        // The kickoff reply carries no child result: the follow-up's answer must
+        // reach this requester through the registry's completion announcement.
+        return { handled: true, text: QA_SPAWNED_REPLY };
       } catch (error) {
         return {
           handled: true,
@@ -206,9 +168,6 @@ export default {
             part?.type === "text" && typeof part.text === "string" ? [part.text] : [],
           )
           .at(-1);
-        if (terminal.status === "ok" && finalReply) {
-          state.resolveFinalReply(finalReply);
-        }
         writeJson(res, 200, {
           ok: terminal.status === "ok",
           kickoffRunId: state.kickoffRunId,

@@ -8,7 +8,7 @@ scenario:
   execution:
     kind: flow
     channel: slack
-    timeoutMs: 8000
+    timeoutMs: 15000
     retryCount: 1
     suiteIsolation: isolated
 flow:

@@ -72,10 +72,7 @@ class ConnectionManagerTest {
 
       assertEquals(
         GatewayTlsParams(
-          required = true,
           expectedFingerprint = expectedFingerprint,
-          allowTOFU = false,
-          stableId = endpoint.stableId,
         ),
         ConnectionManager.resolveTlsParamsForEndpoint(endpoint, storedFingerprint, manualTlsEnabled = false),
       )
@@ -175,6 +172,10 @@ class ConnectionManagerTest {
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
         ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
+        ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
+        "presence-deltas",
+        "health-summary",
+        "personal-session-pins",
       ),
       options.caps,
     )
@@ -188,6 +189,10 @@ class ConnectionManagerTest {
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
+        ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
+        "presence-deltas",
+        "health-summary",
+        "personal-session-pins",
       ),
       options.caps,
     )
@@ -421,12 +426,10 @@ class ConnectionManagerTest {
     params: GatewayTlsParams?,
     expectedFingerprint: String? = null,
   ) {
-    assertEquals(expectedFingerprint, params?.expectedFingerprint)
-    assertEquals(false, params?.allowTOFU)
+    assertEquals(expectedFingerprint, requireNotNull(params).expectedFingerprint)
   }
 
   private fun assertTlsRequired(params: GatewayTlsParams?) {
-    assertEquals(true, params?.required)
     assertTls(params)
   }
 

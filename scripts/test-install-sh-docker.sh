@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,33 +51,6 @@ run_install_smoke_container() {
   DOCKER_COMMAND_TIMEOUT="$INSTALL_SMOKE_DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run "$@"
 }
 
-resolve_default_smoke_platform() {
-  local host_arch
-  if [[ -n "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}" ]]; then
-    printf "%s" "$OPENCLAW_INSTALL_SMOKE_PLATFORM"
-    return
-  fi
-  host_arch="$(uname -m)"
-  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    case "$host_arch" in
-      arm64 | aarch64)
-        printf "linux/arm64"
-        return
-        ;;
-    esac
-    printf "linux/amd64"
-    return
-  fi
-  case "$host_arch" in
-    arm64 | aarch64)
-      printf "linux/arm64"
-      ;;
-    *)
-      printf "linux/amd64"
-      ;;
-  esac
-}
-
 print_pack_audit() {
   local label="$1"
   local pack_json_file="$2"
@@ -110,57 +87,40 @@ console.log(
 assert_pack_unpacked_size_budget() {
   local label="$1"
   local pack_json_file="$2"
-  node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+  node --input-type=module - "$label" "$pack_json_file" "$HARNESS_ROOT" <<'NODE'
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const harnessRoot = process.argv[4];
+const { collectPackUnpackedSizeFindings } = await import(
+  pathToFileURL(`${harnessRoot}/scripts/lib/npm-pack-budget.mts`).href
+);
+const { reportLimitViolations } = await import(
+  pathToFileURL(`${harnessRoot}/scripts/lib/check-limits.mts`).href
+);
 
 const label = process.argv[2];
 const packJsonFile = process.argv[3];
 const raw = readFileSync(packJsonFile, "utf8") || "[]";
 const parsed = JSON.parse(raw);
 const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
-// Both bundled fs-safe loader layouts need all native targets (~31 MiB).
-// Include that payload while retaining the previous package-size headroom.
-const budgetBytes = budgetOverride ? Number(budgetOverride) : 235 * 1024 * 1024;
-if (!Number.isFinite(budgetBytes)) {
+const budgetBytes = budgetOverride ? Number(budgetOverride) : undefined;
+if (budgetBytes !== undefined && !Number.isFinite(budgetBytes)) {
   throw new Error(
     `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
       budgetOverride,
     )}`,
   );
 }
-const entries = Array.isArray(parsed) ? parsed : [parsed];
-const errors = [];
-let checkedCount = 0;
-for (const [index, entry] of entries.entries()) {
-  if (
-    !entry ||
-    typeof entry !== "object" ||
-    Array.isArray(entry) ||
-    typeof entry.unpackedSize !== "number" ||
-    !Number.isFinite(entry.unpackedSize)
-  ) {
-    continue;
-  }
-  checkedCount += 1;
-  if (entry.unpackedSize > budgetBytes) {
-    const resultLabel =
-      typeof entry.filename === "string" && entry.filename.trim()
-        ? entry.filename.trim()
-        : `pack result #${index + 1}`;
-    errors.push(
-      `${resultLabel} unpackedSize ${entry.unpackedSize} bytes exceeds budget ${budgetBytes} bytes. Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.`,
-    );
-  }
-}
-if (entries.length > 0 && checkedCount === 0) {
-  errors.push(
-    `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
-  );
-}
+const { errors, violations } = collectPackUnpackedSizeFindings(parsed, {
+  budgetBytes,
+  missingDataMessage: `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
+});
 for (const error of errors) {
   console.error(`ERROR: ${error}`);
 }
-if (errors.length > 0) {
+const sizeFailed = reportLimitViolations(violations);
+if (errors.length > 0 || sizeFailed) {
   process.exit(1);
 }
 NODE
@@ -233,9 +193,21 @@ process.stdout.write(filename);
 ' "$pack_json_file"
 }
 
+read_pack_version() {
+  node -e '
+const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+if (!last || typeof last.version !== "string" || last.version.length === 0) {
+  process.exit(1);
+}
+process.stdout.write(last.version);
+' "$1"
+}
+
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}"
 NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-openclaw-install-nonroot:local}"
-SMOKE_PLATFORM="$(resolve_default_smoke_platform)"
+SMOKE_PLATFORM="$(docker_build_resolve_platform "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}")"
 NONROOT_PLATFORM="${OPENCLAW_INSTALL_NONROOT_PLATFORM:-$SMOKE_PLATFORM}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 CLI_INSTALL_URL="${OPENCLAW_INSTALL_CLI_URL:-https://openclaw.bot/install-cli.sh}"
@@ -279,6 +251,7 @@ UPDATE_HOST_ALIAS="${OPENCLAW_INSTALL_SMOKE_UPDATE_HOST:-host.docker.internal}"
 UPDATE_PORT="${OPENCLAW_INSTALL_SMOKE_UPDATE_PORT:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION:-}"
 FROZEN_PAYLOAD_DIR="${OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:-}"
+FROZEN_NODE_VERSION="${OPENCLAW_INSTALL_SMOKE_NODE_VERSION:-}"
 LATEST_DIR="$(mktemp -d)"
 LATEST_FILE="${LATEST_DIR}/latest"
 UPDATE_DIR="$(mktemp -d)"
@@ -294,8 +267,8 @@ NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
 NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
-INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install.sh"
-CLI_INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install-cli.sh"
+INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install.sh"
+CLI_INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install-cli.sh"
 SMOKE_RUNNER_ENV_ARGS=()
 
 require_regular_payload_file() {
@@ -321,6 +294,10 @@ if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
     echo "ERROR: frozen install-smoke payload requires OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION" >&2
     exit 1
   fi
+  if [[ ! "$FROZEN_NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: frozen install-smoke payload requires a trusted OPENCLAW_INSTALL_SMOKE_NODE_VERSION" >&2
+    exit 1
+  fi
   INSTALL_SCRIPT_PATH="$FROZEN_PAYLOAD_DIR/install.sh"
   CLI_INSTALL_SCRIPT_PATH="$FROZEN_PAYLOAD_DIR/install-cli.sh"
 fi
@@ -329,10 +306,14 @@ INSTALL_SCRIPT_DOCKER_ARGS=(
   -v "$INSTALL_SCRIPT_PATH:/tmp/openclaw-install.sh:ro"
   -v "$CLI_INSTALL_SCRIPT_PATH:/tmp/openclaw-install-cli.sh:ro"
 )
+if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
+  INSTALL_SCRIPT_DOCKER_ARGS+=(
+    -e "OPENCLAW_NODE_VERSION=$FROZEN_NODE_VERSION"
+  )
+fi
 
 for env_name in \
-  OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
-  OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
+  OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY \
   OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \
   OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL \
   OPENCLAW_INSTALL_SMOKE_PREVIOUS \
@@ -368,6 +349,10 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+if [[ -z "$FROZEN_PAYLOAD_DIR" ]]; then
+  node "$HARNESS_ROOT/scripts/build-installers.mjs" "$UPDATE_DIR/installers" "$ROOT_DIR"
+fi
 
 allocate_host_port() {
   node -e '
@@ -410,11 +395,13 @@ process.stdout.write(packageJson.version);
 prepare_update_tarball() {
   local pack_json_file
   local baseline_pack_json_file
+  local baseline_pack_dir
   local -a package_args
   local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
+  baseline_pack_dir="${UPDATE_DIR}/baseline"
   if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
     # The producer already built and normalized candidate bytes inside an isolated pinned image.
     # Privileged consumers only copy the verified artifact; they never build or import candidate code.
@@ -424,7 +411,7 @@ prepare_update_tarball() {
     UPDATE_TGZ_FILE="candidate.tgz"
   elif [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
-    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$pack_json_file"
     normalize_npm_pack_json_file "$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
@@ -463,17 +450,7 @@ prepare_update_tarball() {
   fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"
-  packed_update_version="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.version !== "string" || last.version.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.version);
-' "$pack_json_file"
-  )"
+  packed_update_version="$(read_pack_version "$pack_json_file")"
   if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
     UPDATE_EXPECT_VERSION="$packed_update_version"
   elif [[ "$UPDATE_EXPECT_VERSION" != "$packed_update_version" ]]; then
@@ -482,20 +459,13 @@ process.stdout.write(last.version);
   fi
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
-  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  # The repo .npmrc dependency cooldown must not hide a days-old published baseline.
+  mkdir -p "$baseline_pack_dir"
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$baseline_pack_dir" >"$baseline_pack_json_file"
   normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
-  UPDATE_BASELINE_VERSION="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.version !== "string" || last.version.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.version);
-' "$baseline_pack_json_file"
-  )"
+  BASELINE_TGZ_FILE="baseline/$BASELINE_TGZ_FILE"
+  UPDATE_BASELINE_VERSION="$(read_pack_version "$baseline_pack_json_file")"
   print_pack_audit "baseline" "$baseline_pack_json_file"
   print_pack_delta_audit "$baseline_pack_json_file" "$pack_json_file"
 }

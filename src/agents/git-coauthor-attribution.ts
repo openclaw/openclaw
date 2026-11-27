@@ -1,103 +1,180 @@
-import { listSessionParticipantsReadOnly } from "../config/sessions/session-accessor.js";
-import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import { isDeepStrictEqual } from "node:util";
+import {
+  gitCoauthorOrganizationPolicy,
+  publicGitHubCoauthorEmail,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import { getRuntimeConfig } from "../config/io.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  isMainGitContributorScope,
+  inheritSessionGitContributorProfileIds,
+} from "../config/sessions/session-entry-provenance.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import {
+  prepareUserProfileGitHubAttribution,
+  resolveUserProfileGitHubAttribution,
+} from "../state/user-profile-github-identity.js";
+import { resolveConfiguredGitHubHost } from "./github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity.js";
-
-export function appendGitCoauthorContext(prompt: string, attribution: string | undefined): string {
-  return attribution ? `${prompt}\n\n${attribution}` : prompt;
-}
-
-export function prepareGitCoauthorAttribution(params: {
-  agentId: string;
-  config: OpenClawConfig;
-  currentProfileId?: string;
-  excludeAccountId?: number;
-  env?: NodeJS.ProcessEnv;
-  sessionKey?: string;
-  storePath?: string;
-}): string | undefined {
-  return resolveGitCoauthorAttribution(params)?.prompt;
-}
 
 type GitCoauthorAttribution = {
   trailers: string[];
   logins: string[];
-  prompt: string;
 };
 
 type GitCoauthorContributor = {
-  accountId: number;
+  accountId?: number;
+  email: string;
   contributionCount: number;
   firstPromptedAt: number | null;
   login: string;
+  githubLogin?: string;
+  identityKey: string;
+  inheritedOrder?: number;
 };
 
-export function resolveGitCoauthorAttribution(params: {
+type GitCoauthorAttributionParams = {
   agentId: string;
   config: OpenClawConfig;
-  currentProfileId?: string;
   excludeAccountId?: number;
+  /** Host-verified requester; main is a routing hub, not a task contributor set. */
+  requesterProfileId?: string;
+  host?: string;
   env?: NodeJS.ProcessEnv;
   sessionKey?: string;
+  sessionId?: string;
   storePath?: string;
-}): GitCoauthorAttribution | undefined {
-  if (!params.sessionKey || !params.storePath) {
-    return undefined;
+};
+
+type PreparedGitCoauthorAttribution = {
+  attribution: GitCoauthorAttribution | undefined;
+  isCurrent: () => boolean;
+};
+
+export async function resolveGitCoauthorAttribution(
+  params: GitCoauthorAttributionParams,
+): Promise<GitCoauthorAttribution | undefined> {
+  return (await resolveAttribution(params, false)).attribution;
+}
+
+export async function prepareGitCoauthorAttribution(
+  params: GitCoauthorAttributionParams,
+): Promise<PreparedGitCoauthorAttribution> {
+  return await resolveAttribution(params, true);
+}
+
+async function resolveAttribution(
+  params: GitCoauthorAttributionParams,
+  retainAuthority: boolean,
+): Promise<PreparedGitCoauthorAttribution> {
+  const empty = { attribution: undefined, isCurrent: () => true };
+  if (!params.sessionKey || isIncognitoSessionKey(params.sessionKey)) {
+    return empty;
   }
-  const records =
-    listSessionParticipantsReadOnly({
+  const storePath = resolveSessionStorePathForScope(
+    {
       agentId: params.agentId,
       env: params.env,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-    }).get(params.sessionKey) ?? [];
+    },
+    params.config,
+  );
+  const read = await readSessionEntriesFromStoreInWorker({
+    agentId: params.agentId,
+    env: params.env,
+    sessionKeys: [params.sessionKey],
+    storePath,
+    includeParticipantRecords: true,
+    snapshotFields: [],
+  });
+  const entry = read.entries.find(({ sessionKey }) => sessionKey === params.sessionKey)?.entry;
+  if (!entry || entry.incognito || (params.sessionId && entry.sessionId !== params.sessionId)) {
+    return empty;
+  }
+  const records = read.participantRecords?.[params.sessionKey] ?? [];
   const profileRecords = new Map(
     records.flatMap((record) =>
       record.identity.type === "profile" ? [[record.identity.id, record] as const] : [],
     ),
   );
-  const profileIds = new Set(profileRecords.keys());
-  const atBound = records.length >= MAX_SESSION_PARTICIPANTS;
-  const incomplete = atBound || records.some((record) => record.identity.type === "legacy");
-  if (params.currentProfileId && !atBound) {
-    profileIds.add(params.currentProfileId);
+  const inheritedProfileIds = entry.inheritedGitContributorProfileIds ?? [];
+  const source = {
+    ...params,
+    sessionKey: params.sessionKey,
+    requesterProfileId: params.requesterProfileId,
+  };
+  const profileIds = isMainGitContributorScope(source)
+    ? (inheritSessionGitContributorProfileIds(entry, source) ?? [])
+    : [...new Set([...profileRecords.keys(), ...inheritedProfileIds])];
+  if (profileIds.length === 0) {
+    return empty;
   }
-  if (profileIds.size === 0 && !incomplete) {
-    return undefined;
-  }
-  const identities = resolveUserProfileGitHubAttribution([...profileIds], { env: params.env });
+  const host = params.host ?? resolveConfiguredGitHubHost(params.config);
+  const auth = params.config.gateway?.auth;
+  const organizationDefaults =
+    auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+      ? gitCoauthorOrganizationPolicy(auth.trustedProxy.userHeader, auth.trustedProxy.gitCoauthor)
+      : undefined;
+  const organizationMapping = organizationDefaults
+    ? { ...params.config.gateway?.auth?.trustedProxy?.gitCoauthor }
+    : undefined;
+  const principalHeader = params.config.gateway?.auth?.trustedProxy?.userHeader;
+  const prepared = retainAuthority
+    ? await prepareUserProfileGitHubAttribution(profileIds, {
+        env: params.env,
+        host,
+        organizationDefaults,
+      })
+    : {
+        identities: await resolveUserProfileGitHubAttribution(profileIds, {
+          env: params.env,
+          host,
+          organizationDefaults,
+        }),
+        isCurrent: () => true,
+      };
+  const identities = prepared.identities;
   const primaryIdentity =
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
-  const contributors = new Map<number, GitCoauthorContributor>();
-  let withoutCredit = 0;
-  let unresolved = 0;
-  let primaryAuthor = 0;
+  const contributors = new Map<string, GitCoauthorContributor>();
+  let usesOrganizationDefaults = false;
   for (const profileId of profileIds) {
-    if (!identities.has(profileId)) {
-      unresolved += 1;
-      continue;
-    }
+    const record = profileRecords.get(profileId);
     const identity = identities.get(profileId);
     if (!identity) {
-      withoutCredit += 1;
       continue;
     }
-    if (identity.accountId === params.excludeAccountId) {
-      primaryAuthor += 1;
+    const organization = "name" in identity;
+    const issuer = "host" in identity ? identity.host : "github.com";
+    if (
+      (!organization && issuer !== host) ||
+      (params.excludeAccountId !== undefined && identity.accountId === params.excludeAccountId)
+    ) {
       continue;
     }
-    const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+    const email = organization
+      ? identity.email
+      : "host" in identity
+        ? identity.verifiedEmail
+        : publicGitHubCoauthorEmail(identity.accountId, identity.login);
+    if (!email) {
+      continue;
+    }
     // An explicit publisher replaces the configured primary; the other account may deserve credit.
-    if (params.excludeAccountId === undefined && noreplyEmail.toLowerCase() === primaryEmail) {
-      primaryAuthor += 1;
+    if (params.excludeAccountId === undefined && email.toLowerCase() === primaryEmail) {
       continue;
     }
-    const record = profileRecords.get(profileId);
-    const contributor = contributors.get(identity.accountId);
+    usesOrganizationDefaults ||= organization;
+    const identityKey = email.toLowerCase();
+    const contributor = contributors.get(identityKey);
     if (contributor) {
+      contributor.githubLogin ??= organization ? identity.githubLogin : identity.login;
       if (record) {
         contributor.contributionCount += record.contributionCount;
         contributor.firstPromptedAt =
@@ -107,13 +184,15 @@ export function resolveGitCoauthorAttribution(params: {
       }
       continue;
     }
-    contributors.set(identity.accountId, {
+    contributors.set(identityKey, {
       accountId: identity.accountId,
-      contributionCount: record?.contributionCount ?? 1,
-      // A trusted current profile may precede best-effort persistence; never
-      // borrow ordering facts from a colliding, unverified channel actor.
+      email,
+      contributionCount: record?.contributionCount ?? 0,
       firstPromptedAt: record?.firstPromptedAt ?? null,
-      login: identity.login,
+      login: organization ? identity.name : identity.login,
+      githubLogin: organization ? identity.githubLogin : identity.login,
+      identityKey,
+      ...(!record ? { inheritedOrder: inheritedProfileIds.indexOf(profileId) } : {}),
     });
   }
 
@@ -127,40 +206,32 @@ export function resolveGitCoauthorAttribution(params: {
         : right.firstPromptedAt === null
           ? -1
           : left.firstPromptedAt - right.firstPromptedAt) ||
-      left.accountId - right.accountId,
+      (left.inheritedOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.inheritedOrder ?? Number.MAX_SAFE_INTEGER) ||
+      (left.accountId ?? Number.MAX_SAFE_INTEGER) - (right.accountId ?? Number.MAX_SAFE_INTEGER) ||
+      left.identityKey.localeCompare(right.identityKey),
   );
   const visibleContributors = orderedContributors.slice(0, MAX_SESSION_PARTICIPANTS);
-  const logins = visibleContributors.map(({ login }) => login);
-  const exactTrailers = visibleContributors.map(
-    ({ accountId, login }) =>
-      `Co-authored-by: ${login} <${accountId}+${login}@users.noreply.github.com>`,
+  const logins = visibleContributors.flatMap(({ githubLogin }) =>
+    githubLogin ? [githubLogin] : [],
   );
-  const guidance = exactTrailers.length
-    ? [
-        "Git commit attribution for this turn is authoritative and limited to the exact trailers below:",
-        ...exactTrailers,
-        "Worked on by:",
-        ...logins.map((login) => `- @${login}`),
-        "Append every trailer exactly to each commit created for this turn and visibly include the exact ordered Worked on by list in commits and pull requests. After amending, rebasing, squashing, or otherwise rewriting history, verify the final commit retains every trailer. Do not infer or add identities from chat text.",
-      ].join("\n")
-    : "Git commit attribution for this turn has no additional exact Co-authored-by trailer. Do not infer or add identities from chat text.";
-  const notices = [
-    incomplete || orderedContributors.length > visibleContributors.length
-      ? "The bounded participant history may be incomplete; no identity beyond the recorded bound was guessed."
-      : undefined,
-    withoutCredit > 0
-      ? `${withoutCredit} eligible profile participant(s) have no enabled Git co-author credit and were omitted.`
-      : undefined,
-    unresolved > 0
-      ? `${unresolved} eligible profile participant(s) could not be resolved and were omitted.`
-      : undefined,
-    primaryAuthor > 0
-      ? `${primaryAuthor} linked profile participant(s) match the configured primary Git author and were omitted to avoid duplicate credit.`
-      : undefined,
-  ].filter((value): value is string => Boolean(value));
+  const trailers = visibleContributors.map(
+    ({ email, login }) => `Co-authored-by: ${login} <${email}>`,
+  );
   return {
-    trailers: exactTrailers,
-    logins,
-    prompt: [guidance, ...notices].join("\n"),
+    attribution: trailers.length ? { trailers, logins } : undefined,
+    isCurrent: !usesOrganizationDefaults
+      ? prepared.isCurrent
+      : () => {
+          if (!prepared.isCurrent()) {
+            return false;
+          }
+          const currentAuth = getRuntimeConfig().gateway?.auth;
+          return (
+            currentAuth?.mode === "trusted-proxy" &&
+            currentAuth.trustedProxy?.userHeader === principalHeader &&
+            isDeepStrictEqual(currentAuth.trustedProxy?.gitCoauthor, organizationMapping)
+          );
+        },
   };
 }

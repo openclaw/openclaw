@@ -1,4 +1,3 @@
-// Resolves human-readable labels for paired channel identities.
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 

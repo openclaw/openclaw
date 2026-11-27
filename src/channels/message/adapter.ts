@@ -1,15 +1,11 @@
-/**
- * Channel message adapter definition helper.
- *
- * Supplies manual receive acknowledgement defaults while preserving adapter-specific types.
- */
+import type { AnyChannelPlugin } from "../plugins/types.plugin.js";
 import type {
   ChannelMessageAdapter,
   ChannelMessageAdapterShape,
   ChannelMessageReceiveAdapterShape,
 } from "./types.js";
 
-const defaultManualReceiveAdapter = {
+export const defaultManualReceiveAdapter = {
   defaultAckPolicy: "manual",
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;
@@ -29,4 +25,13 @@ export function defineChannelMessageAdapter<const TAdapter extends ChannelMessag
     ...adapter,
     receive: adapter.receive ?? defaultManualReceiveAdapter,
   } as ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>>;
+}
+
+/** The outbound execution surfaces that can carry a text payload. */
+export function hasChannelMessageSender(plugin: AnyChannelPlugin | undefined): boolean {
+  return Boolean(
+    plugin?.outbound?.sendText ||
+    plugin?.outbound?.deliveryMode === "gateway" ||
+    plugin?.message?.send?.text,
+  );
 }

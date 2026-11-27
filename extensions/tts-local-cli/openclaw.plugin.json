@@ -1,5 +1,6 @@
 {
   "id": "tts-local-cli",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

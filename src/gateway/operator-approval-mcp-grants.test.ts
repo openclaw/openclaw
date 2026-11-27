@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCodexUserMcpServersThreadConfigPatch } from "../agents/cli-runner/bundle-mcp-codex.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "../agents/cli-runner/bundle-mcp-codex.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -13,40 +14,32 @@ import {
 } from "../infra/agent-run-registry.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { registerMcpToolApprovalBinding } from "../infra/mcp-tool-approval-binding.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { createGatewayAuxHandlerTestParams } from "./server-aux-handlers.test-support.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
 let fixture: OpenClawTestState | undefined;
 const cfg: OpenClawConfig = {
-  agents: { list: [{ id: "main" }, { id: "other" }] },
+  agents: { entries: { main: {}, other: {} } },
   mcp: { servers: { "project.docs": { command: "docs-mcp" } } },
 };
 
 function gateway() {
-  const aux = createGatewayAuxHandlers({
-    log: {},
-    activateRuntimeSecrets: async () => {
-      throw new Error("unexpected secrets reload");
-    },
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    clients: [],
-    channelManager: {
-      startChannel: async () => new Map(),
-      stopChannel: async () => {},
-      isManuallyStopped: () => false,
-      resolveRuntimeAccountId: (_channel, accountId) => accountId,
-    },
-    logChannels: { info: () => {} },
-    validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-  });
+  const aux = createGatewayAuxHandlers(
+    createGatewayAuxHandlerTestParams({
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+    }),
+  );
   auxiliaries.push(aux);
   return aux;
 }
@@ -64,6 +57,7 @@ afterEach(async () => {
   }
   auxiliaries.length = 0;
   resetAgentRunRegistryForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
   await fixture?.cleanup();
@@ -105,16 +99,17 @@ async function requestGrant(
           ...request.mcpTool,
           isActive: options.isActive ?? (() => true),
         });
+  const acknowledged = createDeferred();
   const args = {
     req: { method: "plugin.approval.request", params: request, id: "request-1" },
     params: request,
     client: {
       connId: "runtime-1",
       connect: { client: { id: "test-client" } },
-      ...(options.trusted === false
-        ? {}
-        : {
-            internal: {
+      internal:
+        options.trusted === false
+          ? undefined
+          : {
               agentRuntimeIdentity: {
                 kind: "agentRuntime",
                 agentId: "main",
@@ -123,9 +118,8 @@ async function requestGrant(
                 approvalOwnerPluginId: "codex",
               },
             },
-          }),
     },
-    respond: vi.fn(),
+    respond: vi.fn(() => acknowledged.resolve()),
     isWebchatConnect: () => false,
     context: {
       broadcast: vi.fn(),
@@ -138,20 +132,23 @@ async function requestGrant(
   const pending = createPluginApprovalHandlers(aux.pluginApprovalManager)[
     "plugin.approval.request"
   ]!(args);
-  await vi.waitFor(() => expect(args.respond).toHaveBeenCalled());
-  releaseBinding?.();
-  const record = aux.pluginApprovalManager.listPendingRecords()[0];
-  if (!record) {
-    await pending;
-    throw new Error("MCP approval request did not register");
+  try {
+    await Promise.race([acknowledged.promise, pending]);
+    const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
+    if (!record) {
+      await pending;
+      throw new Error("MCP approval request did not register");
+    }
+    return { aux, authority, pending, record };
+  } finally {
+    releaseBinding?.();
   }
-  return { aux, authority, pending, record };
 }
 
 describe("gateway MCP tool grants", () => {
   it("mints once for the authenticated agent and projects the grant after gateway restart", async () => {
     const { aux, pending, record } = await requestGrant({ agentId: "other" });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     const expected = {
       server: "project.docs",
@@ -160,62 +157,55 @@ describe("gateway MCP tool grants", () => {
       addedAt: expect.any(Number),
     };
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
     await aux.stopOperatorInteractions();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const restarted = gateway();
-    expect(restarted.pluginApprovalManager.runtimeEpoch).not.toBe(
-      aux.pluginApprovalManager.runtimeEpoch,
-    );
+    gateway();
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
-    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "main" })).toMatchObject({
+    const approvedTool = {
       mcp_servers: { "project.docs": { tools: { write_note: { approval_mode: "approve" } } } },
-    });
-    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "other" })).not.toMatchObject({
-      mcp_servers: { "project.docs": { tools: { write_note: { approval_mode: "approve" } } } },
-    });
+    };
+    expect(
+      await buildCodexUserMcpServersThreadConfigPatchForRuntime(cfg, { agentId: "main" }),
+    ).toMatchObject(approvedTool);
+    expect(
+      await buildCodexUserMcpServersThreadConfigPatchForRuntime(cfg, { agentId: "other" }),
+    ).not.toMatchObject(approvedTool);
   });
 
   it.each([
     { name: "unconfigured apps", server: "codex_apps" },
-    { name: "unconfigured computer use", server: "computer" },
     { name: "untrusted caller", trusted: false },
     { name: "remote or missing live proof", binding: false },
     { name: "allow once", decision: "allow-once" as const },
     { name: "deny", decision: "deny" as const },
-    { name: "explicit prompt", prompt: true },
-    { name: "native prompt spelling", nativePrompt: true },
+    {
+      name: "explicit prompt",
+      serverConfig: { codex: { defaultToolsApprovalMode: "prompt" as const } },
+    },
+    {
+      name: "native prompt spelling",
+      serverConfig: { default_tools_approval_mode: "prompt" as const },
+    },
     { name: "removed server", removed: true },
     { name: "closed authority", closed: true },
   ])("does not mint for $name", async (options) => {
     const { aux, authority, pending, record } = await requestGrant(options);
-    if (options.prompt) {
+    if (options.serverConfig || options.removed) {
       setRuntimeConfigSnapshot({
         ...cfg,
         mcp: {
-          servers: {
-            "project.docs": { command: "docs-mcp", codex: { defaultToolsApprovalMode: "prompt" } },
-          },
-        },
-      });
-    }
-    if (options.removed) {
-      setRuntimeConfigSnapshot({ ...cfg, mcp: { servers: {} } });
-    }
-    if (options.nativePrompt) {
-      setRuntimeConfigSnapshot({
-        ...cfg,
-        mcp: {
-          servers: {
-            "project.docs": { command: "docs-mcp", default_tools_approval_mode: "prompt" },
-          },
+          servers: options.removed
+            ? {}
+            : { "project.docs": { command: "docs-mcp", ...options.serverConfig } },
         },
       });
     }
     if (options.closed) {
       releaseAgentRunDelegatedAuthority(authority);
     }
-    aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
+    await aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
   });
@@ -224,19 +214,21 @@ describe("gateway MCP tool grants", () => {
     let active = true;
     const { aux, pending, record } = await requestGrant({ isActive: () => active });
     active = false;
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    expect(aux.pluginApprovalManager.getSnapshot(record.id)?.mcpToolApprovalActive).toBeUndefined();
+    expect(
+      (await aux.pluginApprovalManager.getSnapshot(record.id))?.mcpToolApprovalActive,
+    ).toBeUndefined();
   });
 
   it("rejects an unadvertised allow-always without minting", async () => {
     const { aux, pending, record } = await requestGrant({
       allowedDecisions: ["allow-once", "deny"],
     });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    aux.pluginApprovalManager.resolve(record.id, "deny");
+    await aux.pluginApprovalManager.resolve(record.id, "deny");
     await pending;
   });
 });

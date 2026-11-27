@@ -113,6 +113,14 @@ enum ChatWorkingDurationFormatter {
         return parts.joined(separator: " ")
     }
 
+    /// A completed run's elapsed time, or nil when it has none: two rounded units, and
+    /// milliseconds below one second (web src/infra/format-time/format-duration-internal.ts:27-37).
+    static func completed(milliseconds: Double) -> String? {
+        guard milliseconds.isFinite, milliseconds > 0 else { return nil }
+        let rounded = milliseconds.rounded()
+        return rounded < 1000 ? "\(Int(rounded))ms" : self.compact(milliseconds: milliseconds)
+    }
+
     static func full(milliseconds: Double, locale: Locale = .current) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.day, .hour, .minute, .second]
@@ -204,27 +212,21 @@ struct ChatTurnRecapSessionRow: Equatable, Sendable {
     }
 }
 
-/// Watches the turn whose working indicator was visible. Most anomalous
-/// interleavings fail quiet; without a row run ID, an unrelated completion
-/// inside the settle window remains an accepted cosmetic attribution risk.
+/// Recap attribution is best effort without a per-run row ID: missing initial
+/// rows or late unrelated completions can supply the next footer.
 struct ChatTurnRecapResolver {
     private struct Watch {
         var watching: Bool
-        var baselineKnown: Bool
-        var baselineEndedAt: Double?
-        var absorbedTerminal: Bool
-        var settleStartedAt: Date?
+        let baselineEndedAt: Double?
         var settled: ChatTurnRecap?
     }
 
-    private static let settleWindow: TimeInterval = 30
     private var watches: [String: Watch] = [:]
 
     mutating func resolve(
         sessionKey: String,
         indicatorVisible: Bool,
-        row: ChatTurnRecapSessionRow?,
-        now: Date = Date()) -> ChatTurnRecap?
+        row: ChatTurnRecapSessionRow?) -> ChatTurnRecap?
     {
         var watch = self.watches[sessionKey]
         let rowEndedAt = row?.endedAt
@@ -233,19 +235,8 @@ struct ChatTurnRecapResolver {
             if watch == nil || watch?.watching == false {
                 watch = Watch(
                     watching: true,
-                    baselineKnown: row != nil,
                     baselineEndedAt: rowEndedAt,
-                    absorbedTerminal: false,
-                    settleStartedAt: nil,
                     settled: nil)
-            } else if watch?.baselineKnown == false {
-                if row != nil {
-                    watch?.baselineKnown = true
-                    watch?.baselineEndedAt = rowEndedAt
-                }
-            } else if let rowEndedAt, rowEndedAt != watch?.baselineEndedAt {
-                watch?.baselineEndedAt = rowEndedAt
-                watch?.absorbedTerminal = true
             }
             self.watches[sessionKey] = watch
             return nil
@@ -254,22 +245,7 @@ struct ChatTurnRecapResolver {
         guard var watch else { return nil }
         watch.watching = false
         if let settled = watch.settled {
-            self.watches[sessionKey] = watch
             return settled
-        }
-        if watch.absorbedTerminal || !watch.baselineKnown {
-            // Without an attributable baseline, later terminal rows could belong
-            // to background work, so consume this watch unresolved.
-            self.watches[sessionKey] = nil
-            return nil
-        }
-        if let settleStartedAt = watch.settleStartedAt {
-            if now.timeIntervalSince(settleStartedAt) > Self.settleWindow {
-                self.watches[sessionKey] = nil
-                return nil
-            }
-        } else {
-            watch.settleStartedAt = now
         }
 
         let isStale: Bool = if let rowEndedAt, let baselineEndedAt = watch.baselineEndedAt {

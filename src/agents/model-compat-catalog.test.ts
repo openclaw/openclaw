@@ -26,6 +26,17 @@ describe("catalog-owned model compat", () => {
     ).toEqual(catalogCompat);
   });
 
+  it("keeps thinking-profile settings config states on the catalog route", () => {
+    expect(
+      resolveCatalogOwnedModelCompat({
+        catalogRoute,
+        catalogCompat: { ...catalogCompat, defaultThinkingLevel: "high", adaptiveThinking: true },
+        configuredRoute: catalogRoute,
+        configuredCompat: { defaultThinkingLevel: "low" },
+      }),
+    ).toEqual({ ...catalogCompat, defaultThinkingLevel: "low", adaptiveThinking: true });
+  });
+
   it("uses configured capabilities only when config selects a custom route", () => {
     const configuredCompat = { supportsTools: false };
 
@@ -62,5 +73,15 @@ describe("catalog-owned model compat", () => {
 
     expect(resolveUniqueCatalogModelRoute([routeA, routeB], {})).toBeUndefined();
     expect(resolveUniqueCatalogModelRoute([routeA, routeB], routeA)).toBe(routeA);
+    const anthropicRoute = {
+      api: "anthropic-messages",
+      baseUrl: "https://route-a.example.test",
+    };
+    expect(
+      resolveUniqueCatalogModelRoute(
+        [anthropicRoute, { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1` }],
+        anthropicRoute,
+      ),
+    ).toBeUndefined();
   });
 });

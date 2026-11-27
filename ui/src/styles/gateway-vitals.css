@@ -1,0 +1,227 @@
+.gateway-cpu-tooltip {
+  --cpu-main: var(--accent-2);
+  --cpu-workers: var(--info);
+  --cpu-other: var(--muted);
+  --openclaw-tooltip-max-width: min(300px, calc(100vw - 16px));
+  --openclaw-tooltip-padding: 12px;
+}
+
+.gateway-cpu-trigger {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: start;
+  font: inherit;
+}
+
+.gateway-cpu-trigger .gateway-vital {
+  height: 100%;
+}
+
+.gateway-cpu-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.gateway-cpu-detail {
+  min-width: min(240px, calc(100vw - 48px));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.gateway-cpu-detail dl {
+  margin: 8px 0;
+}
+
+.gateway-cpu-detail dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 3px;
+}
+
+.gateway-cpu-detail dd {
+  margin: 0;
+  font-family: var(--mono);
+}
+
+.gateway-cpu-detail__total {
+  border-bottom: 1px solid var(--border);
+}
+
+.gateway-cpu-detail__host {
+  border-top: 1px solid var(--border);
+  margin-top: 3px;
+}
+
+.gateway-cpu-detail__thread {
+  padding-left: 8px;
+}
+
+.gateway-cpu-key {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-inline-end: 6px;
+  border-radius: 2px;
+}
+
+.gateway-cpu-key--main {
+  background: var(--cpu-main);
+}
+
+.gateway-cpu-key--workers {
+  background: var(--cpu-workers);
+}
+
+.gateway-cpu-key--other {
+  background: var(--cpu-other);
+}
+
+.sparkline-tile__secondary {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.sparkline-tile__stack {
+  opacity: 0.8;
+}
+
+.gateway-vital--cpu .sparkline-tile__chart svg {
+  height: 28px;
+}
+
+.gateway-vitals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.gateway-vital {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px 10px 0;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* currentColor drives every chart part; degraded flips one token below. */
+  color: var(--accent-2);
+}
+
+.gateway-vital[data-degraded] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.sparkline-tile__label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.gateway-vital--disk .sparkline-tile__head {
+  display: grid;
+  gap: 2px;
+}
+
+.gateway-vital--disk .sparkline-tile__label {
+  letter-spacing: normal;
+  white-space: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.sparkline-tile__sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.sparkline-tile__value {
+  margin: 3px 0 2px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.sparkline-tile__age {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sparkline-tile__chart {
+  position: relative;
+  margin: auto -10px 0;
+}
+
+.sparkline-tile__chart svg {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+.sparkline-tile__chart polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 45%, transparent));
+}
+
+.sparkline-tile__hairline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, currentColor 40%, transparent);
+  pointer-events: none;
+}
+
+.sparkline-tile__dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sparkline-tile__dot--now {
+  box-shadow: 0 0 6px 1px color-mix(in srgb, currentColor 60%, transparent);
+  animation: sparkline-tile-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sparkline-tile__dot--now {
+    animation: none;
+  }
+}
+
+@keyframes sparkline-tile-pulse {
+  50% {
+    box-shadow: 0 0 2px 0 color-mix(in srgb, currentColor 30%, transparent);
+  }
+}
+
+@media (max-width: 560px) {
+  .gateway-vitals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

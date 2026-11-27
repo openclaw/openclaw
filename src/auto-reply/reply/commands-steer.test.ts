@@ -1,14 +1,19 @@
-// Tests /steer target capture, prepared-path continuation, and visible fallback.
+// Tests explicit continuation commands, target capture, and prepared-path handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ReplyBackendQueueMessageOptions,
+  ReplyOperation,
+} from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
+import { handleFollowupCommand } from "./commands-followup.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
-import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -27,10 +32,9 @@ function buildParams(commandBody: string) {
   return buildCommandTestParams(commandBody, baseCfg);
 }
 
-function beginActiveOperation(
+async function beginActiveOperation(
   sessionKey: string,
   sessionId = "session-active",
-  taskSuggestionDeliveryMode?: "gateway",
   authorityRun = createMockFollowupRun({ run: { sessionId, sessionKey } }),
 ) {
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
@@ -38,13 +42,12 @@ function beginActiveOperation(
     provider: authorityRun.run.provider,
     model: authorityRun.run.model,
   };
-  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(authorityRun));
-  const toolAuthorityFingerprint = operation.bindToolAuthorityRoute(authorityRoute);
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(authorityRun));
+  const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(authorityRoute);
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
     cancel: vi.fn(),
-    taskSuggestionDeliveryMode,
     messageInjection: { isAvailable: () => true, queueMessage },
   });
   operations.push(operation);
@@ -101,12 +104,12 @@ describe("handleSteerCommand", () => {
   });
 
   it("routes an active /steer through the prepared reply path without a premature ack", async () => {
-    const params = buildParams("/steer keep going");
+    const message = "stop the deploy\nand revert the migration first";
+    const params = buildParams(`/steer ${message}`);
     params.opts = { toolsAllow: ["read"] };
-    const { toolAuthorityFingerprint } = beginActiveOperation(
+    const { toolAuthorityFingerprint } = await beginActiveOperation(
       "agent:main:main",
       "session-active",
-      undefined,
       createCommandAuthorityRun(params),
     );
 
@@ -114,47 +117,16 @@ describe("handleSteerCommand", () => {
 
     expect(toolAuthorityFingerprint).toEqual(expect.any(String));
     expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(params.ctx.Body).toBe(message);
+    expect(params.ctx.BodyForAgent).toBe(message);
+    expect(params.command.commandBodyNormalized).toBe(message);
     // Injection now happens only after the normal path has prepared durable
     // transcript, identity, media, cancellation, and adoption ownership.
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("defers tool-authority admission to the prepared steer path", async () => {
-    const activeParams = buildParams("/steer keep going");
-    activeParams.opts = { toolsAllow: ["exec"] };
-    beginActiveOperation(
-      "agent:main:main",
-      "session-active",
-      undefined,
-      createCommandAuthorityRun(activeParams),
-    );
-    const params = buildParams("/steer keep going");
-    params.opts = { toolsAllow: ["read"] };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("keeps initiating surface options for prepared steering", async () => {
-    beginActiveOperation("agent:main:main", "session-active", "gateway");
-    const params = buildParams("/steer keep going");
-    params.opts = { taskSuggestionDeliveryMode: "gateway" };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.opts.taskSuggestionDeliveryMode).toBe("gateway");
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
   it("prefers the native command target over the slash-command source", async () => {
-    beginActiveOperation("agent:main:discord:direct:target", "session-target");
+    await beginActiveOperation("agent:main:discord:direct:target", "session-target");
     const params = buildParams("/steer check the target");
     params.ctx.CommandSource = "native";
     params.ctx.CommandTargetSessionKey = "agent:main:discord:direct:target";
@@ -168,7 +140,7 @@ describe("handleSteerCommand", () => {
   });
 
   it("maps a text slash source lane to its active direct conversation", async () => {
-    beginActiveOperation("agent:main:telegram:direct:123", "session-direct-active");
+    await beginActiveOperation("agent:main:telegram:direct:123", "session-direct-active");
     const params = buildParams("/steer use the active direct lane");
     params.sessionKey = "agent:main:telegram:slash:123";
 
@@ -223,16 +195,47 @@ describe("handleSteerCommand", () => {
     expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(queueMessage).not.toHaveBeenCalled();
   });
+});
 
-  it("does not contact the backend before prepared admission", async () => {
-    beginActiveOperation("agent:main:main");
-    const params = buildParams("/steer keep going");
+describe("handleFollowupCommand", () => {
+  it.each(["text", "native"] as const)(
+    "preserves authorized %s intent while forwarding only the message without an early ack",
+    async (source) => {
+      const message = "review the result\n\n    keep the formatting";
+      const params = buildParams(`/followup ${message}`);
+      params.ctx.CommandSource = source;
+      params.rootCtx = { ...params.ctx };
+      params.sessionEntry = { sessionId: "session-followup", updatedAt: 1, queueMode: "collect" };
 
-    const result = await handleSteerCommand(params, true);
+      expect(await handleFollowupCommand(params, true)).toEqual({
+        shouldContinue: true,
+        queueModeOverride: "followup",
+      });
+      for (const ctx of [params.ctx, params.rootCtx]) {
+        expect(ctx.Body).toBe(message);
+        expect(ctx.BodyForAgent).toBe(message);
+        expect(isExplicitFollowupCommandTurn(ctx)).toBe(true);
+        expect(ctx.CommandTurn).toMatchObject({
+          source,
+          authorized: true,
+          commandName: "followup",
+        });
+      }
+      expect(params.command.commandBodyNormalized).toBe(message);
+      expect(params.sessionEntry.queueMode).toBe("collect");
+    },
+  );
 
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(queueMessage).not.toHaveBeenCalled();
+  it("returns usage without dispatching an empty followup or accepting unauthorized input", async () => {
+    expect(await handleFollowupCommand(buildParams("/followup"), true)).toEqual({
+      shouldContinue: false,
+      reply: { text: "Usage: /followup <message>" },
+    });
+    const params = buildParams("/followup private instruction");
+    params.command.isAuthorizedSender = false;
+    params.ctx.CommandAuthorized = false;
+    expect(await handleFollowupCommand(params, true)).toEqual({ shouldContinue: false });
+    expect(isExplicitFollowupCommandTurn(params.ctx)).toBe(false);
+    expect(params.ctx.Body).toBe("/followup private instruction");
   });
 });

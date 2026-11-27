@@ -1,9 +1,15 @@
-// Resolves bundled plugin source metadata from package manifests.
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
-import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import {
+  isBundledPluginInsideDevSourceRoot,
+  resolveBundledPluginSourceRoot,
+} from "./dev-source-root.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export type BundledPluginSource = {
@@ -12,8 +18,43 @@ export type BundledPluginSource = {
   npmSpec?: string;
   version?: string;
   configSchema?: Record<string, unknown>;
+  contextEngineIds?: readonly string[];
   requiresConfig?: boolean;
 };
+
+/** Use loader precedence, including explicit paths, when deciding which registry installs are dormant. */
+export function resolveSourceCheckoutBundledPluginIds(params: {
+  config: OpenClawConfig;
+  installRecords: Record<string, PluginInstallRecord>;
+  env?: NodeJS.ProcessEnv;
+  bundledSources?: ReadonlyMap<string, BundledPluginSource>;
+}): ReadonlySet<string> {
+  const env = params.env ?? process.env;
+  if (!resolveBundledPluginSourceRoot(env)) {
+    return new Set();
+  }
+  const bundled = params.bundledSources ?? resolveBundledPluginSources({ env });
+  const sourceIds = new Set(
+    [...bundled]
+      .filter(([, source]) =>
+        isBundledPluginInsideDevSourceRoot({ rootDir: source.localPath, env }),
+      )
+      .map(([pluginId]) => pluginId),
+  );
+  if (sourceIds.size === 0) {
+    return sourceIds;
+  }
+  return new Set(
+    loadPluginManifestRegistryCore({ ...params, env })
+      .plugins.filter(
+        (plugin) =>
+          sourceIds.has(plugin.id) &&
+          plugin.origin === "bundled" &&
+          isBundledPluginInsideDevSourceRoot({ rootDir: plugin.rootDir, env }),
+      )
+      .map((plugin) => plugin.id),
+  );
+}
 
 type BundledPluginLookup =
   | { kind: "localPath"; value: string }
@@ -47,18 +88,17 @@ export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
   /** Use an explicit env when bundled roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
-  discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const snapshot = params.discovery ? undefined : getGatewayPluginMetadataSnapshot();
+  const snapshot = getGatewayPluginMetadataSnapshot();
   const sources = snapshot
     ? (snapshot.bundledManifestRegistry?.plugins ?? []).map((manifest) => ({
         candidate: manifest,
         manifest,
       }))
-    : (
-        params.discovery ??
-        discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env })
-      ).candidates.flatMap((candidate) => {
+    : discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }).candidates.flatMap((candidate) => {
         if (candidate.origin !== "bundled") {
           return [];
         }
@@ -88,6 +128,7 @@ export function resolveBundledPluginSources(params: {
       localPath: candidate.rootDir,
       npmSpec,
       version,
+      ...(manifest.contextEngineIds ? { contextEngineIds: manifest.contextEngineIds } : {}),
       ...(isRecord(manifest.configSchema) ? { configSchema: manifest.configSchema } : {}),
       requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.configSchema),
     });
@@ -128,13 +169,10 @@ export function findBundledPluginSource(params: {
 export function resolveBundledPluginInstallCommandHint(params: {
   pluginId: string;
   workspaceDir?: string;
-  /** Use an explicit env when bundled roots should resolve independently from process.env. */
-  env?: NodeJS.ProcessEnv;
 }): string | null {
   const bundledSource = findBundledPluginSource({
     lookup: { kind: "pluginId", value: params.pluginId },
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
   if (!bundledSource?.localPath) {
     return null;

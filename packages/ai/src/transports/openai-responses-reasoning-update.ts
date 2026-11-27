@@ -10,7 +10,7 @@ export type ResponsesConfigurationUpdate = {
   reasoning: { effort: string };
 };
 
-function isConfigurationUpdate(value: unknown): value is ResponsesConfigurationUpdate {
+export function isConfigurationUpdate(value: unknown): value is ResponsesConfigurationUpdate {
   return (
     isRecord(value) &&
     value.type === "configuration_update" &&
@@ -94,10 +94,14 @@ export function replayResponsesReasoningUpdates(
       // An update belongs before a new user turn, never retroactively before a tool result.
       return request;
     }
-    input.splice(nextUser, 0, {
-      type: "configuration_update",
-      reasoning: { effort: request.reasoning.effort },
-    });
+    input.splice(
+      nextUser,
+      0,
+      Object.freeze({
+        type: "configuration_update",
+        reasoning: Object.freeze({ effort: request.reasoning.effort }),
+      }),
+    );
   }
   if (input.length === request.input.length && activeEffort === request.reasoning.effort) {
     return request;

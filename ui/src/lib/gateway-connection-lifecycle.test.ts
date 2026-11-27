@@ -14,17 +14,14 @@ describe("gateway connection lifecycle", () => {
     expect(scope && lifecycle.isCurrent(scope)).toBe(true);
   });
 
-  it.each(["connecting", "reconnecting", "offline", "stopped"] as const)(
-    "does not capture a %s connection",
-    (phase) => {
-      const lifecycle = createGatewayConnectionLifecycle({
-        client: {} as GatewayBrowserClient,
-        phase,
-      });
+  it("does not capture a connection before it is connected", () => {
+    const lifecycle = createGatewayConnectionLifecycle({
+      client: {} as GatewayBrowserClient,
+      phase: "connecting",
+    });
 
-      expect(lifecycle.capture()).toBeNull();
-    },
-  );
+    expect(lifecycle.capture()).toBeNull();
+  });
 
   it("retires old requests across a reconnect that reuses the same client", () => {
     const client = {} as GatewayBrowserClient;

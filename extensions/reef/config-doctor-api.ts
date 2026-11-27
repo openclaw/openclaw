@@ -34,7 +34,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const reef = cfg.channels?.reef;
   let config = cfg;
   const changes: string[] = [];
-  if (isRecord(reef) && hasRetiredReefPolicyConfig(reef)) {
+  if (hasRetiredReefPolicyConfig(reef)) {
     const next = structuredClone(cfg);
     const nextReef = next.channels?.reef;
     if (isRecord(nextReef)) {

@@ -1,13 +1,22 @@
 // Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import type { TestHomeSelection } from "../../test/test-home-policy.mts";
+import { fileURLToPath } from "node:url";
+import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { relayChildStream } from "./ci-test-output.mts";
+import { signalExitCode } from "./managed-child-process.mts";
 import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
+import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
-import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
-import { spawnOwnedVitestProcess } from "./vitest-process.mts";
+import { resolveVitestNodeArgs } from "./vitest-node-args.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  vitestInfrastructureExitCode,
+} from "./vitest-outcome.mts";
+import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
+import { resolveVitestTestCommand } from "./vitest-test-runtime.mts";
+import { createVitestWorkerRun, type VitestWorkerRun } from "./vitest-worker-run.mts";
 
 export type VitestBatchRunParams = {
   args: string[];
@@ -16,7 +25,9 @@ export type VitestBatchRunParams = {
   // Owner-generated report configs retain their validated original selection.
   homeMode?: TestHomeSelection;
   targets: string[];
+  workerRun?: VitestWorkerRun;
   onComplete?: (outcome: VitestReportOutcome) => void;
+  evidenceLabel?: string;
 };
 
 const scriptFile = fileURLToPath(import.meta.url);
@@ -27,58 +38,126 @@ const repoRoot = path.resolve(scriptDir, "../..");
  * Runs one Vitest batch and forwards process-group cleanup signals.
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
-    const { child, completion } = spawnOwnedVitestProcess({
-      homeMode:
-        params.homeMode ??
-        resolveVitestHomeSelection(["--config", params.config, ...params.args, ...params.targets], {
-          cwd: repoRoot,
-          env: params.env,
-        }),
-      command: process.execPath,
-      args: [
-        ...resolveVitestNodeArgs(params.env),
-        resolveVitestCliEntry({ env: params.env }),
-        "run",
-        "--config",
-        params.config,
-        ...params.args,
-        ...params.targets,
-      ],
-      options: { cwd: repoRoot, env: params.env, stdio: "inherit" },
+  const env = params.env ?? process.env;
+  const homeMode =
+    params.homeMode ??
+    resolveVitestHomeSelection(["--config", params.config, ...params.args, ...params.targets], {
+      cwd: repoRoot,
+      env,
     });
+  assertTestHomeSelection(env, homeMode);
+  const testCommand = resolveVitestTestCommand(
+    [
+      ...resolveVitestNodeArgs(env),
+      resolveVitestCliEntry({ env }),
+      "run",
+      "--config",
+      params.config,
+      ...params.args,
+      ...params.targets,
+    ],
+    env,
+  );
+  const workers =
+    resolveExplicitVitestMode(["run", ...params.args]) === "watch"
+      ? undefined
+      : (params.workerRun ?? createVitestWorkerRun(env));
+  if (workers) {
+    const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+    testCommand.args.splice(
+      cliIndex,
+      0,
+      path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+      workers.descriptor.directory,
+      ...(workers.descriptor.preset && workers.descriptor.preset !== "full"
+        ? [`--worker-preset=${workers.descriptor.preset}`]
+        : []),
+    );
+  }
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+  };
+  // Artifact verification can outlive the child's signal handlers.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  let outcome: VitestReportOutcome = { code: VITEST_INFRASTRUCTURE_EXIT_CODE, signal: null };
+  try {
+    // Match project runs: native workers borrow this invocation's prepared source,
+    // rather than compiling the application independently inside every worker.
+    const { child, completion } = spawnOwnedVitestProcess({
+      homeMode,
+      ...testCommand,
+      options: {
+        cwd: repoRoot,
+        env: testCommand.envOverrides ? { ...env, ...testCommand.envOverrides } : env,
+        stdio: params.evidenceLabel
+          ? workers
+            ? ["inherit", "pipe", "pipe", "ipc"]
+            : ["inherit", "pipe", "pipe"]
+          : workers
+            ? ["inherit", "inherit", "inherit", "ipc"]
+            : "inherit",
+      },
+    });
+    const flushers = params.evidenceLabel
+      ? [child.stdout!, child.stderr!].map((stream) =>
+          relayChildStream(stream, params.evidenceLabel!, () => {}),
+        )
+      : [];
+    if (params.evidenceLabel) {
+      console.log(`[shard:${params.evidenceLabel}] [test] starting ${params.config}`);
+    }
     const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
     });
-    completion.finally(cleanup.teardown).then((result) => {
-      const { code, signal } = result;
-      const forwardedSignal = cleanup.getForwardedSignal();
-      if (params.onComplete) {
-        const outcome = { code: code ?? 1, signal: forwardedSignal ?? signal };
-        params.onComplete(outcome);
-        resolve(outcome.code);
-        return;
+    try {
+      const { code, signal, groupJoined } = await (workers
+        ? workers.borrow(child, completion)
+        : completion);
+      if (params.evidenceLabel && !groupJoined) {
+        throw new Error("Batch test descendant completion is unverified");
       }
-      if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
-        return;
+      interrupted ??= cleanup.getForwardedSignal() ?? signal ?? undefined;
+      outcome = {
+        code: interrupted ? signalExitCode(interrupted) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE),
+        signal: interrupted ?? null,
+      };
+    } finally {
+      for (const flush of flushers) {
+        flush();
       }
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
+      cleanup.teardown();
+    }
+  } catch (error) {
+    console.error(error);
+    outcome.code = vitestInfrastructureExitCode(outcome.code);
+  } finally {
+    try {
+      await (params.workerRun ? undefined : workers)
+        ?.dispose({ interrupted: Boolean(interrupted) })
+        .catch((error: unknown) => {
+          console.error(error);
+          outcome.code = vitestInfrastructureExitCode(outcome.code);
+        });
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (interrupted && !params.onComplete) {
+        await exitVitestBySignal(interrupted);
       }
-      resolve(code ?? 1);
-    }, reject);
-  });
-}
-
-/**
- * Checks whether a module URL is the current direct script entrypoint.
- */
-export function isDirectScriptRun(metaUrl: string): boolean {
-  const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-  return metaUrl === entryHref;
+    }
+  }
+  outcome.signal = interrupted ?? outcome.signal;
+  if (params.evidenceLabel && !outcome.signal && (outcome.code === 0 || outcome.code === 1)) {
+    const label = `[shard:${params.evidenceLabel}]`;
+    console.log(`${label} [test] ${outcome.code === 0 ? "passed" : "failed"} 1 Vitest shard`);
+    if (outcome.code === 1) {
+      console.log(`${label} [test] FAILED (exit 1)`);
+    }
+  }
+  params.onComplete?.(outcome);
+  return outcome.code;
 }

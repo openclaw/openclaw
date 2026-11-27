@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -24,6 +25,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -58,7 +60,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("gateway claw"), runtime.voiceWakeWords.value)
@@ -74,7 +76,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("openclaw", "claude", "computer"), runtime.voiceWakeWords.value)
@@ -198,6 +200,33 @@ class VoiceWakeRuntimeTest {
 
     assertTrue(readField<Boolean>(runtime, "lastVoiceWakeCapabilityEnabled"))
   }
+
+  @Test
+  @Config(sdk = [34])
+  fun permissionSurfaceRefreshUpdatesVoiceWakeAfterMicrophoneGrantAndRevoke() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime()
+      // Retire background collectors so only the permission callback can refresh this state.
+      readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin()
+      assertTrue(runtime.voiceWakeAvailable.value)
+      runtime.setVoiceWakeEnabled(true)
+      assertEquals("Microphone permission required", runtime.voiceWakeStatusText.value)
+
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      runtime.refreshNodePermissionSurface()
+
+      // No Gateway is connected, so permission recovery must still respect wake-word readiness.
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(runtime.voiceWakeIsListening.value)
+
+      shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+      runtime.refreshNodePermissionSurface()
+
+      assertEquals("Microphone permission required", runtime.voiceWakeStatusText.value)
+      assertTrue(runtime.voiceWakeEnabled.value)
+    }
 
   @Test
   fun cameraAudioOwnershipBlocksVoiceNoteUntilRelease() {

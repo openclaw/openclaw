@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -32,10 +32,10 @@ class ProviderModelCatalogRequestTest {
           .parseToJsonElement(
             """
             [
-              {"id":"missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
-              {"id":"failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
-              {"id":"cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
-              {"id":"future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
+              {"id":"missing","name":"Missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
+              {"id":"failed","name":"Failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
+              {"id":"cooling","name":"Cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
+              {"id":"future","name":"Future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
             ]
             """.trimIndent(),
           ).jsonArray,
@@ -56,7 +56,7 @@ class ProviderModelCatalogRequestTest {
       try {
         requestProviderModelConfig(agentId = "beta", refresh = true) { paramsJson ->
           requests += paramsJson
-          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
+          throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
       } catch (err: Throwable) {
         actual = err
@@ -72,7 +72,7 @@ class ProviderModelCatalogRequestTest {
   @Test
   fun preservesNonCompatibilityGatewayFailures() =
     runBlocking {
-      val expected = GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "gateway busy"))
+      val expected = GatewayRequestRejected(ErrorShape("UNAVAILABLE", "gateway busy"))
       var actual: Throwable? = null
 
       try {

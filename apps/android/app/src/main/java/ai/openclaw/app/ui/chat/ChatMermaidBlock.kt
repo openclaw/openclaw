@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -18,14 +19,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -91,18 +90,6 @@ internal data class ChatMermaidRequest(
       .put("theme", theme.payload())
 }
 
-private sealed interface MermaidBlockState {
-  data object Loading : MermaidBlockState
-
-  data class Rendered(
-    val image: ChatRichBlockImage,
-  ) : MermaidBlockState
-
-  data class Unavailable(
-    val retryable: Boolean,
-  ) : MermaidBlockState
-}
-
 @Composable
 internal fun ChatMermaidBlock(source: String) {
   val context = LocalContext.current
@@ -127,21 +114,8 @@ internal fun ChatMermaidBlock(source: String) {
   BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
     val widthPx = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
     val request = remember(source, widthPx, density.density, theme) { ChatMermaidRequest(source, widthPx, density.density, theme) }
-    var state by remember(request, retryGeneration) { mutableStateOf<MermaidBlockState>(MermaidBlockState.Loading) }
-    DisposableEffect(request, retryGeneration) {
-      val subscription =
-        ChatRichBlockRenderer.render(context, request) { result ->
-          state =
-            when (result) {
-              is ChatRichBlockResult.Success -> MermaidBlockState.Rendered(result.value)
-              ChatRichBlockResult.Failure -> MermaidBlockState.Unavailable(retryable = false)
-              ChatRichBlockResult.TransientFailure -> MermaidBlockState.Unavailable(retryable = true)
-            }
-        }
-      onDispose { subscription.cancel() }
-    }
-
-    val rendered = (state as? MermaidBlockState.Rendered)?.image
+    val state = rememberChatRichBlockRender(request, retryGeneration)
+    val rendered = (state as? ChatRichBlockResult.Success)?.value
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(8.dp),
@@ -155,6 +129,7 @@ internal fun ChatMermaidBlock(source: String) {
           }
 
           rendered != null -> {
+            val anchor = rememberChatReaderAnchor(request)
             Image(
               bitmap = rendered.bitmap.asImageBitmap(),
               contentDescription = nativeString("Mermaid diagram"),
@@ -163,7 +138,8 @@ internal fun ChatMermaidBlock(source: String) {
                 Modifier
                   .fillMaxWidth()
                   .clickable(role = Role.Button, onClickLabel = nativeString("Expand diagram")) { expanded = true }
-                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp),
+                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp)
+                  .then(anchor?.modifier ?: Modifier),
             )
           }
 
@@ -172,8 +148,8 @@ internal fun ChatMermaidBlock(source: String) {
               Text(
                 text =
                   when {
-                    state is MermaidBlockState.Loading -> nativeString("Rendering diagram…")
-                    (state as? MermaidBlockState.Unavailable)?.retryable == true -> nativeString("Diagram temporarily unavailable. Open Diagram options and choose Retry diagram. You can still read or copy its source.")
+                    state == null -> nativeString("Rendering diagram…")
+                    state == ChatRichBlockResult.TransientFailure -> nativeString("Diagram temporarily unavailable. Open Diagram options and choose Retry diagram. You can still read or copy its source.")
                     else -> nativeString("Diagram unavailable. Check the syntax or simplify the diagram. You can still read or copy its source.")
                   },
                 style = ClawTheme.type.caption,
@@ -192,7 +168,7 @@ internal fun ChatMermaidBlock(source: String) {
               IconButton(onClick = { menuExpanded = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Diagram options"), modifier = Modifier.size(20.dp), tint = colors.textMuted)
               }
-              DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+              AppDropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                 DropdownMenuItem(
                   text = { Text(if (showSource) nativeString("View diagram") else nativeString("View source")) },
                   onClick = {
@@ -208,7 +184,7 @@ internal fun ChatMermaidBlock(source: String) {
                     menuExpanded = false
                   },
                 )
-                if ((state as? MermaidBlockState.Unavailable)?.retryable == true) {
+                if (state == ChatRichBlockResult.TransientFailure) {
                   DropdownMenuItem(
                     text = { Text(nativeString("Retry diagram")) },
                     onClick = {

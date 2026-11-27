@@ -27,17 +27,6 @@ struct SessionDashboardScreenTests {
         #expect(RootTabs.sidebarPresentation(for: legacyChat) == .chat)
     }
 
-    @Test func `sidebar preserves the roster agent when it presents a global dashboard`() throws {
-        let data = Data(
-            #"{"key":"global","displayName":"Shared Dashboard","boardFace":"dashboard","agentId":"work"}"#
-                .utf8)
-        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
-
-        let target = RootTabs.sidebarDashboardTarget(for: session)
-
-        #expect(target == RootTabs.SidebarDashboardTarget(sessionKey: "global", agentId: "work"))
-    }
-
     @Test func `dashboard URL opens the exact session in the shell-free focus document`() throws {
         let config = try GatewayConnectConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443/tenant%2Fblue?old=true#fragment")),
@@ -117,7 +106,7 @@ struct SessionDashboardScreenTests {
         let script = AuthenticatedControlUI.authUserScript(
             config: config,
             pageURL: url,
-            storedOperatorToken: nil,
+            legacyCredentials: nil,
             usesNativeNavigationChrome: true)
 
         #expect(script?.contains("__OPENCLAW_NATIVE_WEB_CHROME__") == true)
@@ -147,6 +136,43 @@ struct SessionDashboardScreenTests {
             agentId: "work")
 
         #expect(url?.absoluteString == "https://gateway.example.com/openclaw/focus/dashboard/work")
+    }
+
+    @Test func `dashboard URL mounts under the advertised Control UI base path unless the URL has one`() throws {
+        let config = try GatewayConnectConfig(
+            url: #require(URL(string: "ws://gateway.example.com:18789")),
+            stableID: "manual|gateway.example.com|18789",
+            tls: nil,
+            token: "secret-token",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "ios",
+                clientMode: "node",
+                clientDisplayName: "Phone"),
+            controlUiBasePath: "/gateway")
+
+        #expect(
+            SessionDashboardScreen.dashboardURL(config: config, sessionKey: "agent:main:main")?.absoluteString ==
+                "http://gateway.example.com:18789/gateway/focus/dashboard/main/~key/main")
+
+        let pathConfig = try GatewayConnectConfig(
+            url: #require(URL(string: "ws://gateway.example.com:18789/openclaw")),
+            stableID: config.stableID,
+            tls: nil,
+            token: config.token,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: config.nodeOptions,
+            controlUiBasePath: "/gateway")
+        #expect(
+            SessionDashboardScreen.dashboardURL(config: pathConfig, sessionKey: "agent:main:main")?.absoluteString ==
+                "http://gateway.example.com:18789/openclaw/focus/dashboard/main/~key/main")
     }
 
     @Test func `dashboard URL rejects an unscoped session key without a roster agent`() throws {

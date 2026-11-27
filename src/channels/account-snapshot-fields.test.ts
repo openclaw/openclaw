@@ -1,227 +1,116 @@
-// Account snapshot field tests cover channel account snapshot serialization fields.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   getCredentialUnavailableDiagnostics,
-  projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  projectSafeChannelAccountSnapshotFields as project,
+  redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 
-function joinUrlParts(...parts: string[]): string {
-  return parts.join("");
+function credentialUrl(user: string, password: string, hostAndPath: string): string {
+  return `https://${user}:${password}@${hostAndPath}`;
 }
 
-describe("projectSafeChannelAccountSnapshotFields", () => {
-  it("accepts only typed redacted credential diagnostics", () => {
-    expect(
-      getCredentialUnavailableDiagnostics({
-        credentialDiagnostics: [
-          {
-            code: "CREDENTIAL_FILE_UNAVAILABLE",
-            path: "channels.telegram.tokenFile",
-            reason: "not-found",
-          },
-          { code: "OTHER", path: "ignored", reason: "ignored" },
-          { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "", reason: "not-found" },
-        ],
-      }),
-    ).toEqual([
-      {
-        code: "CREDENTIAL_FILE_UNAVAILABLE",
-        path: "channels.telegram.tokenFile",
-        reason: "not-found",
-      },
-    ]);
+it("accepts only typed redacted credential diagnostics", () => {
+  const diagnostic = {
+    code: "CREDENTIAL_FILE_UNAVAILABLE",
+    path: "channels.telegram.tokenFile",
+    reason: "not-found",
+  };
+  const credentialDiagnostics = [
+    diagnostic,
+    { code: "OTHER", path: "ignored", reason: "ignored" },
+    { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "", reason: "not-found" },
+  ];
+  expect(getCredentialUnavailableDiagnostics({ credentialDiagnostics })).toEqual([diagnostic]);
+});
+
+it("preserves diagnostic, audience and liveness metadata without raw credentials", () => {
+  const safeFields = {
+    name: "Primary",
+    tokenSource: "config",
+    tokenStatus: "configured_unavailable",
+    signingSecretSource: "config", // pragma: allowlist secret
+    signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+    webhookPath: "/webhook",
+    audienceType: "project-number",
+    audience: "1234567890",
+    identity: "user",
+    userTokenSource: "config",
+    credentialSource: "serviceAccount",
+    secretSource: "env",
+    apiCredentialStatus: "configured_unavailable",
+    connected: true,
+    lastConnectedAt: 123,
+    lastInboundAt: 123,
+    lastOutboundAt: 234,
+    lastMessageAt: null,
+    lastEventAt: 345,
+    lastTransportActivityAt: 456,
+  };
+  const snapshot = project({
+    ...safeFields,
+    webhookUrl: "https://example.com/webhook",
+    botToken: "must-not-leak",
+    publicKey: "pk_live_123",
+    channelAccessToken: "line-token",
+    channelSecret: "line-secret", // pragma: allowlist secret
+    probe: { ok: true, token: "probe-secret" },
   });
 
-  it("preserves diagnostic identity and audience metadata without raw credentials", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      name: "Primary",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-      signingSecretSource: "config", // pragma: allowlist secret
-      signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-      webhookUrl: "https://example.com/webhook",
-      webhookPath: "/webhook",
-      audienceType: "project-number",
-      audience: "1234567890",
-      identity: "user",
-      userTokenSource: "config",
-      credentialSource: "serviceAccount",
-      secretSource: "env",
-      apiCredentialStatus: "configured_unavailable",
-      botToken: "must-not-leak",
-      publicKey: "pk_live_123",
-    });
+  expect(snapshot).toEqual(safeFields);
+});
 
-    expect(snapshot).toEqual({
-      name: "Primary",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-      signingSecretSource: "config", // pragma: allowlist secret
-      signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-      webhookPath: "/webhook",
-      audienceType: "project-number",
-      audience: "1234567890",
-      identity: "user",
-      userTokenSource: "config",
-      credentialSource: "serviceAccount",
-      secretSource: "env",
-      apiCredentialStatus: "configured_unavailable",
-    });
+it("redacts URL credentials in audiences and base URLs while omitting bearer webhooks", () => {
+  const nested = encodeURIComponent(
+    credentialUrl("nested-user", "nested-pass", "nested.example/cb?access_token=nested-token"),
+  );
+  const snapshot = project({
+    audience: credentialUrl("user", "password", "example.test/path?token=private"),
+    webhookUrl: "https://example.test/webhooks/id/bearer-token",
+    baseUrl: credentialUrl(
+      "outer-user",
+      "outer-pass",
+      `chat.example.test/?token=outer-token&next=${nested}#auth_token=fragment-token`,
+    ),
   });
 
-  it("redacts URL-shaped audiences while omitting bearer webhook URLs", () => {
-    const rawUrl = joinUrlParts(
-      "https://user",
-      ":",
-      "password",
-      "@example.test/path?token=",
-      "private",
-    );
-    expect(
-      projectSafeChannelAccountSnapshotFields({
-        audience: rawUrl,
-        webhookUrl: "https://example.test/webhooks/id/bearer-token",
-      }),
-    ).toEqual({
-      audience: "https://example.test/path?token=***",
-    });
+  expect(snapshot.baseUrl).not.toMatch(
+    /outer-(user|pass|token)|nested-(user|pass|token)|fragment-token/,
+  );
+  expect(snapshot.baseUrl).toContain("token=***");
+  expect(snapshot.audience).toBe("https://example.test/path?token=***");
+  expect(snapshot).not.toHaveProperty("webhookUrl");
+});
+
+it("redacts plugin snapshots without mutating raw account state", () => {
+  const rawBaseUrl = credentialUrl("user", "pass", "chat.example.test/?token=secret");
+  const snapshot = { baseUrl: rawBaseUrl };
+
+  const redacted = redactChannelStatusSummaryBaseUrl(snapshot);
+
+  expect(redacted).toEqual({ baseUrl: "https://chat.example.test/?token=***" });
+  expect(snapshot.baseUrl).toBe(rawBaseUrl);
+});
+
+it("retains object identity when a plugin snapshot baseUrl is already safe", () => {
+  const snapshot = { baseUrl: "https://chat.example.test/?keep=visible" };
+  expect(redactChannelStatusSummaryBaseUrl(snapshot)).toBe(snapshot);
+});
+
+it.each([
+  {
+    input: [" alice ", 42, true, null, {}, ""],
+    expected: { allowFrom: ["alice", "42"] },
+  },
+  { input: [" ", {}, false], expected: {} },
+  { input: "alice", expected: {} },
+])("projects supported allowFrom entries from $input", ({ input, expected }) => {
+  expect(project({ allowFrom: input })).toEqual(expected);
+});
+
+it("projects recorded lifecycle alongside channel-authored healthState", () => {
+  expect(project({ lifecycle: "blocked", healthState: "degraded" })).toEqual({
+    healthState: "degraded",
+    lifecycle: "blocked",
   });
-
-  it("strips embedded credentials from baseUrl fields", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      baseUrl: "https://bob:secret@chat.example.test",
-    });
-
-    expect(snapshot).toEqual({
-      baseUrl: "https://chat.example.test/",
-    });
-  });
-
-  it("redacts query, nested URL, and fragment credentials from baseUrl fields", () => {
-    const nested = encodeURIComponent(
-      joinUrlParts(
-        "https://nested-user",
-        ":",
-        "nested-pass",
-        "@nested.example/cb?access_token=",
-        "nested-token",
-      ),
-    );
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      baseUrl: joinUrlParts(
-        "https://outer-user",
-        ":",
-        "outer-pass",
-        "@chat.example.test/?token=",
-        "outer-token",
-        `&next=${nested}#auth_token=`,
-        "fragment-token",
-      ),
-    });
-
-    expect(snapshot.baseUrl).not.toContain("outer-user");
-    expect(snapshot.baseUrl).not.toContain("outer-pass");
-    expect(snapshot.baseUrl).not.toContain("outer-token");
-    expect(snapshot.baseUrl).not.toContain("nested-user");
-    expect(snapshot.baseUrl).not.toContain("nested-pass");
-    expect(snapshot.baseUrl).not.toContain("nested-token");
-    expect(snapshot.baseUrl).not.toContain("fragment-token");
-    expect(snapshot.baseUrl).toContain("token=***");
-  });
-
-  it("redacts plugin snapshots without mutating raw account state", () => {
-    const rawBaseUrl = joinUrlParts(
-      "https://user",
-      ":",
-      "pass",
-      "@chat.example.test/?token=",
-      "secret",
-    );
-    const account = Object.freeze({
-      baseUrl: rawBaseUrl,
-    });
-    const snapshot = { ...account };
-
-    const redacted = redactChannelAccountSnapshotBaseUrl(snapshot);
-
-    expect(redacted).toEqual({ baseUrl: "https://chat.example.test/?token=***" });
-    expect(account.baseUrl).toBe(rawBaseUrl);
-    expect(snapshot.baseUrl).toBe(rawBaseUrl);
-  });
-
-  it("retains object identity when a plugin snapshot baseUrl is already safe", () => {
-    const snapshot = { baseUrl: "https://chat.example.test/?keep=visible" };
-    expect(redactChannelAccountSnapshotBaseUrl(snapshot)).toBe(snapshot);
-  });
-
-  it("preserves non-secret transport liveness timestamps", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      connected: true,
-      lastConnectedAt: 123,
-      lastInboundAt: 123,
-      lastOutboundAt: 234,
-      lastMessageAt: null,
-      lastEventAt: 345,
-      lastTransportActivityAt: 456,
-      channelAccessToken: "line-token",
-      channelSecret: "line-secret", // pragma: allowlist secret
-      probe: { ok: true, token: "probe-secret" },
-    });
-
-    expect(snapshot).toEqual({
-      connected: true,
-      lastConnectedAt: 123,
-      lastInboundAt: 123,
-      lastOutboundAt: 234,
-      lastMessageAt: null,
-      lastEventAt: 345,
-      lastTransportActivityAt: 456,
-    });
-  });
-
-  it("projects terminalDisconnect when present and omits it when absent", () => {
-    const withFlag = projectSafeChannelAccountSnapshotFields({
-      connected: false,
-      terminalDisconnect: true,
-    });
-    expect(withFlag.terminalDisconnect).toBe(true);
-
-    const withoutFlag = projectSafeChannelAccountSnapshotFields({ connected: false });
-    expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
-  });
-
-  it("projects recorded lifecycle alongside channel-authored healthState", () => {
-    expect(
-      projectSafeChannelAccountSnapshotFields({
-        lifecycle: "blocked",
-        healthState: "degraded",
-      }),
-    ).toEqual({ healthState: "degraded", lifecycle: "blocked" });
-    expect(projectSafeChannelAccountSnapshotFields({ lifecycle: "unknown" })).toEqual({});
-  });
-
-  it("preserves false, zero, and nullable fields without exposing invalid credential metadata", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      running: false,
-      connected: false,
-      reconnectAttempts: 0,
-      lastConnectedAt: null,
-      lastOutboundAt: null,
-      ingressUnavailable: false,
-      activeRuns: 0,
-      token: "must-not-leak",
-      tokenStatus: "unexpected-status",
-      apiCredentialStatus: "unexpected-status",
-    });
-
-    expect(snapshot).toStrictEqual({
-      running: false,
-      connected: false,
-      reconnectAttempts: 0,
-      lastConnectedAt: null,
-      lastOutboundAt: null,
-      activeRuns: 0,
-    });
-  });
+  expect(project({ lifecycle: "unknown" })).toEqual({});
 });

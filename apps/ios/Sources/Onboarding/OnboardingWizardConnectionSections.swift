@@ -61,24 +61,11 @@ struct OnboardingModeSelectionSections: View {
     }
 
     private var developerModeToggleRow: some View {
-        self.onboardingButtonToggle(
-            "Developer mode",
-            symbol: "wrench.and.screwdriver",
-            isOn: self.developerModeEnabled)
-    }
-
-    private func onboardingButtonToggle(
-        _ title: LocalizedStringKey,
-        symbol: String? = nil,
-        isOn: Binding<Bool>) -> some View
-    {
-        Toggle(isOn: isOn) {
+        Toggle(isOn: self.developerModeEnabled) {
             HStack(spacing: 12) {
-                if let symbol {
-                    OnboardingModeIcon(symbol: symbol, selected: false)
-                }
+                OnboardingModeIcon(symbol: "wrench.and.screwdriver", selected: false)
 
-                Text(title)
+                Text("Developer mode")
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.primary)
             }
@@ -88,7 +75,7 @@ struct OnboardingModeSelectionSections: View {
         .contentShape(Rectangle())
         .overlay {
             Button {
-                isOn.wrappedValue.toggle()
+                self.developerModeEnabled.wrappedValue.toggle()
             } label: {
                 Rectangle()
                     .fill(.clear)
@@ -191,6 +178,7 @@ struct OnboardingStagedGatewaySetupSection: View {
             Text("Setup Link")
                 .font(OpenClawType.footnoteSemiBold)
         } footer: {
+            // Localization: plaintext means unencrypted network transport with TLS off, not unformatted text.
             Text(self.link.tls
                 ? "Review this endpoint. Credentials are applied only after you tap Connect."
                 :

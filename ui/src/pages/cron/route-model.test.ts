@@ -1,8 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { cronRunEntryMatchesLink, resolveCronRouteData } from "./route-model.ts";
+import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
+import { resolveCronRouteData } from "./route-model.ts";
 
 describe("resolveCronRouteData", () => {
+  it("opens creation for ?new unless an exact job is linked", () => {
+    expect(resolveCronRouteData("?new")).toEqual({ jobId: null, runId: null, create: true });
+    expect(resolveCronRouteData("?new&job=chosen")).toEqual({ jobId: "chosen", runId: null });
+  });
+  it("opens activity for ?activity unless an exact job is linked", () => {
+    expect(resolveCronRouteData("?activity")).toEqual({ jobId: null, runId: null, activity: true });
+    expect(resolveCronRouteData("?activity&job=chosen")).toEqual({ jobId: "chosen", runId: null });
+  });
   it.each([
     { scenario: "an empty search", search: "", jobId: null, runId: null },
     { scenario: "a job only", search: "?job=job-1", jobId: "job-1", runId: null },
@@ -40,6 +49,7 @@ describe("cronRunEntryMatchesLink", () => {
   const entry = {
     jobId: "job-1",
     runId: "manual:job-1:1787732891668:1",
+    sessionId: "session-1",
     runAtMs: 1_787_732_891_692,
   };
 
@@ -49,6 +59,8 @@ describe("cronRunEntryMatchesLink", () => {
       linked: "manual:job-1:1787732891668:1",
       matches: true,
     },
+    { scenario: "the recorded session id", linked: "session-1", matches: true },
+    { scenario: "a different session id", linked: "session-2", matches: false },
     {
       scenario: "the execution id via the recorded run start",
       linked: "cron:job-1:1787732891692",

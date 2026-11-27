@@ -23,7 +23,9 @@ scenario:
     - test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
   execution:
     kind: script
-    parallelSafe: true
+    # This producer builds and drives heavyweight PTY runtimes; parallel peers
+    # can consume its per-test exit budget before the terminal settles.
+    parallelSafe: false
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     summary: Runs exact real-PTY TUI entrypoint assertions and authenticates their fresh Vitest results as QA evidence.
     timeoutMs: 300000

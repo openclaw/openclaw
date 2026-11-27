@@ -1,21 +1,19 @@
-export function raceNodeWorkerOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  const abortError = () =>
-    signal.reason instanceof Error ? signal.reason : new Error("node worker operation aborted");
-  if (signal.aborted) {
-    return Promise.reject(abortError());
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+
+export function raceNodeWorkerOperation<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+  messages: { aborted: string; failed?: string } = {
+    aborted: "node worker operation aborted",
+    failed: "node worker operation failed",
+  },
+): Promise<T> {
+  if (!signal) {
+    return operation;
   }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error("node worker operation failed"));
-      },
-    );
+  const abortError = () =>
+    signal.reason instanceof Error ? signal.reason : new Error(messages.aborted);
+  return racePromiseWithAbortSignal(operation, signal, abortError).catch((error: unknown) => {
+    throw error instanceof Error ? error : new Error(messages.failed ?? String(error));
   });
 }

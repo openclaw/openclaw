@@ -1,4 +1,4 @@
-// Chokidar forwards native watch failures and directory-scan errors through the same event.
+// Public SDK compatibility for callers receiving legacy native fs.watch errors.
 export function getFileWatchCapacityCode(
   error: unknown,
 ): "EMFILE" | "ENFILE" | "ENOSPC" | undefined {

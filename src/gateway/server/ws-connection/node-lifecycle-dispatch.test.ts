@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 describe("GatewayNodeLifecycleDispatchTracker", () => {
   it("drains every admitted node progress and terminal result", async () => {
     const tracker = new GatewayNodeLifecycleDispatchTracker();
     const events: string[] = [];
-    let releaseProgress: (() => void) | undefined;
-    const progressGate = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
+    const { promise: progressGate, resolve: releaseProgress } = createDeferred();
 
     const progress = tracker.dispatch("node.invoke.progress", async () => {
       events.push("progress-start");
@@ -30,10 +28,7 @@ describe("GatewayNodeLifecycleDispatchTracker", () => {
 
   it("does not queue unrelated methods and bounds a stuck lifecycle drain", async () => {
     const tracker = new GatewayNodeLifecycleDispatchTracker();
-    let releaseResult: (() => void) | undefined;
-    const resultGate = new Promise<void>((resolve) => {
-      releaseResult = resolve;
-    });
+    const { promise: resultGate, resolve: releaseResult } = createDeferred();
     const result = tracker.dispatch("node.invoke.result", async () => {
       await resultGate;
     });

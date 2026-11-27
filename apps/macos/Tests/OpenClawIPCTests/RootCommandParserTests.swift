@@ -2,25 +2,19 @@ import Testing
 @testable import OpenClawMacCLI
 
 struct RootCommandParserTests {
-    @Test func `parse root command returns nil for empty args`() {
-        #expect(parseRootCommand([]) == nil)
-    }
-
-    @Test func `parse root command splits command name and args`() throws {
-        let command = try #require(parseRootCommand(["connect", "--json", "--timeout", "3000"]))
-
-        #expect(command.name == "connect")
-        #expect(command.args == ["--json", "--timeout", "3000"])
+    @Test func `empty args resolve to app control`() {
+        #expect(resolveRootCommandAction([]) == .control([]))
     }
 
     @Test func `help aliases resolve to usage`() {
-        for args in [[], ["-h"], ["--help"], ["help"]] {
+        for args in [["-h"], ["--help"], ["help"]] {
             #expect(resolveRootCommandAction(args) == .usage)
         }
     }
 
     @Test func `known commands preserve trailing args`() {
-        #expect(resolveRootCommandAction(["connect", "--json"]) == .connect(["--json"]))
+        #expect(resolveRootCommandAction(["connect", "--json", "--timeout", "3000"])
+            == .connect(["--json", "--timeout", "3000"]))
         #expect(
             resolveRootCommandAction(["configure-remote", "--ssh-target", "alice@example.com"])
                 == .configureRemote(["--ssh-target", "alice@example.com"]))
