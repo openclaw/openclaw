@@ -211,36 +211,36 @@
   width: 100%;
   margin-block: 0 var(--space-2);
   accent-color: var(--accent);
-}
 
-/* The block bar already breaks the line when Markdown adds a hard break. */
-.session-progress-card__markdown progress + br {
-  display: none;
-}
-
-/* Unmeasured progress and forced colors keep the browser's native indicator. */
-@media (forced-colors: none) {
-  .session-progress-card__markdown progress[value] {
-    appearance: none;
-    height: var(--space-1);
-    overflow: hidden;
-    border: 0;
-    border-radius: var(--radius-full);
-    background: var(--border-strong);
+  /* The block bar already breaks the line when Markdown adds a hard break. */
+  & + br {
+    display: none;
   }
 
-  .session-progress-card__markdown progress[value]::-webkit-progress-bar {
-    background: transparent;
-  }
+  /* Unmeasured progress and forced colors keep the browser's native indicator. */
+  @media (forced-colors: none) {
+    &[value] {
+      appearance: none;
+      height: var(--space-1);
+      overflow: hidden;
+      border: 0;
+      border-radius: var(--radius-full);
+      background: var(--border-strong);
 
-  .session-progress-card__markdown progress[value]::-webkit-progress-value {
-    border-radius: var(--radius-full);
-    background: var(--accent);
-  }
+      &::-webkit-progress-bar {
+        background: transparent;
+      }
 
-  .session-progress-card__markdown progress[value]::-moz-progress-bar {
-    border-radius: var(--radius-full);
-    background: var(--accent);
+      &::-webkit-progress-value {
+        border-radius: var(--radius-full);
+        background: var(--accent);
+      }
+
+      &::-moz-progress-bar {
+        border-radius: var(--radius-full);
+        background: var(--accent);
+      }
+    }
   }
 }
 
