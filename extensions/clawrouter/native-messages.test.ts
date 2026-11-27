@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
@@ -65,6 +66,13 @@ function catalog() {
     ] satisfies [unknown],
   };
 }
+function accountCatalog() {
+  return {
+    ...catalog(),
+    scope: { authType: "proxy_key", credentialId: "fixture-profile" },
+    observedAt: new Date().toISOString(),
+  };
+}
 type Catalog = ReturnType<typeof catalog>;
 type Seen = { path: string; key: string | undefined; body?: unknown };
 const events = [
@@ -96,7 +104,9 @@ async function fixture(
     started: Promise<void>;
     closed: Promise<void>;
   }) => Promise<void>,
-  body: unknown = catalog(),
+  body:
+    | Record<string, unknown>
+    | ((request: IncomingMessage, response: ServerResponse) => unknown) = catalog(),
   modelId = selected,
   hold = false,
 ) {
@@ -116,7 +126,7 @@ async function fixture(
         });
         if (request.url === "/v1/catalog") {
           response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify(body));
+          response.end(JSON.stringify(typeof body === "function" ? body(request, response) : body));
         } else {
           response.setHeader("content-type", "text/event-stream");
           response.once("close", () => closed.resolve());
@@ -203,55 +213,28 @@ beforeEach(() => {
 it.each(["Accept, x-ClAwRoUtEr-ClIeNt", "*"])(
   "reads the ordinary Messages representation when the catalog varies by %s",
   async (vary) => {
-    const provider = await registerSingleProviderPlugin(plugin);
+    const body = accountCatalog();
     const clients: Array<string | string[] | undefined> = [];
-    await withServer(
-      (request, response) => {
-        const client = request.headers["x-clawrouter-client"];
-        clients.push(client);
-        response.setHeader("content-type", "application/json");
-        response.setHeader("vary", vary);
-        const body = catalog();
-        response.end(
-          JSON.stringify({
-            ...body,
-            observedAt: new Date().toISOString(),
-            scope: { authType: "proxy_key", credentialId: "fixture-profile" },
-            providers: client === "openclaw" ? [] : body.providers,
-          }),
-        );
-      },
-      async (origin) => {
-        const key = "synthetic-router-key";
-        const result = await provider.catalog?.run?.({
-          config: {
-            models: { providers: { clawrouter: { baseUrl: origin + "/v1", models: [] } } },
-          },
-          env: {},
-          resolveProviderAuth: () => ({
-            apiKey: key,
-            discoveryApiKey: key,
-            mode: "api_key",
-            source: "profile",
-          }),
-          resolveProviderApiKey: () => ({ apiKey: key }),
-        });
-        expect(result).toMatchObject({
+    await fixture(
+      async ({ discover }) => {
+        expect(await discover()).toMatchObject({
           provider: { models: [expect.objectContaining({ id: selected })] },
           outcomes: [{ status: "ready", capabilityModels: [] }],
         });
         expect(clients).toEqual(["openclaw", undefined]);
+      },
+      (request, response) => {
+        const client = request.headers["x-clawrouter-client"];
+        clients.push(client);
+        response.setHeader("vary", vary);
+        return client === "openclaw" ? { ...body, providers: [] } : body;
       },
     );
   },
 );
 
 it("observes the selected account on each discovery while reusing ordinary Messages rows", async () => {
-  const body = {
-    ...catalog(),
-    scope: { authType: "proxy_key", credentialId: "fixture-profile" },
-    observedAt: new Date().toISOString(),
-  };
+  const body = accountCatalog();
   await fixture(async ({ discover, prepare, seen }) => {
     expect(await discover()).toMatchObject({
       outcomes: [{ status: "ready", capabilityModels: [] }],

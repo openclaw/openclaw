@@ -337,10 +337,15 @@ it("checks admission again before inference and keeps a thrown authority termina
 
 it("checks Baseten admission at the catalog transport handoff", async () => {
   const baseUrl = "https://router.example/v1";
-  const model = {
-    ...context(baseUrl).model,
-    id: "baseten/decision-models/baseten-elephant-9b-latest",
-  };
+  const evaluateWithAdmission = (isAdmissible: DecisionProviderContextV2["isAdmissible"]) =>
+    evaluate(baseUrl, {
+      model: {
+        ...context(baseUrl).model,
+        id: "baseten/decision-models/baseten-elephant-9b-latest",
+      },
+      config: { models: { providers: { clawrouter: { baseUrl, models: [] } } } },
+      isAdmissible,
+    });
   const handedOff = vi.fn();
   using guard = vi
     .spyOn(providerHttp, "fetchWithTimeoutGuarded")
@@ -350,26 +355,17 @@ it("checks Baseten admission at the catalog transport handoff", async () => {
       throw new Error("unexpected handoff");
     });
   const admitted = vi.fn(() => false).mockReturnValueOnce(true);
-  await expect(
-    evaluate(baseUrl, {
-      config: { models: { providers: { clawrouter: { baseUrl, models: [] } } } },
-      model,
-      isAdmissible: admitted,
-    }),
-  ).resolves.toEqual({ status: "unavailable", reason: "transport" });
+  await expect(evaluateWithAdmission(admitted)).resolves.toEqual({
+    status: "unavailable",
+    reason: "transport",
+  });
   const terminal = new Error("fixture owner ended admission");
   const ended = vi
     .fn((): boolean => {
       throw terminal;
     })
     .mockReturnValueOnce(true);
-  await expect(
-    evaluate(baseUrl, {
-      config: { models: { providers: { clawrouter: { baseUrl, models: [] } } } },
-      model,
-      isAdmissible: ended,
-    }),
-  ).rejects.toBe(terminal);
+  await expect(evaluateWithAdmission(ended)).rejects.toBe(terminal);
   expect(guard).toHaveBeenCalledTimes(2);
   expect(handedOff).not.toHaveBeenCalled();
 });
@@ -377,37 +373,29 @@ it("checks Baseten admission at the catalog transport handoff", async () => {
 it("matches only effective Baseten credentials and excludes automatic protocol headers", () => {
   const baseUrl = "https://router.example/v1";
   const ctx = context(baseUrl);
-  const model = {
-    id: ctx.model.id,
-    name: ctx.model.name,
-    provider: "clawrouter",
-    api: ctx.model.api,
+  const { id, name, provider, api } = ctx.model;
+  const model = { id, name, provider, api, baseUrl };
+  const fixtureAuth = (value: string) => ({
+    mode: "header" as const,
+    headerName: "x-fixture-auth",
+    prefix: "Schema ",
+    value,
+  });
+  const clawrouter = {
+    models: [],
     baseUrl,
-  };
-  const config = {
-    models: {
-      providers: {
-        clawrouter: {
-          models: [],
-          baseUrl,
-          headers: { "x-fixture-model": "fixture-provider-value", Accept: "fixture-overridden" },
-          request: {
-            headers: { "x-fixture-request": "fixture-request-value" },
-            auth: {
-              mode: "header" as const,
-              headerName: "x-fixture-auth",
-              prefix: "Schema ",
-              value: "fixture-credential",
-            },
-          },
-        },
-      },
+    headers: { "x-fixture-model": "fixture-provider-value", Accept: "fixture-overridden" },
+    request: {
+      headers: { "x-fixture-request": "fixture-request-value" },
+      auth: fixtureAuth("fixture-credential"),
     },
   };
-  const match = resolveBasetenDecisionHttpContext(
-    { ...ctx, model, config },
-    "fixture-router-key",
-  ).reflectsCredential;
+  const matcherFor = (candidate: DecisionProviderContextV2["model"]) =>
+    resolveBasetenDecisionHttpContext(
+      { ...ctx, model: candidate, config: { models: { providers: { clawrouter } } } },
+      "fixture-router-key",
+    ).reflectsCredential;
+  const match = matcherFor(model);
   for (const value of [
     "fixture-provider-value",
     "fixture-request-value",
@@ -430,18 +418,10 @@ it("matches only effective Baseten credentials and excludes automatic protocol h
     },
     {
       allowPrivateNetwork: false,
-      auth: {
-        mode: "header",
-        headerName: "x-fixture-auth",
-        prefix: "Schema ",
-        value: "fixture-prepared-value",
-      },
+      auth: fixtureAuth("fixture-prepared-value"),
     },
   );
-  const effective = resolveBasetenDecisionHttpContext(
-    { ...ctx, config, model: prepared },
-    "fixture-router-key",
-  ).reflectsCredential;
+  const effective = matcherFor(prepared);
   expect(effective("fixture-model-value")).toBe(true);
   expect(effective("fixture-prepared-value")).toBe(true);
   for (const value of [

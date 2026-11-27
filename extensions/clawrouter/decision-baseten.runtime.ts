@@ -64,7 +64,7 @@ export function resolveBasetenDecisionHttpContext(
         tls: prepared.tls,
         allowPrivateNetwork: prepared.allowPrivateNetwork,
       }
-    : sanitizeConfiguredModelProviderRequest(provider?.request);
+    : provider?.request;
   const http = resolveClawRouterCapabilityHttpContext(
     {
       ...context.config,
@@ -93,7 +93,7 @@ export function resolveBasetenDecisionHttpContext(
     reflectsCredential: createProviderCredentialMatcher({
       headers: credentialHeaders,
       configuredHeaderNames: Object.keys(configuredHeaders ?? {}),
-      request: prepared ?? request,
+      request: prepared ?? sanitizeConfiguredModelProviderRequest(provider?.request),
       defaultAuthHeader: "Authorization",
       defaultAuthPrefix: "Bearer ",
     }),
