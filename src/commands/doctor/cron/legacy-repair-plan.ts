@@ -97,6 +97,7 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
         .map((job) => normalizeOptionalStringifiedId(job.id))
         .filter((id): id is string => id !== undefined),
     ),
+    params.cfg,
   );
   if (quarantineRecovery.recoveredJobs.length > 0) {
     state.rawJobs.push(...quarantineRecovery.recoveredJobs);

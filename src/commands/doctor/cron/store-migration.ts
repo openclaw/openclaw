@@ -649,6 +649,7 @@ function storedCronJobId(job: Record<string, unknown>): string | undefined {
 export function recoverValidQuarantinedCronScheduleJobs(
   entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
   activeJobIds: ReadonlySet<string>,
+  cfg: OpenClawConfig,
 ): QuarantinedCronJobRecovery {
   const recoveredJobs: Array<Record<string, unknown>> = [];
   const recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
@@ -673,7 +674,7 @@ export function recoverValidQuarantinedCronScheduleJobs(
       candidate.updatedAtMs = entry.updatedAtMs;
     }
 
-    const normalized = normalizeStoredCronJobs([candidate]);
+    const normalized = normalizeStoredCronJobs([candidate], { cfg });
     if (normalized.jobs.length !== 1 || normalized.removedJobs.length !== 0) {
       retainedEntries.push(entry);
       continue;

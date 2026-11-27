@@ -406,7 +406,7 @@ it("converts saved current jobs without changing their linked conversation", () 
 });
 
 it.each(["explicit", "session-key"])(
-  "pins the %s agent\'s configured main conversation without adding announce delivery",
+  "pins the %s agent's configured main conversation without adding announce delivery",
   (owner) => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({
@@ -507,7 +507,7 @@ it("recovers only currently valid schedule rows and preserves recovery state", (
     state: { nextRunAtMs: 123 },
     updatedAtMs: 456,
   }));
-  const result = recoverValidQuarantinedCronScheduleJobs(entries, new Set(["existing"]));
+  const result = recoverValidQuarantinedCronScheduleJobs(entries, new Set(["existing"]), {});
   expect(result.recoveredJobs).toMatchObject([
     {
       id: "sandbox",

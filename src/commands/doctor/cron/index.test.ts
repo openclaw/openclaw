@@ -430,9 +430,8 @@ describe("maybeRepairLegacyCronStore", () => {
     ).toEqual(unsupportedScripts);
   });
 
-  it("recovers a valid quarantined schedule only after Doctor confirmation", async () => {
+  it("recovers a valid quarantined main job for the system agent only after confirmation", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
-    await writeCurrentCronStore([]);
     await saveCronQuarantinedJobs({
       storePath,
       nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
@@ -441,20 +440,20 @@ describe("maybeRepairLegacyCronStore", () => {
           sourceIndex: 0,
           reason: "invalid-schedule",
           job: createCurrentCronJob({
-            id: "variant-cron",
             schedule: { kind: " CRON ", expr: "0 9 * * *", tz: "UTC" },
+            sessionTarget: "main",
           }),
           state: { nextRunAtMs: 123 },
           updatedAtMs: 456,
         },
       ],
     });
-    const cfg = createCronConfig();
-    expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual([
-      expect.objectContaining({
-        path: resolveOpenClawStateSqlitePath(),
-        requirement: "quarantined-cron-rows",
-      }),
+    const cfg: OpenClawConfig = {
+      ...createCronConfig(),
+      agents: { defaults: { systemAgent: { agentId: "ops" } }, entries: { main: {}, ops: {} } },
+    };
+    expect(await collectLegacyCronStoreHealthFindings({ cfg })).toMatchObject([
+      { path: resolveOpenClawStateSqlitePath(), requirement: "quarantined-cron-rows" },
     ]);
     const decline = makePrompter(false);
 
@@ -464,14 +463,15 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
     expect(decline.confirm).toHaveBeenCalledOnce();
 
-    const confirm = makePrompter(true);
-    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter: confirm });
+    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter: makePrompter() });
 
     const persisted = (await loadCronStore(storePath)).jobs;
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toMatchObject({
-      id: "variant-cron",
+      id: "sqlite-job",
       enabled: true,
+      agentId: "ops",
+      sessionTarget: "session:agent:ops:main",
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
       state: { nextRunAtMs: 123 },
     });
