@@ -27,11 +27,11 @@ import {
   privatePackageActivationIdentity,
   resolvePackageActivationHelper,
 } from "./package-update-activation-paths.js";
+import { packageStatUnchanged } from "./package-update-integrity-drift.js";
 import {
   assertPackageIntegritySettlementUnchanged,
   createPackageIntegrityReader,
   packageIntegrityMatches,
-  packageStatUnchanged,
 } from "./package-update-integrity.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 

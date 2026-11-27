@@ -140,9 +140,9 @@ pr_read_workflow_successor_request() {
   shift 2
   local binding="" from="" to="" head="" tree="" review="" hosted="" value purpose=""
   while [ "$#" -gt 0 ]; do
-    if [ "$1" = --for-proof ] || [ "$1" = --ready-review ]; then
+    if [ "$1" = --for-proof ] || [ "$1" = --ready-review ] || [ "$1" = --incoming-review ]; then
       [ -z "$purpose" ] || return 2
-      case "$1" in --for-proof) purpose=proof ;; --ready-review) purpose=ready ;; esac
+      case "$1" in --for-proof) purpose=proof ;; --ready-review) purpose=ready ;; --incoming-review) purpose=incoming ;; esac
       shift
       continue
     fi
@@ -168,7 +168,7 @@ pr_read_workflow_successor_request() {
   [ -z "$purpose" ] || PR_WORKFLOW_SUCCESSOR="${PR_WORKFLOW_SUCCESSOR%\}},\"purpose\":\"$purpose\"}"
 }
 pr_read_workflow_successor_request "$@" || {
-  echo "prepare-workflow-successor requires an exact binding, old/new workflow, head, tree, review and hosted head; --ready-review and --for-proof are exclusive." >&2
+  echo "prepare-workflow-successor requires an exact binding, old/new workflow, head, tree, review and hosted head; --incoming-review, --ready-review and --for-proof are exclusive." >&2
   exit 2
 }
 
@@ -337,13 +337,25 @@ try {
       ["correction-review.json", "absent"], ["correction-incoming-review.json", "absent"],
       ["pending-proof-acceptance.json", "absent"], ["prepare-baseline.json", "absent"],
     ];
-    const validateReadySnapshot = (snapshot, facts) => {
+    const incomingInventory = [
+      ["review-context.env", "required"],
+      ...readyInventory.map(([name, presence]) => [name,
+        ["prep-context.env", "prep.env", "prepare-push-result.env", "prepare-sync-result.env"].includes(name) ? "absent" : presence]),
+      ["gates.env", "absent"], ["review-transition.json", "absent"],
+    ];
+    const reviewInventory = kind => {
+      if (kind === "ready") return readyInventory;
+      if (kind === "incoming") return incomingInventory;
+      throw new Error("Invalid workflow review kind");
+    };
+    const validateWorkflowReviewSnapshot = (snapshot, facts) => {
+      const inventory = reviewInventory(facts.reviewKind);
       const rows = snapshot.split("\n");
-      if (rows.length !== readyInventory.length || facts.reviewKind !== "ready" || facts.head !== facts.hostedHead) {
+      if (rows.length !== inventory.length || facts.head !== facts.hostedHead) {
         throw new Error("Invalid READY workflow snapshot inventory or candidate");
       }
       const values = new Map();
-      for (const [index, [name, presence]] of readyInventory.entries()) {
+      for (const [index, [name, presence]] of inventory.entries()) {
         const [path, value, extra] = rows[index].split(" ");
         if (path !== `.local/${name}` || extra !== undefined ||
             (presence === "absent" ? value !== "absent" :
@@ -364,7 +376,7 @@ try {
       }
       return values;
     };
-    const readyTreeEntries = values => [...values].filter(([, value]) => value !== "absent")
+    const reviewTreeEntries = values => [...values].filter(([, value]) => value !== "absent")
       .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([name, value]) => `100644 blob ${value}\t${name}`).join("\n");
     const readAt = listing => {
@@ -391,7 +403,7 @@ try {
         const facts = record.continuation;
         if (!oid.test(record.predecessor) || !facts ||
             JSON.stringify(Object.keys(facts).sort()) !== JSON.stringify(["head", "hostedHead", "review", ...(record.version === 3 ? ["reviewKind"] : []), "snapshot", "tree"]) ||
-            !Object.entries(facts).every(([key, value]) => record.version === 3 && key === "reviewKind" ? value === "ready" : typeof value === "string" && oid.test(value)) ||
+            !Object.entries(facts).every(([key, value]) => record.version === 3 && key === "reviewKind" ? ["ready", "incoming"].includes(value) : typeof value === "string" && oid.test(value)) ||
             run(["rev-parse", `${facts.head}^{tree}`]) !== facts.tree ||
             run(["rev-parse", `${listing}:review-snapshot`]) !== facts.snapshot ||
             Number(run(["cat-file", "-s", facts.snapshot])) > 4096) {
@@ -402,8 +414,8 @@ try {
         run(["merge-base", "--is-ancestor", previous.source, record.source]);
         const snapshot = git(repository, ["cat-file", "blob", facts.snapshot]).toString("utf8");
         if (record.version === 3) {
-          const values = validateReadySnapshot(snapshot, facts);
-          if (run(["ls-tree", `${listing}:ready-evidence`]) !== readyTreeEntries(values)) {
+          const values = validateWorkflowReviewSnapshot(snapshot, facts);
+          if (run(["ls-tree", `${listing}:ready-evidence`]) !== reviewTreeEntries(values)) {
             throw new Error("READY workflow evidence tree does not match its inventory");
           }
         }
@@ -473,7 +485,7 @@ try {
     };
     const requireSuccessor = (source, value, anchor = "refs/remotes/origin/main") => {
       const request = JSON.parse(value);
-      const keys = ["binding", "from", "head", "hostedHead", ...(["proof", "ready"].includes(request.purpose) ? ["purpose"] : []), "review", "to", "tree"];
+      const keys = ["binding", "from", "head", "hostedHead", ...(["proof", "ready", "incoming"].includes(request.purpose) ? ["purpose"] : []), "review", "to", "tree"];
       if (JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(keys) ||
           !Object.entries(request).every(([key, value]) => key === "purpose" || typeof value === "string" && oid.test(value)) ||
           !current || request.binding !== current.oid || request.from !== current.source ||
@@ -511,8 +523,8 @@ try {
       }
     };
     if (operation === "workflow-ready-snapshot") {
-      const [worktree, head, tree, review] = paths;
-      const snapshot = readyInventory.map(([name, presence]) => {
+      const [worktree, head, tree, review, reviewKind = "ready"] = paths;
+      const snapshot = reviewInventory(reviewKind).map(([name, presence]) => {
         const path = join(worktree, ".local", name);
         const stat = lstatSync(path, { throwIfNoEntry: false });
         if (stat && (!stat.isFile() || stat.isSymbolicLink() || presence === "absent") ||
@@ -520,7 +532,7 @@ try {
         return `.local/${name} ${stat ? git(worktree, ["hash-object", "-w", "--no-filters", "--", path]).toString().trim() : "absent"}`;
       }).join("\n");
       if (run(["rev-parse", `${head}^{tree}`]) !== tree) throw new Error("READY candidate tree changed");
-      validateReadySnapshot(snapshot, {head, hostedHead: head, review, reviewKind: "ready"});
+      validateWorkflowReviewSnapshot(snapshot, {head, hostedHead: head, review, reviewKind});
       process.stdout.write(snapshot);
     } else if (operation === "workflow-history") {
       const historical = readAt(paths[0]);
@@ -533,11 +545,12 @@ try {
     } else if (operation === "workflow-successor-commit") {
       const [source, value, anchor, snapshot, lockRef, lockOid, worktree] = paths;
       const request = requireSuccessor(source, value, anchor);
+      const ordinaryReview = ["ready", "incoming"].includes(request.purpose);
       if (lockRef !== `refs/openclaw/pr-operation-locks/${revision}` || !oid.test(lockOid) ||
           run(["rev-parse", "--verify", lockRef]) !== lockOid || !snapshot || Buffer.byteLength(snapshot) > 4096 ||
-          !(request.purpose === "ready" || snapshot.split("\n").includes(`.local/correction-review.json ${request.review}`)) ||
+          !(ordinaryReview || snapshot.split("\n").includes(`.local/correction-review.json ${request.review}`)) ||
           run(["rev-parse", `${request.head}^{tree}`]) !== request.tree) throw new Error("Workflow successor authority changed");
-      if (request.purpose === "ready") validateReadySnapshot(snapshot, {...request, reviewKind: "ready"});
+      if (ordinaryReview) validateWorkflowReviewSnapshot(snapshot, {...request, reviewKind: request.purpose});
       const checkRetained = () => {
         if (realpathSync(git(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).toString().trim()) !== owner ||
             git(worktree, ["rev-parse", "HEAD"]).toString().trim() !== request.head ||
@@ -560,18 +573,18 @@ try {
       };
       checkRetained();
       const snapshotOid = git(repository, ["hash-object", "-w", "--stdin"], snapshot).toString().trim();
-      const record = JSON.stringify({ version: request.purpose === "ready" ? 3 : 2, repository: identity, owner, pr: revision, source,
+      const record = JSON.stringify({ version: ordinaryReview ? 3 : 2, repository: identity, owner, pr: revision, source,
         predecessor: current.oid, continuation: { head: request.head, tree: request.tree,
           hostedHead: request.hostedHead, review: request.review, snapshot: snapshotOid,
-          ...(request.purpose === "ready" ? {reviewKind: "ready"} : {}) } });
+          ...(ordinaryReview ? {reviewKind: request.purpose} : {}) } });
       const blob = git(repository, ["hash-object", "-w", "--stdin"], record).toString().trim();
       // Textual OIDs do not retain objects: V3 links every authoritative blob.
-      const evidenceTree = request.purpose === "ready" ? git(repository, ["mktree"],
-        readyTreeEntries(validateReadySnapshot(snapshot, {...request, reviewKind: "ready"})) + "\n").toString().trim() : "";
+      const evidenceTree = ordinaryReview ? git(repository, ["mktree"],
+        reviewTreeEntries(validateWorkflowReviewSnapshot(snapshot, {...request, reviewKind: request.purpose})) + "\n").toString().trim() : "";
       const tree = git(repository, ["mktree"], `100644 blob ${blob}\tbinding.json\n${evidenceTree ? `040000 tree ${evidenceTree}\tready-evidence\n` : ""}100644 blob ${snapshotOid}\treview-snapshot\n`).toString().trim();
       const parents = [...new Set([current.oid, source, request.head, request.hostedHead])];
       const commit = git(repository, ["-c", "commit.gpgsign=false", "commit-tree", tree,
-        ...parents.flatMap(parent => ["-p", parent])], `Native ${request.purpose === "ready" ? "READY" : "correction"} workflow successor\n`).toString().trim();
+        ...parents.flatMap(parent => ["-p", parent])], `Native ${ordinaryReview ? "READY" : "correction"} workflow successor\n`).toString().trim();
       readAt(commit);
       requireSuccessor(source, value, anchor);
       checkRetained();
@@ -1690,11 +1703,12 @@ Usage:
   scripts/pr prepare-correction-init <PR>
   scripts/pr prepare-correction-continue <PR> --expected-head <SHA> --expected-tree <OID> --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>
   scripts/pr prepare-correction-review-init <PR>
-  scripts/pr prepare-workflow-successor <PR> --expected-binding <OID> --from-workflow <SHA> --to-workflow <SHA> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --expected-hosted-head <SHA> [--for-proof|--ready-review]
-    Continue an unchanged approved preparation with exact current official-main tooling.
+  scripts/pr prepare-workflow-successor <PR> --expected-binding <OID> --from-workflow <SHA> --to-workflow <SHA> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --expected-hosted-head <SHA> [--for-proof|--ready-review|--incoming-review]
+    Continue an unchanged approved review or preparation with exact current official-main tooling.
     Recover any retained operation lock separately after proving its tools quiescent.
     Preserves source, review and publication facts; archives and invalidates gates before the binding CAS.
-    Does not publish, merge or waive gates. Run ordinary prepare-gates after success.
+    Does not publish, merge or waive gates. Run prepare-run for incoming review, otherwise prepare-gates.
+    --incoming-review requires ordinary READY at the unchanged incoming head, before preparation.
     --ready-review requires ordinary READY at the same reviewed, prepared and published head.
     --for-proof instead requires the exact typed pending-proof publication review; ordinary gates remain blocked.
   scripts/pr prepare-publish-for-proof <PR>

@@ -31,6 +31,9 @@
  * rows to every cold archive, with leftover bodies at the end of selected windows.
  * Hot siblings provide database size without copying operator data. Each measured
  * selection resumes the preceding discovery cursor, as the maintenance owner does.
+ * --recent N keeps N unarchived windows at the cutoff. For a 128-slot sweep of
+ * 10,000 unarchived sessions, prepare with --sessions 10000 --hot 10000 --events 1
+ * --cleanup-pending 0 and --recent 10000 (idle), 9999 (one old) or 9872 (128 old).
  * --entry measures retained-window entry deletion instead of cold selection. Prepare
  * with --entry --sessions 10000 --hot 1 --events 1 --windows 16 --body-bytes 1024;
  * measure with --entry [--entry-module <frozen-entry-store.ts>]. Each operation deletes
@@ -57,6 +60,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     sessions: { type: "string", default: "10000" },
     hot: { type: "string", default: "128" },
+    recent: { type: "string" },
     events: { type: "string", default: "1000" },
     "body-bytes": { type: "string", default: "1024" },
     iterations: { type: "string", default: "20" },
@@ -97,6 +101,7 @@ const positive = (input: string) => {
 type Fixture = {
   sessions: number;
   hot: number;
+  recent?: number;
   events: number;
   bodyBytes: number;
   windows?: number;
@@ -126,6 +131,7 @@ try {
     const fixture: Fixture = {
       sessions: positive(values.sessions),
       hot: positive(values.hot),
+      ...(values.recent !== undefined ? { recent: positive(values.recent) } : {}),
       events: positive(values.events),
       bodyBytes: positive(values["body-bytes"]),
       ...(values.entry ? { windows: positive(values.windows) } : {}),
@@ -133,7 +139,7 @@ try {
         ? { cleanupPending: Number(values["cleanup-pending"]) }
         : {}),
     };
-    assert(fixture.hot <= fixture.sessions);
+    assert((fixture.recent ?? 0) <= fixture.hot && fixture.hot <= fixture.sessions);
     assert(fixture.cleanupPending === undefined || [0, 1].includes(fixture.cleanupPending));
     const { prepareColdTranscriptPayload } =
       await import("../../src/config/sessions/transcript-payload.js");
@@ -141,10 +147,10 @@ try {
       agent.runOpenClawAgentWriteTransaction(({ db }) => {
         // sqlite-allow-raw -- Synthetic fixture insertion into the real admitted schema.
         const node = db.prepare(
-          "INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES(?,?,?,1,1)",
+          "INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES(?,?,?,?,1)",
         );
         const window = db.prepare(
-          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at) VALUES(?,?,1,1,1)",
+          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at) VALUES(?,?,1,?,?)",
         );
         const watermark = db.prepare(
           "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,1)",
@@ -169,18 +175,21 @@ try {
         for (let index = start; index < Math.min(start + 100, fixture.sessions); index++) {
           const sessionId = id(index);
           const key = `agent:main:${sessionId}`;
+          const hotIndex = index - (fixture.sessions - fixture.hot);
+          const updatedAt = hotIndex >= 0 && hotIndex < (fixture.recent ?? 0) ? 100 : 1;
           node.run(
             key,
             sessionId,
             JSON.stringify({
               sessionId,
-              updatedAt: 1,
+              updatedAt,
               ...(values.entry
                 ? { label: "synthetic metadata ".repeat(Math.ceil(fixture.bodyBytes / 19)) }
                 : {}),
             }),
+            updatedAt,
           );
-          window.run(sessionId, key);
+          window.run(sessionId, key, updatedAt, updatedAt);
           watermark.run(sessionId, `generation-${index}`);
           if (index < fixture.sessions - fixture.hot) {
             const hash = index.toString(16).padStart(64, "0");
@@ -213,7 +222,7 @@ try {
         if (start === 0) {
           for (let index = 1; index < (fixture.windows ?? 1); index++) {
             const target = id(fixture.sessions - 1);
-            window.run(`${target}-history-${index}`, `agent:main:${target}`);
+            window.run(`${target}-history-${index}`, `agent:main:${target}`, 1, 1);
           }
         }
       }, options);
@@ -222,6 +231,10 @@ try {
     console.log(JSON.stringify({ prepared: fixture }));
   } else {
     const fixture = JSON.parse(readFileSync(manifestPath, "utf8")) as Fixture;
+    assert(
+      !fixture.recent || !(values.protection || values.mutation || values.entry || values.history),
+      "Recent windows require selection mode",
+    );
     const owner: typeof import("../../src/config/sessions/session-cold-storage-selection.js") =
       await import(
         values["owner-module"]
@@ -390,7 +403,10 @@ try {
       } else {
         const result = owner.selectSessionColdBatch(input);
         assert(result.found);
-        assert.equal(result.value.plans.length, Math.min(fixture.hot, input.maxTranscripts));
+        assert.equal(
+          result.value.plans.length,
+          Math.min(fixture.hot - (fixture.recent ?? 0), input.maxTranscripts),
+        );
         input.cleanupCursor = result.value.cleanupCursor;
       }
     };

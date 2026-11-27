@@ -8,7 +8,12 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
-import { button, createMeetingsPageProvider, mount } from "./meetings-page.test-support.tsx";
+import {
+  button,
+  createMeetingsPageProvider,
+  meetingPage,
+  mount,
+} from "./meetings-page.test-support.tsx";
 import { page as meetingsRoute } from "./route.tsx";
 
 afterEach(() => {
@@ -152,4 +157,54 @@ it("does not reformat unchanged rows on refresh and still presents changed meeti
   expect(page.querySelector(".meetings-row time")?.getAttribute("datetime")).toBe(
     "2026-08-28T10:00:00.000Z",
   );
+});
+
+it("loads beyond five speech pages and refreshes the last without losing or duplicating earlier pages", async () => {
+  vi.useFakeTimers();
+  let appended = false;
+  const request = vi.fn(async (method: string, params: { cursor?: string }) => {
+    if (method === "transcripts.list") {
+      return { sessions: [], nextCursor: null };
+    }
+    const pageNumber = Number(params.cursor ?? 0);
+    return {
+      ...meetingPage,
+      session: { ...meetingEntry, active: true },
+      utterances: [
+        {
+          sequence: pageNumber,
+          text: `Utterance ${pageNumber}`,
+          startedAt: `2026-08-20T10:00:0${pageNumber}Z`,
+        },
+        ...(appended && pageNumber === 6
+          ? [{ sequence: 7, text: "Late transcription", startedAt: "2026-08-20T10:00:01.500Z" }]
+          : []),
+      ],
+      nextCursor: pageNumber < 6 ? String(pageNumber + 1) : null,
+    };
+  });
+  const { page, unmount } = mount(request, "?selector=meeting&tab=transcript");
+  try {
+    await waitForSolid(() => expect(page.textContent).toContain("Utterance 6"));
+    const speech = () =>
+      [...page.querySelectorAll(".transcripts-utterances p")].map((el) => el.textContent);
+    const initialSpeech = Array.from({ length: 7 }, (_, index) => `Utterance ${index}`);
+    expect(speech()).toEqual(initialSpeech);
+    expect(page.textContent).not.toContain("Load more");
+    appended = true;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(speech()).toEqual([
+      ...initialSpeech.slice(0, 2),
+      "Late transcription",
+      ...initialSpeech.slice(2),
+    ]);
+    expect(request).toHaveBeenLastCalledWith(
+      "transcripts.get",
+      expect.objectContaining({ cursor: "6" }),
+      expect.anything(),
+    );
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
 });

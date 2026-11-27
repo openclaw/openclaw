@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import { writeManagedGitHubProfileFiles } from "../../agents/github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-profile-path.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -9,6 +9,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
@@ -113,4 +114,41 @@ export async function createRepositoryPolicySource(stagingRoot: string) {
   const baseCommit = await requireWorkspaceResultGit(stagingRoot, ["rev-parse", "HEAD"]);
   const base = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
   return { baseCommit, base };
+}
+
+export function createRepositoryPolicyReconciler(
+  source: Awaited<ReturnType<typeof createRepositoryPolicySource>>,
+): WorkerWorkspaceTunnelHandle["reconcileWorkspace"] {
+  const { base, baseCommit } = source;
+  return async (input) => {
+    if (input.source.kind !== "repository") {
+      throw new Error("Expected repository");
+    }
+    const manifest = await captureWorkspaceManifest({
+      root: input.remoteWorkspaceDir,
+      baseCommit,
+    });
+    const checkpoint = await input.source.prepareCheckpoint({
+      stagingRoot: input.remoteWorkspaceDir,
+      baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+      currentManifestRaw: serializeWorkerWorkspaceManifest(manifest.manifest),
+      baseManifestRef: base.manifestRef,
+      currentManifestRef: manifest.manifestRef,
+    });
+    return {
+      manifestRef: manifest.manifestRef,
+      changed: false,
+      verifyStable: async () => {
+        expect(
+          (await captureWorkspaceManifest({ root: input.remoteWorkspaceDir, baseCommit }))
+            .manifestRef,
+        ).toBe(manifest.manifestRef);
+      },
+      verifyLocalStable: () => checkpoint.verify(),
+      publishStagedResult: async () => {
+        await checkpoint.publish();
+      },
+      discardPreparedStagedResult: () => checkpoint.discard(),
+    };
+  };
 }

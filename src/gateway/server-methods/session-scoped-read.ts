@@ -141,6 +141,7 @@ export async function retainSessionScopedRead(
     if (operatorSessionCap(options.client, cfg) === "invited") {
       sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
     }
+    const facts = sharing?.readCurrent(cfg);
     assertCurrent();
     return {
       assertCurrent,
@@ -151,8 +152,6 @@ export async function retainSessionScopedRead(
         canonicalKey: string;
         entry?: { sessionId?: string };
       }) => {
-        assertCurrent();
-        const facts = sharing?.readCurrent(getConfig());
         return Boolean(
           profileId &&
           facts?.membership.has(profileId) &&

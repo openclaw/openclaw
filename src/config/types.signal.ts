@@ -48,6 +48,8 @@ export type SignalGroupConfig = Pick<
 > & {
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
+  /** Include other members' unquoted recent photos on mentions in this group. */
+  includeOtherMembersHistoryImages?: boolean;
 };
 
 export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &

@@ -95,6 +95,40 @@ describe("resolveGlobalSingleton", () => {
     }
   });
 
+  it.each(["close", "restart"] as const)(
+    "joins execution owners before native cleanup during %s, including failures",
+    async (event) => {
+      const { promise: held, resolve: release } = createDeferred();
+      const failure = new Error("execution owner cleanup failed");
+      const nativeFailure = new Error("native cleanup retained");
+      const nativeReset = vi.fn(() => {
+        throw nativeFailure;
+      });
+      resolveGlobalSingleton(TEST_KEY, () => ({}), nativeReset, "native-workers");
+      register(async () => {
+        await held;
+        throw failure;
+      }, TEST_MAP_KEY);
+      const pending = drain(event);
+      const outcome = expect(pending).rejects.toMatchObject({
+        errors: expect.arrayContaining([failure, nativeFailure]),
+      });
+      try {
+        await nextEventLoopTurn();
+        expect(nativeReset).not.toHaveBeenCalled();
+      } finally {
+        release();
+        try {
+          await outcome;
+        } finally {
+          register(() => {});
+          register(() => {}, TEST_MAP_KEY);
+        }
+      }
+      expect(nativeReset).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retains shared state for terminal persistence after other owners close", async () => {
     const shared = mapFor<string, string>(TEST_KEY, "shared-state");
     const runtime = mapFor<string, string>(TEST_MAP_KEY, "close-and-restart");

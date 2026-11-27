@@ -14,12 +14,12 @@ import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
+import { chatGoalResumeBusy } from "./chat-goals.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
-import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { dismissChatRunError } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
 registerChatComposerEnglish();
@@ -239,7 +239,7 @@ export function dismissChatError(state: { chatError?: string | null; lastError: 
 }
 
 export function chatSubmitState(
-  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
+  state: ChatPageHost,
   unavailable: boolean,
   nativeChat: boolean,
   session?: GatewaySessionRow,
@@ -260,7 +260,9 @@ export function chatSubmitState(
       Boolean(
         state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
       ),
-    goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
+    goalResumeBusy:
+      (session?.goal?.status === "active" && (!nativeChat || unavailable)) ||
+      chatGoalResumeBusy(state, session),
     ...(workspaceRemoved || routePending || (connectionPendingReason && !controlCommand)
       ? { canSend: false }
       : {}),

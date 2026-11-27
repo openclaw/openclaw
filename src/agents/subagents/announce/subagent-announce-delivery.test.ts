@@ -1214,7 +1214,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("delivers visible placeholder text for channel completion", async () => {
+  it("keeps channel completion parameters valid for a silent requester response", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],

@@ -24,7 +24,6 @@ import {
   type DiagnosticLivenessSample,
 } from "./diagnostic-liveness.js";
 import {
-  emitDiagnosticMemorySample,
   createDiagnosticMemorySampler,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
@@ -543,7 +542,7 @@ export function startGatewayDiagnosticHeartbeat(
     reconcileObservations();
   };
   reconcileObservations();
-  const sampleMemory = createDiagnosticMemorySampler(
+  const { sampleMemory, checkPressure } = createDiagnosticMemorySampler(
     () => !scheduler.signal.aborted && heartbeatJob === job && observing,
   );
   const tick = () => {
@@ -819,7 +818,7 @@ export function startGatewayDiagnosticHeartbeat(
     everyMs: MEMORY_PRESSURE_INTERVAL_MS,
     run: () => {
       if (!scheduler.signal.aborted && heartbeatJob === job) {
-        emitDiagnosticMemorySample(undefined, false);
+        checkPressure();
       }
     },
   });

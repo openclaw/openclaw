@@ -22,6 +22,7 @@ import { parseProjectGitUrl } from "../projects/project-git-url.js";
 import { selectStoredProjectRegistry } from "../projects/project-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.types.js";
 import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
@@ -80,7 +81,14 @@ export async function postSessionGitHubProjectItem(
   using selected = await prepareGitHubPublicationSession(params.sessionKey, {
     agentId: caller?.agentId ?? params.agentId,
     cfg: getConfig(),
-    fields: ["sessionId", "lifecycleRevision", "archivedAt", "projectId"],
+    fields: [
+      "sessionId",
+      "lifecycleRevision",
+      "archivedAt",
+      "projectId",
+      "worktree",
+      "repositoryWorkspaceId",
+    ],
     assertCurrent: () => options.sessionMutationAuthorization?.assertCurrent(),
   });
   const { entry, agentId, canonicalKey } = selected.readCurrent();
@@ -139,8 +147,23 @@ export async function postSessionGitHubProjectItem(
       );
     }
   };
+  let workingPullRequestUrl = entry.worktree?.githubPullRequest?.url;
+  if (isComment && !entry.worktree?.githubPullRequest) {
+    const receipt = await options.context.githubPublicationService?.latestPublishedShared(
+      {
+        agentId,
+        sessionKey: canonicalKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision ?? null,
+      },
+      () => selected.readCurrent(),
+    );
+    if (receipt?.result.status === "published") {
+      workingPullRequestUrl = receipt.result.url;
+    }
+  }
   const recordComment = isComment
-    ? await requestGitHubCommentApproval(
+    ? await prepareGitHubCommentPost(
         options,
         {
           ...params,
@@ -151,6 +174,7 @@ export async function postSessionGitHubProjectItem(
           sessionKey: canonicalKey,
         },
         assertPublisherCurrent,
+        workingPullRequestUrl,
       )
     : undefined;
   // No browser/native fallback and no retry: a lost POST response may hide a created item.
@@ -275,8 +299,8 @@ export async function postSessionGitHubProjectItem(
   return { status: "created" as const, url: posted.url };
 }
 
-/** The approver sees the exact repository, number, account and text that the Gateway posts. */
-async function requestGitHubCommentApproval(
+/** Comments outside the session PR require approval of the exact target, account and text. */
+async function prepareGitHubCommentPost(
   options: HandlerOptions,
   target: Omit<GitHubToolCommentParams, "action"> & {
     host: string;
@@ -284,7 +308,37 @@ async function requestGitHubCommentApproval(
     account: PreparedGitHubPublicationIdentity["account"];
   },
   assertCurrent: () => void,
+  workingPullRequestUrl?: string,
 ) {
+  let record: ExecApprovalRecord<PluginApprovalRequestPayload> | null = null;
+  const recordOutcome = (
+    outcome: "denied" | "not-posted" | "posted" | "rejected" | "unconfirmed",
+    url?: string,
+  ) => {
+    try {
+      createSubsystemLogger("gateway/github-publication").info("GitHub comment", {
+        outcome,
+        approvalId: record?.id ?? null,
+        approver: record?.resolvedBy ?? null,
+        account: target.account.login,
+        accountId: target.account.accountId,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        repository: target.repository,
+        issueNumber: target.issueNumber,
+        ...(url ? { url } : {}),
+      });
+    } catch {
+      // A diagnostic sink cannot change the comment outcome.
+    }
+  };
+  if (
+    workingPullRequestUrl?.toLowerCase() ===
+    `https://${target.host}/${target.repository}/pull/${target.issueNumber}`
+  ) {
+    assertCurrent();
+    return recordOutcome;
+  }
   const manager = options.context.pluginApprovalManager;
   if (!manager) {
     throw new Error("GitHub comment approval is unavailable. Nothing was posted.");
@@ -321,7 +375,7 @@ async function requestGitHubCommentApproval(
     allowedDecisions: ["allow-once", "deny"],
   };
   assertCurrent();
-  const record = manager.create(payload, timeoutMs, `plugin:${toolCallId}`);
+  record = manager.create(payload, timeoutMs, `plugin:${toolCallId}`);
   record.approvalAuthority = () => {
     assertCurrent();
     return true;
@@ -340,27 +394,6 @@ async function requestGitHubCommentApproval(
     getIosPushDelivery: () => options.context.pluginApprovalIosPushDelivery,
   });
   const approved = manager.projectDecisionIfActive(record.id, await decision);
-  const recordOutcome = (
-    outcome: "denied" | "not-posted" | "posted" | "rejected" | "unconfirmed",
-    url?: string,
-  ) => {
-    try {
-      createSubsystemLogger("gateway/github-publication").info("GitHub comment", {
-        outcome,
-        approvalId: record.id,
-        approver: record.resolvedBy ?? null,
-        account: target.account.login,
-        accountId: target.account.accountId,
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        repository: target.repository,
-        issueNumber: target.issueNumber,
-        ...(url ? { url } : {}),
-      });
-    } catch {
-      // A diagnostic sink cannot change the comment outcome.
-    }
-  };
   if (approved !== "allow-once") {
     recordOutcome("denied");
     throw new Error(

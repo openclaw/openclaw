@@ -16,6 +16,7 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import * as agentRoster from "./agent-roster.js";
 import {
   AgentSelectionRequiredError,
+  isImplicitAcpWorkspaceCandidate,
   listAgentEntries,
   listAgentEntriesWithSource as entriesWithSource,
   listAgentIds,
@@ -23,6 +24,8 @@ import {
   resolveAgentConfig as agentConfig,
   resolveAgentOperationAgentId as operationAgent,
   resolveAgentWorkspaceDir,
+  resolveAgentWorkspaceProvisioning,
+  resolveEffectiveAgentDir,
   readAgentConfigEntry,
   resolveAgentEntry,
   resolveAmbientOwnerAgentId as ambientOwner,
@@ -56,6 +59,26 @@ const legacy = (list?: LegacyAgentListEntry[]): OpenClawConfigWithLegacyRoster =
 });
 
 describe("agent roster resolution", () => {
+  it("resolves authored agent paths without projecting unrelated defaults", () => {
+    const readFastMode = vi.fn(() => false);
+    const agentDir = path.resolve("fixture-agent-dir");
+    const workspace = path.resolve("fixture-workspace");
+    const config = fleet({
+      defaults: {
+        workspace,
+        get fastModeDefault() {
+          return readFastMode();
+        },
+      },
+      entries: { ops: { agentDir: ` ${agentDir} `, runtime: { type: "acp" } } },
+    });
+
+    expect(resolveEffectiveAgentDir(config, "OPS")).toBe(agentDir);
+    expect(isImplicitAcpWorkspaceCandidate(config, "OPS")).toBe(true);
+    expect(resolveAgentWorkspaceProvisioning(config, "OPS", { cwd: workspace })).toBe("standard");
+    expect(readFastMode).not.toHaveBeenCalled();
+  });
+
   it("inherits workspace file policy and permits a private per-agent override", () => {
     const cfg = fleet({
       defaults: { workspaceFileMode: "0660" },

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   runChannelInboundEvent,
   type ChannelInboundEventRunnerParams,
@@ -22,6 +23,39 @@ type MatrixInboundRunParams = Parameters<MatrixInboundRun>[0];
 type TurnAdoptionLifecycle = NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sendDraftMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "$draft1", roomId: "!r" })));
+const sendMock = vi.hoisted(() => vi.fn());
+
+// mock-isolation: Keep Matrix network sends inert while core dispatch decides progress delivery.
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
+  sendMessageMatrix: sendMock,
+  sendSingleTextMessageMatrix: sendDraftMock,
+  sendTypingMatrix: vi.fn(async () => {}),
+}));
+
+function runWithReplyResolver(
+  replyResolver: unknown,
+  onRun?: (params: MatrixInboundRunParams) => void,
+) {
+  return (async (params: MatrixInboundRunParams) => {
+    onRun?.(params);
+    const adapter = params.adapter;
+    return await runChannelInboundEvent({
+      ...params,
+      adapter: {
+        ...adapter,
+        resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
+          const turn = await adapter.resolveTurn(...args);
+          if (!("route" in turn) || "runDispatch" in turn) {
+            throw new Error("expected Matrix to resolve a routed channel turn");
+          }
+          return { ...turn, replyResolver: replyResolver as never };
+        },
+      },
+    } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
+  }) as MatrixInboundRun;
+}
 
 describe("Matrix active-turn steering admission", () => {
   it("lets an explicit /steer command reach queue policy while the prior Matrix turn is active", async ({
@@ -69,26 +103,12 @@ describe("Matrix active-turn steering admission", () => {
         return undefined;
       },
     );
-    const runWithQueuePolicyResolver = (async (params: MatrixInboundRunParams) => {
+    const runWithQueuePolicyResolver = runWithReplyResolver(queuePolicyResolver, (params) => {
       const eventId = (params.raw as MatrixRawEvent).event_id;
       if (eventId) {
         inboundLifecycles.set(eventId, params.turnAdoptionLifecycle);
       }
-      const adapter = params.adapter;
-      return await runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...adapter,
-          resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
-            const turn = await adapter.resolveTurn(...args);
-            if (!("route" in turn) || "runDispatch" in turn) {
-              throw new Error("expected Matrix to resolve a routed channel turn");
-            }
-            return { ...turn, replyResolver: queuePolicyResolver as never };
-          },
-        },
-      } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
-    }) as MatrixInboundRun;
+    });
     const runtime = { error: vi.fn() };
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
@@ -197,5 +217,41 @@ describe("Matrix active-turn steering admission", () => {
 
     expect(lifecycle.onAdopted).not.toHaveBeenCalled();
     expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Matrix progress when the message tool sends the final reply", () => {
+  it("shows the progress draft through core dispatch", async () => {
+    installMatrixMonitorTestRuntime();
+    sendMock.mockClear();
+    const progressResolver = async (_ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
+      await options?.onItemEvent?.(
+        projectAgentToolActivity({ toolCallId: "read-1", name: "read_file", phase: "start" }),
+      );
+      await vi.waitFor(() => expect(sendDraftMock).toHaveBeenCalledOnce(), { timeout: 10_000 });
+      return undefined;
+    };
+    const runtime = { error: vi.fn() };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        session: { store: path.join(tempDirs.make("openclaw-matrix-progress-"), "sessions.json") },
+        messages: { visibleReplies: "message_tool" },
+        channels: { matrix: { dm: { allowFrom: ["*"] } } },
+      } satisfies OpenClawConfig,
+      runtime: runtime as never,
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      runChannelInboundEvent: runWithReplyResolver(progressResolver),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$progress", body: "check the file" }),
+      createMatrixIngressLifecycle(),
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendDraftMock).toHaveBeenCalledOnce();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 });

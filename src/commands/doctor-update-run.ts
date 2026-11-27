@@ -1,5 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { readRetiredDeferredUpdateWarnings } from "../infra/deferred-update-warnings.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
@@ -103,7 +104,6 @@ async function inspectStaleUpdateRuns(
   const [
     { staleUpdateRunGuidance },
     { listUpdateRunsAsync },
-    { renderUpdateRunReport },
     { updateRunWarningMessages },
     { readInstalledUpdateCandidate, reconcileInterruptedUpdateRuns },
     { isAcknowledgedAbandonedUpdateRun },
@@ -111,7 +111,6 @@ async function inspectStaleUpdateRuns(
   ] = await Promise.all([
     import("../infra/update-run-activity.js"),
     import("../infra/update-run-reader.js"),
-    import("../infra/update-run-report.js"),
     import("../infra/update-run-step.js"),
     import("../infra/update-run-interruption.js"),
     import("../infra/update-run-record.js"),
@@ -183,7 +182,7 @@ async function inspectStaleUpdateRuns(
       (latest.reason === UPDATE_ACTIVATION_TIMEOUT_REASON ||
         UPDATE_ENVIRONMENT_FAILURE_REASONS.has(latest.reason))
     ) {
-      note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
+      note(`Update ${latest.runId}: ${renderUpdateRunSummary(latest)}`, "Update history");
     }
     const retiredWarnings = await readRetiredDeferredUpdateWarnings(
       latest.steps.map((step) => step.detail),

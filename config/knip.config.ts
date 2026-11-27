@@ -65,6 +65,7 @@ const repositoryScriptEntries = [
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
   "scripts/perf/github-managed-profile-write.ts!",
+  "scripts/perf/worktree-fast-forward-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -75,6 +76,8 @@ const repositoryScriptEntries = [
   "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
+  // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
+  "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -1414,6 +1417,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // Performance measurement resolves Tokenjuice from extensions/tokenjuice/package.json.
+        "tokenjuice",
         // The bundled AI runtime loads Bun proxy support through a computed import.
         "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.

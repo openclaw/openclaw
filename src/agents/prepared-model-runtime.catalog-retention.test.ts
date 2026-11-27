@@ -3,7 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -40,7 +40,7 @@ import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lif
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime-retention" });
-const { mocks } = fixture;
+const { mocks, holdCatalogWrite } = fixture;
 
 async function publishSettledCatalogBatch(
   config: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[0],
@@ -211,28 +211,6 @@ it("releases the reload caller while a superseded acquisition signal remains ret
 });
 
 describe("retired owner publication", () => {
-  function holdCatalogWrite() {
-    const started = createDeferred();
-    const result = createDeferred<Record<string, never>>();
-    const pending: Promise<unknown>[] = [];
-    const release = () => result.resolve({});
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-      started.resolve();
-      return await result.promise;
-    });
-    return {
-      started: started.promise,
-      release,
-      track<T>(promise: Promise<T>) {
-        pending.push(promise);
-        return promise;
-      },
-      async [Symbol.asyncDispose]() {
-        release();
-        await Promise.allSettled(pending);
-      },
-    };
-  }
   it("retires only the deleted agent's physical owners", async () => {
     mocks.configuredAgentIds = ["worker"];
     mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));

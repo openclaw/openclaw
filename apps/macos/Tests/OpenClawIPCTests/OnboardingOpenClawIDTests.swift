@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct OnboardingOpenClawIDTests {
-    @Test func `main build cannot claim an unbacked enrollment succeeded`() {
+    @Test func `unavailable enrollment cannot start or advance`() {
         let model = OnboardingOpenClawIDModel(service: UnavailableOnboardingOpenClawIDService())
         #expect(model.unavailableReason != nil)
         #expect(model.begin(.makeReachable) == nil)
@@ -69,6 +69,22 @@ private final class FixtureService: OnboardingOpenClawIDService {
     func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
         if self.fail { throw NSError(domain: "fixture-private-response", code: 1) }
         return self.next
+    }
+
+    func cancel() {}
+}
+
+struct UnavailableOnboardingOpenClawIDService: OnboardingOpenClawIDService {
+    var unavailableReason: String? {
+        "Native OpenClaw ID setup is not available in this build. You can continue without it."
+    }
+
+    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+        throw CocoaError(.featureUnsupported)
+    }
+
+    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+        throw CocoaError(.featureUnsupported)
     }
 
     func cancel() {}

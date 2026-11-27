@@ -17,6 +17,7 @@ import { loadBundleMcpRuntimeModules } from "./agent-bundle-mcp-runtime-modules.
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
 import {
   projectBundleMcpCatalogFailure,
+  projectBundleMcpCatalogRetry,
   type BundleMcpSession,
   type CreateSessionMcpRuntime,
   type McpServerBackoffState,
@@ -111,20 +112,10 @@ function createServerMcpRuntime(
     catalogRetryAfterMs = undefined;
   };
   const scheduleCatalogServerRetry = (message: string) => {
-    const server = lastListedCatalog?.servers[serverName];
     invalidateCatalog();
-    if (server) {
-      catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
-        serverName,
-        safeServerName: server.safeServerName ?? serverName,
-        launchSummary: server.launchSummary,
-        message,
-      });
-      catalogRetryAfterMs = monotonicNow();
-    }
+    catalog = projectBundleMcpCatalogRetry(lastListedCatalog, serverName, message) ?? null;
+    catalogRetryAfterMs = catalog ? monotonicNow() : undefined;
   };
-  const catalogRetryIsDue = (): boolean =>
-    catalogRetryAfterMs !== undefined && monotonicNow() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
   const nativeContextKey = nativeContext
     ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
@@ -587,12 +578,16 @@ function createServerMcpRuntime(
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();
-        return projectBundleMcpCatalogFailure(lastListedCatalog, {
-          serverName,
-          safeServerName,
-          launchSummary: launchDescription,
-          message,
-        });
+        return projectBundleMcpCatalogFailure(
+          lastListedCatalog,
+          {
+            serverName,
+            safeServerName,
+            launchSummary: launchDescription,
+            message,
+          },
+          error,
+        );
       }
     })();
     catalogInFlight = inFlight;
@@ -630,17 +625,21 @@ function createServerMcpRuntime(
           lastListedCatalog = undefined;
           listedCatalogs?.delete(catalogIdentity);
         }
-        catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
-          serverName,
-          safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
-          launchSummary: serverName,
-          message: backoff.message,
-        });
+        catalog = projectBundleMcpCatalogFailure(
+          lastListedCatalog,
+          {
+            serverName,
+            safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
+            launchSummary: serverName,
+            message: backoff.message,
+          },
+          backoff,
+        );
         startupRetryAfterMs = backoff.retryAfterMs;
         catalogRetryAfterMs = backoff.retryAfterMs;
       }
     }
-    if (catalog && !catalogRetryIsDue()) {
+    if (catalog && (catalogRetryAfterMs === undefined || monotonicNow() < catalogRetryAfterMs)) {
       return catalog;
     }
     if (!catalog && !lastListedCatalog) {

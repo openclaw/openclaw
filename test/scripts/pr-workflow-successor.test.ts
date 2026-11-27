@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -326,6 +327,193 @@ const readyFixture = reuseBaselineFixture((root) => {
     "prepare-push-result.env",
   ]);
   return { ...f, head, tree, binding, source, current, review, args, files };
+});
+
+const incomingFixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 1, "IMPORTANT", undefined, "incoming");
+  f.prepGit("checkout", "--detach", f.incoming);
+  const head = f.incoming;
+  const tree = f.prepGit("rev-parse", "HEAD^{tree}");
+  const binding = f.git(f.repo, "rev-parse", bindingRef);
+  const source = JSON.parse(f.git(f.repo, "show", `${binding}:binding.json`)).source as string;
+  const cache = join(f.repo, "scripts/pr-lib/cache-lifetime.mjs");
+  writeFileSync(cache, readFileSync(cache, "utf8") + "\n// Selected incoming workflow fixture.\n");
+  const cacheHash = createHash("sha256").update(readFileSync(cache)).digest("hex");
+  f.git(f.repo, "add", "scripts/pr-lib/cache-lifetime.mjs");
+  f.git(f.repo, "commit", "-qm", "fix: incoming workflow fixture");
+  const current = f.git(f.repo, "rev-parse", "HEAD");
+  f.git(f.repo, "config", `url.${f.repo}.insteadOf`, "https://github.com/openclaw/openclaw.git");
+  f.git(f.repo, "remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+  f.git(f.repo, "fetch", "-q", "origin", "main");
+  const review = f.prepGit("hash-object", "--no-filters", f.local("review.json"));
+  const args = [
+    "--expected-binding",
+    binding,
+    "--from-workflow",
+    source,
+    "--to-workflow",
+    current,
+    "--expected-head",
+    head,
+    "--expected-tree",
+    tree,
+    "--expected-review",
+    review,
+    "--expected-hosted-head",
+    head,
+    "--incoming-review",
+  ];
+  const files = f.snapshot([
+    "pr-meta.json",
+    "pr-meta.env",
+    "review-mode.env",
+    "review-context.env",
+    "review.json",
+  ]);
+  return { ...f, head, tree, binding, source, current, review, args, files, cache, cacheHash };
+});
+
+describePosix("incoming READY workflow succession", () => {
+  it("upgrades the reviewed workflow and enters ordinary preparation without fabricating preparation", () => {
+    const f = incomingFixture();
+    f.expectAbsent("prep-context.env", "prep.env", "gates.env", "correction-review.json");
+    expectExit(f.run("prepare-workflow-successor", f.args), 0);
+    f.expectSnapshot(f.files);
+    f.expectAbsent("prep-context.env", "prep.env", "gates.env", "correction-review.json");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(f.head);
+    expect(f.prepGit("branch", "--show-current")).toBe("");
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.head);
+    const record = JSON.parse(f.git(f.repo, "show", `${bindingRef}:binding.json`));
+    expect(record).toMatchObject({
+      version: 3,
+      predecessor: f.binding,
+      source: f.current,
+      continuation: {
+        reviewKind: "incoming",
+        head: f.head,
+        tree: f.tree,
+        hostedHead: f.head,
+        review: f.review,
+      },
+    });
+    const reachable = new Set(
+      f
+        .git(f.repo, "rev-list", "--objects", bindingRef)
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    );
+    for (const name of Object.keys(f.files)) {
+      expect(reachable, name).toContain(f.prepGit("hash-object", "--no-filters", f.local(name)));
+    }
+    // A newer canonical inventory prevents matching-code substitution: the
+    // next ordinary operation must extract the still-bound selected workflow.
+    writeFileSync(
+      f.cache,
+      readFileSync(f.cache, "utf8") + "\n// Later canonical workflow fixture.\n",
+    );
+    f.git(f.repo, "add", "scripts/pr-lib/cache-lifetime.mjs");
+    f.git(f.repo, "commit", "-qm", "fix: later canonical workflow fixture");
+    f.git(f.repo, "fetch", "-q", "origin", "main");
+    const observed = join(f.root, "materializer-observations");
+    writeFileSync(
+      join(f.root, "bin/node"),
+      `#!/bin/sh
+if [ "$#" -eq 7 ] && [ "$1" = --input-type=module ] && [ "$2" = - ]; then
+  case "$3" in
+    */materialize-dependencies.mjs)
+    '${process.execPath}' -e '
+      const fs=require("node:fs"),path=require("node:path"),crypto=require("node:crypto");
+      const materializer=process.argv[1], revision=process.argv[2];
+      const cache=path.join(path.dirname(materializer),"cache-lifetime.mjs");
+      fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({materializer,revision,cacheHash:crypto.createHash("sha256").update(fs.readFileSync(cache)).digest("hex")})+"\\n");
+    ' -- "$3" "$6" || exit ;;
+  esac
+fi
+exec '${process.execPath}' "$@"
+`,
+      { mode: 0o700 },
+    );
+    expectExit(f.run("prepare-init"), 0);
+    const materializers = readFileSync(observed, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(
+      materializers.some(
+        (entry) =>
+          entry.materializer.includes("openclaw-pr-anchor-v3.") &&
+          entry.cacheHash === f.cacheHash &&
+          entry.revision === f.current,
+      ),
+    ).toBe(true);
+    f.expectSnapshot(f.files);
+    expect(f.readLocal("prep-context.env").toString()).toContain("PREP_REVIEW_MODE=ready");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(f.head);
+    f.expectAbsent("prep.env", "gates.env", "correction-review.json");
+  });
+
+  it.each([
+    "prep-context.env",
+    "prep.env",
+    "gates.env",
+    "prepare-push-result.env",
+    "correction-review.json",
+    "pending-proof-acceptance.json",
+    "review-transition.json",
+    "merge-output.log",
+  ])("preserves incompatible retained %s before any recovery", (name) => {
+    const f = incomingFixture();
+    const bytes = "retained state must not be consumed\n";
+    f.writeLocal(name, bytes);
+    const result = f.run("prepare-workflow-successor", f.args);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(f.readLocal(name).toString()).toBe(bytes);
+    f.expectSnapshot(f.files);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(f.head);
+    expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
+  });
+
+  it.each(["review mode", "review head", "symlink", "hosted head"])(
+    "refuses changed incoming %s authority",
+    (fault) => {
+      const f = incomingFixture();
+      if (fault === "review mode") {
+        f.writeLocal("review-mode.env", "REVIEW_MODE=main\n");
+      }
+      if (fault === "review head") {
+        f.writeLocal(
+          "pr-meta.env",
+          f.readLocal("pr-meta.env").toString().replace(f.head, f.source),
+        );
+      }
+      if (fault === "symlink") {
+        unlinkSync(f.local("review-context.env"));
+        symlinkSync(f.local("review-mode.env"), f.local("review-context.env"));
+      }
+      if (fault === "hosted head") {
+        f.git(f.repo, "update-ref", "refs/heads/topic", f.source);
+      }
+      const result = f.run("prepare-workflow-successor", f.args);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(f.head);
+      f.expectAbsent("prep-context.env", "prep.env", "gates.env");
+    },
+  );
+
+  it.each(["before CAS", "after CAS", "lock race"] as const)(
+    "preserves incoming review through %s interruption",
+    (phase) => {
+      const f = incomingFixture();
+      const result = f.run("prepare-workflow-successor", f.args, gitFault(f, phase));
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(existsSync(join(f.root, "fault-reached"))).toBe(true);
+      f.expectSnapshot(f.files);
+      f.expectAbsent("prep-context.env", "prep.env", "gates.env");
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(f.head);
+      expect(f.git(f.repo, "rev-parse", bindingRef) === f.binding).toBe(phase !== "after CAS");
+    },
+  );
 });
 
 describePosix("ordinary READY workflow succession", () => {

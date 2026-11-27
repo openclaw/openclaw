@@ -21,7 +21,6 @@ import { FollowupRunDeferredError, type FollowupRun } from "./queue/types.js";
 import type { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { expectCallCounts, expectCalls } from "./reply-contract.test-support.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 const admissionState = vi.hoisted(() => ({
   beforeAdmission: vi.fn<(queued: FollowupRun) => Promise<void>>(),
@@ -165,7 +164,6 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
       const opts = createObservers();
       decoys.push(opts);
       return createFollowupRunner({
-        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "gpt-test",
         opts: {

@@ -9,6 +9,10 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  checkInitialConfigWriteHealthPending,
+  checkWriteConfigHealthPending,
+} from "./doctor-health-contribution-runners.config-plan.js";
+import {
   runInitialConfigWriteHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
@@ -99,6 +103,9 @@ it.each([
             "${OPENCLAW_HOME}",
           );
         };
+        const deferRepairs = { runPostWriteRepairs: false };
+        await expect(checkInitialConfigWriteHealthPending(ctx)).resolves.toBe("work");
+        expect(await read()).toBe(beforeFirstWrite);
         await runInitialConfigWriteHealth(ctx);
         expect(ctx.configWriteRefusal).toBeUndefined();
         const firstRaw = await read();
@@ -121,9 +128,21 @@ it.each([
           expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         }
 
+        // Only a retained deferred input leaves a second write for the final pass.
+        await expect(checkWriteConfigHealthPending(ctx, deferRepairs)).resolves.toBe(
+          deferred ? "work" : "none",
+        );
+        const identity = async () => {
+          const { ino, mtimeMs } = await fs.stat(outputPath);
+          return { ino, mtimeMs };
+        };
+        const firstIdentity = await identity();
         vi.setSystemTime(startedAt + 1_000);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await runWriteConfigHealth(ctx, deferRepairs);
         const finalRaw = await read();
+        if (!deferred) {
+          expect(await identity()).toEqual(firstIdentity);
+        }
         await assertPersisted(deferred ? firstRaw : beforeFirstWrite);
         expect(JSON.parse(finalRaw)).not.toHaveProperty(retiredPath);
         expect(ctx.cfg.agents?.defaults?.workspace).toBe(state.home);
@@ -131,9 +150,12 @@ it.each([
           expect(finalRaw).toBe(firstRaw);
         }
 
+        await expect(checkWriteConfigHealthPending(ctx, deferRepairs)).resolves.toBe("none");
+        const finalIdentity = await identity();
         vi.setSystemTime(startedAt + 2_000);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await runWriteConfigHealth(ctx, deferRepairs);
         expect(await read()).toBe(finalRaw);
+        expect(await identity()).toEqual(finalIdentity);
       },
     );
   },

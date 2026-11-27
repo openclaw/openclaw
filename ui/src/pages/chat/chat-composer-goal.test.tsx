@@ -117,6 +117,21 @@ it.each(["remove", "unmount"])(
   },
 );
 
+it("shows Resume alongside Pause for an idle active goal", () => {
+  const onGoalAction = vi.fn();
+  const view = mountGoal(goal, { canAct: true, onGoalAction });
+  const resume = () => view.query<HTMLButtonElement>('[aria-label="Resume goal"]');
+
+  expect(resume()).toBeNull();
+  view.update({ resumeBusy: false });
+  expect(view.query('[aria-label="Pause goal"]')).not.toBeNull();
+  resume()?.click();
+  expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume");
+
+  view.update({ resumeBusy: true });
+  expect(resume()).toBeNull();
+});
+
 it("disables only fresh Resume while the session is busy and preserves receipt recovery", () => {
   const onGoalAction = vi.fn();
   const onGoalEdit = vi.fn();

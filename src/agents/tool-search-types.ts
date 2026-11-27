@@ -106,6 +106,11 @@ export type ToolSearchCatalogRef = {
   loadsOnDemandTools?: true;
   /** On-demand tools this session already loaded; compaction keeps them direct. */
   promotedToolNames?: ReadonlySet<string>;
+  /**
+   * Set only by a runner that pins the session's tool listing: the names its pin sends, or on a
+   * series' first request the MCP tools chosen by size. Unset, every MCP tool stays deferred.
+   */
+  sessionPinnedToolNames?: ReadonlySet<string>;
   /** Set by a runner that loads an on-demand tool as soon as the model looks it up. */
   loadOnDemandTool?: (name: string) => void;
   directOnlyToolNames?: ReadonlySet<string>;
