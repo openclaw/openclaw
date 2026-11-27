@@ -193,7 +193,9 @@ try {
       const input = { config, workspaceDir, allowGatewaySubagentBinding: true };
       await withPluginRuntimeRegistryScope(root, async () => {
         const loadInbound = createPreparedInboundRegistryLoader();
-        const acquire = () => (prepared = loadInbound(input, metadata, []));
+        const getConfiguredHarnessRuntimes = () => [];
+        const acquire = () =>
+          (prepared = loadInbound(input, metadata, getConfiguredHarnessRuntimes));
         global.gc!();
         await nextTurn();
         const initial = await measure(1, acquire);

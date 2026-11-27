@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
-import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
@@ -49,7 +48,5 @@ it.each([
     for (const privateText of ["Fixture Person", "private-install", "812345"]) {
       expect(report.body).not.toContain(privateText);
     }
-    const local = renderUpdateRunReport(updateRunReportInputFromResult(result, recordedRun));
-    expect(local.lines.join("\n")).toContain(`Failing check managed-service-preflight (${code})`);
   }
 });

@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,11 +12,11 @@ class MobileUiHandler {
 
   suspend fun handleObserve(
     @Suppress("UNUSED_PARAMETER") paramsJson: String?,
-  ): GatewaySession.InvokeResult = unavailable()
+  ): InvokeResult = unavailable()
 
   suspend fun handleAct(
     @Suppress("UNUSED_PARAMETER") paramsJson: String?,
-  ): GatewaySession.InvokeResult = unavailable()
+  ): InvokeResult = unavailable()
 
-  private fun unavailable(): GatewaySession.InvokeResult = nodeInvokeError("MOBILE_UI_UNAVAILABLE", "accessibility control is not available on this build")
+  private fun unavailable(): InvokeResult = nodeInvokeError("MOBILE_UI_UNAVAILABLE", "accessibility control is not available on this build")
 }

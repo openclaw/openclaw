@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -12,12 +12,15 @@ import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifacts = createControlUiE2eArtifactDir("browser-pair-code-real-gateway");
-const uiRoot = path.join(artifacts, "control-ui");
 let gatewayInstance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "browser code pairing against a real Gateway",
   startServer: async () => {
-    await buildProductionControlUiE2e(uiRoot, "browser-pair-code-proof");
+    const prebuiltAssets = inject("controlUiE2ePrebuiltAssets");
+    const uiRoot = prebuiltAssets?.root ?? path.join(artifacts, "control-ui");
+    if (!prebuiltAssets) {
+      await buildProductionControlUiE2e(uiRoot, "browser-pair-code-proof");
+    }
     const instance = await createOpenClawTestInstance({
       name: "browser-pair-code",
       config: { gateway: { controlUi: { enabled: true, root: uiRoot } }, cron: { enabled: false } },

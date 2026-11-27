@@ -278,7 +278,7 @@ describe("requester settle dispatch deadline", () => {
     expect(foreground).toHaveBeenCalledOnce();
   });
 
-  it.each(["superseded sibling", "current killed child"] as const)(
+  it.each(["superseded sibling", "kill-reconciled sibling", "current killed child"] as const)(
     "dispatches an owed yielded cohort with a %s",
     async (scenario) => {
       const context = createContext();
@@ -294,10 +294,15 @@ describe("requester settle dispatch deadline", () => {
           resultText: "OBSOLETE-FINDING",
         },
         delivery: { status: "pending" },
-        suppressCompletionDelivery: true,
-        killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+        ...(scenario === "kill-reconciled sibling"
+          ? { killReconciliation: { killedAt: 3_000, suppressTaskDelivery: true } }
+          : {
+              suppressCompletionDelivery: true,
+              killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+            }),
       };
-      const rows = scenario === "superseded sibling" ? [child, obsolete] : [child];
+      const hasSibling = scenario !== "current killed child";
+      const rows = hasSibling ? [child, obsolete] : [child];
       if (scenario === "current killed child") {
         child.killReconciliation = { killedAt: 3_000 };
         child.suppressCompletionDelivery = true;
@@ -342,12 +347,14 @@ describe("requester settle dispatch deadline", () => {
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
       ).resolves.toBe(true);
       expect(received).toHaveLength(1);
-      expect(received[0]!.message).not.toContain("OBSOLETE-FINDING");
+      if (scenario === "superseded sibling") {
+        expect(received[0]!.message).not.toContain("OBSOLETE-FINDING");
+      }
       expect(received[0]!.message).toContain(
-        scenario === "superseded sibling" ? "child result" : "synthetic cancellation",
+        hasSibling ? "child result" : "synthetic cancellation",
       );
       expect(received[0]!.runId).toBe(
-        scenario === "superseded sibling"
+        hasSibling
           ? "announce:requester-settle:main:agent:main:main:settled-child,superseded-child:yield-1"
           : "announce:requester-settle:main:agent:main:main:settled-child:yield-1",
       );
@@ -357,6 +364,8 @@ describe("requester settle dispatch deadline", () => {
         expect.objectContaining({ delivered: true }),
         expect.any(Function),
       );
+      expect(rows.every((row) => row.requesterSettleWake === undefined)).toBe(true);
+      expect(child.completion?.resultText).toBe("child result");
       await expect(
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
       ).resolves.toBe(false);

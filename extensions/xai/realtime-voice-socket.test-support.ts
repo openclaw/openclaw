@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { vi } from "vitest";
 
 export class FakeWebSocket extends EventEmitter {
   static readonly OPEN = 1;
@@ -57,13 +56,3 @@ export class FakeWebSocket extends EventEmitter {
     this.close(1006, "terminated");
   }
 }
-
-export const isProviderAuthProfileConfiguredAsyncMock = vi.fn(
-  async (_params: { agentDir?: string }) => false,
-);
-
-export const resolveApiKeyForProviderMock = vi.fn(
-  async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
-    apiKey: undefined,
-  }),
-);

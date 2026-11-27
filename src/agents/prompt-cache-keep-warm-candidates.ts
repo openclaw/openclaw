@@ -1,10 +1,5 @@
-import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { classifySessionKeyShape, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  isAcpSessionKey,
-  isCronRunSessionKey,
-  isSubagentSessionKey,
-} from "../sessions/session-key-utils.js";
+import { isPromptCacheKeepWarmSessionKey } from "../sessions/prompt-cache-recovery.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -41,16 +36,6 @@ export function resolvePromptCacheKeepWarmLeadMs(ttlMs: number): number {
 
 export function promptCacheKeepWarmCandidateKey(agentId: string, sessionKey: string): string {
   return `${agentId}\u0000${sessionKey}`;
-}
-
-/** Machine-paced and internal sessions have no one coming back to a warm cache. */
-export function isPromptCacheKeepWarmSessionKey(sessionKey: string): boolean {
-  return !(
-    isCronRunSessionKey(sessionKey) ||
-    isSubagentSessionKey(sessionKey) ||
-    isAcpSessionKey(sessionKey) ||
-    isInternalSessionEffectsKey(sessionKey)
-  );
 }
 
 /**

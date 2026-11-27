@@ -69,23 +69,12 @@ export function recordUpdateModelRetirement(
     },
     { env },
   );
-  if (status === "completed") {
-    recordUpdateRunStep(
-      run.runId,
-      {
-        step: `warning:${RETIREMENT_STEP}:deferred`,
-        status: "skipped",
-        detail,
-      },
-      { env },
-    );
-  }
-  // Completion must follow the package warnings in the bounded status history.
+  // Update the same warning row so durable completion retires the pending warning.
   recordUpdateRunStep(
     run.runId,
     {
-      step: `warning:${RETIREMENT_STEP}${status === "deferred" ? ":deferred" : ""}`,
-      status: "completed",
+      step: `warning:${RETIREMENT_STEP}:deferred`,
+      status: status === "deferred" ? "completed" : "skipped",
       detail,
     },
     { env },

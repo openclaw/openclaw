@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
+import { NativeWorker } from "../infra/worker-native-handle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as jitiFactory from "./jiti-factory.js";
 import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
@@ -76,6 +77,7 @@ it.each([
       { stateDir: makePluginLoaderTempDir(), placement: "state" },
       () =>
         withPluginCache(cache, async () => {
+          const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
           const visit = vi.spyOn(sourceReferences, "visitPluginSourceReferences");
           const createResolver = vi.spyOn(jitiFactory, "createJiti");
           const options = {
@@ -97,6 +99,15 @@ it.each([
           if (mode === "async") {
             expect(visit).not.toHaveBeenCalled();
             expect(createResolver).not.toHaveBeenCalled();
+            const workers = new Set(
+              posts.mock.contexts.filter(
+                (worker): worker is NativeWorker =>
+                  worker instanceof NativeWorker &&
+                  worker.sourcePath?.includes("plugin-generation-preparation") === true,
+              ),
+            );
+            expect(workers.size).toBe(1);
+            expect([...workers][0]?.executionStopped).toBe(true);
           } else {
             expect(visit).toHaveBeenCalled();
           }
@@ -105,15 +116,38 @@ it.each([
             () => {},
           )!;
           fs.unlinkSync(dependency);
-          for (const name of ["state-operation-api.cjs", "other-operation-api.cjs"]) {
-            expect(
-              loadValidatedPublicSurfaceModule({
-                ...source.resolve(name),
-                capturedSource: true,
-                surfaceLabel: "bundled operation fixture",
-              }),
-            ).toMatchObject({ value: "captured" });
+          const readOperation = (owner: typeof source, name: string) =>
+            loadValidatedPublicSurfaceModule({
+              ...owner.resolve(name),
+              capturedSource: true,
+              surfaceLabel: "bundled operation fixture",
+            });
+          expect(readOperation(source, "state-operation-api.cjs")).toMatchObject({
+            value: "captured",
+          });
+          if (mode === "async") {
+            fs.writeFileSync(dependency, "exports.value = 'replacement';");
+            // A new installation root has its own bundled module identity. Reusing the same
+            // loaded export after an in-place edit intentionally requires a Gateway restart.
+            const nextRoot = makePluginLoaderTempDir();
+            fs.cpSync(bundled, nextRoot, { recursive: true });
+            process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = nextRoot;
+            await using replacement = createPluginCache();
+            await withPluginCache(replacement, async () => {
+              const next = await loadOpenClawPluginsAsync({ ...options, cache: false });
+              const nextRecord = next.plugins.find(({ id }) => id === plugin.id)!;
+              const nextSource = capturePluginStateOperationModuleSource(
+                getPluginInstance(nextRecord),
+                () => {},
+              )!;
+              expect(readOperation(nextSource, "other-operation-api.cjs")).toMatchObject({
+                value: "replacement",
+              });
+            });
           }
+          expect(readOperation(source, "other-operation-api.cjs")).toMatchObject({
+            value: "captured",
+          });
         }),
     );
   },

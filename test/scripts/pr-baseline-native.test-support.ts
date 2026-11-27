@@ -130,7 +130,7 @@ export function createBaselineFixture(
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
   seedRepository?: (repo: string) => void,
-  reviewMode: "correction" | "ready" = "correction",
+  reviewMode: "correction" | "ready" | "incoming" = "correction",
 ) {
   const repo = join(root, "repo");
   const home = join(root, "home");
@@ -300,7 +300,7 @@ if (args[0] === 'api' && args[1] === 'user') {
     area: product[0]!,
     fix: "Repair behavior",
   });
-  if (reviewMode === "ready") {
+  if (reviewMode !== "correction") {
     review.recommendation = "READY FOR /prepare-pr";
     review.findings = [];
   }
@@ -316,7 +316,12 @@ if (args[0] === 'api' && args[1] === 'user') {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return result;
   };
-  pass(reviewMode === "ready" ? "prepare-init" : "prepare-correction-init");
+  if (reviewMode === "incoming") {
+    writeLocal("review-context.env", `MERGE_BASE=${base}\n`);
+    pass("review-validate-artifacts");
+  } else {
+    pass(reviewMode === "ready" ? "prepare-init" : "prepare-correction-init");
+  }
   if (reviewMode === "correction") {
     writeProduct(worktree, product, "corrected\n");
     commit(worktree, "fix: fixture correction");

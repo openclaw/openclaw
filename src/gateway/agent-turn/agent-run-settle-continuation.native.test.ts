@@ -451,6 +451,34 @@ describe("requester-settle processing survives later user turns", () => {
     await expectCompletedReplay(before, preparePeer);
     expect(reads.command).not.toHaveBeenCalled();
   });
+
+  it("persists hidden returned peer-delivery notices with display=false", async () => {
+    const delivery: Parameters<typeof withSessionSendDelivery>[0]["delivery"] = {
+      version: 1,
+      runId,
+      source: { agentId: "main", sessionId: "peer-source", sessionKey: sourceSessionKey },
+      target: { agentId: "main", sessionId, sessionKey },
+      sandboxed: false,
+      message: "sessions_send delivery failed",
+      returnedResult: { extraSystemPrompt: "Report the failure.", hideInput: true },
+    };
+    const hidden = await withSessionSendDelivery({ delivery }, () =>
+      prepare({
+        settleWakeReplay: undefined,
+        inputProvenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
+      }),
+    );
+    expect(hidden.recorder!.getPendingInputMessage!()).toMatchObject({ display: false });
+    await hidden.recorder!.persistApproved();
+    await complete(hidden);
+    await release(hidden);
+    expect(await loadTranscriptEvents(scope())).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ role: "user", display: false }),
+      }),
+    );
+  });
 });
 
 it("keeps the committed child target and later owner metadata through input persistence", async () => {

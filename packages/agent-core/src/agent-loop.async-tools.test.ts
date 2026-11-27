@@ -215,22 +215,13 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   },
 );
 
-it("forwards unchanged updates without copying events or inspecting prior content", async () => {
+it("forwards unchanged updates while isolating provider message snapshots", async () => {
   const message = fixtures.makeAssistantMessage([
     { type: "thinking", thinking: "synthetic thought" },
     { type: "text", text: "answer" },
     fixtures.makeCall("lookup"),
   ]);
   message.stopReason = "stop";
-  let blockReads = 0;
-  message.content = new Proxy(message.content, {
-    get(target, key, receiver) {
-      if (key === "0") {
-        blockReads++;
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
   const updates: AssistantMessageEvent[] = [
     { type: "thinking_start", contentIndex: 0, partial: message },
     { type: "thinking_delta", contentIndex: 0, delta: "synthetic thought", partial: message },
@@ -241,25 +232,21 @@ it("forwards unchanged updates without copying events or inspecting prior conten
     { type: "toolcall_start", contentIndex: 2, partial: message },
     { type: "toolcall_delta", contentIndex: 2, delta: "{}", partial: message },
   ];
-  const readsAtUpdate: number[] = [];
+  let updateIndex = 0;
   await runAgentLoop(
     [fixtures.user("hello")],
     { systemPrompt: "", messages: [] },
     fixtures.config,
     (event) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        blockReads = 0;
-      }
       if (event.type === "message_update") {
-        expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
-        readsAtUpdate.push(blockReads);
+        expect(event.assistantMessageEvent).toBe(updates[updateIndex++]);
         expect(event.message).not.toBe(message);
       }
     },
     undefined,
     () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
   );
-  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+  expect(updateIndex).toBe(updates.length);
 });
 
 it("does not commit an async fragment when a listener changes an ordinary update type", async () => {

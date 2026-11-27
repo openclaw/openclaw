@@ -31,24 +31,6 @@ it("preserves authored tags through projection and list-marker removal", () => {
   expect(Object.keys(stripped)).not.toContain("htmlTags");
 });
 
-it.each([
-  ["heading", "native", makeIR("Title", [style(0, 5, "heading_2")]), ["Title", ["heading_2"], 0]],
-  ["linkLabel", "strip", makeIR("docs", [], [link(0, 4)]), ["docs", [], 0]],
-  [
-    "codeLanguage",
-    "fallback",
-    makeIR("const x = 1;", [{ start: 0, end: 12, style: "code_block", language: "ts" }]),
-    ["const x = 1;", ["code_block"], 0],
-  ],
-] as const)("%s: %s", (construct, support, ir, expected) => {
-  const actual = project(ir, { [construct]: support });
-  expect([
-    actual.text,
-    actual.styles.map((span) => (span.language ? `${span.style}:${span.language}` : span.style)),
-    actual.links.length,
-  ]).toEqual(expected);
-});
-
 it("keeps link suffixes outside surrounding styles", () => {
   const ir = makeIR("see docs now", [style(0, 12, "bold")], [link(4, 8)]);
   expect(project(ir, { linkLabel: "fallback" })).toEqual({
@@ -56,12 +38,6 @@ it("keeps link suffixes outside surrounding styles", () => {
     styles: [style(0, 8, "bold"), style(30, 34, "bold")],
     links: [],
   });
-});
-
-it("merges heading fallback with authored bold and respects stripped bold", () => {
-  const ir = makeIR("Title", [style(0, 5, "heading_1"), style(0, 5, "bold")]);
-  expect(project(ir, { heading: "fallback" }).styles).toEqual([style(0, 5, "bold")]);
-  expect(project(ir, { heading: "fallback", bold: "strip" }).styles).toEqual([]);
 });
 
 it("does not infer list constructs from literal code or escaped markers", () => {

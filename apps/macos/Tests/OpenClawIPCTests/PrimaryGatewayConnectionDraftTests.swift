@@ -199,7 +199,7 @@ struct PrimaryGatewayConnectionDraftTests {
 
             let root = OpenClawConfigFile.loadDict()
             #expect(GatewayRemoteConfig.resolveTransport(root: root) == .direct)
-            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://new.example.test:443")
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://new.example.test")
             #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "new-test-token")
         }
     }

@@ -6,6 +6,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as sessionDiff from "../sessions/session-diff.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -23,6 +24,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
 import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
 import * as fileAssets from "./server-methods/sessions-file-assets.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
@@ -142,6 +144,50 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("keeps an admitted invited workspace target after membership removal", async () => {
+    await withScopedReader(
+      "invited-workspace-reader",
+      async ({ reader, context }) => {
+        const entry = { sessionId: "invited-workspace", updatedAt: 1 };
+        await seed(entry);
+        await addSessionMember(scope, {
+          identityId: reader.authenticatedUserProfile!.profileId,
+          addedBy: "owner",
+          addedAt: 1,
+        });
+        const read = await retainSessionScopedRead(
+          {
+            req: gatewayRequest("workspace", "sessions.files.list", { sessionKey: key }),
+            params: {},
+            client: reader,
+            context,
+            respond: vi.fn(),
+            isWebchatConnect: () => false,
+          },
+          key,
+          "main",
+          { retain: true },
+        );
+        try {
+          await removeSessionMember(scope, reader.authenticatedUserProfile!.profileId);
+          expect(
+            read!.isInvitedWorkspaceTarget({ agentId: "main", canonicalKey: key, entry }),
+          ).toBe(true);
+          expect(
+            read!.isInvitedWorkspaceTarget({
+              agentId: "main",
+              canonicalKey: key,
+              entry: { sessionId: "replacement" },
+            }),
+          ).toBe(false);
+        } finally {
+          read?.release();
+        }
+      },
+      { role: "invited" },
+    );
+  });
+
   it("admits CSP previews for session-only readers and revokes resources when sharing ends", async () => {
     await withScopedReader("preview-reader", async ({ state, reader, context }) => {
       reader.connId = "narrow-preview";

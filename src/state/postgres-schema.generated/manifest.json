@@ -493,6 +493,16 @@
       "file": "fragment-skill_workshop_changes.postgres.sql"
     },
     {
+      "id": "skill_workshop_activity",
+      "tables": [
+        "skill_workshop_activity"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-skill_workshop_activity.postgres.sql"
+    },
+    {
       "id": "worker_environment_ssh_fallback_ports",
       "tables": [
         "worker_environment_ssh_fallback_ports"

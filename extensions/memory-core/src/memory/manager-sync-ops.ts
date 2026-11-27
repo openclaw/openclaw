@@ -94,9 +94,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
 
   protected createConfiguredEmbeddingProvider(
     request = resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+    createProvider = this.createProvider,
   ) {
     return createEmbeddingProvider({
-      createProvider: this.createProvider,
+      createProvider,
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
       ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),

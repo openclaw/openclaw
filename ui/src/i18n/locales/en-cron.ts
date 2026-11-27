@@ -421,6 +421,7 @@ const enCron = {
       unavailable:
         "MCP Events is unavailable. Enable and configure the plugin to manage this source.",
       discoveryFailed: "Couldn’t load events. Refresh the catalog before saving.",
+      catalogUnavailable: "Couldn’t load events. Try {action}. Details: {error}",
       catalogMismatch: "The event catalog returned a different server. Refresh and try again.",
       catalogCursor: "The event catalog repeated a page. Check the MCP server and refresh.",
       catalogLimit:

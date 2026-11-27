@@ -11,9 +11,8 @@ export async function prepareRecoveredParticipation(params: {
   context: GatewayRequestContext;
   authority: AdmittedRunOperatorAuthority;
   ceiling: BoundParticipationCeiling;
-  revoke: (cause?: unknown) => void;
 }) {
-  const { authority, ceiling: retained, revoke } = params;
+  const { authority, ceiling: retained } = params;
   const { prepareSessionPrincipalRunAuthority } =
     await import("./session-sharing-authorization-async.js");
   if (authority.profileId !== retained.profileId) {
@@ -32,22 +31,15 @@ export async function prepareRecoveredParticipation(params: {
     },
     assertCurrent: () => authority.signal?.throwIfAborted(),
   });
-  const signal = access.authority.signal;
-  const onRevoked = () => revoke(signal?.reason);
-  const release = () => {
-    signal?.removeEventListener("abort", onRevoked);
-    access.release();
-  };
   try {
     if (!access.participationCeiling) {
       throw new OperatorRefusalError("invitation-ended");
     }
     const ceiling = intersectParticipationCeilings(retained, access.participationCeiling);
-    signal?.addEventListener("abort", onRevoked, { once: true });
     access.assertCurrent();
-    return { ceiling, assertCurrent: access.assertCurrent, release };
+    return { ceiling, assertCurrent: access.assertCurrent, release: access.release };
   } catch (error) {
-    release();
+    access.release();
     throw error;
   }
 }

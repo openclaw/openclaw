@@ -291,6 +291,42 @@ describe("grouped chat rendering", () => {
     expectAbsent(".chat-tool-row--running");
   });
 
+  it("distinguishes missing results from unknown outcomes in raw command history", async () => {
+    const call = createAssistantMessage(
+      [
+        createToolCall("check", "exec", { command: "check-workspace" }),
+        createToolCall("list", "exec", { command: "list-workspace" }),
+      ],
+      { timestamp: 1 },
+    );
+    const completed = createToolResultMessage("list", "exec", "Files listed.", {
+      timestamp: 2,
+      isError: false,
+    });
+    const renderRawHistory = async (messages: TestMessage[]) => {
+      renderActivityGroup(groupsOf(buildItems({ messages })), {
+        showReasoning: false,
+        runActive: false,
+        ...expandedTools,
+      });
+      await settleToolBridges(harness.view);
+    };
+
+    await renderRawHistory([call, completed]);
+    expect(elementText(".chat-activity-group__summary")).toContain("Ran commands");
+    expect(elementText(".chat-activity-group__summary")).not.toContain("Outcome unknown");
+    expect(harness.view.textContent).toContain("No result available.");
+
+    const unknown = createToolResultMessage("check", "exec", "Execution response.", {
+      timestamp: 3,
+      __openclaw: {
+        toolOutput: { source: "execution", modelInput: "unverified", outcome: "unknown" },
+      },
+    });
+    await renderRawHistory([call, completed, unknown]);
+    expect(elementText(".chat-activity-group__summary")).toContain("Outcome unknown");
+  });
+
   it("keeps aggregate expansion and accessibility ids stable when groups append", () => {
     const groups = ["first", "second", "third"].map((key, index) =>
       createToolGroup(`stable-${key}`, [
@@ -422,7 +458,9 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
+            expanded ? "Viewed 3 images" : undefined,
+          );
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);

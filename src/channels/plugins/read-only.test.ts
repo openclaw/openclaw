@@ -23,7 +23,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { channelHasConfiguredState, resolveChannelAccount } from "../account-resolution.js";
-import { buildChannelUiCatalog } from "./catalog.js";
 import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
@@ -158,20 +157,6 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
-  it("resolves selected channel setup through the async preparation path", async () => {
-    const fixture = setupFixture();
-    await using cache = createPluginCache();
-    await withPluginCache(cache, () =>
-      withPluginGenerationSourceCustody(async () => {
-        const plugins = await listReadOnlyChannelPluginsForConfigAsync(
-          fixture.cfg,
-          coldOptions(true),
-        );
-        expectExternalChatSetupOnlyPluginLoaded({ ...fixture, plugins });
-      }),
-    );
-  });
-
   it.each(["worker", "cleanup"] as const)(
     "propagates fatal %s failure from async channel preparation",
     async (kind) => {
@@ -437,41 +422,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(pluginIds(read())).not.toContain(channelId);
     fs.writeFileSync(persistedAuthPath, "linked again", "utf8");
     expect(read().find((plugin) => plugin.id === channelId)).toBe(linked);
-    expectMarkers(setupMarker, fullMarker);
-  });
-
-  it("keeps package presentation on its declared channel", () => {
-    const { list, fullMarker, setupMarker } = externalFixture(
-      {
-        manifestChannelIds: ["external-chat", "sibling-chat"],
-        manifestChannelConfig: true,
-        packagePresentation: {
-          selectionLabel: "Package Chat (picker)",
-          detailLabel: "Package Chat Bot",
-          systemImage: "bubble.left",
-        },
-      },
-      {
-        "external-chat": { token: "configured" },
-        "sibling-chat": { token: "configured" },
-      },
-    );
-    const catalog = buildChannelUiCatalog(list());
-    expect(catalog.entries).toEqual(
-      expect.arrayContaining([
-        {
-          id: "external-chat",
-          label: "External Chat Manifest",
-          detailLabel: "Package Chat Bot",
-          systemImage: "bubble.left",
-        },
-        {
-          id: "sibling-chat",
-          label: "External Chat Manifest",
-          detailLabel: "External Chat Manifest",
-        },
-      ]),
-    );
     expectMarkers(setupMarker, fullMarker);
   });
 
