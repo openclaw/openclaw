@@ -323,3 +323,25 @@ it("selects the exec completion tests when the owed-result owner changes", () =>
     expect(selected.has(test), test).toBe(true);
   }
 });
+
+it("keeps reset-fork coverage when the parent-fork transcript owner changes", () => {
+  const source = "src/config/sessions/session-accessor.sqlite-parent-fork.ts";
+  const ownerTest = "src/config/sessions/session-accessor.parent-fork.test.ts";
+  const resetFork = "src/gateway/server.sessions.create.reset-fork.test.ts";
+  const options = {
+    selectionMode: "aggressive" as const,
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  const changedPaths = [source, ownerTest];
+  const targets = resolveChangedNodeTestTargets(changedPaths, options);
+  expect(targets).toContain(resetFork);
+  expect(
+    selectedFiles(
+      createChangedNodeTestShards(changedPaths, { ...options, selectedTestTargets: targets }),
+    ),
+  ).toContain(resetFork);
+  const testOnly = resolveChangedNodeTestTargets([ownerTest], options);
+  expect(testOnly).toContain(ownerTest);
+  expect(testOnly).not.toContain(resetFork);
+});
