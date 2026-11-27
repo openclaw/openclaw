@@ -2,13 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { formatUiError } from "../../../lib/format-error.ts";
-import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  openRealtimeTalkCamera,
-  RealtimeTalkInputOwner,
-} from "./input.ts";
+import { openRealtimeTalkCamera, RealtimeTalkInputOwner } from "./input-acquisition.ts";
+import { discoverRealtimeTalkDevices, observeRealtimeTalkDevices } from "./input.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
@@ -176,7 +171,7 @@ describe("realtime Talk microphone inputs", () => {
       getUserMedia,
     });
 
-    await expect(discoverRealtimeTalkInputs(() => false)).resolves.toEqual({
+    await expect(discoverRealtimeTalkDevices(() => false, "audioinput")).resolves.toEqual({
       devices: [
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "usb", label: "Microphone 2" },
@@ -202,7 +197,7 @@ describe("realtime Talk microphone inputs", () => {
     }));
     vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
 
-    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkDevices(() => true, "audioinput")).resolves.toEqual({
       devices: [
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "loopback", label: "Loopback Audio" },
@@ -231,7 +226,7 @@ describe("realtime Talk microphone inputs", () => {
       },
     });
 
-    const result = await discoverRealtimeTalkInputs(() => true);
+    const result = await discoverRealtimeTalkDevices(() => true, "audioinput");
 
     expect(result.devices).toEqual([]);
     expect(result.permissionRequired).toBe(true);
@@ -248,7 +243,7 @@ describe("realtime Talk microphone inputs", () => {
       },
     });
 
-    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkDevices(() => true, "audioinput")).resolves.toEqual({
       devices: [],
       permissionRequired: true,
       issue: "none-found",
@@ -271,7 +266,7 @@ describe("realtime Talk microphone inputs", () => {
   it("reports an unsupported enumeration instead of a generic access failure", async () => {
     stubMediaDevices({});
 
-    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkDevices(() => true, "audioinput")).resolves.toEqual({
       devices: [],
       permissionRequired: false,
       issue: "list-unsupported",
@@ -431,7 +426,7 @@ describe("realtime Talk camera inputs", () => {
     const getUserMedia = vi.fn(async () => stream);
     stubMediaDevices({ enumerateDevices, getUserMedia });
 
-    await expect(discoverRealtimeTalkCameras(() => true)).resolves.toEqual({
+    await expect(discoverRealtimeTalkDevices(() => true, "videoinput")).resolves.toEqual({
       devices: [{ deviceId: "camera", label: "Desk Camera" }],
       permissionRequired: false,
       issue: null,

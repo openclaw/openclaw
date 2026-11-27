@@ -1,8 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
+  discoverRealtimeTalkDevices,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
 } from "../chat/talk/input.ts";
@@ -32,18 +31,12 @@ export function createMediaDevicePreferences(
     }
     device.requestsPermission = requestPermission;
     device.selection = null;
-    const discover =
-      kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
-    const request = discover(() => device.requestsPermission)
+    const mediaKind = kind === "microphone" ? "audioinput" : "videoinput";
+    const request = discoverRealtimeTalkDevices(() => device.requestsPermission, mediaKind)
       .then((result) => {
         device.devices = result.devices;
         device.permissionRequired = result.permissionRequired;
-        return result.issue
-          ? realtimeTalkDeviceIssueMessage(
-              result.issue,
-              kind === "microphone" ? "audioinput" : "videoinput",
-            )
-          : null;
+        return result.issue ? realtimeTalkDeviceIssueMessage(result.issue, mediaKind) : null;
       }, formatUiError)
       .finally(() => {
         device.activeDiscovery = null;

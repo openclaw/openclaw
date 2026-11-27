@@ -8,7 +8,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme-builtins.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
 import type { CatalogTheme } from "../../app/theme-catalog.ts";

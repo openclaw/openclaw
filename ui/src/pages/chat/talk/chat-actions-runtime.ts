@@ -6,7 +6,8 @@ import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import type { ChatRealtimeState, stopChatRealtimeTalk } from "../chat-realtime.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
-import { discoverRealtimeTalkCameras, RealtimeTalkSelectedMicrophoneError } from "./input.ts";
+import { RealtimeTalkSelectedMicrophoneError } from "./input-acquisition.ts";
+import { discoverRealtimeTalkDevices } from "./input.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { SplitTalkOptions } from "./split.ts";
 import { RealtimeTalkVoiceSelection } from "./voice-selection.ts";
@@ -34,7 +35,7 @@ const showCameraError = (state: ChatRealtimeState, error: unknown) => {
   });
 };
 async function refreshCameraDevices(state: ChatRealtimeState, session: RealtimeTalkSession) {
-  const result = await discoverRealtimeTalkCameras(() => false);
+  const result = await discoverRealtimeTalkDevices(() => false, "videoinput");
   if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
     state.realtimeTalk.update({ realtimeTalkCameraDevices: result.devices });
   }

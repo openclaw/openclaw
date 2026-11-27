@@ -1,5 +1,5 @@
 import { listen } from "../../../lib/reactive/listener.ts";
-import { openRealtimeTalkCamera } from "./input.ts";
+import { openRealtimeTalkCamera } from "./input-acquisition.ts";
 
 type RealtimeTalkCameraOwnerOptions = {
   getDeviceId: () => string | undefined;

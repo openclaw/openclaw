@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
-  discoverRealtimeTalkInputs,
+  discoverRealtimeTalkDevices,
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
@@ -129,8 +129,9 @@ export class ComposerMicrophoneOwner extends EventTarget {
     const request = ++this.discoveryRequest;
     this.dispatchEvent(new Event("change"));
     // A closed or replaced picker cannot turn delayed discovery into a prompt.
-    const result = await discoverRealtimeTalkInputs(
+    const result = await discoverRealtimeTalkDevices(
       () => this.open && request === this.discoveryRequest,
+      "audioinput",
     ).catch(() => ({ devices: [], issue: "failed" as const }));
     if (request !== this.discoveryRequest) {
       return;

@@ -2,7 +2,7 @@ import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
-import { MicrophoneActivity } from "./chat-voice-activity.tsx";
+import { MicrophoneActivity } from "./chat-microphone-activity.tsx";
 
 // Dictation feedback starts on the click itself: pulsing bars while the microphone
 // opens, then the live input level while listening. The permission hint only

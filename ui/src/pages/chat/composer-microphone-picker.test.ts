@@ -165,7 +165,7 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     vi.stubGlobal("navigator", {
       mediaDevices: { enumerateDevices, getUserMedia, addEventListener, removeEventListener },
     });
-    const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs");
+    const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkDevices");
     picker = new ComposerMicrophoneOwner();
     picker.handleOpen();
     expect(enumerateDevices).toHaveBeenCalledOnce();

@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { MicrophoneActivity } from "../components/chat-voice-activity.tsx";
+import { MicrophoneActivity } from "../components/chat-microphone-activity.tsx";
 import { RealtimeTalkLevelSignal } from "./level.ts";
 import type { createMicrophoneMeter } from "./microphone-meter.ts";
 import type { RealtimeTalkStatus } from "./session.ts";

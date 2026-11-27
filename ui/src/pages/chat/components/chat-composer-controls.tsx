@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
+import { Errored, Loading, Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
@@ -18,12 +18,15 @@ import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
+import { voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 registerEnglishCatalog(registerSessionNavigationEnglish);
 
 const MicrophoneMenu = lazy(() => import("./chat-composer-microphone-menu.tsx"), {
   export: "MicrophoneMenu",
+});
+const MicrophoneActivity = lazy(() => import("./chat-microphone-activity.tsx"), {
+  export: "MicrophoneActivity",
 });
 
 // The device affordance and microphone hint share one pointer-intent window.
@@ -495,10 +498,15 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
                 {voiceErrored() ? null : (
-                  <MicrophoneActivity
-                    status={props.voiceStatus}
-                    inputLevel={props.voiceInputLevel}
-                  />
+                  // The decorative meter must not suspend or replace the Stop button.
+                  <Errored fallback={() => null}>
+                    <Loading fallback={null}>
+                      <MicrophoneActivity
+                        status={props.voiceStatus}
+                        inputLevel={props.voiceInputLevel}
+                      />
+                    </Loading>
+                  </Errored>
                 )}
                 <span class="chat-send-btn__voice-stop-glyph">
                   <Icon name="stop" />

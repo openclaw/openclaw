@@ -26,7 +26,7 @@ const expectEventually = (read: () => unknown, expected: unknown) =>
   waitForSolid(() => expect(read()).toEqual(expected));
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
-  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(discover);
+  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkDevices").mockImplementation(discover);
 });
 afterEach(() => resetComposerFixture(() => discover.mockReset()));
 

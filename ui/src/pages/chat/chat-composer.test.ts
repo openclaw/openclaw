@@ -14,10 +14,11 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
+import { RealtimeTalkInputOwner } from "./talk/input-acquisition.ts";
 import { MockDictationAudioContext } from "./talk/input.test-support.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
-const discoverRealtimeTalkInputsMock = vi.fn();
+const discoverRealtimeTalkDevicesMock = vi.fn();
 const openMicrophoneMock = vi.fn();
 function renderComposer(overrides: Parameters<typeof props>[0], attached = false) {
   const container = createComposerContainer();
@@ -168,17 +169,15 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
-  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
-    discoverRealtimeTalkInputsMock,
+  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkDevices").mockImplementation(
+    discoverRealtimeTalkDevicesMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
-    openMicrophoneMock,
-  );
+  vi.spyOn(RealtimeTalkInputOwner.prototype, "open").mockImplementation(openMicrophoneMock);
 });
 
 afterEach(async () => {
   await resetComposerFixture(() => {
-    discoverRealtimeTalkInputsMock.mockReset();
+    discoverRealtimeTalkDevicesMock.mockReset();
     openMicrophoneMock.mockReset();
   });
 });
@@ -461,7 +460,7 @@ it("keeps the dictation button stable through hold progress and latch", async ()
 });
 
 it("keeps the microphone picker open without leaking an unavailable hold into Talk", async () => {
-  discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+  discoverRealtimeTalkDevicesMock.mockResolvedValue({ devices: [], issue: "none-found" });
   const onToggleRealtimeTalk = vi.fn();
   const { container, query } = await mountTalk(
     { realtime: { ready: true }, transcription: { ready: false } },

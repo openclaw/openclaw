@@ -1,7 +1,7 @@
 import {
-  BUILTIN_THEMES,
+  builtinThemeBrandingOverrides,
   resolveThemeBranding,
-} from "../../../packages/gateway-protocol/src/theme.ts";
+} from "../../../packages/gateway-protocol/src/theme-builtin-branding.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -25,8 +25,7 @@ import { applyTypefaceOverrides, resolveTypefaces, syncTypefaceStylesheets } fro
 
 function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   return (
-    catalogTheme?.branding ??
-    resolveThemeBranding(BUILTIN_THEMES.find((theme) => theme.id === settings.theme))
+    catalogTheme?.branding ?? resolveThemeBranding(builtinThemeBrandingOverrides(settings.theme))
   );
 }
 

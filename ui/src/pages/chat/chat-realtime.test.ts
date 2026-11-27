@@ -14,7 +14,7 @@ import {
   stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import { RealtimeTalkSelectedMicrophoneError } from "./talk/input.ts";
+import { RealtimeTalkSelectedMicrophoneError } from "./talk/input-acquisition.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
 import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
 
