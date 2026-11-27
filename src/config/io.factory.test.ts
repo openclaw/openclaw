@@ -11,6 +11,7 @@ beforeAll(() => roots.setup());
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
   vi.doUnmock("./io.write.js");
+  vi.doUnmock("../infra/update-doctor-result.js");
   const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
   closeOpenClawStateDatabaseForTest();
 });
@@ -77,10 +78,15 @@ it.each([
   }
 });
 
-it("reads and records normal observation without importing the writer", async () => {
+it("reads and records normal observation without importing the writer or Doctor result handling", async () => {
   const loadWriter = vi.fn().mockRejectedValue(new Error("read imported the config writer"));
   // mock-isolation: Fail if the read-only path imports the config writer.
   vi.doMock("./io.write.js", loadWriter);
+  // mock-isolation: Loading update result handling here would also load database migration code.
+  const loadDoctorResult = vi.fn(() => {
+    throw new Error("read imported Doctor result handling");
+  });
+  vi.doMock("../infra/update-doctor-result.js", loadDoctorResult);
   const { io, configPath, raw, readRaw, health } = await fixture();
 
   expect(io.loadConfig().gateway?.port).toBe(18789);
@@ -94,6 +100,7 @@ it("reads and records normal observation without importing the writer", async ()
   });
   expect(await readRaw()).toBe(raw);
   expect(loadWriter).not.toHaveBeenCalled();
+  expect(loadDoctorResult).not.toHaveBeenCalled();
 });
 
 it("honors per-call unobserved mutation reads without disabling write auditing", async () => {
