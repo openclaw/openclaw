@@ -28,6 +28,7 @@ import type {
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuResolvedProps,
 } from "./chat-composer-plus-menu.types.ts";
+import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
 
 registerEnglishCatalog(registerChatComposerMenuEnglish);
 
@@ -44,6 +45,7 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
     uploadsEnabled(menu.attachments.uploadConfig),
     menu.showCapabilities,
     Boolean(menu.capabilityMenu),
+    Boolean(menu.correctionControls),
   );
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
@@ -87,6 +89,16 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
         entries.push(menuDivider("plugin-actions-divider"));
       }
       entries.push(...plugins);
+    }
+    if (menu.correctionControls) {
+      entries.push({
+        id: "open-microphone",
+        label: t("chat.composer.microphoneInput"),
+        class: "agent-chat__capability-menu-item",
+        icon: <Icon name="mic" />,
+        details: menuChevron(),
+        closeOnSelect: false,
+      });
     }
     if (!entries.length) {
       return attachments;
@@ -219,6 +231,11 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
       changeView(`plugin:${value.slice("plugin:".length)}`);
       return;
     }
+    if (value === "open-microphone") {
+      event.preventDefault();
+      changeView("microphone");
+      return;
+    }
     if (value === "back") {
       event.preventDefault();
       changeView("root");
@@ -281,6 +298,22 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
   );
   const items = createMemo(
     (): MenuEntry[] => {
+      if (props.view === "microphone") {
+        return [
+          renderBackRow(t("chat.composer.microphoneInput")),
+          {
+            kind: "content",
+            id: "spoken-corrections",
+            content: (
+              <Show when={props.menu.correctionControls}>
+                {(controls) => (
+                  <ComposerCorrectionControls {...controls()} menuControls={props.controls} />
+                )}
+              </Show>
+            ),
+          },
+        ];
+      }
       if (!props.view.startsWith("plugin:")) {
         return rootItems(rootInputs().menu);
       }
@@ -316,7 +349,9 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
   });
   return (
     <Show
-      when={props.view === "root" || props.view.startsWith("plugin:")}
+      when={
+        props.view === "root" || props.view === "microphone" || props.view.startsWith("plugin:")
+      }
       fallback={
         <Subview
           {...props}

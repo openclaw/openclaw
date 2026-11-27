@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
@@ -232,14 +232,6 @@ export function MicrophoneMenu(props: {
           details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
         });
       }
-      const corrections = props.picker.correctionControls;
-      if (corrections) {
-        entries.push({
-          kind: "content",
-          id: "spoken-corrections",
-          content: <ComposerCorrectionControls {...corrections} menuControls={props.controls} />,
-        });
-      }
       return entries;
     },
     { lazy: true },
@@ -248,5 +240,14 @@ export function MicrophoneMenu(props: {
     props.onReady(items);
     return () => props.onReady(undefined);
   });
-  return <>{props.renderItems(items)}</>;
+  return (
+    <>
+      {props.renderItems(items)}
+      <Show when={props.picker.correctionControls}>
+        {(corrections) => (
+          <ComposerCorrectionControls {...corrections()} menuControls={props.controls} />
+        )}
+      </Show>
+    </>
+  );
 }

@@ -605,6 +605,8 @@ export function renderChatComposerView(
                     pluginActions: readPluginActions()?.(),
                     inputHandle,
                     capabilityMenu: props.capabilityMenu,
+                    correctionControls:
+                      context().runControlsProps.microphonePicker?.correctionControls,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
                     view: capabilityView(),
@@ -664,8 +666,8 @@ export function renderChatComposerView(
               </div>
             </div>
           </div>
-          <ChatComposerCorrections context={context()} />
           <ComposerWidthEdge options={() => props} shell={() => shell} />
+          <ChatComposerCorrections context={context()} />
         </regions.ComposerInputScope>
       ) : memberWelcome.active() ? (
         memberWelcome.step()

@@ -46,14 +46,22 @@ it.each([390, 1100])(
       onToggleRealtimeTalk: vi.fn(),
     });
     renderComposerInto(container, props);
-    const microphoneMenu = page.getByRole("button", { name: "Microphone input", exact: true });
+    const button = (name: string) => page.getByRole("button", { name, exact: true });
+    const trigger = button(width === 390 ? "Add attachment" : "Microphone input");
     const policy = page.getByRole("combobox", { name: "Spoken corrections" });
-    await expect.element(microphoneMenu).toBeInTheDocument();
-    (microphoneMenu.element() as HTMLElement).focus();
+    await expect.element(trigger).toBeInTheDocument();
+    (trigger.element() as HTMLElement).focus();
     await userEvent.keyboard("{ArrowDown}");
+    if (width === 390) {
+      await page.getByRole("menuitem", { name: "Microphone input", exact: true }).click();
+      const literal = page.getByRole("checkbox", { name: "Literal for this recording" });
+      await literal.click();
+      await expect.element(literal).toBeChecked();
+    }
     await expect.element(policy).toHaveValue("explicit");
     await userEvent.keyboard("{Escape}");
     await expect.element(policy).not.toBeVisible();
+    await expect.element(trigger).toHaveFocus();
     await page.screenshot({ path: `.artifacts/m03-review/composer-${width}-before-review.png` });
 
     const dictation = getChatComposerState(props.paneId).dictation;
@@ -72,20 +80,16 @@ it.each([390, 1100])(
     await waitForSolid(() =>
       expect(container.querySelector(".composer-correction-review")).not.toBeNull(),
     );
-    await expect
-      .element(page.getByText("The recognized text needs your review. No correction was applied."))
-      .toBeVisible();
-    await expect
-      .element(
-        page.getByText(
-          "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
-        ),
-      )
-      .toBeVisible();
+    for (const notice of [
+      "The recognized text needs your review. No correction was applied.",
+      "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
+    ]) {
+      await expect.element(page.getByText(notice)).toBeVisible();
+    }
     const originalRegion = page.getByRole("region", { name: "Original recognized text" });
     await expect.element(originalRegion).toHaveTextContent(original);
     expect(container.querySelector(".composer-correction-review details")).toBeNull();
-    const accept = page.getByRole("button", { name: "Accept correction" });
+    const accept = button("Accept correction");
     await expect.element(accept).toBeDisabled();
     expect(accept.element().closest(".agent-chat__input")).toBeNull();
     expect(findPrimaryButton(container).disabled).toBe(true);
@@ -104,13 +108,9 @@ it.each([390, 1100])(
       page.getByRole("region", { name: "Proposed correction" }).element(),
     );
     await userEvent.tab();
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Cancel", exact: true }).element(),
-    );
+    expect(document.activeElement).toBe(button("Cancel").element());
     await userEvent.tab();
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Keep original" }).element(),
-    );
+    expect(document.activeElement).toBe(button("Keep original").element());
     await userEvent.keyboard("{Enter}");
     expect(resolve).toHaveBeenCalledExactlyOnceWith("original");
     // The unmodified owner refuses insertion because the presentation fixture has no capture.

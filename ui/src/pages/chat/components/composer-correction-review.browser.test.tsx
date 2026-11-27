@@ -98,12 +98,6 @@ it.each([
   const props = reviewProps();
   const view = mountSolid(() => (
     <main style={{ padding: "1rem", display: "grid", gap: "1rem" }}>
-      <ComposerCorrectionControls
-        policy="explicit"
-        literal={false}
-        onPolicyChange={() => {}}
-        onLiteralChange={() => {}}
-      />
       <ComposerCorrectionReview {...props} />
     </main>
   ));

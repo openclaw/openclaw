@@ -151,7 +151,8 @@ selection remain unchanged. Browser microphone capture requires a secure context
 ### Review spoken corrections
 
 In the Control UI's conversation composer, open **Microphone input** next to the
-microphone. **Spoken corrections** starts **Off**. Choose **Review original
+microphone, or choose **+ (Add attachment) → Microphone input** in a narrow pane
+or on a phone. **Spoken corrections** starts **Off**. Choose **Review original
 (corrections unavailable)** to inspect recognized text
 after you stop dictating. Spoken correction suggestions are unavailable in this
 revision. Words such as `no`, `sorry`, `actually`, and `scratch that` remain part
