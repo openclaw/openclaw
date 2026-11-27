@@ -11,7 +11,8 @@ import { normalizeElevatedLevel } from "../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { readGatewayRequestAdmission } from "../operator-admission.js";
+import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 
 export type TalkAgentConsultAuthority = {
@@ -22,18 +23,17 @@ export type TalkAgentConsultAuthority = {
 };
 
 export function resolveTalkAgentConsultAuthority(
-  scopes: readonly string[] | undefined,
   client?: Parameters<typeof resolveChatSendCallerContext>[0],
 ): TalkAgentConsultAuthority {
-  const senderIsOwner = scopes?.includes(ADMIN_SCOPE) === true;
+  const senderIsOwner = readGatewayRequestAdmission(client).grant.owner;
   const replyCaller = client ? resolveChatSendCallerContext(client) : undefined;
   if (replyCaller) {
     // Talk has no task-suggestion acceptance UI, even when its hosting client does.
-    replyCaller.GatewayClientCaps = replyCaller.GatewayClientCaps.filter(
+    replyCaller.GatewayClientCaps = replyCaller.GatewayClientCaps?.filter(
       (cap) => cap !== GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
     );
   }
-  if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
+  if (senderIsOwner || client?.connect?.scopes?.includes(WRITE_SCOPE) === true) {
     return { senderIsOwner, ...(replyCaller ? { replyCaller } : {}) };
   }
   return {

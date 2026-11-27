@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -166,12 +167,7 @@ async function measureWithdrawal() {
   collectGarbage();
   const inspector = values.allocation ? new Session() : undefined;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const latencyMs: number[] = [];
   const counts = { withdrawn: 0, withdrawnClaimable: 0, ambiguous: 0, ambiguousClaimable: 0 };

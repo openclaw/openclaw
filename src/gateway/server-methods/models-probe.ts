@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   buildModelAliasIndex,
@@ -104,7 +104,7 @@ function modelCandidatesFromConfig(cfg: OpenClawConfig, agentId: string): string
   };
   const aliasIndex = buildModelAliasIndex(selection);
   const primary = resolveNativeModelPrimary(cfg, agentId)
-    ? resolveConfiguredModelRef({ ...selection, defaultModel: DEFAULT_MODEL })
+    ? resolveConfiguredModelRef(selection)
     : undefined;
   const utility = readUtilityModelSetting(cfg, agentId);
   const candidates = [

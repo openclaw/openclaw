@@ -29,11 +29,18 @@ async function expectMove(gateway: Gateway, fields: Record<string, unknown>) {
 }
 type MenuFixture = Parameters<typeof installMockGateway>[1] & {
   session?: NonNullable<Parameters<typeof chatSessionListResponse>[0]>[number];
+  hasCloudProfile?: boolean;
   surface?: Surface;
   locale?: string;
 };
 function withMenu(
-  { session = localSession(), surface = "sidebar", locale, ...overrides }: MenuFixture,
+  {
+    session = localSession(),
+    surface = "sidebar",
+    locale,
+    hasCloudProfile = true,
+    ...overrides
+  }: MenuFixture,
   run: (page: Page, gateway: Gateway) => Promise<void>,
 ) {
   return suite.withPage(
@@ -49,8 +56,15 @@ function withMenu(
         sessionKey,
         ...options,
         methodResponses: {
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }],
+            sessionPlacement: hasCloudProfile ? { hasDispatchableCloudProfile: true } : {},
+          },
           ...(options.featureMethods?.includes("environments.list")
-            ? { "environments.list": catalog }
+            ? { "environments.list": hasCloudProfile ? catalog : { ...catalog, profiles: [] } }
             : {}),
           "sessions.list": chatSessionListResponse([session]),
           ...options.methodResponses,
@@ -133,6 +147,20 @@ async function openMenu(page: Page, surface: Surface) {
 }
 
 suite.define(() => {
+  it("omits Move to cloud when only a paired device exists", async () => {
+    return withMenu(
+      {
+        featureMethods: dispatchMethods,
+        hasCloudProfile: false,
+      },
+      async (page, gateway) => {
+        const menu = await openMenu(page, "sidebar");
+        await menu.getByText("Rename…", { exact: true }).waitFor();
+        expect(await menuItem(menu, "Move to cloud…").count()).toBe(0);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      },
+    );
+  });
   it.each(["sidebar", "sessions"] as const)(
     "moves local to remote and back through the %s menu",
     async (surface) => {

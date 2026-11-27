@@ -55,7 +55,7 @@ export class DiscordVoiceReceive {
       accountId: string;
       admissionAllowFrom?: string[];
       botUserId?: string;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
       sessions: ReadonlyMap<string, VoiceSessionEntry>;
@@ -175,6 +175,7 @@ export class DiscordVoiceReceive {
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
@@ -202,7 +203,10 @@ export class DiscordVoiceReceive {
       `speaker ${userId} start`,
       DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
     );
-    if (!entry.audioInputBudget.enabled && !realtime) {
+    // Bind one budget before subscribing to the speaking edge. Frames already admitted
+    // retain their chunk size and realtime fallback when a later speaker sees a reload.
+    const audioInputBudget = entry.readAudioInputBudget();
+    if (!audioInputBudget.enabled && !realtime) {
       logger.warn(
         "discord voice: capture skipped: audio understanding is disabled; enable tools.media.audio.enabled to transcribe voice.",
       );
@@ -231,6 +235,7 @@ export class DiscordVoiceReceive {
     let failed = false;
     let resetReceiveRecovery = false;
     const acceptPacket = (frame: DiscordAudioFrame) => {
+      const { pcm } = frame;
       if (failed || !frame.packet.byteLength || stream.destroyed) {
         stream.acknowledge(frame);
         return;
@@ -242,7 +247,7 @@ export class DiscordVoiceReceive {
       }
       // Reset in worker-message order, before asynchronous recording/admission.
       // A queued healthy frame must not erase another speaker's later failure.
-      if (!resetReceiveRecovery && frame.pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
+      if (!resetReceiveRecovery && pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
         resetReceiveRecovery = true;
         this.resetDecryptFailureState(entry);
       }
@@ -251,7 +256,7 @@ export class DiscordVoiceReceive {
         startedAt: frame.receivedAt,
         recordingEpoch: frame.recordingEpoch,
       };
-      input.write({ pcm: Buffer.from(frame.pcm), receipt, frame });
+      input.write({ pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), receipt, frame });
     };
     const endInput = () => input.end();
     let aborted = false;
@@ -276,7 +281,7 @@ export class DiscordVoiceReceive {
     stream.on("close", endInput);
     stream.on("error", onError);
     const realtimeRecording = realtime
-      ? new DiscordRealtimeRecordingInput(!entry.audioInputBudget.enabled)
+      ? new DiscordRealtimeRecordingInput(!audioInputBudget.enabled)
       : undefined;
     const conversation = conversationAllowed
       ? entry.conversations.start({
@@ -295,7 +300,8 @@ export class DiscordVoiceReceive {
       : undefined;
     const recording = new DiscordVoiceRecording({
       entry,
-      cfg: this.params.cfg,
+      maxBytes: audioInputBudget.enabled ? audioInputBudget.maxBytes : 0,
+      readConfig: this.params.readConfig,
       userId,
       isInputComplete: () => !failed,
       minimumSeconds: () => (aborted ? 0.2 : MIN_SEGMENT_SECONDS),
@@ -316,7 +322,7 @@ export class DiscordVoiceReceive {
         }
       },
       onExcluded: () => {
-        if (entry.audioInputBudget.enabled) {
+        if (audioInputBudget.enabled) {
           realtimeRecording?.exclude();
         }
         if (!realtime) {
@@ -456,6 +462,7 @@ export class DiscordVoiceReceive {
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
     });

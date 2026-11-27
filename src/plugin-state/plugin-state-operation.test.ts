@@ -8,6 +8,8 @@ import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { useState } from "./plugin-state-fixtures.test-support.js";
 import type { PluginStateOperationInput } from "./plugin-state-operation-contract.js";
@@ -17,6 +19,7 @@ import type { FixtureOperations } from "./plugin-state-operation.test-support.js
 import {
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
+  createPluginStateRuntimeStores,
   createPluginStateSyncKeyedStore,
   replaceCorePluginStateEntry,
 } from "./plugin-state-store.js";
@@ -56,6 +59,100 @@ const open = (namespace: string, env = state().env) =>
     resolve: () => moduleSource,
   });
 
+function trackedNamespaces(env: NodeJS.ProcessEnv) {
+  const sources = readGlobalSingleton(Symbol.for("openclaw.pluginStateOperationEpochs")) as Map<
+    string,
+    Map<string, unknown>
+  >;
+  const { coordinationKey } = captureOpenClawStateDatabaseReadAdmission(
+    resolveOpenClawStateSqlitePath(env),
+  );
+  return sources.get(coordinationKey);
+}
+
+it("deletes the captured keys together from host-owned stores without a plugin module", async () => {
+  const openData = (namespace: string) =>
+    createPluginStateKeyedStore<string>("operation-test", options(namespace));
+  const first = openData("prune-first");
+  const second = openData("prune-second");
+  const other = openData("unrelated");
+  for (const store of [first, second, other]) {
+    await store.register("key", "delete");
+    await store.register("neighbor", "keep");
+  }
+  // Older repairable stores can exceed the 10,000-key read batch. The last key
+  // still belongs to this same write, even if later caller code edits the array.
+  const keys = Array.from({ length: 10_001 }, (_, i) => `absent-${i}`);
+  keys.push("key", "key");
+  const write = first.deleteKeys(keys, { alsoFrom: second });
+  keys.fill("neighbor");
+  await write;
+  const dispatch = vi.spyOn(workerClient, "executePluginStateOperationInWorker");
+  try {
+    await first.deleteKeys(["key"], { alsoFrom: first });
+    await first.deleteKeys(["key"], { alsoFrom: openData("prune-first") });
+    expect(dispatch.mock.calls.map(([input]) => input.writeStores)).toEqual([[0], [0]]);
+  } finally {
+    dispatch.mockRestore();
+  }
+  expect(await first.lookup("key")).toBeUndefined();
+  expect(await second.lookup("key")).toBeUndefined();
+  expect(await first.lookup("neighbor")).toBe("keep");
+  expect(await second.lookup("neighbor")).toBe("keep");
+  expect(await other.lookup("key")).toBe("delete");
+});
+
+it("preserves both stores when a sibling loses its grant before commit", async () => {
+  const first = open("prune-first");
+  const second = open("prune-second");
+  await first.register("key", "first");
+  await second.register("key", "second");
+  let active = true;
+  let rejectedAtCommit = false;
+  const bound = second.withCurrent({
+    assertCurrent() {
+      if (!active) {
+        rejectedAtCommit = true;
+        throw new Error("retired sibling");
+      }
+    },
+  });
+  sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      active = false;
+    }
+    admit(request, grant);
+  });
+  await expect(first.deleteKeys(["key"], { alsoFrom: bound })).rejects.toMatchObject({
+    code: "PLUGIN_STATE_WRITE_FAILED",
+  });
+  expect(rejectedAtCommit).toBe(true);
+  expect(await first.lookup("key")).toBe("first");
+  expect(await second.lookup("key")).toBe("second");
+});
+
+it("refuses foreign or unbound stores before exact-key deletion", async () => {
+  const first = open("prune-owner");
+  await first.register("key", "original");
+  await invalid(first.deleteKeys(["key", "   "]));
+  await invalid(first.deleteKeys(["key", "x".repeat(513)]));
+  await invalid(first.deleteKeys(Array(50_001).fill("key")));
+  await first.deleteKeys(Array(50_000).fill("missing"));
+  const foreign = createPluginStateKeyedStore("another-plugin", options("other"));
+  const anotherDatabase = open("other", {
+    ...state().env,
+    OPENCLAW_STATE_DIR: path.join(state().stateDir, "other"),
+  });
+  for (const other of [
+    foreign,
+    anotherDatabase,
+    { lookup: first.lookup, entries: first.entries },
+  ]) {
+    await invalid(first.deleteKeys(["key"], { alsoFrom: other }));
+  }
+  expect(await first.lookup("key")).toBe("original");
+});
+
 const read = (operation: PluginStateOperation<FixtureOperations>, store = 0) =>
   operation.execute({ type: "read", input: { store, key: "key" } }, { writeStores: [] });
 const move = (
@@ -90,6 +187,58 @@ const afterExecute = (
       return result;
     });
 };
+
+it("releases completed conversation namespaces while their plugin store rows stay readable", async () => {
+  const env = { ...state().env, OPENCLAW_STATE_DIR: state().path("conversation-epochs") };
+  const runtime = createPluginStateRuntimeStores("conversation-retention", () => {});
+  const namespaces = Array.from({ length: 8 }, (_, session) =>
+    ["jobs", "steps", "cancellations"].map((kind) => `research-${kind}-v1-${session}`),
+  ).flat();
+  for (const namespace of namespaces) {
+    const store = runtime.openKeyedStoreV2<string>(options(namespace, env));
+    expect(await store.registerIfAbsent("job", namespace)).toBe(true);
+  }
+  for (const namespace of namespaces) {
+    expect(await runtime.openKeyedStoreV2<string>(options(namespace, env)).lookup("job")).toBe(
+      namespace,
+    );
+  }
+  expect(trackedNamespaces(env)).toBeUndefined();
+  expect(
+    await runtime.openKeyedStoreV2<string>(options("never-written", env)).lookup("job"),
+  ).toBeUndefined();
+  expect(trackedNamespaces(env)).toBeUndefined();
+});
+
+it("releases both exact-key deletion epochs after the native commit", async () => {
+  const env = { ...state().env, OPENCLAW_STATE_DIR: state().path("delete-epochs") };
+  const names = ["recall", "phase"] as const;
+  const first = open(names[0], env);
+  const second = open(names[1], env);
+  for (const store of [first, second]) {
+    await store.register("key", "delete");
+    await store.register("neighbor", "keep");
+  }
+  const prior = await read(first.createOperation<FixtureOperations>([first, second], handler));
+  prior.assertCurrent();
+  const atCommit: number[] = [];
+  sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      atCommit.push(trackedNamespaces(env)?.size ?? 0);
+    }
+    admit(request, grant);
+  });
+  const deletion = first.deleteKeys(["key"], { alsoFrom: second });
+  expect(prior.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+  await deletion;
+  expect(atCommit).toEqual([2]);
+  for (const name of names) {
+    const reopened = createPluginStateSyncKeyedStore<string>("operation-test", options(name, env));
+    expect(reopened.lookup("key")).toBeUndefined();
+    expect(reopened.lookup("neighbor")).toBe("keep");
+  }
+  expect(trackedNamespaces(env)).toBeUndefined();
+});
 
 it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
   const { first, second, operation } = await pair("move");
@@ -300,6 +449,7 @@ it("invalidates receipts at async admission and sync commit through a directory 
   const native = createPluginStateSyncKeyedStore<string>("operation-test", options(namespace, env));
   const invalidation = PluginStateOperationInvalidatedError;
   let current = await read(operation);
+  const original = current.assertCurrent;
   current.assertCurrent();
   native.register("key", "sync successor");
   expect(current.assertCurrent).toThrow(invalidation);
@@ -316,6 +466,7 @@ it("invalidates receipts at async admission and sync commit through a directory 
   native.delete("key");
   expect(current.assertCurrent).toThrow(invalidation);
   expect((await read(operation)).value.value).toBeUndefined();
+  expect(original).toThrow(invalidation);
 });
 
 it("keeps scalar and receipt reads behind earlier unfinished mutations", async () => {
@@ -334,8 +485,9 @@ it("keeps scalar and receipt reads behind earlier unfinished mutations", async (
   const scalarRead = second.lookup("key");
   const reading = read(operation, 1);
   release.resolve();
-  await write;
+  const overtaken = await write;
   await followingWrite;
+  expect(overtaken.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
   expect(await scalarRead).toBe("following");
   const receipt = await reading;
   expect(receipt.value.value).toBe("following");

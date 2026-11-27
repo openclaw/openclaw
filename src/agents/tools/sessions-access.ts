@@ -103,9 +103,7 @@ function recordAdmittedSessionDecision(params: {
     return false;
   }
   try {
-    if (caller.receiptAuthority() === false) {
-      return false;
-    }
+    caller.receiptAuthority();
   } catch {
     return false;
   }
@@ -214,6 +212,7 @@ export async function resolveSessionToolAccess(params: {
   requesterAgentId: string;
   requesterSessionKey: string;
   sessionReadScopeKey?: string;
+  sessionReadAgentOnly?: boolean;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -248,15 +247,19 @@ export async function resolveSessionToolAccess(params: {
     });
     return denial;
   };
-  if (params.sessionReadScopeKey) {
+  if (
+    params.sessionReadScopeKey ||
+    (params.sessionReadAgentOnly && params.targetAgentId !== params.requesterAgentId)
+  ) {
     // Invocation read caps are ceilings: a grant held by the observed session
     // must not widen the auxiliary reader beyond that selected session.
     const capped = createSessionVisibilityDecisionChecker({
       action: params.action,
       defaultAgentId: params.targetAgentId,
       requesterAgentId: params.requesterAgentId,
-      requesterSessionKey: params.sessionReadScopeKey,
-      visibility: "self",
+      requesterSessionKey: params.sessionReadScopeKey ?? params.requesterSessionKey,
+      sessionReadAgentOnly: params.sessionReadAgentOnly,
+      visibility: params.sessionReadScopeKey ? "self" : params.visibility,
       a2aPolicy: params.a2aPolicy,
     }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
     if (!capped.allowed) {

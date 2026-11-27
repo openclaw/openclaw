@@ -90,9 +90,6 @@ async function settleSubagentKill(
       settlement = await settleSubagentKillSources({ cleanup, execution });
     }
   }
-  if (!stopAcceptance.accepted) {
-    params.cancellationControl.assertCurrent();
-  }
   if (captured) {
     assertCapturedSubagentExecutionCurrent(captured, params.entry);
   }
@@ -204,15 +201,14 @@ async function killLatestSubagentRun(params: {
     params.onCancelled?.(entry);
   }
   if (commands && !result.superseded && !result.declined && !result.error) {
+    // The admitted kill finishes its own commands; only the selected row stays checked.
     for (
       let pending = cancellationControl.prepareRead();
       pending;
       pending = cancellationControl.prepareRead()
     ) {
       await pending;
-      cancellationControl.assertCurrent();
     }
-    cancellationControl.assertCurrent();
     if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
       return { entry: tree.entry, session, result: { ...result, superseded: true } };
     }
@@ -220,7 +216,6 @@ async function killLatestSubagentRun(params: {
     // is gone. Drain that exact request without replacing the completed task receipt.
     commands.observe(tree.entry);
     commands.cancel(() => {
-      cancellationControl.assertCurrent();
       if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
         throw new Error("Subagent ownership changed during command cancellation.");
       }

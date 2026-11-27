@@ -1,6 +1,6 @@
 import type { Selectable } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type {
   SessionPendingInputs,
   SessionInputCompletions,

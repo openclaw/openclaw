@@ -525,6 +525,11 @@
         display: none;
       }
 
+      /* Before session metadata arrives, chat cannot promise saved messages. */
+      html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__message {
+        display: none;
+      }
+
       /* The chat composer's surface; fallbacks match the default theme's tokens
          until the app stylesheet defines --chat-composer-surface. */
       html[data-openclaw-boot-chat]

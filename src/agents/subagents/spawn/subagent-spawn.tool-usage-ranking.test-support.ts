@@ -101,7 +101,7 @@ export function registerToolUsageRankingSpawnCase(options: RankingSpawnOptions) 
     const failures: unknown[] = [];
     let childRunId: string | undefined;
     const completed = createDeferred<EmbeddedAgentRunResult>();
-    const readLiveScores = vi.spyOn(toolUsage, "readAgentToolUsage");
+    const readLiveScores = vi.spyOn(toolUsage, "readAgentToolUsageForRanking");
     const observedRankings: ReturnType<typeof getSessionToolUsageRanking>[] = [];
     const stream = vi.fn<StreamFn>((model, context) => {
       const childSessionId = expectDefined(sessionIds[1], "executing child session");
@@ -140,7 +140,7 @@ export function registerToolUsageRankingSpawnCase(options: RankingSpawnOptions) 
         catalogIds: [deniedId, allowedId],
         enabled: true,
         now: parentAt,
-        readRankedIds: async () => [deniedId, allowedId],
+        readUsage: async () => ({ rankedIds: [deniedId, allowedId], firstSeen: {} }),
       };
       let parentRanking: ToolUsageRankingSnapshot | undefined;
       try {

@@ -3,7 +3,11 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import * as hostSource from "../gateway/desktop/host-source.js";
 import * as execRunner from "../process/exec-runner.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { collectHostDesktopHealthFindings, noteHostDesktopHealth } from "./doctor-host-desktop.js";
+import {
+  checkHostDesktopRepairPending,
+  collectHostDesktopHealthFindings,
+  noteHostDesktopHealth,
+} from "./doctor-host-desktop.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 const hostConfig = { desktop: { host: { enabled: true } } };
@@ -97,3 +101,39 @@ it.each([
     }
   },
 );
+
+it("reports pending work only when an interactive repair would enable Screen Sharing", async () => {
+  const runCommand = vi.spyOn(execRunner, "runCommandWithTimeout");
+  const prompter = (shouldRepair: boolean, canPrompt: boolean) => ({
+    shouldRepair,
+    repairMode: {
+      shouldRepair,
+      shouldForce: false,
+      nonInteractive: !canPrompt,
+      canPrompt,
+      updateInProgress: false,
+    },
+  });
+  await expect(checkHostDesktopRepairPending(hostConfig, prompter(true, true))).resolves.toBe(
+    "work",
+  );
+  // The confirmation refuses without a terminal, and plain Doctor only reports.
+  await expect(checkHostDesktopRepairPending(hostConfig, prompter(true, false))).resolves.toBe(
+    "none",
+  );
+  await expect(checkHostDesktopRepairPending(hostConfig, prompter(false, true))).resolves.toBe(
+    "none",
+  );
+  vi.mocked(hostSource.inspectHostDesktop).mockResolvedValue({
+    status: { enabled: true, state: "attached", port: 5900, security: "ARD" },
+    detail: "attached (127.0.0.1:5900, security: ARD)",
+  });
+  await expect(checkHostDesktopRepairPending(hostConfig, prompter(true, true))).resolves.toBe(
+    "none",
+  );
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  await expect(checkHostDesktopRepairPending(hostConfig, prompter(true, true))).resolves.toBe(
+    "none",
+  );
+  expect(runCommand).not.toHaveBeenCalled();
+});

@@ -3,9 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
-import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
-import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
-import { isUpdateDoctorInspectionReportMode } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import {
@@ -34,8 +31,9 @@ import type {
 import {
   isUpdateDoctorRun,
   noteDoctorRepairResult,
-  resolveDoctorMode,
   resolveDoctorWorkspaceDir,
+  shouldDeferPostActivationInspections,
+  measureDoctorContribution,
 } from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
@@ -48,7 +46,6 @@ import { withDoctorProgress } from "./doctor-health-startup.js";
 import { admitDoctorUpdateInspection, resolveDoctorUpdateBudget } from "./doctor-update-budget.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -297,86 +294,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function shouldInspectSystemdLinger(
-  ctx: Pick<HealthCheckContext, "cfg" | "env">,
-): Promise<boolean> {
-  if (
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env))
-  ) {
-    return false;
-  }
-  const env = ctx.env ?? process.env;
-  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
-  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
-}
-
-async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (ctx.options.nonInteractive === true || !(await shouldInspectSystemdLinger(ctx))) {
-    return;
-  }
-  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
-  const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-  const service = resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: process.env });
-  if (state.loadState.status !== "loaded") {
-    return;
-  }
-  await ensureSystemdUserLingerInteractive({
-    runtime: ctx.runtime,
-    prompter: {
-      confirm: async (p) => ctx.prompter.confirm(p),
-      note,
-    },
-    reason:
-      "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-    requireConfirm: true,
-  });
-}
-
-async function detectSystemdLingerFindings(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  if (!(await shouldInspectSystemdLinger(ctx))) {
-    return [];
-  }
-  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
-  const service = resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: process.env });
-  if (state.loadState.status !== "loaded") {
-    return [];
-  }
-  const {
-    isSystemdUserServiceAvailable,
-    readSystemdUserLingerStatus,
-    resolveSystemdUserServiceAccount,
-  } = await import("../daemon/systemd.js");
-  if (!(await isSystemdUserServiceAvailable(process.env))) {
-    return [];
-  }
-  // Doctor must inspect the same user manager as the Gateway service operation.
-  const user = resolveSystemdUserServiceAccount(process.env);
-  if (!user) {
-    return [];
-  }
-  const status = await readSystemdUserLingerStatus({ env: process.env, user });
-  if (!status || status.linger === "yes") {
-    return [];
-  }
-  return [
-    {
-      checkId: "core/doctor/systemd-linger",
-      severity: "warning",
-      source: "doctor",
-      message: `Systemd lingering is disabled for ${status.user}.`,
-      target: `systemd.user.${status.user}`,
-      requirement: "systemd user lingering enabled",
-      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
-    },
-  ];
-}
-
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.prompter, {
@@ -413,14 +330,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
-function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
-  return (
-    isUpdateDoctorRun(env) &&
-    !resolveUpdateRehearsalRoot(env) &&
-    isUpdateDoctorInspectionReportMode(env)
-  );
-}
-
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
@@ -433,8 +342,6 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       runLegacyStateHealth,
     }),
     ...resolveFinalDoctorHealthContributions({
-      runSystemdLingerHealth,
-      detectSystemdLingerFindings,
       runShellCompletionHealth,
       runGatewayHealthChecks,
     }),
@@ -507,6 +414,12 @@ async function selectPostActivationInspections(
       ? [{ contribution, checks }]
       : [];
   });
+}
+
+/** The serving release owns which advisory inspections can run after activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  const inspections = await selectPostActivationInspections(resolveDoctorHealthContributions());
+  return [...new Set(inspections.flatMap(({ checks }) => checks.map((check) => check.id)))];
 }
 
 async function runDoctorHealthContributionList(
@@ -612,7 +525,7 @@ async function runDoctorHealthContributionList(
         await withDoctorProgress(
           contribution.label,
           () =>
-            measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, async () => {
+            measureDoctorContribution(ctx, contribution, async () => {
               if (!runWithPluginMetadataSnapshot) {
                 await run();
               } else {
@@ -719,6 +632,13 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
       "doctor:write-config",
       "doctor:final-config-validation",
     ]);
+    // The last Doctor receipt replaces earlier selectors in shipped updaters.
+    // Keep deferrals in the narrow pass without running the inspections here.
+    if (shouldDeferPostActivationInspections(ctx.env ?? process.env)) {
+      for (const { contribution } of await selectPostActivationInspections(contributions)) {
+        retained.add(contribution.id);
+      }
+    }
     await runDoctorHealthContributionList(
       ctx,
       contributions.filter((entry) => retained.has(entry.id)),

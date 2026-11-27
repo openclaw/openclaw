@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { create } from "tar";
+import { create } from "tar/raw";
 import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 
 export const SOURCE_SHA = "a".repeat(40);

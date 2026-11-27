@@ -111,13 +111,12 @@ it("retains settled readiness until a migration commits, independently of databa
   expect(operations).toHaveBeenCalledOnce();
   writeConfigMachineState("fixture.unrelated", true, { env });
   expect(await read({ env })).toEqual([]);
-  expect(operations).toHaveBeenCalledTimes(2);
   expect(await read({ env })).toEqual([]);
-  expect(operations).toHaveBeenCalledTimes(3);
+  expect(operations).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
-  "keeps unpublished readiness uncached without receipt discovery (existing=%s)",
+  "retains unpublished readiness without receipt discovery (existing=%s)",
   async (existing) => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-readiness-missing-") };
     const pathname = resolveOpenClawStateSqlitePath(env);
@@ -140,7 +139,7 @@ it.each([false, true])(
     const operations = vi.spyOn(reads, "executeExistingOpenClawStateRead");
     expect(await read({ env })).toEqual([]);
     expect(await read({ env })).toEqual([]);
-    expect(operations).toHaveBeenCalledTimes(2);
+    expect(operations).toHaveBeenCalledOnce();
     expect(fs.existsSync(pathname)).toBe(existing);
     expect(observation).toHaveBeenCalled();
     expect(receiptLookups).toBe(0);

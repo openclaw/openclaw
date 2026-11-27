@@ -1,3 +1,5 @@
+import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
+
 export type AttachmentInputKind = "file" | "photo" | "camera" | "media";
 type AttachmentInputBindings = {
   inputs: Partial<Record<AttachmentInputKind, HTMLInputElement>>;
@@ -8,20 +10,15 @@ type AttachmentInputBindings = {
 export function createChatAttachmentInputHandle() {
   let bindings: AttachmentInputBindings | undefined;
   let anchor: HTMLElement | undefined;
+  let releaseInputAnchor = () => {};
   const openNative = (kind: AttachmentInputKind) => {
     const input = bindings?.inputs[kind];
     if (input) {
       if (anchor) {
-        // iOS presents its native upload menu from the input's rendered rectangle.
-        // Measure at activation so scrolling, resizing, and the keyboard cannot stale it.
-        const rect = anchor.getBoundingClientRect();
-        Object.assign(input.style, {
-          display: "block",
-          left: `${rect.left}px`,
-          top: `${rect.top}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
-        });
+        // iOS uses the input's rectangle. CSS anchors also account for layout containment.
+        releaseInputAnchor();
+        releaseInputAnchor = bindOverlayAnchor(input, anchor);
+        input.style.display = "block";
       }
       input.click();
     }
@@ -31,6 +28,7 @@ export function createChatAttachmentInputHandle() {
       bindings = next;
       return () => {
         if (bindings === next) {
+          releaseInputAnchor();
           bindings = undefined;
         }
       };
@@ -39,6 +37,7 @@ export function createChatAttachmentInputHandle() {
       anchor = next;
       return () => {
         if (anchor === next) {
+          releaseInputAnchor();
           anchor = undefined;
         }
       };

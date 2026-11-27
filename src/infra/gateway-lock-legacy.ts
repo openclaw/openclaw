@@ -32,8 +32,12 @@ export async function assertLegacyGatewayStoppedForMaintenance(
 ): Promise<void> {
   const owner = await readLegacyGatewayLockIdentity(env);
   if (owner) {
+    const next =
+      owner.path === resolveGatewayLockPaths(env).configLockPath
+        ? "Stop that process before retrying."
+        : "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account.";
     throw new GatewayLockError(
-      `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}).`,
+      `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}). ${next}`,
     );
   }
 }

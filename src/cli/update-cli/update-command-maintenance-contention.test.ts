@@ -17,7 +17,7 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 
-const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
@@ -96,77 +96,52 @@ async function fixture() {
   return { root, env, runId, opts, guard };
 }
 
-it.each(["before-stop", "during-stop", "before-checkout", "held-before-checkout"] as const)(
-  "defers a held owner %s and waits for a transient owner before checkout",
-  async (arrival) => {
-    const duringStop = arrival === "during-stop";
+it.each(["held", "released"] as const)(
+  "waits for a %s maintenance owner before package-to-Git mutation",
+  async (owner) => {
     const f = await fixture();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const wait = vi.spyOn(sleeping, "sleep").mockImplementation(async (ms) => {
-      if (arrival !== "before-checkout") {
-        now += 30_000 + ms;
-      } else {
+      if (owner === "released") {
         await request({ release: true });
+      } else {
+        now += 30_000 + ms;
       }
     });
-    let checkedOut = false;
-    const acquire = async () => {
+    let mutated = false;
+    mocks.runGitUpdate.mockImplementation(async (options) => {
+      await options.validateCandidate("/candidate");
       await closeOpenClawStateDatabaseAsync();
       await request({ acquire: f.env });
       expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
-    };
-    if (duringStop) {
-      mocks.maybeStopService.mockImplementation(async (params) => {
-        if (params.phase === "inspect") {
-          return inspectOrStopService("inspect");
-        }
-        await acquire();
-        const cause = await Promise.resolve()
-          .then(() => f.guard.assertCurrent())
-          .catch((error: unknown) => error);
-        throw new AggregateError([cause], "Update executor was lost during native preparation", {
-          cause,
-        });
-      });
-    }
-    mocks.runGitUpdate.mockImplementation(async (options) => {
-      await options.validateCandidate("/candidate");
-      if (arrival === "before-stop") {
-        await acquire();
-      }
       await options.beforeGitMutation({});
-      if (arrival !== "before-stop") {
-        await acquire();
-        await options.inspectGitTarget({});
-      }
-      checkedOut = true;
+      mutated = true;
       return { ...successfulUpdate, mode: "git" };
     });
     const result = await executeMutableUpdate(
-      await bindExecutionGuards({ ...executionParams("git"), root: f.root, opts: f.opts }),
+      await bindExecutionGuards({
+        ...executionParams("git"),
+        installKind: "package",
+        switchToGit: true,
+        channel: "dev",
+        root: f.root,
+        opts: f.opts,
+      }),
     );
-    if (arrival !== "before-checkout") {
+    if (owner === "released") {
+      expect(result?.result.status, result?.failure?.detail).toBe("ok");
+    } else {
       expect(result?.result, result?.failure?.detail).toMatchObject({
-        reason: duringStop ? "managed-service-stop-failed" : "state-maintenance-busy",
+        reason: "state-maintenance-busy",
         recovery: { serviceRestartSafe: true },
       });
       expect(result?.failure?.detail).toContain(`sqlite-maintenance process ${child.pid}`);
-      if (duringStop) {
-        expect(result?.result.steps[0]?.failureFacts?.[0]?.message).toContain(
-          `sqlite-maintenance process ${child.pid}`,
-        );
-      } else {
-        expect(result?.failure?.detail).toContain("retry openclaw update");
-      }
-    } else {
-      expect(result?.result.status, result?.failure?.detail).toBe("ok");
+      expect(result?.failure?.detail).toContain("retry openclaw update");
+      expect(mocks.serviceStopped).toBe(false);
     }
-    if (!duringStop) {
-      expect(wait).toHaveBeenCalled();
-    }
-    expect(mocks.serviceStopped).toBe(arrival !== "before-stop" && !duringStop);
-    expect(checkedOut).toBe(arrival === "before-checkout");
+    expect(wait).toHaveBeenCalled();
+    expect(mutated).toBe(owner === "released");
   },
 );
 

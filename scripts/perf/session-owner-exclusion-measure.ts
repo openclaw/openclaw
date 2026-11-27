@@ -32,6 +32,7 @@ import { GatewayBrowserClient, type GatewayEventFrame } from "../../ui/src/api/g
 import type { GatewaySessionRow } from "../../ui/src/api/types.ts";
 import type { SessionGateway } from "../../ui/src/lib/sessions/session-types.ts";
 import { createTeamScaleSidebarListOwner } from "../../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -165,12 +166,7 @@ try {
   const firstMeasuredRead = fixture.stats().length;
   globalThis.gc?.();
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16_384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16_384);
   }
   const startLoad = loadavg();
   const started = process.hrtime.bigint();

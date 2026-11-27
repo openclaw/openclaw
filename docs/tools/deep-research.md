@@ -1,15 +1,79 @@
 ---
-summary: "Bounded portable research and explicitly enabled provider-managed research"
+summary: "Run multi-source research with cited findings, explicit evidence gaps, and optional Google managed research"
 title: "Deep Research"
 read_when:
-  - Researching a question across sources or supplied documents
-  - Configuring Google managed research
+  - Researching a question across web sources or supplied documents
+  - Comparing sources and checking for conflicting claims or evidence gaps
+  - Configuring Google managed research or portable research budgets
 ---
 
-Deep Research is a bundled, default-enabled plugin with a lazy `deep_research`
-tool. Startup scans bounded local job state and reconstructs due wakes. An empty
-startup does not resolve research credentials or make research network requests. Existing plugin allowlists and agent tool policy
-still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
+Deep Research lets your agent investigate a question across multiple web sources
+or documents you supply, then return a structured Markdown report with inline
+citations, exact supporting quotes, and explicit evidence gaps. It ships as a
+bundled, default-enabled plugin (`deep_research`), so you can ask for deep
+research in chat right away without extra setup.
+
+## What Deep Research does
+
+Instead of answering from a single search snippet, Deep Research plans
+sub-questions, searches and fetches source pages (or reads documents you
+provide), checks each finding against exact quotes in the retrieved text, and
+reports what could not be verified.
+
+You can use it in two modes:
+
+- **`portable` (default):** Works with any model and web search/fetch setup you
+  already have configured. It checks exact quotes mechanically, audits support
+  and contradictions with a separate model pass, and verifies derived arithmetic
+  (sums, differences, ratios, percent changes) against cited values, units, and
+  dates.
+- **`google` (opt-in):** Routes research to Google's managed Deep Research
+  Interactions service (`deep-research-preview-04-2026`) when you explicitly
+  enable it with a pinned Google API-key profile.
+
+## How to use it
+
+Because Deep Research is enabled by default, just ask your agent in chat when
+you want a cited, multi-source investigation. Existing plugin allowlists and
+agent tool policy still apply.
+
+Practical prompts:
+
+- **Web comparison:** _"Run deep research comparing the 2026 river restoration
+  totals across state and federal reports, and call out any conflicting numbers."_
+- **Domain-scoped check:** _"Use deep research to summarize OpenClaw's latest
+  release notes, restricting sources to `docs.openclaw.ai` and `github.com`."_
+- **Local document synthesis:** _"Run deep research over these three vendor
+  proposals I'm pasting below and highlight unresolved pricing gaps."_ (When you
+  supply documents, public web search stays off unless you ask to mix in web
+  sources.)
+- **Specific time frame or focus:** _"Do deep research as of 2026 on EU AI Act
+  compliance deadlines for small teams, formatted as an executive summary with
+  open questions."_
+
+Disable the plugin at any time with
+`plugins.entries.deep-research.enabled: false`. On an empty startup, the plugin
+does not resolve research credentials or make research network requests; it only
+scans bounded local job state and reconstructs due wakes.
+
+## What you get
+
+Every completed or partial job returns a structured report and durable job state:
+
+- **Cited findings and exact quotes:** Portable findings require exact,
+  substantive quotations from the retained source text, plus a separate model
+  support and contradiction check so conflicting sources are surfaced rather than
+  glossed over.
+- **Explicit evidence gaps:** Missing data, inaccessible URLs, malformed model
+  responses, or exhausted budgets produce a partial report with an **Unresolved**
+  section instead of silent guesses.
+- **Restart resilience:** Active jobs, operation receipts, and pending
+  cancellations persist in the plugin state store. Eligible jobs recover and
+  reconcile automatically after a Gateway restart without blindly resubmitting
+  unknown requests.
+- **7-day retention:** Jobs, receipts, and saved reports stay available for seven
+  days (up to 32 retained jobs per conversation), and repeated reads return the
+  exact same stored report.
 
 ## Choose an engine
 
@@ -30,7 +94,7 @@ and ChatGPT plan-usage/token-sharing qualification are separate.
 
 ## Start and inspect research
 
-Call the tool with a stable idempotency key for one request:
+Call the `deep_research` tool with a stable idempotency key for one request:
 
 ```json
 {

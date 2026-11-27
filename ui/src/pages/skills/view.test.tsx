@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred as createDeferredRead, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
@@ -11,7 +11,6 @@ import {
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
 } from "../../lib/skills/index.ts";
-import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
@@ -23,6 +22,9 @@ import {
   normalizeText,
 } from "./view.test-support.ts";
 import { Skills } from "./view.tsx";
+
+// Keep short render waits scoped to UI state, after the lazy detail module is compiled.
+beforeAll(() => import("./skill-detail.tsx"));
 afterEach(cleanupSkillsViews);
 
 const dialogRestores: Array<() => void> = [];
@@ -43,6 +45,13 @@ function createView(dialog = false) {
     text: () => normalizeText(container),
     render: (overrides: Parameters<typeof createProps>[0] = {}) => renderView(container, overrides),
   };
+}
+
+/** A skill page arrives with its lazily loaded code; wait for it to render. */
+async function renderedPage(container: HTMLElement): Promise<HTMLElement> {
+  const loaded = () => container.querySelector<HTMLElement>(".skill-page h1, .skill-page__absent");
+  await waitForFast(() => expect(loaded()).not.toBeNull());
+  return expectDefined(loaded()?.closest<HTMLElement>(".skill-page"), "skill page");
 }
 
 function buttons(root: ParentNode) {
@@ -169,10 +178,6 @@ describe("renderSkills", () => {
     "only enables credential replacement for nonblank input over plaintext: %o",
     async ({ editValue, disabled, apiKey, error, text }) => {
       const container = document.createElement("div");
-      installDialogMethod("showModal", function () {
-        expect(this.isConnected).toBe(true);
-        this.setAttribute("open", "");
-      });
       const onSaveKey = vi.fn();
       const retry = vi.fn();
       const config = { skills: { entries: { "repo-skill": { apiKey } } } };
@@ -186,15 +191,12 @@ describe("renderSkills", () => {
       });
       document.body.append(container);
       dialogRestores.push(() => container.remove());
-      const { dialog } = await getRenderedModalDialog(container);
-      expect(dialog.open).toBe(true);
+      await renderedPage(container);
 
       const input = container.querySelector<HTMLInputElement>('input[type="password"]');
       const save = findButton(container, "Save key");
       expect(input?.required).toBe(true);
-      expect(normalizeText(expectDefined(input?.labels?.[0], "API key label"))).toBe(
-        "API key (OPENAI_API_KEY)",
-      );
+      expect(input?.getAttribute("aria-label")).toBe("API key (OPENAI_API_KEY)");
       expect(save?.disabled).toBe(disabled);
       expect(input?.disabled).toBe(Boolean(text));
       expect(`${input?.placeholder} ${container.textContent}`).toContain(text ?? "");
@@ -282,7 +284,7 @@ describe("renderSkills", () => {
     await Promise.resolve();
     expect(findButton(container, "Install unrelated CLI")).toBeUndefined();
     const install = findButton(container, "Install Codex CLI");
-    expect(query(".callout")?.textContent).toContain("bin:any of (claude, codex, opencode)");
+    expect(query(".skill-requirement")?.textContent).toContain("claude / codex / opencode");
     install!.click();
     expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
   });
@@ -434,11 +436,11 @@ describe("renderSkills", () => {
     expect(text()).toContain("Needs setup 1");
 
     render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
-    await Promise.resolve();
+    await renderedPage(container);
 
     expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
     expect(text()).toContain("Reason: blocked by agent filter");
-    expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
+    expect(query(".skill-page .settings-status--warn")).not.toBeNull();
   });
 
   it("gives one signal per meaning and says why the toggle is locked", async () => {
@@ -448,31 +450,34 @@ describe("renderSkills", () => {
       detailKey: "agentreceipt",
       canUpdate: false,
     });
-    await Promise.resolve();
-    expect(query(".skill-reader-dialog .oc-dialog__title .statusDot")).toBeNull();
-    const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
-    const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
+    const dialog = await renderedPage(container);
+    expect(query(".skill-page h1 .statusDot")).toBeNull();
+    const labels = Array.from(dialog.querySelectorAll(".skill-page__facts dt")).map(normalizeText);
     expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
     expect(normalizeText(dialog)).toContain("You need admin access to change this skill.");
-    expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
+    expect(container.querySelector(".skill-page input[type=checkbox]")).toHaveProperty(
       "disabled",
       true,
     );
   });
 
-  it("closes installed details and installs ClawHub details with their cached icon", async () => {
-    const { container, query, render } = createView(true);
+  it("leaves installed pages by their way back and installs ClawHub pages with their cached icon", async () => {
+    const { container, query, render } = createView();
     const onDetailClose = vi.fn();
     const onClawHubInstall = vi.fn();
-    installDialogMethod("close", function () {
-      this.removeAttribute("open");
-      this.dispatchEvent(new Event("close"));
-    });
     render({ detailKey: "repo-skill", onDetailClose });
-    expect((await getRenderedModalDialog(container)).dialog.open).toBe(true);
-    container
-      .querySelector<HTMLButtonElement>('.skill-reader-dialog [aria-label="Close"]')!
-      .click();
+    await renderedPage(container);
+    // The list stays mounted behind the page, so going back finds it as it was.
+    expect(query(".skills-list-surface")?.hidden).toBe(true);
+    const back = expectDefined(
+      container.querySelector<HTMLAnchorElement>(
+        ".skill-page .plugins-settings-breadcrumb__parent",
+      ),
+      "way back",
+    );
+    expect(back.getAttribute("href")).toBe("/skills");
+    expect(normalizeText(back)).toBe("Skills");
+    back.click();
     expect(onDetailClose).toHaveBeenCalledOnce();
 
     const icon = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
@@ -485,30 +490,97 @@ describe("renderSkills", () => {
       clawhubIconUrls: { [icon]: "blob:clawhub-detail-icon" },
       onClawHubInstall,
     });
-    await getRenderedModalDialog(container);
+    await renderedPage(container);
     expect([...container.querySelectorAll(".callout")].map(normalizeText)).toEqual([
       "rate limited Retry",
       "Installed other",
     ]);
-    expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
+    expect(container.querySelector<HTMLImageElement>(".skill-page__tile img")?.src).toBe(
       "blob:clawhub-detail-icon",
     );
-    expect(query(".clawhub-skill-icon--profile")).toBeNull();
-    const install = findButton(container, "Install GitHub");
+    expect(query(".skill-tile--profile")).toBeNull();
+    const install = findButton(container, "Add GitHub");
     install!.click();
     expect(onClawHubInstall).toHaveBeenCalledExactlyOnceWith("github");
   });
 
-  it("updates the latest ClawHub version in an open detail dialog", async () => {
+  it("swaps Installed for the added skill's switch once the inventory names it", async () => {
     const { container, query, render } = createView(true);
+    const onToggle = vi.fn();
+    const added = createSkill({
+      skillKey: "github",
+      name: "github",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "github",
+        ownerHandle: "openclaw",
+        installedVersion: "1.0.0",
+        installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
+      },
+    });
+    const opened = {
+      surface: "discovery",
+      clawhubInstallMessage: { ref: "@openclaw/github", kind: "success", text: "Installed" },
+      clawhubDetailRef: "@openclaw/github",
+      clawhubDetail: {
+        ...githubDetail(),
+        registry: "https://clawhub.ai",
+        card: { status: "available", content: "# GitHub skill card" },
+      },
+      onToggle,
+    } satisfies Parameters<typeof createProps>[0];
+    // Before the inventory names it, the dialog can only say it was added.
+    render({ ...opened, report: skillReport([]), mutationSkills: [] });
+    const skillPage = await renderedPage(container);
+    expect(normalizeText(expectDefined(query(".plugin-catalog-detail__actions"), "actions"))).toBe(
+      "Installed",
+    );
+
+    render({ ...opened, report: skillReport([added]), mutationSkills: [added] });
+    await Promise.resolve();
+    const toggle = expectDefined(
+      query('.plugin-catalog-detail__actions input[role="switch"]'),
+      "added skill switch",
+    );
+    expect(normalizeText(expectDefined(query(".plugin-catalog-detail__actions"), "actions"))).toBe(
+      "Enabled",
+    );
+    toggle.click();
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith("github", false);
+
+    render({
+      ...opened,
+      report: skillReport([added]),
+      mutationSkills: [added],
+      messages: { github: { kind: "error", message: "Could not disable GitHub" } },
+    });
+    await waitForFast(() => {
+      expect(query('.skill-page [role="alert"]')?.textContent ?? "").toContain(
+        "Could not disable GitHub",
+      );
+      expect(skillPage.querySelector(".sidebar-markdown")?.textContent).toContain(
+        "GitHub skill card",
+      );
+      expect(query(".skill-page")).toBe(skillPage);
+      expect(skillPage.querySelector('input[role="switch"]')).toBe(toggle);
+    });
+  });
+
+  it("updates the latest ClawHub version on an open page", async () => {
+    const { container, render } = createView();
     const detail = {
       ...githubDetail({ summary: "GitHub integration for OpenClaw" }),
       latestVersion: { version: "1.0.0", createdAt: 1_700_000_200 },
     };
     render({ clawhubDetailRef: "github", clawhubDetail: detail });
-    const { dialog } = await getRenderedModalDialog(container);
-    const body = expectDefined(query(".skill-reader-dialog__body"), "ClawHub detail body");
-    expect(normalizeText(body)).toContain("Latest: v1.0.0");
+    const body = await renderedPage(container);
+    const version = () =>
+      normalizeText(expectDefined(body.querySelector(".skill-page__facts dd"), "version fact"));
+    expect(version()).toBe("1.0.0");
 
     render({
       clawhubDetailRef: "github",
@@ -518,26 +590,24 @@ describe("renderSkills", () => {
       },
     });
 
-    expect((await getRenderedModalDialog(container)).dialog).toBe(dialog);
-    expect(query(".skill-reader-dialog__body")).toBe(body);
-    expect(normalizeText(body)).toContain("Latest: v2.0.0");
-    expect(normalizeText(body)).not.toContain("Latest: v1.0.0");
+    expect(await renderedPage(container)).toBe(body);
+    expect(version()).toBe("2.0.0");
   });
 
   it.each([
     [true, 1],
     [undefined, 0],
   ])(
-    "marks official ClawHub skills in the detail title: isOfficial=%s",
+    "marks official ClawHub skills beside their publisher: isOfficial=%s",
     async (isOfficial, count) => {
-      const { container, render } = createView(true);
+      const { container, render } = createView();
       render({
         clawhubDetailRef: "@openclaw/github",
-        clawhubDetail: githubDetail({ isOfficial }),
+        clawhubDetail: { ...githubDetail({ isOfficial }), owner: { handle: "openclaw" } },
       });
-      await getRenderedModalDialog(container);
+      await renderedPage(container);
       const badges = container.querySelectorAll(
-        ".clawhub-skill-detail__identity [role='img'][aria-label='Official']",
+        ".skill-page__byline [role='img'][aria-label='Official']",
       );
       expect(badges).toHaveLength(count);
     },
@@ -576,7 +646,7 @@ describe("renderSkills", () => {
     const detail = native.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!;
     expect(detail.getAttribute("aria-label")).toBe("Open Pdf details");
     expect(detail.querySelector(".plugin-catalog-card__install")).toBeNull();
-    expect(native.querySelector("h2")?.textContent).toBe("Pdf");
+    expect(native.querySelector("h3")?.textContent).toBe("Pdf");
     expect(native.querySelector(".plugin-card-author")?.textContent).toBe("@awspace/pdf");
     expect(native.textContent).toContain("Native PDF integration");
     expect(native.querySelector<HTMLImageElement>("img")?.src).toBe("blob:clawhub-search-icon");
@@ -639,7 +709,7 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).not.toHaveBeenCalled();
   });
 
-  it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
+  it("renders installed ClawHub verdicts and the local Skill Card on request", async () => {
     const { container, query, text, render } = createView(true);
 
     const linkedSkill = createSkill({
@@ -664,32 +734,26 @@ describe("renderSkills", () => {
       }),
       "openclaw",
     );
-    const onDetailTabChange = vi.fn();
-
     render({
       report,
       detailKey: "agentreceipt",
-      onDetailTabChange,
       clawhubVerdicts: suspicious,
     });
-    await Promise.resolve();
+    await renderedPage(container);
 
     expect(text()).toContain("Review");
     expect(text()).toContain("@openclaw/agentreceipt@1.2.3");
     expect(text()).toContain("security.suspicious");
     expect(
-      container.querySelector<HTMLAnchorElement>('a[href*="security-audit"]')?.textContent?.trim(),
+      container
+        .querySelector<HTMLAnchorElement>('a[href*="security-audit"]')
+        ?.getAttribute("aria-label"),
     ).toBe("Full security report");
-    expect(query("#skill-detail-tab-overview")?.hasAttribute("active")).toBe(true);
-    container
-      .querySelector("#skill-detail-tab-card")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onDetailTabChange).toHaveBeenCalledWith("card");
+    expect(text()).toContain("Skill card");
 
     render({
       report,
       detailKey: "agentreceipt",
-      detailTab: "card",
       skillCardContents: {
         agentreceipt: "# AgentReceipt\n\nLocal **trust** card.",
       },
@@ -697,7 +761,6 @@ describe("renderSkills", () => {
     });
     await Promise.resolve();
 
-    expect(query("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
     expect(query(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(text()).toContain("AgentReceipt Local trust card.");
   });
@@ -773,8 +836,8 @@ describe("renderSkills", () => {
     expect(refresh().getAttribute("aria-busy")).toBeNull();
   });
 
-  it("renders card read errors and retries inside the existing detail dialog", async () => {
-    const { container, render } = createView(true);
+  it("renders card read errors and retries inside the open page", async () => {
+    const { container, render } = createView();
     const report = skillReport([
       createSkill({
         skillCard: { present: true, path: "/tmp/skill/SKILL.md", sizeBytes: 12 },
@@ -786,12 +849,11 @@ describe("renderSkills", () => {
       render({
         report,
         detailKey: "repo-skill",
-        detailTab: "card",
         skillCardReads: { "repo-skill": receipt },
         skillCardContents: content === undefined ? {} : { "repo-skill": content },
       });
     showCard(read);
-    const { dialog } = await getRenderedModalDialog(container);
+    const dialog = await renderedPage(container);
     expect(normalizeText(dialog)).toContain("Loading");
     pending.resolve({ value: undefined, error: "Card temporarily unavailable" });
     await waitForFast(() =>
@@ -805,19 +867,23 @@ describe("renderSkills", () => {
     retry.resolve({ value: "# Restored card", error: null });
     showCard(retriedRead, "# Restored card");
     await waitForFast(() => expect(normalizeText(dialog)).toContain("Restored card"));
-    expect((await getRenderedModalDialog(container)).dialog).toBe(dialog);
+    expect(await renderedPage(container)).toBe(dialog);
     expect(dialog.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("retains inventory and dialog through missing verdicts, read failure, and retry", async () => {
-    const { container, query } = createView(true);
+  it("retains inventory and page through missing verdicts, read failure, and retry", async () => {
+    const { container, query } = createView();
     const first = createDeferred<Record<string, ClawHubSkillSecurityVerdict>>();
     const changeRead = mountVerdictView(container, first.promise);
-    const { dialog } = await getRenderedModalDialog(container);
+    const dialog = await renderedPage(container);
     const row = query(".plugins-item");
     const search = query('input[name="skills-filter"]');
     const verdictLabels = () =>
-      [...container.querySelectorAll(".settings-status, .chip")].map(normalizeText);
+      [
+        ...container.querySelectorAll(
+          ".settings-status, .chip, .plugin-catalog-detail__security-verdict",
+        ),
+      ].map(normalizeText);
     expect(verdictLabels().filter((label) => label === "Refreshing…")).toHaveLength(2);
     first.reject(new Error("Verdicts temporarily unavailable"));
     await waitForFast(() =>
@@ -832,7 +898,7 @@ describe("renderSkills", () => {
     expect(verdictLabels().filter((label) => label === "Unavailable")).toHaveLength(2);
     expect(query(".plugins-item")).toBe(row);
     expect(query('input[name="skills-filter"]')).toBe(search);
-    expect((await getRenderedModalDialog(container)).dialog).toBe(dialog);
+    expect(await renderedPage(container)).toBe(dialog);
     expect(normalizeText(dialog)).not.toContain("Verdicts temporarily unavailable");
   });
 
@@ -845,14 +911,14 @@ describe("renderSkills", () => {
       detailKey: "agentreceipt",
       clawhubVerdicts: verdicts(verdict({ ok: false })),
     });
-    await Promise.resolve();
+    await renderedPage(container);
 
-    const statuses = Array.from(
-      container.querySelectorAll(".skill-reader-dialog .settings-status"),
+    const security = expectDefined(
+      container.querySelector(".skill-page .plugin-catalog-detail__security"),
+      "security fact",
     );
-    const verdictStatus = statuses.find((status) => normalizeText(status) === "Unavailable");
-    expect(verdictStatus).toBeDefined();
-    expect(statuses.some((status) => normalizeText(status) === "Clean")).toBe(false);
-    expect(verdictStatus?.classList.contains("settings-status--ok")).toBe(false);
+    expect(normalizeText(security.querySelector("dd")!)).toContain("Unavailable");
+    expect(normalizeText(security)).not.toContain("Clean");
+    expect(security.classList.contains("plugin-catalog-detail__security--pass")).toBe(false);
   });
 });

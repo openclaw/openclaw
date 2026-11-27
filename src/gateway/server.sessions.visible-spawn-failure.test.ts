@@ -34,10 +34,11 @@ beforeEach(async () => {
   };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const { provider, model } = resolveDefaultModelForAgent({
-    cfg: getRuntimeConfig(),
-    agentId: "main",
-  });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: getRuntimeConfig(), agentId: "main" });
+  if (!defaultModel) {
+    throw new Error("gateway test config must configure a model");
+  }
+  const { provider, model } = defaultModel;
   agentDiscoveryMock.models = [{ provider, id: model, name: "Fixture model", reasoning: false }];
 });
 

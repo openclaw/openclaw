@@ -1,0 +1,8 @@
+# Exact net regression-test lines above the allowance for #204805: on-demand tool loading.
+# Keeps the real-SQLite turn/restart/compaction/reset proof in both Tool Search and Code Mode,
+# the 11-call stream unknown-tool guard check, the real-loop screenshot check, the real
+# github_publish Code Mode guidance check, and the two load-on-lookup checks (a real session keeps
+# a tool loaded in its first tool batch for later requests even when each continuation resends the
+# session's tool list, as the embedded runner does; tool_describe and a refused dispatch load it)
+# after consolidating the rest of the suite.
+56

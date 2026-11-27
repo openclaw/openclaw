@@ -7,6 +7,8 @@ import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configLock from "../../config/write-lock.js";
+import { setLoggerOverride } from "../../logging/logger.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -283,22 +285,36 @@ describe("models.authLogout with a concurrent registered config set", () => {
             ] as const) {
               upsertAuthProfile({ agentDir, profileId, credential });
             }
-            const apiKeyLogout = await logoutProvider({ credentialType: "api_key" });
-            expect(apiKeyLogout).toMatchObject({
-              removedProfiles: [saved.profileId],
-              abortedRunIds: [],
-            });
-            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            const status = await client.request<{
-              providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
-            }>("models.authStatus", { agentId: "main" });
-            expect(
-              status.providers
-                .find((provider) => provider.provider === "fixture")
-                ?.profiles.map((profile) => profile.profileId)
-                .toSorted(),
-              JSON.stringify({ logout: apiKeyLogout, status }),
-            ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
+            const warnings = createWarnLogCapture("models-auth-removal");
+            try {
+              const apiKeyLogout = await logoutProvider({ credentialType: "api_key" });
+              expect(apiKeyLogout).toMatchObject({
+                removedProfiles: [saved.profileId],
+                abortedRunIds: [],
+              });
+              expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+              const status = await client.request<{
+                providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
+              }>("models.authStatus", { agentId: "main" });
+              expect(
+                status.providers
+                  .find((provider) => provider.provider === "fixture")
+                  ?.profiles.map((profile) => profile.profileId)
+                  .toSorted(),
+                JSON.stringify({ logout: apiKeyLogout, status }),
+              ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
+            } catch (error) {
+              if (error instanceof Error) {
+                const warning = await warnings.findText(
+                  "credential change saved but auth refresh failed:",
+                );
+                error.message += `\nAuth refresh warning: ${warning?.replaceAll(state.root, "<test-state>").slice(0, 6000) ?? "not captured"}`;
+              }
+              throw error;
+            } finally {
+              warnings.cleanup();
+              setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+            }
             await expect(
               logoutProvider({ profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] }),
             ).resolves.toMatchObject({

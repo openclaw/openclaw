@@ -29,6 +29,17 @@ The release live/E2E child keeps broad native `pnpm test:live` coverage, but it 
 
 That keeps the same file coverage while making slow live provider failures easier to rerun and diagnose. The aggregate `native-live-src-gateway`, `native-live-extensions-o-z`, `native-live-extensions-media`, and `native-live-extensions-media-music` shard names remain valid for manual one-shot reruns.
 
+### Z.AI credentials
+
+Configure two Actions secrets in `openclaw/openclaw` under **Settings → Secrets and variables → Actions**:
+
+- `ZAI_API_KEY`: a Standard API key with funded API balance or an applicable usage bundle. General model, gateway, and media checks use this key; `Z_AI_API_KEY` remains its legacy alias.
+- `ZAI_CODING_API_KEY`: a Personal or Team Coding Plan key with an active subscription and available quota. Only `native-live-src-agents-zai-coding` uses this secret, mapped to `ZAI_API_KEY` before live profile hydration.
+
+The selected Coding Plan shard fails with a setup error if `ZAI_CODING_API_KEY` is missing; it never falls back to the standard key. `Z_AI_API_KEY` is not a separate Coding Plan credential. Callers using an explicit reusable-workflow secret map must forward `ZAI_CODING_API_KEY`; callers using `secrets: inherit` need no mapping change. See [Z.AI's key management guide](https://docs.z.ai/devpack/notice/api-key-management) for key types and billing.
+
+### Native live execution
+
 Stable/full release validation includes the configless `agent exec --auth-env-only` Code Mode smoke in `native-live-test`. The test runner builds the runtime before starting workers. The smoke copies that built distribution outside the source checkout, applies the package's plugin exclusions, and reuses installed dependencies. It supplies only `OPENAI_API_KEY` to a fresh CLI environment, runs `openai/gpt-5.6-luna` without a runtime override, and verifies Code Mode engagement, nested tool calls, and an exact read-to-write artifact. This proves built-distribution behavior; Package Acceptance owns tarball installation proof. The shard requires passing evidence from this test; a missing key or skipped test cannot satisfy the release gate.
 
 Gateway-profile shards and shards containing the image-tool provider or OpenAI plugin live tests prepare the `sourcePerformance` build profile before starting Vitest. This supplies executable provider and agent runtime artifacts without building declarations or the Control UI. Provider requests, assertions, and test deadlines remain unchanged; gateway diagnostic environment settings apply only to gateway-profile shards. Cold source-plugin Jiti import cost remains a separate performance follow-up, not live provider latency.
@@ -40,3 +51,28 @@ The native live media shards run in `ghcr.io/openclaw/openclaw-live-media-runner
 Release and scheduled live checks forward `KIE_API_KEY`, `NOVITA_API_KEY`, and `PIXVERSE_API_KEY` to the media workflow and its isolated live profile. Configure those repository secrets to exercise their video plugins; missing credentials do not qualify the selected full-release coverage.
 
 Docker-backed live model/backend shards use a separate shared `ghcr.io/openclaw/openclaw-live-test:<sha>-<extensions>` image per selected commit. The live release workflow builds and pushes that image once, then the Docker live model, provider-sharded gateway, CLI backend, ACP bind, and Codex harness shards run with `OPENCLAW_SKIP_DOCKER_BUILD=1`. Gateway Docker shards carry explicit script-level `timeout` caps below the workflow job timeout so a stuck container or cleanup path fails fast instead of consuming the whole release-check budget. If those shards rebuild the full source Docker target independently, the release run is misconfigured and will waste wall clock on duplicate image builds.
+
+## Frozen native clients against candidate source
+
+The iOS and Android release E2E workflows accept a frozen published client
+(`client_sha` and `client_release_tag`) separately from candidate Gateway source
+(`target_sha`) and the workflow/harness revision. Source selection does not grant
+the candidate access to the qualification checkout or its evidence.
+
+Candidate dependency installation, runtime build, Gateway startup, and CLI calls
+use the same platform isolation owner. Linux uses a nonroot Docker container with
+a private volume and scoped network rules; macOS uses a private unprivileged UID
+and a default-deny Seatbelt profile. The qualification harness retains native
+client execution, provider fixtures, and authoritative result files outside that
+boundary. Only synthetic runtime configuration and provider access cross it.
+Each workflow first runs a hostile synthetic source through the production
+install/build/runtime path and requires protected evidence, private runtime state,
+provider connectivity, and cleanup checks to pass. A setup or cleanup failure is
+a failed qualification, not successful isolation.
+
+These lanes require their existing Linux Docker or macOS native runner. They do
+not silently fall back to same-user execution. macOS uses `sandbox-exec` as an
+additional restriction around UID separation; this is not a claim that it is a
+supported general-purpose Apple sandbox API. Candidate diagnostics are untrusted;
+the resulting proof attests independently observed compatibility, not honest
+internal implementation by arbitrary candidate code.

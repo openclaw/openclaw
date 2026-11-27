@@ -38,7 +38,7 @@ export async function withRequesterTestAuthority<T>(
       createCronCreatorAuthorityCapability(
         runId,
         { kind: "external", channel: "discord" },
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       ),
       "original requester authority",
     );
@@ -49,7 +49,11 @@ export async function withRequesterTestAuthority<T>(
           sessionKey,
           operationalRunInstance,
           approvalAuthority: authority,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () => run(retire),
       ),

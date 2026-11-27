@@ -15,6 +15,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { findReplaySafeRunAbort } from "../../agents/embedded-agent-runner/transcript-conflict.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
+import { isHostMissingReplyNoticeText } from "../../agents/reply-completion.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -233,7 +234,6 @@ export function dispatchAgentRunFromGateway(params: {
         params.cronCreatorAuthority.managementEntitlement,
         params.cronCreatorAuthority.isCurrent,
         undefined,
-        params.cronCreatorAuthority.requesterOwner,
         params.cronCreatorAuthority.callerScopedCreation,
       ))
     : undefined;
@@ -477,6 +477,10 @@ export function dispatchAgentRunFromGateway(params: {
             : responseStatus === "error"
               ? "failed"
               : "completed",
+        // agent.wait reads this replay. Keep the host's retry guidance, never arbitrary diagnostics.
+        ...(responseStatus === "error" && isHostMissingReplyNoticeText(terminalOutcome.error)
+          ? { error: terminalOutcome.error }
+          : {}),
         ...(responseStatus !== "ok" && terminalOutcome.stopReason
           ? { stopReason: terminalOutcome.stopReason }
           : {}),

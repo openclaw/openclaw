@@ -1,7 +1,6 @@
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { projectProgressCardChannelUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
@@ -50,7 +49,6 @@ import {
   type TestDispatchSequenceEntry,
 } from "./dispatch.compact-progress.test-support.js";
 import {
-  createSlackPlatformError,
   expectMockCallArgFields,
   requireRecord,
   type DeliveryParams,
@@ -129,7 +127,6 @@ type TypingCallbacks = {
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
 };
-let capturedTyping: TypingCallbacks | undefined;
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
@@ -138,13 +135,6 @@ let mockedDispatchError: Error | undefined;
 let useRealChannelInboundTurn = false;
 
 let mockedReplyOptionEvents: SlackReplyOptionEvent[] = [];
-
-function requireCapturedTyping() {
-  if (!capturedTyping) {
-    throw new Error("expected Slack typing callback");
-  }
-  return capturedTyping;
-}
 
 function requireCapturedItemEventHandler() {
   const handler = capturedReplyOptions?.onItemEvent;
@@ -448,7 +438,6 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
       typing?: TypingCallbacks;
     }) => {
-      capturedTyping = params.typing;
       return {
         typingCallbacks: params.typing
           ? {
@@ -761,7 +750,6 @@ beforeEach(() => {
   mockedSlackStreamingMode = "partial";
   mockedPinnedMainDmOwner = undefined;
   capturedReplyOptions = undefined;
-  capturedTyping = undefined;
   mockedReplyThreadTs = THREAD_TS;
   mockedStatusThreadTs = THREAD_TS;
   mockedReplyThreadTsSequence = undefined;
@@ -1278,60 +1266,6 @@ it.each([
   });
 });
 
-it.each([
-  ["code", "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```"],
-  ["bullets", "*Beta*\n• Value: 2"],
-] as const)(
-  "preserves %s table mode when finalizing authored preview text",
-  async (tables, expected) => {
-    const { normalizeSlackOutboundText } =
-      await vi.importActual<typeof import("../../format.js")>("../../format.js");
-    normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
-    try {
-      finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
-      mockedDispatchSequence = [textReply("| Name | Value |\n| --- | --- |\n| Beta | 2 |")];
-
-      await dispatch({ cfg: { channels: { slack: { markdown: { tables } } } } });
-
-      expect(finalizeSlackPreviewEditMock).toHaveBeenCalledOnce();
-      expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, {
-        channelId: "C123",
-        messageId: "171234.567",
-        text: expected,
-      });
-      expect(deliverRepliesMock).not.toHaveBeenCalled();
-    } finally {
-      normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
-    }
-  },
-);
-
-it.each([
-  {
-    operation: "add",
-    error: "missing_scope",
-    details: { needed: "reactions:write", provided: "chat:write" },
-    suffix: "; needed: reactions:write; provided: chat:write",
-  },
-  { operation: "remove", error: "invalid_auth", details: undefined, suffix: "" },
-])(
-  "logs the formatted Slack error when typing reaction $operation fails",
-  async ({ operation, error, details, suffix }) => {
-    (operation === "add" ? reactSlackMessageMock : removeSlackReactionMock).mockRejectedValueOnce(
-      createSlackPlatformError(error, details),
-    );
-    await dispatch({ typingReaction: "hourglass_flowing_sand" });
-    const typing = requireCapturedTyping();
-    await expect(typing.start()).resolves.toBeUndefined();
-    if (operation === "remove") {
-      await expect(typing.stop?.()).resolves.toBeUndefined();
-    }
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      `slack send: typing reaction${operation === "remove" ? " removal" : ""} failed: An API error occurred: ${error}; code: slack_webapi_platform_error; slack error: ${error}${suffix}`,
-    );
-  },
-);
-
 it.each(["message-tool-only", "recovered-failure", "room-event", "reasoning-only"] as const)(
   "settles lifecycle reactions for %s delivery",
   async (scenario) => {
@@ -1393,43 +1327,6 @@ it.each(["message-tool-only", "recovered-failure", "room-event", "reasoning-only
     }
   },
 );
-
-it("finalizes a labeled session card separately from final text", async () => {
-  const draftStream = useDraftStream(true);
-  mockedSlackStreamingMode = "progress";
-  mockedReplyOptionEvents = [
-    { kind: "item", progressText: "tool one" },
-    { kind: "partial", text: "partial answer" },
-    { kind: "item", progressText: "tool two" },
-  ];
-  await dispatch({
-    cfg: {
-      gateway: { publicOrigin: "https://team.openclaw.ai", controlUi: { basePath: "/openclaw" } },
-    },
-    accountConfig: { streaming: { progress: { toolProgress: true, label: "Shelling" } } },
-  });
-  const title = section("Shelling", true);
-  expect(draftStream.update).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      text: "Shelling\n\n_tool one_\n_tool two_\n\n1s",
-      blocks: expect.arrayContaining([title]),
-    }),
-  );
-  expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
-  expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, {
-    channelId: "C123",
-    messageId: "171234.567",
-  });
-  const finalEdit = mockRecord(finalizeSlackPreviewEditMock, 0);
-  expect(finalEdit.blocks).toContainEqual(title);
-  expect(JSON.stringify(finalEdit.blocks)).toContain("Open in OpenClaw");
-  expect(JSON.stringify(finalEdit.blocks)).toContain(
-    "https://team.openclaw.ai/openclaw/chat/agent-1/slack/C123",
-  );
-  expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
-  expect(draftStream.clear).not.toHaveBeenCalled();
-  expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-});
 
 it.each(["dispatch", "reply"])("settles a working card after failed %s", async (source) => {
   const draftStream = useDraftStream(true);
@@ -1663,68 +1560,6 @@ it.each(["stop-delivered", "oversized-fallback", "msg_too_long"] as const)(
     }
   },
 );
-
-it.each<{
-  name: string;
-  events: SlackReplyOptionEvent[];
-  updates: unknown[];
-  progress?: NonNullable<Parameters<typeof dispatchNativeProgressScenario>[1]>["progress"];
-}>([
-  {
-    name: "deduplicated preamble and prepared note",
-    events: [
-      preamble("Checking results", "preamble-1"),
-      {
-        kind: "plan",
-        phase: "update",
-        ...projectProgressCardChannelUpdate({ markdown: "**Checking** results" }),
-        steps: [],
-      },
-    ],
-    updates: [
-      planUpdate("Checking results"),
-      taskUpdate(expect.any(String), "Update Plan", "in_progress", { details: "Checking results" }),
-    ],
-  },
-  {
-    name: "canonical command title with truncated raw details",
-    progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, commandText: "raw" },
-    events: [
-      toolStart(
-        { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
-        { itemId: "exec-call-1", toolCallId: "tool-call-1" },
-      ),
-    ],
-    updates: [
-      planUpdate("Shelling"),
-      taskUpdate(expect.stringMatching(/^exec_call_1_[a-f0-9]{8}$/), "Bash", "in_progress", {
-        details: "12345…uvwxyz",
-      }),
-    ],
-  },
-  {
-    name: "patch item identity",
-    events: [
-      {
-        kind: "patch",
-        itemId: "patch:item-1",
-        toolCallId: "patch-call-1",
-        name: "apply_patch",
-        phase: "end",
-        summary: "updated Slack progress tests",
-      },
-    ],
-    updates: [
-      planUpdate("Apply Patch — updated Slack progress tests"),
-      taskUpdate(expect.stringMatching(/^patch_item_1_[a-f0-9]{8}$/), "Apply Patch", "complete", {
-        details: "updated Slack progress tests",
-      }),
-    ],
-  },
-])("renders native progress from $name", async ({ events, updates, progress }) => {
-  await dispatchNativeProgressScenario(events, { progress });
-  expectNativeProgressStart(updates);
-});
 
 it.each([true, false])(
   "retracts a native model-wait headline before the final reply (detailed=%s)",

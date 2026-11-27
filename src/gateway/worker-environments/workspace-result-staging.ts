@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import {
   composeSessionSourceAssertion,
@@ -9,6 +12,7 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout, runExec } from "../../process/exec.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -195,7 +199,7 @@ async function stageWorkerWorkspaceResult(
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath }, params);
-    await using input = await fs.open(inputPath, "r");
+    await using input = await openCommandStdinFile(inputPath);
     const { stdout } = await withWorkspaceResultRefMutation(
       root,
       async (queuedEnv) => {
@@ -218,7 +222,7 @@ async function stageWorkerWorkspaceResult(
         source.assertCurrent();
         return await runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
           baseEnv: queuedEnv,
-          stdinFileDescriptor: input.fd,
+          stdinFile: input.stdinFile,
           timeoutMs: PATCH_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         });
@@ -296,7 +300,7 @@ async function withMaterializedWorkerWorkspaceResult<Snapshot, T>(
     return await use({ ...snapshot, stagingRoot });
   } finally {
     await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      cleanup: () => nativeWorktreeFilesystem.remove(stagingRoot, { commitGuard: () => {} }),
       onError: (error) =>
         workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
     });

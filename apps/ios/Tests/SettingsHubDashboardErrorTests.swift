@@ -1,6 +1,8 @@
 import Testing
 @testable import OpenClaw
 
+/// The fixture's start wait has no deadline of its own; this limit bounds a lost signal (#161616).
+@Suite(.timeLimit(.minutes(10)))
 @MainActor
 struct SettingsHubDashboardErrorTests {
     @Test func `a plain Gateway error hands its status to the Settings host until Reload`() async throws {

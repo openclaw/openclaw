@@ -550,7 +550,7 @@ describe("buildAttemptSystemPrompt", () => {
         );
         expect(capabilityToolNames.has("write")).toBe(true);
         expect(capabilityToolNames.has("read")).toBe(false);
-        expect(system).not.toContain("read exact <location>");
+        expect(system).not.toContain("read exact `<location>`");
       } else {
         expect(/"name":"(?:read|skills_read)"/.test(JSON.stringify(payload.tools))).toBe(expected);
       }
@@ -576,7 +576,7 @@ describe("buildAttemptSystemPrompt", () => {
       expect(prepared.systemPromptText).toContain(skillsCatalog);
       const hidden = await refreshSystemPrompt(prepared.systemPromptText, [write]);
       expect(hidden).not.toContain(skillsCatalog);
-      expect(hidden).not.toContain("read exact <location>");
+      expect(hidden).not.toContain("read exact `<location>`");
       expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
       expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(codeModeActive);
 
@@ -675,7 +675,7 @@ describe("buildAttemptSystemPrompt", () => {
     const fixture = await preparePermissionPrompt();
     const { attempt, capabilityToolNames, prepared, read, refreshSystemPrompt, write } = fixture;
     const initialPrompt = prepared.systemPromptText;
-    expectText(initialPrompt, ["- exec:", "exec approval-pending:"]);
+    expectText(initialPrompt, ["- exec:", "Approval-pending:"]);
 
     attempt.permissionMode = "workspace";
     capabilityToolNames.delete("exec");
@@ -705,7 +705,7 @@ describe("buildAttemptSystemPrompt", () => {
         "Current runtime addition",
         "permissions to read-only",
       ],
-      ["- write:", "- exec:", "exec approval-pending:", "permissions to workspace"],
+      ["- write:", "- exec:", "Approval-pending:", "permissions to workspace"],
     );
     expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
     expect(await refreshSystemPrompt(refreshed, [read])).toBe(refreshed);

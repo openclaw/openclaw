@@ -119,9 +119,9 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
     const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
     const initialAccounting = {
       byteSize: events
-        .slice(1)
+        .filter((event) => event.type === "message" || event.type === "custom_message")
         .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1, 0),
-      eventCount: 4,
+      eventCount: 3,
       turnTainted: false,
       usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
     };
@@ -334,7 +334,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             accountingOptions,
           );
           expect(completedAccounting).toMatchObject({
-            eventCount: 8,
+            eventCount: 6,
             turnTainted: true,
             usage: { promptTokens: 500, outputTokens: 11, trailingMessages: [] },
           });

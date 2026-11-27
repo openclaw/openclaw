@@ -205,9 +205,14 @@ describe("applyMediaUnderstanding", () => {
         readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
       };
     });
+    // mock-isolation: Use fixture FFmpeg and HEIC converters instead of external media tools.
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,
+    }));
+    // mock-isolation: Keep fixture images on the existing unknown-format optimizer path.
+    vi.doMock("../media/image-header-metadata.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../media/image-header-metadata.js")>()),
       readImageMetadataFromHeader: () => null,
     }));
     // mock-isolation: All external media commands are supplied by the test fixture.

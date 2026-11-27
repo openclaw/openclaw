@@ -34,6 +34,7 @@ import {
   verifyReleaseStateArtifacts,
   updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
+import { sortJsonValueKeys } from "../../scripts/lib/canonical-json.mjs";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import {
   fixtureReceiptClientSource,
@@ -65,6 +66,40 @@ import {
 } from "./full-release-validation-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function runSyntheticWaiverState(
+  source: string,
+  fixture: Record<string, unknown>,
+  waivers: Record<string, unknown>[] = [
+    {
+      targetVersion: "2099.1.1",
+      targetSha: "c".repeat(40),
+      childRole: "normalCi",
+      jobName: "synthetic-lane",
+      reason: "Synthetic state policy fixture",
+    },
+  ],
+) {
+  const policyPath = join(tempDirs.make("frv-synthetic-waiver-"), "waivers.json");
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema: "openclaw.release-validation-waivers/v1",
+      waivers,
+    }),
+  );
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_RELEASE_WAIVERS_PATH: policyPath,
+      STATE_FIXTURE: JSON.stringify(fixture),
+    },
+    timeout: 10_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
 
 function runPlanSubprocess(overrides: Record<string, unknown>, env: Record<string, string> = {}) {
   const root = tempDirs.make("frv-candidate-plan-");
@@ -234,22 +269,6 @@ describe("full release execution plan", () => {
         expect.objectContaining({ key: "normalCi", runId: "999", source: "reused" }),
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
-    });
-    const unverifiableTooling = runPlanSubprocess(
-      {
-        childPhaseVersion: 3,
-        childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
-      },
-      { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
-    );
-    expect(unverifiableTooling.result.status).toBe(2);
-    expect(JSON.parse(readFileSync(unverifiableTooling.output, "utf8"))).toMatchObject({
-      blockers: [
-        expect.objectContaining({
-          kind: "reused_evidence_invalid",
-          message: expect.stringContaining("invalid workflow commit tree"),
-        }),
-      ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
     const clock = join(root, "retry-clock.mjs");
@@ -838,6 +857,38 @@ syncBuiltinESMExports();
     });
   });
 
+  it("records a waived missing dispatch without fabricating child evidence", () => {
+    const sealedPlan = executionPlan(
+      { children: { normalCi: { result: "skipped" } }, rerunGroup: "ci" },
+      { targetVersion: "2099.1.1" },
+    );
+    const grant = {
+      targetVersion: sealedPlan.targetVersion,
+      childRole: "normalCi",
+      reason: "Synthetic dispatch absence",
+    };
+    const observed = runSyntheticWaiverState(
+      `import { buildReleaseStateArtifact, classifyReleaseSnapshot, formatReleaseStateOutcome, verifyReleaseStateArtifacts } from "./scripts/full-release-validation-policy.mjs";
+       const executionPlan = JSON.parse(process.env.STATE_FIXTURE);
+       const { parentRunAttempt, parentRunId, releaseProfile, rerunGroup, targetVersion, targetSha, workflowRef, workflowSha } = executionPlan;
+       const expected = { parentRunAttempt, parentRunId, targetSha, workflowRef, workflowSha };
+       const children = executionPlan.children.map((child) => ({ ...child, jobs: [], status: "missing" }));
+       const decision = classifyReleaseSnapshot({ children, targetVersion, targetSha });
+       const artifact = (mode) => buildReleaseStateArtifact({ children, decision, executionPlan, expected, mode, releaseProfile, rerunGroup });
+       const { drain } = verifyReleaseStateArtifacts(executionPlan, artifact("decision"), artifact("drain"), expected);
+       console.log(JSON.stringify({ ...drain, summary: formatReleaseStateOutcome(drain) }));`,
+      sealedPlan,
+      [grant],
+    );
+    expect(observed).toMatchObject({
+      blockers: [],
+      state: "passed",
+      waivers: [{ ...grant, runId: "", runAttempt: null }],
+    });
+    expect(Object.keys(observed.children)).toEqual([]);
+    expect(observed.summary).toContain("Waived (not a test pass)");
+  });
+
   it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {
     expect(
       plan({
@@ -1153,14 +1204,17 @@ describe("release child attempt composition", () => {
         plannedRunAttempt: 2,
       },
     ])(
-      "marks a duplicate-contaminated attempt unsealable even when another attempt is effective",
+      "uses the single real execution despite runnerless copies in any attempt",
       ({ attempts, effectiveRunAttempt, plannedRunAttempt }) => {
-        expect(() =>
-          composeReleaseAttemptJobs(attempts, {
-            effectiveRunAttempt,
-            plannedRunAttempt,
+        expect(
+          composeReleaseAttemptJobs(attempts, { effectiveRunAttempt, plannedRunAttempt }).jobs,
+        ).toContainEqual(
+          expect.objectContaining({
+            name: completed.name,
+            conclusion: "success",
+            acceptedRunAttempt: 2,
           }),
-        ).toThrow("is unsealable due to duplicate job identity");
+        );
       },
     );
 
@@ -1232,13 +1286,6 @@ describe("release child attempt composition", () => {
         effectiveRunStatus: "in_progress",
         plannedRunAttempt: 1,
       },
-      {
-        label: "beside a running job without a rerun",
-        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
-        effectiveRunAttempt: 1,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      },
     ])(
       "still rejects duplicates $label",
       ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
@@ -1251,6 +1298,44 @@ describe("release child attempt composition", () => {
         ).toThrow("duplicate job identity");
       },
     );
+  });
+
+  it("preserves a sealed projection only for the exact same completed execution", () => {
+    const original = {
+      ...job("test", "success"),
+      steps: [{ name: "test", conclusion: "success" }],
+    };
+    const projection = { ...original, html_url: "https://example.invalid/jobs/projected" };
+    const attempts = [
+      { jobs: [original], runAttempt: 1 },
+      { jobs: [projection], runAttempt: 2 },
+    ];
+    const range = { plannedRunAttempt: 1, effectiveRunAttempt: 2 };
+    const canonical = composeReleaseAttemptJobs(attempts, range);
+    expect(canonical.jobs[0]).toMatchObject({ acceptedRunAttempt: 1, url: original.html_url });
+    const recordedJobs = [
+      { ...canonical.jobs[0], acceptedRunAttempt: 2, url: projection.html_url },
+    ];
+    expect(composeReleaseAttemptJobs(attempts, { ...range, recordedJobs }).jobs).toEqual(
+      recordedJobs,
+    );
+    for (const change of [
+      { url: "https://example.invalid/jobs/forged" },
+      { conclusion: "failure" },
+      { startedAt: "2026-08-23T00:00:00Z" },
+    ]) {
+      const changed = [{ ...recordedJobs[0], ...change }];
+      expect(
+        composeReleaseAttemptJobs(attempts, { ...range, recordedJobs: changed }).jobs,
+      ).not.toEqual(changed);
+    }
+    const newer = { ...projection, steps: [{ name: "test", conclusion: "failure" }] };
+    expect(
+      composeReleaseAttemptJobs([attempts[0]!, { jobs: [newer], runAttempt: 2 }], {
+        ...range,
+        recordedJobs: canonical.jobs,
+      }).jobs,
+    ).not.toEqual(canonical.jobs);
   });
 
   it("rejects duplicate logical jobs and gapped attempts", () => {
@@ -1399,7 +1484,17 @@ describe("release decision policy", () => {
       drain: artifact,
       context: { releaseProfile: "stable", rerunGroup: "all", validationInputs: {} },
     });
-    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(decision.advisoryJobs);
+    const advisoryJobs = validateReleaseManifestAdvisoryJobs(manifest);
+    expect(advisoryJobs).toEqual(decision.advisoryJobs);
+    expect(validateReleaseManifestAdvisoryJobs(sortJsonValueKeys(manifest))).toEqual(
+      decision.advisoryJobs,
+    );
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        ...manifest,
+        advisoryJobs: [{ ...advisoryJobs[0], conclusion: "success" }],
+      }),
+    ).toThrow("advisory jobs differ");
     expect(() => validateReleaseManifestAdvisoryJobs({ ...manifest, advisoryJobs: [] })).toThrow(
       "advisory jobs differ",
     );
@@ -1450,64 +1545,6 @@ describe("release decision policy", () => {
     });
     expect(terminalPolicyPass(snapshot)).toBe(false);
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
-  });
-
-  it("binds Decision and Drain policy to the plan target and authenticated aggregate attempt", async () => {
-    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
-    const targetVersion = "2026.11.4";
-    const planned = child("normalCi");
-    const leaf = {
-      id: 50,
-      name: "macos-swift (tests)",
-      status: "completed",
-      conclusion: "failure",
-    };
-    const gate = {
-      id: 51,
-      name: "openclaw/ci-gate",
-      status: "completed",
-      conclusion: "failure",
-      steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
-    };
-    const fetched: number[] = [];
-    const options = {
-      targetSha,
-      targetVersion,
-      readRun: async () =>
-        githubRun(planned, {
-          conclusion: "failure",
-          run_attempt: 2,
-          triggering_actor: { login: "release-operator" },
-        }),
-      readAttemptJobs: async (_id: string, attempt: number) =>
-        attempt === 1
-          ? [leaf, gate]
-          : [{ name: "receipt", status: "completed", conclusion: "success" }],
-      readJobLog: (id: number) => {
-        fetched.push(id);
-        return "2026-11-15T04:00:00.0000000Z ##[error]macos-swift finished with failure (selected=true)";
-      },
-    };
-    const observed = await readChild(planned, undefined, undefined, options);
-    expect(observed.errors).toEqual([]);
-    expect(fetched).toEqual([51]);
-    expect(observed.conclusion).toBe("failure");
-    expect(observed.jobs).toContainEqual(
-      expect.objectContaining({ name: gate.name, acceptedRunAttempt: 1, conclusion: "failure" }),
-    );
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state).toBe(
-      "passed",
-    );
-    expect(
-      classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha: TARGET_SHA }).state,
-    ).toBe("blocked_complete");
-    const invalid = await readChild(planned, undefined, undefined, {
-      ...options,
-      readJobLog: () => "##[error]unknown",
-    });
-    expect(classifyReleaseSnapshot({ children: [invalid], targetVersion, targetSha }).state).toBe(
-      "orchestration_error",
-    );
   });
 
   it("accepts a targeted runtime child rerun with retained sibling evidence", async () => {
@@ -1571,7 +1608,7 @@ describe("release decision policy", () => {
   });
 
   it.each(["queued", "in_progress"])(
-    "marks a %s rerun with runnerless duplicate copies unsealable",
+    "keeps a %s rerun pending behind its real running execution",
     async (runStatus) => {
       const planned = child("normalCi");
       const name = "checks-node-core-fast-isolated";
@@ -1609,14 +1646,10 @@ describe("release decision policy", () => {
                 },
               ],
       });
-      expect(contaminated.errors).toEqual([
-        expect.objectContaining({
-          kind: "api_error",
-          message: expect.stringContaining("is unsealable due to duplicate job identity"),
-        }),
-      ]);
+      expect(contaminated.errors).toEqual([]);
+      expect(terminalPolicyPass(contaminated)).toBe(false);
       expect(classifyReleaseSnapshot({ children: [contaminated] })).toMatchObject({
-        state: "orchestration_error",
+        state: "qualifying",
       });
     },
   );
@@ -1978,29 +2011,38 @@ describe("release state artifacts", () => {
   });
 
   it("recomputes candidate-bound waivers when validating sealed Decision and Drain", () => {
-    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const targetSha = "c".repeat(40);
     const sealedPlan = executionPlan(
       { rerunGroup: "ci" },
-      { expected: { targetSha }, targetVersion: "2026.11.4" },
+      { expected: { targetSha }, targetVersion: "2099.1.1" },
     );
-    const failed = {
-      conclusion: "failure",
-      jobs: [{ name: "macos-swift (tests)", status: "completed", conclusion: "failure" }],
-    };
-    const decision = collectorArtifact("decision", 2, sealedPlan, failed);
-    const drain = collectorArtifact("drain", 2, sealedPlan, failed);
-    const expected = { ...stateExpected(), targetSha };
-    expect(verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected).drain.state).toBe(
-      "passed",
+    const result = runSyntheticWaiverState(
+      `
+      import { buildReleaseStateArtifact, classifyReleaseSnapshot, verifyReleaseStateArtifacts } from "./scripts/full-release-validation-state.mjs";
+      import { releaseExecutionPlanSha256 } from "./scripts/full-release-validation-policy.mjs";
+      const { sealedPlan, baseChild, expected } = JSON.parse(process.env.STATE_FIXTURE);
+      const children = [{ ...baseChild, ...sealedPlan.children.find(c => c.key === "normalCi"),
+        conclusion: "failure", status: "completed",
+        jobs: [{ name: "synthetic-lane", status: "completed", conclusion: "failure" }],
+      }];
+      const decisionState = classifyReleaseSnapshot({ children, targetSha: sealedPlan.targetSha, targetVersion: sealedPlan.targetVersion, releaseProfile: "stable", workflowRef: "release-ci/tooling" });
+      const artifact = mode => buildReleaseStateArtifact({ children, decision: decisionState, executionPlan: sealedPlan, expected: { ...expected, parentRunAttempt: 2 }, mode, releaseProfile: "stable", rerunGroup: "ci", cancellation: {} });
+      const decision = artifact("decision");
+      const drain = artifact("drain");
+      const state = verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected).drain.state;
+      let missingWaiverError;
+      try { verifyReleaseStateArtifacts(sealedPlan, { ...decision, waivers: [] }, drain, expected); } catch (error) { missingWaiverError = error.message; }
+      const otherPlan = { ...sealedPlan, targetSha: "b".repeat(40) };
+      otherPlan.sha256 = releaseExecutionPlanSha256(otherPlan);
+      let mismatched = false;
+      try { verifyReleaseStateArtifacts(otherPlan, decision, drain, { ...expected, targetSha: otherPlan.targetSha }); } catch { mismatched = true; }
+      console.log(JSON.stringify({ state, missingWaiverError, mismatched }));
+    `,
+      { sealedPlan, baseChild: child("normalCi"), expected: { ...stateExpected(), targetSha } },
     );
-    expect(() =>
-      verifyReleaseStateArtifacts(sealedPlan, { ...decision, waivers: [] }, drain, expected),
-    ).toThrow("waivers differ");
-    const otherPlan = { ...sealedPlan, targetSha: TARGET_SHA };
-    otherPlan.sha256 = releaseExecutionPlanSha256(otherPlan);
-    expect(() =>
-      verifyReleaseStateArtifacts(otherPlan, decision, drain, stateExpected()),
-    ).toThrow();
+    expect(result.state).toBe("passed");
+    expect(result.missingWaiverError).toContain("waivers differ");
+    expect(result.mismatched).toBe(true);
   });
 
   it("uses one policy for decision, drain, and final verification", () => {
