@@ -33,6 +33,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
@@ -59,7 +60,15 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
-installRequesterCronAuthorityTestHooks();
+function requesterActor() {
+  return {
+    type: "human",
+    source: "profile",
+    id: ensureProfileForEmail("child-requester@example.test").id,
+  } as const;
+}
+
+installRequesterCronAuthorityTestHooks(requesterActor);
 
 const DEVICE: PairedDevice = {
   deviceId: "control-ui-device",
@@ -122,6 +131,7 @@ it.each([
   if (scenario === "role revoked") {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const recovery = await createOperatorRecoveryFixture({
     stateDir,
     context,
@@ -133,6 +143,9 @@ it.each([
   });
   recovery.entry.status = "done";
   recovery.entry.abortedLastRun = false;
+  if (scenario === "no operator source") {
+    recovery.entry.createdActor = requesterActor();
+  }
   await accessor.replaceSessionEntry(recovery.target, recovery.entry);
   // Without operator admission the creating turn stores only its profile attribution.
   const original =
@@ -257,6 +270,17 @@ it.each([
       lifecycleRevision: "reset",
     });
   }
+  if (scenario === "no operator source") {
+    config.gateway = {
+      ...config.gateway,
+      roles: {
+        default: "member",
+        definitions: {
+          member: { scopes: ["operator.write"], agents: "*", sessions: { others: "write" } },
+        },
+      },
+    };
+  }
 
   let entered = 0;
   let operatorAdmitted = false;
@@ -345,9 +369,11 @@ it.each([
         // An owner run is an internal turn: it carries no sender bit.
         expect(runSenderIsOwner).toBeUndefined();
       } else {
-        // Without a snapshot the existing profile check decides owner status; the
-        // fixture's attributed profile is not resident, so it is not the owner.
-        expect(job.createdActor).toMatchObject({ source: "profile", id: "fixture-operator" });
+        // The stored member can run its automation with non-owner permissions.
+        expect(job.createdActor).toEqual({
+          ...requesterActor(),
+          delegatedBy: { type: "agent", id: "main" },
+        });
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
         expect(runSenderIsOwner).toBe(false);
       }
