@@ -466,8 +466,10 @@ export function scheduledTrackedTestFiles(): string[] {
   // Coverage itself runs in a complete checkout; retain the existing Git owner.
   const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
     createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
-  // Narrow before the Git owner checks existence; non-test paths cannot enter this census.
-  const files = listGitTrackedFiles({ pathspecs: ":(glob)**/*.test.*" });
+  // Literal pathspec mode disables Git's glob magic; filter the full inventory instead.
+  const files = listGitTrackedFiles({
+    pathspecs: process.env.GIT_LITERAL_PATHSPECS ? "." : ":(glob)**/*.test.*",
+  });
   if (!files) {
     throw new Error("Scheduled test coverage requires git ls-files");
   }
