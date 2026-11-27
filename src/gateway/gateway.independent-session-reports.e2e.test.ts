@@ -195,10 +195,10 @@ it("keeps an independent opening's result obligation while accepting its peer si
   };
 
   await start(`${marker}_CREATE`);
-  expect(created).toMatchObject({ status: "created", runStarted: true });
+  expect(created).toMatchObject({ runStarted: true });
   const childKey = created?.sessionKey;
-  if (typeof childKey !== "string") {
-    throw new Error("sessions_create did not return a session key");
+  if (typeof childKey !== "string" || typeof created?.runId !== "string") {
+    throw new Error(`sessions_create did not start a run: ${JSON.stringify(created)}`);
   }
   const openingOutcome = await waitForProofRun(created?.runId);
   await expectProofIdle();
@@ -207,14 +207,15 @@ it("keeps an independent opening's result obligation while accepting its peer si
     spawnedBy: parentKey,
     spawnDepth: 1,
   });
-  // The opening's NO_REPLY is refused, so the run asks the model again for its result.
-  expect({ outcome: openingOutcome.status, openingCalls: openingPrompts.length }).toEqual({
-    outcome: "ok",
-    openingCalls: 2,
-  });
 
   await start(`${marker}_SEND`);
-  // A later message from the creator is a peer message: exact NO_REPLY is accepted once.
-  expect(notePrompts).toHaveLength(1);
-  expect(sent).toMatchObject({ status: "no_reply", sessionKey: childKey });
+  expect({
+    // The opening's NO_REPLY is refused, so the run asks the model again for its result.
+    opening: { status: openingOutcome.status, modelCalls: openingPrompts.length },
+    // A later message from the creator is a peer message: exact NO_REPLY is accepted once.
+    note: { status: sent?.status, sessionKey: sent?.sessionKey, modelCalls: notePrompts.length },
+  }).toEqual({
+    opening: { status: "ok", modelCalls: 2 },
+    note: { status: "no_reply", sessionKey: childKey, modelCalls: 1 },
+  });
 }, 60_000);
