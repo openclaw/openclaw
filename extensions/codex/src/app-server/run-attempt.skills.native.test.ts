@@ -466,34 +466,32 @@ describe("native Codex skill delivery", () => {
         expect(developerMessageText(request)).not.toContain(
           "Synthetic model-owned Default policy.",
         );
-        // Inspect the latest delivered section: creation policy, then in-place refreshes on
-        // the live thread (no cold resume). Historical messages may retain old persona.
-        const input = Array.isArray(request?.input) ? request.input : [];
-        const policyIndex = input.findLastIndex(
-          (item) =>
-            isJsonObject(item) &&
-            item.role === "developer" &&
-            (index === 0
-              ? JSON.stringify(item).includes("<thread_policy>")
-              : JSON.stringify(item).includes(
-                  "complete current OpenClaw refreshable thread instructions",
-                )),
-        );
-        expect(policyIndex).toBeGreaterThanOrEqual(0);
-        const text = JSON.stringify(input[policyIndex]);
-        // Everything the model sees from the latest section on.
-        const latest = JSON.stringify(input.slice(policyIndex));
+        // Inspect the latest framed policy: historical messages may retain old persona.
+        const input = request?.input;
+        const policy = Array.isArray(input)
+          ? input.findLast(
+              (item) =>
+                isJsonObject(item) &&
+                item.role === "developer" &&
+                JSON.stringify(item).includes("<thread_policy>"),
+            )
+          : undefined;
+        expect(policy).toBeDefined();
+        const text = JSON.stringify(policy);
         expect(text).toContain(sharedUser);
         expect(text).not.toContain("Synthetic model-owned Default policy.");
         expect(text).not.toContain("# Collaboration Mode: Default");
         expect(text).not.toContain("request_user_input");
+        if (index > 0) {
+          expect(text).toContain("All earlier collaboration-mode instructions are withdrawn");
+        }
         if (soul) {
           expect(text).toContain(soul);
         } else {
-          expect(latest).not.toContain(editedSoul);
+          expect(text).not.toContain(editedSoul);
         }
         if (index > 0) {
-          expect(latest).not.toContain(firstSoul);
+          expect(text).not.toContain(firstSoul);
         }
       }
       expect(threadIds.size).toBe(1);
@@ -511,14 +509,13 @@ describe("native Codex skill delivery", () => {
   }, 90_000);
 
   it.each([
-    {
-      label: "a withdrawn catalog",
-      refreshed: undefined,
-      current: "refreshable thread instructions are empty",
-    },
+    { thread: "incognito", sessionKey: "agent:main:dashboard:incognito-native-compaction" },
+    { thread: "persistent", sessionKey: "agent:main:native-compaction" },
   ])(
-    "keeps $label visible to the model after native compaction rebuilds the incognito thread",
-    async ({ refreshed, current }) => {
+    "keeps a withdrawn catalog withdrawn after native compaction rebuilds the $thread thread",
+    async ({ thread, sessionKey }) => {
+      const incognito = thread === "incognito";
+      const current = "refreshable thread instructions are empty";
       // auto_compact_token_limit resolves to 900, so a turn reporting 5_000
       // tokens forces the next turn to compact before it samples.
       const { fixture, attemptOptions, createParams } = await createNativeFixture(
@@ -526,13 +523,12 @@ describe("native Codex skill delivery", () => {
         1_000,
       );
       const overAutoCompactLimitTokens = 5_000;
-      const sessionKey = `agent:main:dashboard:incognito-native-compaction-${refreshed ? "edit" : "removal"}`;
       await seedRunSessionOwnerForTest("session-1", sessionKey);
       let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
       try {
         const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
           const before = fixture.requests.length;
-          const params = createParams("incognito-compaction-session.jsonl", sessionKey);
+          const params = createParams(`${thread}-compaction-session.jsonl`, sessionKey);
           // A native-tool-restricted turn always starts a transient thread, which
           // would replace the live incognito thread this regression depends on.
           params.disableTools = false;
@@ -557,11 +553,15 @@ describe("native Codex skill delivery", () => {
         expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
 
         fixture.usage.tokens = overAutoCompactLimitTokens;
-        const [refreshRequest] = await runTurn("run-2", refreshed, "second");
-        expect(developerMessageText(refreshRequest)).toContain(current);
+        const [refreshRequest] = await runTurn("run-2", undefined, "second");
+        // An ephemeral thread has no resume source and takes a handoff; an idle persistent
+        // thread cold-resumes, so its native configuration drops the catalog.
+        if (incognito) {
+          expect(developerMessageText(refreshRequest)).toContain(current);
+        }
 
         fixture.usage.tokens = 10;
-        const compactionTurn = await runTurn("run-3", refreshed, "third");
+        const compactionTurn = await runTurn("run-3", undefined, "third");
         // Codex summarizes, then resumes the same turn against the rebuilt context.
         const summarizationIndex = compactionTurn.findIndex((request) =>
           JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
@@ -569,26 +569,31 @@ describe("native Codex skill delivery", () => {
         expect(summarizationIndex).toBeGreaterThanOrEqual(0);
         const continuationRequest = compactionTurn[summarizationIndex + 1];
         expect(continuationRequest).toBeDefined();
-        // The rebuilt context restores the creation-time carrier and drops the
-        // client-authored refresh, which is exactly the reversion under test.
-        expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
-        expect(developerMessageText(continuationRequest)).not.toContain(current);
-        expect(developerMessageText(continuationRequest)).toContain(
-          "silence is not an answer or approval",
-        );
-        expect(developerMessageText(continuationRequest)).not.toContain(
-          "Synthetic model-owned Default policy.",
-        );
-        expect(developerMessageText(continuationRequest)).not.toContain("request_user_input");
+        const continuation = developerMessageText(continuationRequest);
+        // The rebuilt context restores the native carrier and drops client-authored
+        // handoffs: an ephemeral thread's creation catalog reverts for this request.
+        if (incognito) {
+          expect(continuation).toContain(NATIVE_FIRST_CATALOG);
+          expect(continuation).not.toContain(current);
+        } else {
+          expect(continuation).not.toContain(NATIVE_FIRST_CATALOG);
+        }
+        expect(continuation).toContain("silence is not an answer or approval");
+        expect(continuation).not.toContain("Synthetic model-owned Default policy.");
+        expect(continuation).not.toContain("request_user_input");
 
-        const [restoredRequest] = await runTurn("run-4", refreshed, "fourth");
+        const [restoredRequest] = await runTurn("run-4", undefined, "fourth");
         const restored = developerMessageText(restoredRequest);
-        expect(restored).toContain(current);
-        // The creation-time catalog is immutable on an ephemeral thread, so the
-        // proof is that the current catalog is the model's latest instruction.
-        expect(restored.lastIndexOf(current)).toBeGreaterThan(
-          restored.lastIndexOf(NATIVE_FIRST_CATALOG),
-        );
+        if (incognito) {
+          expect(restored).toContain(current);
+          // The creation-time catalog is immutable on an ephemeral thread, so the
+          // proof is that the current catalog is the model's latest instruction.
+          expect(restored.lastIndexOf(current)).toBeGreaterThan(
+            restored.lastIndexOf(NATIVE_FIRST_CATALOG),
+          );
+        } else {
+          expect(restored).not.toContain(NATIVE_FIRST_CATALOG);
+        }
       } finally {
         if (client) {
           await client.closeAndWait();

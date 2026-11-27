@@ -4,7 +4,8 @@ import {
   formatErrorMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import type { CodexEphemeralThreadPolicy } from "./client-thread-owner.js";
+import { isCodexAppServerLiveThreadProtected } from "./client-runtime.js";
+import { isEphemeralThreadPolicy, type CodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
   isCodexAppServerOverloadError,
   isCodexAppServerPrewriteRequestCancellationError,
@@ -71,6 +72,24 @@ export async function refreshCodexThreadPolicy(
   await injectCodexThreadDeveloperHandoff(
     params,
     notice + collaborationNotice + params.developerInstructions,
+  );
+}
+
+/**
+ * Native compaction rebuilds from the section a persistent thread was started or resumed
+ * with and can sample its continuation before any host handoff, so a changed section needs
+ * a cold resume. Protected work refuses one; the thread then takes a handoff until its
+ * first unprotected turn. Ephemeral threads have no resume source.
+ */
+export function isCodexNativeSectionStale(
+  params: { client: CodexAppServerClient; refreshableInstructions?: string },
+  threadId: string,
+  policy: CodexEphemeralThreadPolicy | undefined,
+): boolean {
+  return (
+    !isEphemeralThreadPolicy(policy) &&
+    policy?.nativeRefreshableInstructions !== params.refreshableInstructions &&
+    !isCodexAppServerLiveThreadProtected(params.client, threadId)
   );
 }
 

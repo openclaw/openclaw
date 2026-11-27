@@ -122,9 +122,10 @@ export function fingerprintCodexThreadConfig(
 }
 
 /**
- * A live thread takes a changed refreshable section as an appended developer handoff
- * (`tryReuseCodexLiveThread`), so only the policy before it is creation identity.
- * The section is the last one joined into the `<thread_policy>` carrier (thread-requests.ts).
+ * The refreshable section is not creation identity: `tryReuseCodexLiveThread` compares it
+ * with the section the thread was natively given and cold-resumes, or, under protected
+ * work, appends a developer handoff. The section is the last one joined into the
+ * `<thread_policy>` carrier (thread-requests.ts).
  */
 function withoutRefreshableSection(
   developerInstructions: JsonValue | undefined,

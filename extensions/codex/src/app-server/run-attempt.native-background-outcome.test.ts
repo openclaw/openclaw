@@ -280,7 +280,7 @@ it.each([
   ["managed relay", true],
   ["appServer.command", false],
 ] as const)(
-  "refreshes edited skills on a protected thread without a cold resume (%s)",
+  "refreshes edited skills on a protected thread, then cold-resumes once it ends (%s)",
   async (_route, relay) => {
     const agentDir = path.join(tempDir, "protected-skills-agent");
     const codexHome = resolveCodexAppServerHomeDir(agentDir);
@@ -288,16 +288,20 @@ it.each([
     let nativeTools: unknown;
     const source = new AbortController();
     const command = runningCommand("background-listener", "synthetic-callback-listener", "12345");
+    let listenerRunning = true;
     const harness = createStartedThreadHarness(
       async (method, request) => {
         if (method === "account/read") {
           return { account: { type: "apiKey" } };
         }
         if (method === "thread/backgroundTerminals/list") {
-          return { data: [{ itemId: command.id, processId: command.processId }], nextCursor: null };
+          const data = listenerRunning
+            ? [{ itemId: command.id, processId: command.processId }]
+            : [];
+          return { data, nextCursor: null };
         }
-        if (method === "thread/start") {
-          nativeTools = isJsonObject(request) ? request.dynamicTools : undefined;
+        if (method === "thread/start" || method === "thread/resume") {
+          nativeTools ??= isJsonObject(request) ? request.dynamicTools : undefined;
           const result = threadStartResult();
           return { ...result, thread: { ...result.thread, path: rolloutPath } };
         }
@@ -312,7 +316,15 @@ it.each([
       ownCodexInferenceClient(harness.client);
     }
     try {
-      for (const [index, catalog] of [FIRST_CATALOG, SECOND_CATALOG].entries()) {
+      for (const [index, catalog] of [FIRST_CATALOG, SECOND_CATALOG, SECOND_CATALOG].entries()) {
+        if (index === 2) {
+          // The listener ends: the first unprotected turn must make the edit native.
+          listenerRunning = false;
+          await harness.notify(
+            itemNotification("item/completed", { ...command, status: "completed", exitCode: 0 }),
+          );
+          expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(false);
+        }
         const params = Object.assign(
           createParams(path.join(tempDir, "protected-skills.jsonl"), tempDir, {
             runId: `run-${index}`,
@@ -332,7 +344,7 @@ it.each([
         }
         await harness.notify(answerCompleted("Ready."));
         expect(readAttemptTerminal(await run).promptError).toBeNull();
-        expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+        expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(index < 2);
       }
       const threadRequests = harness.requests.filter(
         ({ method, params }) =>
@@ -343,10 +355,18 @@ it.each([
       expect(threadRequests.map(({ method }) => method)).toEqual([
         "thread/start",
         "thread/inject_items",
+        // Cold resume makes the edited catalog native, then hands the current policy over.
+        "thread/unsubscribe",
+        "thread/resume",
+        "thread/inject_items",
       ]);
       expect(JSON.stringify(threadRequests[0])).toContain(FIRST_CATALOG);
       expect(JSON.stringify(threadRequests[1])).toContain(SECOND_CATALOG);
-      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(2);
+      for (const request of threadRequests.slice(3)) {
+        expect(JSON.stringify(request)).toContain(SECOND_CATALOG);
+        expect(JSON.stringify(request)).not.toContain(FIRST_CATALOG);
+      }
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(3);
     } finally {
       source.abort(new Error("fixture cleanup"));
       harness.close();
