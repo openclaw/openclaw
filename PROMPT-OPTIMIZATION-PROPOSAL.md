@@ -25,6 +25,14 @@ This is not hindsight. On August 10, 2026, we submitted [upstream PR #121683](ht
 
 An equivalent live patch preserved the same native thread and registered-tool fingerprint over six turns, with 98.30–99.83% cache reuse; non-owner turns retained 99.24% and 98.94% without gaining privileged execution rights. The PR was closed without merging on September 3. On August 14 we also created the public [Transient Tools plugin](https://github.com/Animeleague/openclaw-plugin-transient-tools), addressing persistent tool-history accumulation.
 
+### Upstream subsequently adopted the same principle
+
+On October 17, 2026, **68 days after our submission**, upstream merged [PR #175309](https://github.com/openclaw/openclaw/pull/175309), explicitly addressing prompt-cache misses on non-owner turns. Its production telemetry identified owner/non-owner tool-list changes as the most frequent raw cause of cache drops. It kept tool definitions stable and enforced actual authority at execution time, the same architectural separation we demonstrated in August.
+
+On November 26, 108 days after our submission, [upstream PR #206126](https://github.com/openclaw/openclaw/pull/206126) was opened to address remaining Codex native-thread rotation from tool catalog drift, again separating the durable catalog from per-turn execution authority. It was not merged as of November 27.
+
+These public records establish the chronology and technical convergence, not code copying or identical implementations.
+
 The point is not merely that we identified a problem in August. We had implemented solutions and published measured evidence more than three months before this proposal. Today's work applies the same architectural principle to another context surface: durable state should not be inflated or destabilized by transient information.
 
 ## Evidence boundaries
