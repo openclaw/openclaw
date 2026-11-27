@@ -33,6 +33,7 @@ packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
 packages/gateway-protocol/package.json
+packages/gateway-protocol/src/builtin-theme-catalog.ts
 packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
