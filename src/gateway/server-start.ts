@@ -13,6 +13,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { captureGatewayInstallationTrial } from "./stale-install.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
@@ -60,6 +61,9 @@ async function startGatewayServerWithSdkHost(
   let stopStartingTailscale: (() => void) | undefined;
   const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
+    if (!opts.updateCanary) {
+      await captureGatewayInstallationTrial();
+    }
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
       httpRequestLifetime: gatewayKernel.gatewayRequestContext,

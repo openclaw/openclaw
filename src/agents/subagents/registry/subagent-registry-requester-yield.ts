@@ -12,6 +12,7 @@ import {
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
+import { hasSubagentKill, isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import { hasSubagentControllerInput } from "./subagent-controller-inputs.js";
 import { isSubagentRetirementSettled } from "./subagent-delivery-state.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
@@ -31,6 +32,10 @@ import {
   isRequesterSettleWakeForRun,
   owesRequesterCompletion,
 } from "./subagent-requester-settle-identity.js";
+import {
+  hasRequesterTurnYielded,
+  isSubagentPausedByYield,
+} from "./subagent-requester-turn-custody.js";
 import {
   bindSubagentRunRuntimeKey,
   compareSubagentRunGeneration,
@@ -71,9 +76,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
-          !entry.killIntent &&
-          !entry.killReconciliation &&
-          entry.suppressCompletionDelivery !== true &&
+          !isSubagentCompletionCancelled(entry) &&
           entry.cleanupCompletedAt === undefined &&
           !hasSubagentControllerInput(entry) &&
           (entry.requesterSettleWake?.batchRunIds === undefined
@@ -241,9 +244,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
             requesterAgentId: params.requesterAgentId,
             runsById: params.runs,
           }))) ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      entry.suppressCompletionDelivery === true
+      isSubagentCompletionCancelled(entry)
     ) {
       continue;
     }
@@ -255,7 +256,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
         continue;
       }
       state = "running";
-    } else if (entry.pauseReason === "sessions_yield") {
+    } else if (isSubagentPausedByYield(entry)) {
       // markSubagentRunPausedAfterYield records a pause as an ended execution
       // without an outcome; the child resumes only through a continuation.
       state = "paused";
@@ -431,7 +432,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       entry.childSessionKey === spawn.childSessionKey &&
       (!params.requesterYielded ||
         !owesRequesterCompletion(entry) ||
-        entry.requesterTurnYielded === true)
+        hasRequesterTurnYielded(entry))
     );
   };
   const requiredRunIds = new Set(
@@ -453,8 +454,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   // A cohort holds the remaining obligations, plus members the yield claimed that retired
   // since; those resolve into the cohort's one continuation instead of disappearing.
   const isCohortMember = (entry: SubagentRunRecord) =>
-    owesRequesterCompletion(entry) ||
-    (params.requesterYielded && entry.requesterTurnYielded === true);
+    owesRequesterCompletion(entry) || (params.requesterYielded && hasRequesterTurnYielded(entry));
   const selectedEntries = boundEntries.filter(isCohortMember);
   if (selectedEntries.length === 0) {
     return true;
@@ -470,8 +470,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   ): requester is SubagentRunRecord =>
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
+    !hasSubagentKill(requester) &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
@@ -653,7 +652,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     afterRelease: (members) => {
       const entries = children(members);
       for (const entry of entries) {
-        if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+        if (isSubagentPausedByYield(entry) && entry.requesterSettleWake?.pauseNotice) {
           params.schedule(entry.runId, entry, "settle");
           continue;
         }

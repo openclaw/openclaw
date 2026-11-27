@@ -1,6 +1,6 @@
 import { action, createMemo, createOptimistic, Show } from "solid-js";
 import type { CyberAccessProgram } from "../../../api/types.ts";
-import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
+import { Switch } from "../../../components/solid/switch.tsx";
 import type { resolveDaybreakAccessProgram } from "../../../lib/chat/daybreak-access-program.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/settings-native-controls.css";
@@ -44,7 +44,7 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
             </span>
           </Show>
         </span>
-        <SettingsToggle
+        <Switch
           size="sm"
           ariaLabel={t("chat.modelControls.daybreak")}
           ariaDescription={requiredHint()}

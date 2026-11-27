@@ -147,22 +147,16 @@ async function admitQueuedSource(
     if (!context) {
       throw new OperatorRefusalError("sign-in-ended");
     }
-    const revoked = new AbortController();
     const participation = await prepareRecoveredParticipation({
       context,
       authority: admitted.authority,
       ceiling,
-      revoke: (cause) => revoked.abort(cause),
     });
     return {
       ...admitted,
       ...retainGatewayOperatorInvocation(admitted, {
         participationCeiling: participation.ceiling,
-        assertCurrent: () => {
-          revoked.signal.throwIfAborted();
-          participation.assertCurrent();
-        },
-        signal: revoked.signal,
+        assertCurrent: participation.assertCurrent,
         release: participation.release,
       }),
     };

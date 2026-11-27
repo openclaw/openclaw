@@ -63,3 +63,7 @@ export type ReadinessResult = {
 };
 
 export type ReadinessChecker = (childRuntime?: ChildRuntimeViability) => ReadinessResult;
+
+export type PreparedReadinessChecker = ReadinessChecker & {
+  prepare: () => Promise<{ publish: () => ReadinessResult }>;
+};

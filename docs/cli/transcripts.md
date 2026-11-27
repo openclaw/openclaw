@@ -266,6 +266,12 @@ Oversized rows or invalid cursors fail visibly.
 Summary participants and model/heuristic provenance are shown when available;
 older summaries need not contain them.
 
+Meeting notes, the Meetings transcript tab, and the full Markdown transcript
+order speech by its start time. Equal start times keep their append order.
+A turn without a usable time and explicit zone keeps its place between the surrounding
+groups of timed turns. Paginated API reads and JSONL exports follow append order.
+Clients can use their existing cursor to pick up late transcriptions.
+
 For compatibility with clients released before archive pagination, `transcripts.get`
 without `limit`, `cursor`, or `query` retains the most recent 2,000 utterances in
 chronological order, with each sanitized text clipped to 4,000 UTF-16 units.

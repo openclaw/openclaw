@@ -3,7 +3,6 @@ import { hostname } from "node:os";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
-import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
@@ -11,8 +10,8 @@ import {
   MachineIdentitySchema,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 export type StateLeaseProcessOwner = {
   pid: number;
@@ -106,40 +105,6 @@ export function readNamespacedStateLeaseProcessOwnerStatus(
     previous.identity !== current.identity
     ? "dead"
     : "unknown";
-}
-
-/** Linux gives its initial PID namespace, the host's own, this fixed inode. */
-const INITIAL_LINUX_PID_NAMESPACE = "pid:[4026531836]";
-
-/**
- * A process recorded under `namespace` on `host` is gone, children included, once
- * this same identified Linux or macOS host has booted again. On Linux both must be
- * in the host's own PID namespace: a container restart is not a host restart, and
- * container identities can repeat. A container sharing the host's PID namespace
- * still carries an image's identity, so no detected container proves it; the
- * detector cannot see one that leaves no runtime marker. Everything else proves
- * nothing.
- */
-export function ranInEarlierHostBoot(
-  owner: { host: string; namespace?: string | null },
-  currentNamespace: string | null,
-): boolean {
-  const previous = parseNamespace(owner.namespace ?? null);
-  const current = parseNamespace(currentNamespace);
-  return (
-    previous !== null &&
-    current !== null &&
-    !isContainerEnvironment() &&
-    owner.host === hostname() &&
-    previous.platform === current.platform &&
-    (current.platform === "darwin" ||
-      (current.platform === "linux" &&
-        current.pidNamespace === INITIAL_LINUX_PID_NAMESPACE &&
-        previous.pidNamespace === INITIAL_LINUX_PID_NAMESPACE)) &&
-    current.machineIdentity !== null &&
-    previous.machineIdentity === current.machineIdentity &&
-    previous.identity !== current.identity
-  );
 }
 
 export function parseStateLeaseProcessOwner(

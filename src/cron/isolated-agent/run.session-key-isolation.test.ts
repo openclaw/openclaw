@@ -48,9 +48,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const firstSession = makeSession({ sessionId: "run-a" });
     h.resolveCronSessionMock.mockReturnValueOnce(firstSession);
     h.mockRunCronFallbackPassthrough();
+    const admittedDuringCleanup: boolean[] = [];
     h.removeCronRunContinuationSessionIfIdleMock.mockImplementation(async (sessionKey) => {
       expect(sessionKey).toMatch(/:run:run-[ab]$/u);
-      expect(isSessionControllerWorkActive("/tmp/store.json", [sessionKey])).toBe(false);
+      admittedDuringCleanup.push(isSessionControllerWorkActive("/tmp/store.json", [sessionKey]));
     });
     const params = makeJobParams(
       { payload: { kind: "agentTurn", message: "test", lightContext: true } },
@@ -90,6 +91,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       onWarn: expect.any(Function),
     });
     expect(h.removeCronRunContinuationSessionIfIdleMock).toHaveBeenCalledTimes(2);
+    expect(admittedDuringCleanup).toEqual([false, false]);
     const executionOrder = h.runEmbeddedAgentMock.mock.invocationCallOrder[0];
     assert(executionOrder !== undefined, "Expected embedded cron execution order");
     for (const sessionKey of [baseKey, first.sessionKey]) {

@@ -42,7 +42,7 @@ import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-ext
 import { runExec } from "../process/exec.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
-import { MediaAttachmentCache } from "./attachments.cache.js";
+import { maxBytesError, MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
@@ -245,10 +245,7 @@ export async function runProviderEntry(params: {
       });
     } catch (error) {
       if (error instanceof ImageOptimizationLimitError) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${error.maxBytes}`,
-        );
+        throw maxBytesError({ attachmentIndex: params.attachmentIndex, maxBytes: error.maxBytes });
       }
       throw error;
     }

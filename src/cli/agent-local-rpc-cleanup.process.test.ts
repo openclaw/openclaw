@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,7 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { nodeCommand } from "../agents/bash-tools.lifecycle.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
@@ -21,14 +23,14 @@ import { createCliProcessFixture } from "./isolated-process-fixture.test-support
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const parentTask = "PARENT-CLEANUP-PROBE";
 
-function tool(response: ServerResponse, code: string) {
+function tool(response: ServerResponse, code: string, awaitResults = true) {
   const id = randomUUID();
   const item = {
     type: "function_call",
     id: `fc_${id}`,
     call_id: `call_${id}`,
     name: "exec",
-    arguments: JSON.stringify({ code, awaitResults: true }),
+    arguments: JSON.stringify({ code, awaitResults }),
   };
   writeOpenAiResponsesSse(response, [
     { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
@@ -70,7 +72,7 @@ function findToolResult(value: unknown, field: string): Record<string, unknown> 
 }
 
 it(
-  "agent --local settles projection cleanup after a session RPC",
+  "agent --local settles RPC cleanup and exposes collectible background commands",
   { timeout: 120_000 },
   async () => {
     const root = tempDirs.make("openclaw-local-rpc-cleanup-");
@@ -81,6 +83,19 @@ it(
     });
     let parentRequests = 0;
     let listed = false;
+    let running: Record<string, unknown> | undefined;
+    let collected: Record<string, unknown> | undefined;
+    let lastToolOutputs: unknown;
+    const release = path.join(root, "release");
+    const command = nodeCommand(`const fs = require("node:fs");
+      const finish = () => {
+        if (fs.existsSync(${JSON.stringify(release)})) {
+          watcher.close();
+          console.log("LOCAL_EXEC_DONE");
+        }
+      };
+      const watcher = fs.watch(${JSON.stringify(root)}, finish);
+      finish();`);
     const server = await startOpenAiResponsesModelServer({
       modelId: "gpt-5.2",
       bindError: "cleanup probe provider did not bind",
@@ -128,8 +143,27 @@ it(
         parentRequests++;
         if (parentRequests === 1) {
           tool(response, "text(await sessions_list({limit:1}));");
-        } else {
+        } else if (parentRequests === 2) {
           listed = Array.isArray(findToolResult(body.input, "sessions")?.sessions);
+          tool(
+            response,
+            `text(await exec({command:${JSON.stringify(command)},yieldMs:1,timeoutSeconds:30}));`,
+            false,
+          );
+        } else if (parentRequests === 3) {
+          running = findToolResult(body.input, "followUp");
+          await fs.writeFile(release, "ready");
+          tool(
+            response,
+            `let result; do { result = await process({action:"poll",sessionId:${JSON.stringify(running?.sessionId)},timeout:1000}); } while (result.status === "running"); text(result);`,
+          );
+        } else {
+          lastToolOutputs = Array.isArray(body.input)
+            ? body.input
+                .filter((entry) => asRecord(entry).type === "function_call_output")
+                .slice(-2)
+            : body.input;
+          collected = findToolResult(body.input, "exitCode");
           reply("parent complete");
         }
       },
@@ -148,7 +182,7 @@ it(
         defaults: { ...config.agents?.defaults, workspace: path.join(root, "workspace") },
         entries: { main: {} },
       };
-      config.tools = { ...config.tools, codeMode: { enabled: true } };
+      config.tools = { ...config.tools, exec: { mode: "full" }, codeMode: { enabled: true } };
       await fixture.writeConfig(config);
       const result = await runCliProcessChild({
         env: fixture.env,
@@ -176,8 +210,20 @@ it(
       expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
       expect(JSON.parse(result.stdout)).toMatchObject({ payloads: [{ text: "parent complete" }] });
       expect(listed, result.stderr).toBe(true);
+      expect(running, result.stderr).toMatchObject({
+        status: "running",
+        sessionId: expect.any(String),
+      });
+      expect(running?.followUp).toContain("Automatic completion wake is unavailable");
+      expect(running?.followUp).not.toContain("Its exit wakes this conversation");
+      expect(collected, JSON.stringify(lastToolOutputs)).toMatchObject({
+        exitCode: 0,
+        aggregated: expect.stringContaining("LOCAL_EXEC_DONE"),
+      });
+      expect(result.stderr).not.toContain("completion delivery failed");
       expect(result.stderr).not.toContain("CLI cleanup failed");
     } finally {
+      await fs.writeFile(release, "ready");
       await server.close();
     }
   },

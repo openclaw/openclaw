@@ -90,6 +90,7 @@ export function createWorkerTaskHost(
     createMemoryBudget: (pool, url, maxWorkers) =>
       createWorkerPoolMemoryBudget(pool, url, maxWorkers, !owner.nativeResource),
     requiresReady: owner.retainedTransport,
+    isSharedWorker: isHostedWorkerEndpoint,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
       if (workerOptions.env === undefined) {

@@ -169,7 +169,7 @@ export async function fetchPullChecks(
     [
       truncated ? (items.length ? "Checks incomplete" : "Checks unavailable") : undefined,
       counts.failure ? counts.failure + " failed" : undefined,
-      counts.pending ? counts.pending + " pending" : undefined,
+      counts.pending ? counts.pending + " in progress" : undefined,
       counts.success ? counts.success + " passed" : undefined,
       counts.neutral ? counts.neutral + " skipped or neutral" : undefined,
     ]

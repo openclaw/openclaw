@@ -29,9 +29,9 @@ import {
   SettingsPage,
   SettingsPageHeader,
   SettingsStatus,
-  SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -546,7 +546,7 @@ export function LogsView(props: LogsProps) {
         />
         <label class="logs-toolbar__follow">
           <span>{t("gatewayLogs.autoFollow")}</span>
-          <SettingsToggle
+          <Switch
             checked={props.autoFollow}
             ariaLabel={t("gatewayLogs.autoFollow")}
             onChange={(next) => props.onToggleAutoFollow(next)}

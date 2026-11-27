@@ -52,9 +52,7 @@ export const startupMetadataReadOperations = {
     // native admission so no SQLite handle or snapshot is held across the await.
     const readMetadata = isUpdateRunAdmissionReadCommand(command)
       ? await import("../infra/update-run-admission.read.js").then(
-          ({ readUpdateRunAdmissionCommand }) =>
-            (db: EngineConnection) =>
-              readUpdateRunAdmissionCommand(db, command),
+          ({ prepareUpdateRunAdmissionRead }) => prepareUpdateRunAdmissionRead(command),
         )
       : command.type === "config.health.read"
         ? (db: EngineConnection) => configHealthReadOperations[command.type](command.input, db)
@@ -64,18 +62,17 @@ export const startupMetadataReadOperations = {
     const inspect = (db: EngineConnection) => {
       let sourceAdmitted = false;
       try {
-        const recoveryAdmission = command.type === "updateRuns.recoveryAdmission";
-        const release = recoveryAdmission ? openDoctorStateSchemaReadAdmission(db) : undefined;
+        const cohortRead =
+          command.type === "updateRuns.recoveryAdmission" ||
+          command.type === "updateRuns.pluginCohortRecovery";
+        const release = cohortRead ? openDoctorStateSchemaReadAdmission(db) : undefined;
         return runWithSqliteCleanup({ release: () => release?.() }, "Current metadata read", () => {
-          const schemaContext = recoveryAdmission ? "doctor-maintenance" : "runtime";
+          const schemaContext = cohortRead ? "doctor-maintenance" : "runtime";
           admitStateSchemaFacts(db, context.path, schemaContext);
           assertSupportedStateSchemaVersion(db, context.path, undefined, undefined, schemaContext);
           assertStateDatabaseAccessAllowed(context.path);
           sourceAdmitted = true;
-          return {
-            ok: true as const,
-            result: readMetadata(db),
-          };
+          return { ok: true as const, result: readMetadata(db) };
         });
       } catch (error) {
         // Keep domain refusals typed; native rollback/close failures still retire the child.
