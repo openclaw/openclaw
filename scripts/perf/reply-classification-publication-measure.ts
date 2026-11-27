@@ -17,6 +17,7 @@ import { retainReplyToolAuthorityClassification } from "../../src/auto-reply/rep
 import { publishRetainedSessionEntryChange } from "../../src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
@@ -103,12 +104,7 @@ for (let i = 0; i < 10_000; i++) {
 await nextTurn();
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const collections: { kind: number; ms: number }[] = [];
 let start = Infinity;

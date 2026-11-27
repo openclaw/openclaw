@@ -50,10 +50,9 @@ describe("chat history pagination", () => {
 
     renderChatInto(container);
     expect(container.querySelector(".chat-history-boundary")).toBeNull();
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("loads older history from upward wheel and keyboard intent across transcript updates", async () => {
+  it("forwards upward wheel and keyboard intent across transcript updates", async () => {
     const onHistoryIntent = vi.fn();
     const props = {
       messages: [{ role: "assistant", content: "Current history" }],
@@ -66,9 +65,8 @@ describe("chat history pagination", () => {
     };
     const container = renderChatView(props);
     const thread = requireElement(container, ".chat-thread", "chat thread");
-    const sentinel = await waitForElement(container, ".chat-history-sentinel");
+    await waitForElement(container, ".chat-history-boundary");
 
-    expect(sentinel.querySelector("button")).toBeNull();
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
@@ -77,13 +75,7 @@ describe("chat history pagination", () => {
       ...props,
       messages: [...props.messages, { role: "assistant", content: "Updated history" }],
     });
-    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
-    expect(thread.contains(sentinel)).toBe(true);
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(3);
-
-    renderChatInto(container, { messages: props.messages, onHistoryIntent });
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
-    expect(thread.contains(sentinel)).toBe(false);
   });
 });

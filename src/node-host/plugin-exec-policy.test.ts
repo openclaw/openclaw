@@ -83,9 +83,10 @@ function setPolicy(owner: "config" | "approvals", security: ExecSecurity, ask: E
   }
 }
 
-it("checks an in-process policy change without SQLite immediately before spawn", async () => {
+it("finishes an admitted launch without SQLite when approvals change before spawn", async () => {
   let queries: string[] = [];
   await checkLaunch("session-full", {
+    allowed: true,
     prepare: () => setPolicy("approvals", "deny", "off"),
     observe: () => {
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
@@ -110,11 +111,12 @@ it.each([
     for (const ask of asks) {
       for (const source of ["session-full", "human-approved"] as const) {
         setPolicy(owner, tightened ? "full" : security, tightened ? "off" : ask);
-        const allowed =
-          !tightened &&
-          (source === "human-approved"
+        // Approvals are read once at invocation start; node config is still read at launch.
+        const allowed = tightened
+          ? owner === "approvals"
+          : source === "human-approved"
             ? security !== "deny"
-            : security === "full" && ask === "off");
+            : security === "full" && ask === "off";
         await checkLaunch(source, {
           allowed,
           prepare: tightened ? () => setPolicy(owner, security, ask) : undefined,

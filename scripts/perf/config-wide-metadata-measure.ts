@@ -14,6 +14,7 @@ import { constants, PerformanceObserver, type PerformanceNodeEntry } from "node:
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values, positionals } = parseArgs({
@@ -112,12 +113,7 @@ try {
     global.gc!();
     await nextTurn();
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     } else {
       observer.observe({ entryTypes: ["gc"] });
     }

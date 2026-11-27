@@ -24,6 +24,7 @@ import type {
   ReplyExpectation,
 } from "./reply-completion.types.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
+import { isSubagentSessionFromEntry } from "./subagents/spawn/subagent-depth-policy.js";
 
 export type { ReplyCompletion, ReplyExpectation } from "./reply-completion.types.js";
 
@@ -73,7 +74,7 @@ export function resolveCompletionInputReplyExpectation(
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "chatType">;
+  sessionEntry?: Pick<SessionEntry, "chatType" | "spawnDepth" | "spawnedBy">;
   messageChannel?: string;
   opts: {
     lane?: string;
@@ -112,11 +113,18 @@ export function resolveCommandReplyExpectation(params: {
   if (isExecCompletionInputProvenance(provenance)) {
     return "optional";
   }
+  // sessions_send always dispatches on the internal channel, so that channel says nothing
+  // about a peer recipient; the sender reports a peer's silence as no_reply.
+  const peerSend =
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    !isSubagentSessionFromEntry(params.sessionKey ?? "", params.sessionEntry);
   if (
-    !params.messageChannel ||
-    params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
-    isInternalNonDeliveryChannel(params.messageChannel) ||
-    !isDeliverableMessageChannel(params.messageChannel)
+    !peerSend &&
+    (!params.messageChannel ||
+      params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
+      isInternalNonDeliveryChannel(params.messageChannel) ||
+      !isDeliverableMessageChannel(params.messageChannel))
   ) {
     return "result-required";
   }

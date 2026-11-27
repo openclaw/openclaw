@@ -4,6 +4,7 @@ import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -68,10 +69,7 @@ import {
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
-import {
-  DegenerateToolCallArgumentsError,
-  hasOnlyResponsesFunctionTools,
-} from "./openai-responses-stream-errors.js";
+import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
@@ -302,7 +300,7 @@ function createResponsesTransportExecutor(config: {
           finalizeTransportStream({ stream, output, signal: options?.signal });
           return;
         }
-        const sessionId = options?.sessionId;
+        const providerState = responsesOptions?.[PROVIDER_STATE_SCOPE];
         // Custom routes require an explicit capability; native routes retain
         // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
@@ -314,14 +312,14 @@ function createResponsesTransportExecutor(config: {
             resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
-          sessionId &&
+          providerState &&
           (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
           const restoreRequest = () =>
             restoreResponsesReasoningState(context, model, responsesOptions, params);
           continuationClaim = claimOpenAIResponsesHttpContinuation({
-            sessionId,
+            scope: providerState,
             apiKey,
             baseUrl: model.baseUrl,
             headers: httpHeaders,
@@ -451,7 +449,7 @@ function createResponsesTransportExecutor(config: {
               restoreRequest: (request) =>
                 restoreResponsesReasoningState(context, model, responsesOptions, request),
               mode: websocketMode,
-              sessionId: options?.sessionId,
+              providerState: responsesOptions?.[PROVIDER_STATE_SCOPE],
               headers: websocketHeaders,
               signal: websocketSignal,
               callerSignal: options?.signal,
@@ -615,9 +613,6 @@ function createResponsesTransportExecutor(config: {
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
         itemRecovery.reject(error);
-        if (error instanceof DegenerateToolCallArgumentsError) {
-          firstEventAbort?.abort(error);
-        }
         if (requestLifecycle) {
           await requestLifecycle.settle().catch(() => undefined);
         }

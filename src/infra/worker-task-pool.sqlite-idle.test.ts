@@ -56,3 +56,42 @@ it("retires a cold-imported reader after its task, then reopens and explicitly c
     }
   });
 });
+
+it.each([
+  { label: "a retained native handle", closeNative: false },
+  { label: "an explicitly closed native handle", closeNative: true },
+])(
+  "releases read-only worker admission references after exiting with $label",
+  async ({ closeNative }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { path, db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const pool = createOwnedWorkerTaskPool<SqliteIdleInput, SqliteIdleReply>(
+        {
+          workerUrl: new URL("./worker-task-pool.sqlite-idle.test-support.ts", import.meta.url),
+          maxWorkers: 1,
+          idleTimeoutMs: 0,
+        },
+        { databaseAccess: "read-only" },
+      );
+      try {
+        const reader = await pool.run({ path }, {});
+        expect(reader).toMatchObject({ retained: true, open: true });
+        if (closeNative) {
+          await pool.closeResources();
+        }
+        await pool.close();
+        const admitted = captureSqliteDatabaseAdmissions().find(
+          (entry) => entry.location === path,
+        )!;
+        expect(admitted.references.has(reader.threadId)).toBe(false);
+        expect(db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+      } finally {
+        await pool.close();
+        await closeOpenClawAgentDatabaseByPathAsync(path);
+      }
+      expect(captureSqliteDatabaseAdmissions().some((entry) => entry.location === path)).toBe(
+        false,
+      );
+    });
+  },
+);

@@ -58,20 +58,21 @@ export function handleComposerAttachmentSelection(
   const { overlay } = menu;
   const { surface } = overlay;
   props.inputHandle.open(value, () => {
-    const durations = ["--oc-overlay-show-duration", "--oc-overlay-hide-duration"].map((name) => ({
+    // The native picker needs the popover closed before user activation ends.
+    const presentation = ["animation-name", "transition-property"].map((name) => ({
       name,
       value: surface.style.getPropertyValue(name),
       priority: surface.style.getPropertyPriority(name),
     }));
-    for (const { name } of durations) {
-      surface.style.setProperty(name, "0s");
+    for (const { name } of presentation) {
+      surface.style.setProperty(name, "none");
     }
     try {
       return overlay.request(false, "none") && !surface.matches(":popover-open");
     } finally {
-      for (const { name, value: duration, priority } of durations) {
-        if (duration) {
-          surface.style.setProperty(name, duration, priority);
+      for (const { name, value: previousValue, priority } of presentation) {
+        if (previousValue) {
+          surface.style.setProperty(name, previousValue, priority);
         } else {
           surface.style.removeProperty(name);
         }

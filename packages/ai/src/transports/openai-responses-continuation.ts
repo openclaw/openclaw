@@ -8,6 +8,7 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import {
   getSessionResourceOwnerId,
   registerSessionResourceCleanup,
+  type ProviderStateScope,
   type SessionResourceOwner,
 } from "../session-resources.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
@@ -684,15 +685,17 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
+/** Only the conversation writer's scope reaches the slot; every other run sends full input. */
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
-    sessionId: string;
+    scope: ProviderStateScope;
     request: ResponsesContinuationRequest;
     restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
+  const { sessionId } = params.scope;
   const owner = getAiTransportHost();
-  const key = `${getSessionResourceOwnerId(owner)}\0${params.sessionId}\0${connectionIdentity(params)}`;
+  const key = `${getSessionResourceOwnerId(owner)}\0${sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
     return undefined;
@@ -704,7 +707,7 @@ export function claimOpenAIResponsesHttpContinuation(
   const resolved = resolveResponsesContinuationRequest(previous?.state, request);
   const fullRequest = resolved.fullRequest ?? request;
   const continuationRequest = params.request.store === false ? fullRequest : resolved.request;
-  const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
+  const claimed = { kind: "claimed", sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
   return {
     // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.

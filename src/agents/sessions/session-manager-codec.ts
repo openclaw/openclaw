@@ -370,11 +370,12 @@ export function reuseResidentSessionEntryStrings(
 export function buildInitialContext(
   branch: SessionEntry[],
   residentEntries?: ReadonlyMap<string, SessionEntry>,
+  restore: (entries: SessionEntry[]) => SessionContext = buildCoreSessionContext,
 ): SessionContext {
   if (residentEntries) {
     reuseResidentSessionEntryStrings(branch, residentEntries);
   }
-  return buildCoreSessionContext(projectSessionModelContextEntries(branch));
+  return restore(projectSessionModelContextEntries(branch));
 }
 
 export function buildSessionContext(

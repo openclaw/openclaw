@@ -18,6 +18,7 @@ import { getUpdateRun } from "../infra/update-run-reader.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
 /** Record the producer's verified originals in the existing recovery inventory. */
 export function recordDoctorMigrationBackups(
@@ -92,16 +93,12 @@ export function recordDoctorMigrationBackups(
   });
 }
 
-/** Complete a committed version phase, or the full Doctor phase for undeclared migrations. */
-export function completeDoctorMigrationBackups(
+/** Incomplete backup manifests whose every target is a verified, unchanged database. */
+function* listCompletableDoctorMigrationBackups(
   env: NodeJS.ProcessEnv,
   verifiedDatabasePaths: readonly string[],
-  versionPhaseOnly = false,
-): void {
-  const maintenance = getOpenClawDatabaseMaintenanceScope();
-  if (!maintenance?.ownsSchemaMaintenance) {
-    return;
-  }
+  versionPhaseOnly: boolean,
+) {
   const verified = new Set(
     [...verifiedDatabasePaths, resolveOpenClawStateSqlitePath(env)].map(canonicalMigrationFilePath),
   );
@@ -132,6 +129,41 @@ export function completeDoctorMigrationBackups(
     ) {
       continue;
     }
+    yield { manifest, manifestPath };
+  }
+}
+
+/**
+ * Read-only: whether `completeDoctorMigrationBackups` would record a completion for these
+ * databases. Callers pass every candidate path; refusals found later only narrow the set.
+ */
+export function checkDoctorMigrationBackupsPending(
+  env: NodeJS.ProcessEnv,
+  databasePaths: readonly string[],
+): DoctorMaintenancePending {
+  if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+    return "none";
+  }
+  return listCompletableDoctorMigrationBackups(env, databasePaths, false).next().done
+    ? "none"
+    : "work";
+}
+
+/** Complete a committed version phase, or the full Doctor phase for undeclared migrations. */
+export function completeDoctorMigrationBackups(
+  env: NodeJS.ProcessEnv,
+  verifiedDatabasePaths: readonly string[],
+  versionPhaseOnly = false,
+): void {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (!maintenance?.ownsSchemaMaintenance) {
+    return;
+  }
+  for (const { manifest, manifestPath } of listCompletableDoctorMigrationBackups(
+    env,
+    verifiedDatabasePaths,
+    versionPhaseOnly,
+  )) {
     maintenance.assertAdmission();
     for (const target of manifest.targets) {
       target.validationBeforeArchive = "passed";

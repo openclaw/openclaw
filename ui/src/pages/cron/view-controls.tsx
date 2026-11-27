@@ -4,7 +4,7 @@ import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-b
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -143,7 +143,7 @@ export function EnabledSwitch(
       data-test-id={props.compact ? `cron-row-toggle-${props.job.id}` : "cron-toggle-enabled"}
       title={props.compact ? actionLabel() : undefined}
     >
-      <SettingsToggle
+      <Switch
         checked={props.job.enabled}
         saving={props.toggleSavingJobId === props.job.id}
         disabled={

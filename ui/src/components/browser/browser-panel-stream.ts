@@ -155,6 +155,7 @@ type Attempt = {
   epoch: number;
   client: BrowserRequestClient;
   width: number;
+  viewportChanged: boolean;
   live: boolean;
   connection?: BrowserScreencastClient;
   controller: AbortController;
@@ -245,6 +246,7 @@ export class BrowserPanelStream {
       client,
       epoch,
       width: dimensions.width,
+      viewportChanged: false,
       live: false,
       controller: new AbortController(),
       firstFrame,
@@ -470,12 +472,19 @@ export class BrowserPanelStream {
   }
 
   private resized(attempt: Attempt): boolean {
-    return Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3;
+    return (
+      attempt.viewportChanged ||
+      Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3
+    );
   }
 
-  resize(): void {
+  resize(viewportChanged = false): void {
     const attempt = this.attempt;
-    if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
+    if (!attempt || !this.current(attempt)) {
+      return;
+    }
+    attempt.viewportChanged ||= viewportChanged;
+    if (!this.resized(attempt)) {
       return;
     }
     // Coalesce a burst of layout changes into one restart.

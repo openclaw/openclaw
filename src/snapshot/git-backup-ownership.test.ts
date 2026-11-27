@@ -270,6 +270,38 @@ it("replaces owned directory entries without overwriting hardlink aliases", asyn
   await expectContents(payload, '{"id":1,"value":"updated"}\n');
 });
 
+it.each(["missing", "stale"])(
+  "rejects a commit with a %s table after a hook unstages it",
+  async (condition) => {
+    const { repositoryPath, agent, repoFile, backup, updateAgent, restore } = await fixture(false);
+    await backup();
+    const table = condition === "missing" ? "new_payload" : "payload";
+    if (condition === "missing") {
+      withDatabase(agent.path, (source) =>
+        source.exec(
+          "CREATE TABLE new_payload (value TEXT); INSERT INTO new_payload VALUES ('updated')",
+        ),
+      );
+    } else {
+      updateAgent();
+    }
+    const file = `agents/main/tables/${table}.jsonl`;
+    const hook = repoFile(".git/hooks/pre-commit");
+    await fs.writeFile(hook, `#!/bin/sh\ngit reset -- "${file}"\n`, { mode: 0o700 });
+    await expect(backup()).rejects.toThrow(/does not match the prepared snapshot/u);
+    await expect(verifyGitBackupRef({ repositoryPath, identity: agent.identity })).rejects.toThrow(
+      condition === "missing" ? /does not contain/u : /hash mismatch/u,
+    );
+
+    await fs.rm(hook);
+    const recovered = await backup();
+    const restored = await restore("after-hook", agent.identity, recovered.commit);
+    expectDatabaseRows(restored.targetPath, {
+      [`SELECT value FROM ${table}`]: [{ value: "updated" }],
+    });
+  },
+);
+
 it("still refuses missing, non-regular, and corrupted declared payloads", async () => {
   const { root, git, repoFile, backup, restore } = await fixture(false);
   const first = await backup();

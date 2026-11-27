@@ -269,6 +269,11 @@ Native Gateway and sandbox exec workdir errors and foreground process failures
 include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
 remain values; thrown tool errors remain catchable.
 
+A successful foreground `exec` returns exactly what the command wrote in
+`aggregated`, so it is safe to parse. What OpenClaw has to say about the call is
+in `warningText`: for example, that the command left a process running, with the
+session ID to pass to `process`. The field is absent when there is nothing to report.
+
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and

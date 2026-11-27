@@ -9,15 +9,14 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import {
+  type GatewayStabilityRuntimeOptions as GatewaySupportExportRuntimeOptions,
+  parseGatewayStabilityRuntimeOptions as parseOptions,
+} from "./gateway-stability-runtime-contract.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.ts";
 const SCENARIO_ID = "gateway-support-export";
-
-export type GatewaySupportExportRuntimeOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
 
 type DiagnosticsExportResult = {
   path: string;
@@ -40,29 +39,6 @@ type GatewaySupportExportSummary = {
   privateMode: boolean;
   rawLogsIncluded: boolean;
 };
-
-function parseOptions(
-  argv: string[],
-  repoRoot = process.cwd(),
-): GatewaySupportExportRuntimeOptions {
-  let artifactBase: string | undefined;
-  for (let index = 0; index < argv.length; index += 1) {
-    const option = argv[index];
-    const value = argv[index + 1];
-    if (option !== "--artifact-base") {
-      throw new Error(`unknown argument: ${option}`);
-    }
-    if (!value || value.startsWith("--")) {
-      throw new Error("--artifact-base requires a value");
-    }
-    artifactBase = value;
-    index += 1;
-  }
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return { artifactBase: path.resolve(repoRoot, artifactBase), repoRoot };
-}
 
 function parseCliJson<T>(
   label: string,

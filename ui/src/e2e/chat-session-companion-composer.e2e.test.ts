@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSendShortcut } from "../app/settings.ts";
@@ -140,7 +141,12 @@ suite.define(() => {
       await gateway.deferNext(ask);
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests(ask)).length).toBe(2);
-      expect((await gateway.getRequests(ask))[1]?.params).toEqual(original.params);
+      const { askId: originalId, ...originalInput } = asRecord(original.params);
+      const { askId: retryId, ...retryInput } = asRecord(
+        (await gateway.getRequests(ask))[1]?.params,
+      );
+      expect(retryInput).toEqual(originalInput);
+      expect(retryId).not.toBe(originalId);
       const answer = "The image shows a sunny landscape.";
       await gateway.resolveDeferred(ask, { answer, ts: 2 });
       await text(answer).waitFor();

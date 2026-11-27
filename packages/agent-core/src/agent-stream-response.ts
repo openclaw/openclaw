@@ -6,6 +6,7 @@ import {
 } from "@openclaw/ai/transports";
 import {
   appendTextDeltaToAssistantMessage,
+  DEGENERATE_OUTPUT_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
@@ -59,6 +60,25 @@ export type ExecutedToolCallBatch = {
   repeatStop?: ToolRepeatVerdict;
   fatal?: { error: unknown };
 };
+
+// Argument JSON escapes newlines, so real indentation runs stay far below 4 KiB.
+// Live runaways stream 100-200 whitespace chars/s until the provider's output cap.
+const DEGENERATE_WHITESPACE_RUN_CHARS = 4 * 1024;
+const DEGENERATE_OUTPUT_ERROR_MESSAGE =
+  "Tool-call argument stream exceeded the consecutive whitespace limit";
+
+/** Trailing whitespace run after `delta`; an all-whitespace delta extends `previous`. */
+function trailingWhitespaceRun(delta: string, previous = 0): number {
+  let tail = 0;
+  while (
+    tail < delta.length &&
+    tail < DEGENERATE_WHITESPACE_RUN_CHARS &&
+    /\s/u.test(delta.charAt(delta.length - 1 - tail))
+  ) {
+    tail += 1;
+  }
+  return tail === delta.length ? previous + tail : tail;
+}
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
@@ -340,6 +360,7 @@ export async function streamAgentResponse(
         const repetitionGuard = config.repetitionGuard?.(config.model)
           ? new AssistantRepetitionGuard()
           : undefined;
+        const whitespaceRuns = new Map<number, number>();
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
         let committedContentCount = 0;
@@ -430,6 +451,26 @@ export async function streamAgentResponse(
                 if (event.contentIndex < committedContentCount) {
                   break;
                 }
+                if (event.type === "toolcall_delta") {
+                  const run = trailingWhitespaceRun(
+                    event.delta,
+                    whitespaceRuns.get(event.contentIndex),
+                  );
+                  if (run >= DEGENERATE_WHITESPACE_RUN_CHARS) {
+                    modelAbort.abort(
+                      Object.assign(new Error(DEGENERATE_OUTPUT_ERROR_MESSAGE), {
+                        code: DEGENERATE_OUTPUT_ERROR_CODE,
+                      }),
+                    );
+                    return await finalizeAssistantMessage({
+                      ...message,
+                      stopReason: "error",
+                      errorCode: DEGENERATE_OUTPUT_ERROR_CODE,
+                      errorMessage: DEGENERATE_OUTPUT_ERROR_MESSAGE,
+                    });
+                  }
+                  whitespaceRuns.set(event.contentIndex, run);
+                }
                 const stopped = repetitionGuard?.check(
                   message,
                   committedContentCount,
@@ -506,8 +547,10 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
+          // Stream-owner stops win over the aborted provider result they caused.
           const stoppedTerminal =
-            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE
+            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE ||
+            terminal?.errorCode === DEGENERATE_OUTPUT_ERROR_CODE
               ? terminal
               : terminal && repetitionGuard?.check(terminal, committedContentCount);
           if (stoppedTerminal) {

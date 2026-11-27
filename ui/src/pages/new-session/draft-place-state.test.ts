@@ -861,24 +861,24 @@ describe("device folder selection", () => {
     const f = folderFixture(true, { ...workerRuntime, cloudPlacementExecutionMode: undefined });
     expect(f.state.devicePlacement().ready).toBe(true);
     expect(f.state.deviceFolderAvailable).toBe(false);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.deviceFolder).toBeUndefined();
   });
 
   it("requires an explicit capable device and keeps its path out of Gateway discovery", () => {
     const f = folderFixture();
     expect(f.state.deviceFolderAvailable).toBe(false);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.deviceFolder).toBeUndefined();
     f.gateway.environments![0]!.workerHost = { deviceFolders: true };
     expect(f.state.deviceFolderAvailable).toBe(true);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     f.request.mockClear();
     f.persistPreference.mockClear();
-    f.state.setDeviceFolderPath("relative");
+    f.state.selectDeviceFolder("relative");
     expect(f.state.folderSubmissionBlocked()).toBe(true);
-    f.state.setDeviceFolderPath("/srv/existing project");
+    f.state.selectDeviceFolder("/srv/existing project");
     expect(f.state.folderSubmissionBlocked()).toBe(false);
     expect(f.state).toMatchObject({ worktree: false, checkoutVisible: false });
     expect(f.request).not.toHaveBeenCalled();
@@ -892,8 +892,7 @@ describe("device folder selection", () => {
 
   it("blocks a selected device folder when current capability is withdrawn", () => {
     const f = folderFixture(true);
-    f.state.selectDeviceFolder();
-    f.state.setDeviceFolderPath("/srv/project");
+    f.state.selectDeviceFolder("/srv/project");
     f.gateway.environments![0]!.workerHost = {};
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });

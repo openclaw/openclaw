@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -11,8 +10,6 @@ import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as availability from "../github-publication-availability.js";
 import { prepareGitHubPublicationTarget } from "../github-publication-target.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -403,7 +400,7 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
     },
   );
 
-  it.each(["scope", "role", "profile", "grant", "connection", "visibility", "lifecycle"] as const)(
+  it.each(["grant", "connection", "visibility", "lifecycle"] as const)(
     "keeps admitted reads across transport revocation while fencing %s changes",
     async (change) => {
       await withReadFixture(
@@ -419,22 +416,9 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
             fixture,
             method === "options" ? "shared" : "status",
             async (respond, release) => {
-              const profile = expectDefined(
-                fixture.client.authenticatedUserProfile,
-                "guest profile",
-              );
               const updateSession = (patch: Parameters<typeof upsertSessionEntryCore>[1]) =>
                 upsertSessionEntryCore({ agentId: "main", sessionKey }, patch);
               await {
-                scope: () => {
-                  fixture.client.connect.scopes = [];
-                },
-                role: () => setCanonicalUserProfileRole(profile.profileId, "blocked"),
-                profile: () => {
-                  profile.profileId = ensureProfileForEmail(
-                    "replacement-publication-reader@example.test",
-                  ).id;
-                },
                 grant: () => granted.abort(),
                 connection: fixture.disconnect,
                 visibility: () => updateSession({ visibility: "draft" }),

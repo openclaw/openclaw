@@ -1,8 +1,5 @@
-import {
-  captureWorktreeRegistryReadGuard,
-  readRegistryWorktree,
-} from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { resolveSessionWorktree } from "../../agents/worktrees/session-lifecycle.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -37,26 +34,17 @@ export async function readLocalWorkspaceReviewBase(params: {
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }
-  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
-  const worktree = await readRegistryWorktree(context, binding.id);
-  const assertWorktreeCurrent = accept(worktree);
-  const assertCurrent = () => {
-    params.assertCurrent();
-    assertWorktreeCurrent();
-  };
-  assertCurrent();
-  if (!worktree || worktree.removedAt !== undefined) {
-    throw new Error(
-      `This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session. Worktree: ${binding.id}.`,
-    );
+  const prepared = await resolveSessionWorktree({
+    binding,
+    sessionKey: params.sessionKey,
+    assertCurrent: params.assertCurrent,
+  });
+  if (!prepared) {
+    return undefined;
   }
-  if (
-    worktree.ownerKind !== "session" ||
-    worktree.ownerId !== params.sessionKey ||
-    worktree.repoRoot !== binding.repoRoot ||
-    worktree.branch !== binding.branch ||
-    !isPathInside(worktree.path, params.cwd)
-  ) {
+  const { worktree, assertCurrent } = prepared;
+  assertCurrent();
+  if (!isPathInside(worktree.path, params.cwd)) {
     throw new Error("Local workspace review owner changed");
   }
   return row ? { baseCommit: row.base_commit, assertCurrent } : undefined;

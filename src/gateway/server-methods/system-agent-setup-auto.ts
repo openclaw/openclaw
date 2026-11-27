@@ -56,26 +56,21 @@ function present(candidate: SetupInferenceCandidate) {
 /** Accepted setup belongs to the Gateway; disconnecting a joining caller does not cancel it. */
 export function runGatewayAutomaticSetup(
   context: GatewayRequestContext,
-  assertAuthority: () => void,
 ): Promise<SystemAgentSetupAutoResult> {
-  assertAuthority();
   const previous = runs.get(context.wizardSessions);
   if (previous) {
     return previous;
   }
-  const run = runExclusiveSystemAgentSetupActivation(() => autoSetup(assertAuthority));
+  const run = runExclusiveSystemAgentSetupActivation(autoSetup);
   runs.set(context.wizardSessions, run);
   void run.finally(() => runs.delete(context.wizardSessions)).catch(() => {});
   return run;
 }
 
-async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupAutoResult> {
+async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
   const runtime = createSystemAgentGatewayRuntime();
   const signal = getAsyncWorkSignal();
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    assertAuthority();
-  };
+  const assertCurrent = () => signal?.throwIfAborted();
   const detection = await runSystemAgentGatewayTask(() => detectSetupInference());
   let ranked = rankSetupInferenceCandidates(detection.candidates);
   const attempts: SystemAgentSetupAutoResult["attempts"] = [];

@@ -21,12 +21,17 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
+import { cronDeclarationOwnedBy } from "../../cron/declaration-owner.js";
+import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
+import { listManagedPlugins } from "../../plugins/management-service.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { TemplateAddMutationError } from "../../templates/add-mutation-error.js";
+import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
+import type { TemplateSetupOpening } from "../../templates/conversation.js";
 import { createTemplateCronGateway } from "../../templates/cron-gateway.js";
 import {
   templateCronGatewayJobMatchesRef,
@@ -45,13 +50,12 @@ import type {
 } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
-import {
-  assertTemplatesLabsEnabled,
-  TemplatesLabsDisabledError,
-} from "../../templates/labs-gate.js";
 import { resolveTemplatePreferredModel } from "../../templates/preferred-model.js";
 import { TemplateProjectError } from "../../templates/project.js";
-import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
+import {
+  buildTemplateOpeningMessage,
+  type TemplateSetupPluginState,
+} from "../../templates/setup-prompt.js";
 import { measureTemplateAddStage, withTemplateAddTimings } from "../../templates/timings.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -67,6 +71,36 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
+
+function templateDeviceTimeZone(
+  client: GatewayRequestHandlerOptions["client"],
+): string | undefined {
+  const zone = client?.connect.client?.timeZone;
+  // Intl also accepts numeric offsets; they aren't IANA zones and can't follow DST.
+  return zone && !/^[+-]/.test(zone) ? resolveTimezone(zone) : undefined;
+}
+
+/**
+ * What this Gateway's inventory says about each ClawHub plugin the Template references.
+ * The first turn would otherwise spend a model round trip per plugin asking for the same
+ * facts. Undefined leaves one lookup to the agent.
+ */
+function declaredPluginStates(
+  opening: TemplateSetupOpening,
+  inventory: Awaited<ReturnType<typeof listManagedPlugins>>["plugins"] | undefined,
+): TemplateSetupPluginState[] | undefined {
+  const declared = opening.declared?.plugins;
+  if (!declared?.length) {
+    return declared ? [] : undefined;
+  }
+  return inventory
+    ? declared.map((packageName) => ({
+        packageName,
+        state:
+          inventory.find((plugin) => plugin.packageName === packageName)?.state ?? "not-installed",
+      }))
+    : undefined;
+}
 
 // One terminal record per request; never serialize request data or caught errors.
 function templateAddDiagnostic(operation: "plan" | "apply") {
@@ -120,11 +154,10 @@ export function reportTemplateAddFailure(
     return `${error.message} Nothing was kept. Ask the publisher to move the conflicting workspace file and publish a corrected release before adding it again.`;
   }
   if (
-    error instanceof TemplatesLabsDisabledError ||
+    error instanceof TemplatesDisabledError ||
     error instanceof ClawHubSourceError ||
     (operation === "apply" &&
-      (error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplateGatewayConsentError ||
+      (error instanceof TemplateGatewayConsentError ||
         error instanceof TemplateSkillConsentError ||
         error instanceof TemplateGatewayPlanBlockedError ||
         error instanceof TemplateGatewayPlanChangedError))
@@ -176,15 +209,16 @@ export async function planTemplateAddForRequest(
     }
   };
   assertLocalSourceAuthority();
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
+  assertTemplatesEnabled(context.getRuntimeConfig());
   const config = await readCurrentConfigForPolicyCheckAsync({
     configPath: resolveConfigPath(),
     env: process.env,
   });
-  assertTemplatesLabsEnabled(config);
+  assertTemplatesEnabled(config);
   options.onStage?.("source_resolution_and_plan");
   const plan = await planTemplateAddForGateway({
     source: params.source,
+    deviceTimeZone: templateDeviceTimeZone(client),
     onStage: options.onStage,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     config,
@@ -197,8 +231,7 @@ export async function planTemplateAddForRequest(
       return listedMcp.authoredConfig?.mcp?.servers ?? {};
     },
   });
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
-  assertLocalSourceAuthority();
+  assertTemplatesEnabled(context.getRuntimeConfig());
   return plan;
 }
 
@@ -212,26 +245,15 @@ export async function applyTemplateAddForRequest(
     options;
   // The handler option type also carries an open record; name the union so `mode` narrows.
   const params: TemplatesAddApplyParams = options.params;
+  const deviceTimeZone = templateDeviceTimeZone(client);
   const configPath = resolveConfigPath();
   const configEnv = process.env;
   const assertCurrent = () => {
     signal?.throwIfAborted();
     sessionMutationCommitGuard?.();
-    if (
-      hasCurrentClientAuthority?.() === false ||
-      (client &&
-        (client.invalidated ||
-          (client.connect.role ?? "operator") !== "operator" ||
-          !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
-      (!client && !context.localEmbedded)
-    ) {
-      throw new TemplateGatewayAuthorityError(
-        "Template installation authority is no longer active.",
-      );
-    }
   };
-  assertTemplatesLabsEnabled(context.getRuntimeConfig());
-  assertTemplatesLabsEnabled(
+  assertTemplatesEnabled(context.getRuntimeConfig());
+  assertTemplatesEnabled(
     await readCurrentConfigForPolicyCheckAsync({ configPath, env: configEnv }),
   );
   assertCurrent();
@@ -283,6 +305,14 @@ export async function applyTemplateAddForRequest(
       );
     }
   };
+  // Asked for now, while the Template is fetched and written, so it is ready by the first turn.
+  const pluginInventory =
+    "mode" in params
+      ? listManagedPlugins({ config: context.getRuntimeConfig(), cachedCatalogOnly: true }).then(
+          (listed) => listed.plugins,
+          () => undefined,
+        )
+      : Promise.resolve(undefined);
   options.onStage?.("apply");
   const result = await withTemplateAddTimings(
     options.req.id,
@@ -296,9 +326,21 @@ export async function applyTemplateAddForRequest(
               mode: params.mode,
               source: params.source,
               ...(params.resume ? { resume: true as const } : {}),
+              readSetupAutomationKeys: async ({ agentId, sessionKey }) => {
+                assertCurrent();
+                const jobs = await context.cron.list({ includeDisabled: true });
+                assertCurrent();
+                return new Set(
+                  jobs.flatMap((job) =>
+                    job.declarationKey && cronDeclarationOwnedBy(job, { agentId, sessionKey })
+                      ? [job.declarationKey]
+                      : [],
+                  ),
+                );
+              },
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
-              onAgentCreated: async (agent, report, dependenciesPending, onModelRequested) => {
+              onAgentCreated: async (agent, opening, onModelRequested) => {
                 assertCurrent();
                 await measureTemplateAddStage(
                   "opening.total",
@@ -308,7 +350,15 @@ export async function applyTemplateAddForRequest(
                       agent.agentId,
                       agent.sessionKey,
                       "template",
-                      buildTemplateOpeningMessage(report, agent, dependenciesPending),
+                      buildTemplateOpeningMessage(
+                        opening,
+                        agent,
+                        // Use the inventory only if it is already here; the greeting never waits for it.
+                        declaredPluginStates(
+                          opening,
+                          await Promise.race([pluginInventory, Promise.resolve(undefined)]),
+                        ),
+                      ),
                       () => {
                         assertCurrent();
                         publishProgress("agent-ready", agent);
@@ -357,9 +407,10 @@ export async function applyTemplateAddForRequest(
             env: configEnv,
           });
           assertCurrent();
-          assertTemplatesLabsEnabled(config);
+          assertTemplatesEnabled(config);
           return {
             config,
+            deviceTimeZone,
             resolvePreferredModel: preferredModelResolver(context),
             sourceMcpServers: async () => {
               const listedMcp = await listConfiguredMcpServers();
@@ -523,7 +574,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       // A preview never mutates state; say so, or owner-routed CLIs report a possible partial Add.
       const noEffect = { details: { mutationAccepted: false } };
       if (
-        error instanceof TemplatesLabsDisabledError ||
+        error instanceof TemplatesDisabledError ||
         error instanceof TemplateGatewayAuthorityError
       ) {
         diagnostic(stage, "forbidden", "kind" in params.source ? params.source.kind : "clawhub");
@@ -580,8 +631,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         "kind" in params.source ? params.source.kind : undefined,
       );
       const code =
-        error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplatesLabsDisabledError
+        error instanceof TemplatesDisabledError
           ? ErrorCodes.FORBIDDEN
           : (error instanceof TemplateProjectError && error.code === "project_invalid") ||
               error instanceof TemplateGatewayPlanChangedError ||

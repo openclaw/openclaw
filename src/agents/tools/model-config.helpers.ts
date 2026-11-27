@@ -15,7 +15,7 @@ import { evaluateStoredCredentialEligibility } from "../auth-profiles/credential
 import { resolveExternalCliAuthProfiles } from "../auth-profiles/external-cli-sync.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../auth-profiles/oauth-shared.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import { isAuthModeAllowedForModel } from "../model-auth-policy.js";
 import { profileTypeToAuthMode } from "../model-auth-provider-config.js";
 import {
@@ -24,6 +24,7 @@ import {
   resolveEnvApiKey,
   type RuntimeProviderAuthLookup,
 } from "../model-auth.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
 export type ToolModelConfig = Exclude<AgentToolModelConfig, string>;
@@ -65,16 +66,9 @@ export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean 
   );
 }
 
-export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string; model: string } {
-  if (cfg) {
-    const resolved = resolveConfiguredModelRef({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    return { provider: resolved.provider, model: resolved.model };
-  }
-  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+/** The configured primary model; undefined when no model is configured. */
+export function resolveDefaultModelRef(cfg?: OpenClawConfig): ModelRef | undefined {
+  return cfg ? resolveConfiguredModelRef({ cfg, defaultProvider: DEFAULT_PROVIDER }) : undefined;
 }
 
 export function hasAuthForProvider(params: {

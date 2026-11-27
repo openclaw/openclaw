@@ -1,39 +1,28 @@
 // HTTP cookie handoff and lifetime belong to the Gateway auth owner.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
   prepareHttpUserProfileCatalog,
 } from "./http-auth-user-profile.js";
-import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-header-value.js";
 import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
 import {
-  bindHttpResponseAuthority,
-  GatewayHttpRequestAuthorityError,
-} from "./http-request-authority.js";
-import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
   readGatewayIngressTransport,
 } from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
-import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
-
-type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginCookieRequest>>;
 
 export function resolveControlUiPluginAuthCookieGeneration(
   authGeneration: string | undefined,
@@ -153,71 +142,5 @@ export function authorizeControlUiPluginCookieRequest(
     // Route dispatch selects the candidate that owns the first matched gateway
     // route. Do not union scopes before that owner boundary is known.
     operatorScopes: [],
-  };
-}
-
-export function bindControlUiPluginCookieRequestAuthority(
-  cookieAuth: CookieRequestAuth,
-  params: {
-    req: IncomingMessage;
-    res: ServerResponse;
-    requestPath: string;
-    auth: ResolvedGatewayAuth;
-    getResolvedAuth?: () => ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    hasCurrentClientAuthority: () => boolean;
-  },
-) {
-  const requestAuth = bindHttpResponseAuthority(
-    cookieAuth.requestAuth,
-    params.res,
-    params.hasCurrentClientAuthority,
-  );
-  const revalidate = async () => {
-    // A renewed grant may satisfy a new request, never revive this original source.
-    requestAuth.assertCurrent();
-    // Reuse the cookie/profile owner, including expiry and the current auth
-    // generation. Admission does not extend a browser grant across awaited work.
-    const current = authorizeControlUiPluginCookieRequest(params.req, {
-      requestPath: params.requestPath,
-      authGeneration: resolveSharedGatewaySessionGeneration(
-        params.getResolvedAuth?.() ?? params.auth,
-        params.trustedProxies ?? getRuntimeConfig().gateway?.trustedProxies,
-      ),
-    });
-    const currentGrants = current?.requestAuth.controlUiPluginGrants ?? [];
-    requestAuth.assertCurrent();
-    // Prepared data used the admitted policy, not just its operator scopes. A
-    // policy change requires a fresh request before that data can be disclosed.
-    if (
-      !isDeepStrictEqual(
-        current?.requestAuth.operatorRolePolicy,
-        cookieAuth.requestAuth.operatorRolePolicy,
-      ) ||
-      !cookieAuth.requestAuth.controlUiPluginGrants.every((admitted) =>
-        currentGrants.some(
-          (grant) =>
-            grant.pluginId === admitted.pluginId &&
-            grant.path === admitted.path &&
-            grant.match === admitted.match &&
-            grant.profileId === admitted.profileId &&
-            roleScopesAllow({
-              role: "operator",
-              requestedScopes: admitted.scopes,
-              allowedScopes: grant.scopes,
-            }),
-        ),
-      )
-    ) {
-      sendUnauthorized(params.res);
-      throw new GatewayHttpRequestAuthorityError("Unauthorized");
-    }
-  };
-  return {
-    ...cookieAuth,
-    requestAuth: {
-      ...requestAuth,
-      revalidate,
-    },
   };
 }

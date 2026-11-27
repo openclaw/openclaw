@@ -581,22 +581,19 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it("rejects a same-size user_version change after validation", async () => {
-    let stagedReadCount = 0;
-    interceptOpen(
-      (file, flags) =>
-        flags === "r" &&
-        path.basename(file) === "database.sqlite.partial" &&
-        path.basename(path.dirname(file)).startsWith(".sqlite-snapshot-"),
-      async (file) => {
-        if (++stagedReadCount === 2) {
-          const bytes = await fs.readFile(file);
-          bytes.writeUInt32BE(8, 60);
-          await fs.writeFile(file, bytes);
-        }
-      },
-    );
+    let changed = false;
+    durabilityTestState.publish = async (options, publish) => {
+      const published = await publish(options);
+      // Mutate the actual publication, independent of acquisition paths or read counts.
+      const bytes = await fs.readFile(options.targetPath);
+      bytes.writeUInt32BE(8, 60);
+      await fs.writeFile(options.targetPath, bytes);
+      changed = true;
+      return published;
+    };
 
     await expectSnapshotFailureWithoutTarget(/size mismatch|hash mismatch/u);
+    expect(changed).toBe(true);
   });
 
   it.each(["beforePublish", "afterPublish"] as const)(

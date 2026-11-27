@@ -358,7 +358,7 @@ export function handleDesktopObserveUpgrade(
           signal: ingress?.signal,
           assertCurrent: () => {
             if (!isCurrent()) {
-              throw new Error("Desktop observer authority is no longer current");
+              throw new Error("Desktop observer connection ended. Reconnect and try again.");
             }
           },
         });

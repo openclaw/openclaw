@@ -374,6 +374,10 @@ export function resolveUserChannelIdentityInDatabase(
       } else {
         subject = userChannelIdentitySubject(identity);
       }
+      const nativeIdentity = "authorizationId" in identity ? readIdentity(subject) : identity;
+      if (!nativeIdentity) {
+        return undefined;
+      }
       const link = selectLink(db, subject);
       const profile = link ? selectResolvedUserProfileMetadataById(db, link.profile_id) : undefined;
       if (!profile || profile.id === GATEWAY_OWNER_PROFILE_ID) {
@@ -411,6 +415,7 @@ export function resolveUserChannelIdentityInDatabase(
       const githubLogins =
         githubAccounts?.map((account) => `${account.login.toLowerCase()}@github`) ?? [];
       return {
+        identity: nativeIdentity,
         ...(authorization ? { authorization } : {}),
         profileId: profile.id,
         ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),

@@ -1,5 +1,7 @@
+// Build the QA channel first: OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:runtime
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   createWriteStream,
   existsSync,
@@ -9,8 +11,10 @@ import {
   writeFileSync,
   renameSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { startQaBusServer, createQaBusState } from "../extensions/qa-lab/bus-api.ts";
@@ -38,6 +42,10 @@ import {
 const { values } = parseArgs({
   options: {
     entry: { type: "string", default: "dist/entry.js" },
+    "mcp-list-delay-ms": { type: "string" },
+    "mcp-first-ever": { type: "boolean", default: false },
+    "state-dir": { type: "string" },
+    "workspace-dir": { type: "string" },
     help: { type: "boolean", short: "h" },
     resources: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
@@ -54,7 +62,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--tool-args-chars N]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nWith --tool-args-chars, each turn first streams a Chat Completions write call carrying N content characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--tool-args-chars N]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider. --mcp-list-delay-ms=-1|3000|0 uses a successful seed catalog then ten fresh-session sends against a hung, slow, or healthy MCP fixture. --mcp-first-ever also delays the seed listing.\nWith --tool-args-chars, each turn first streams a Chat Completions write call carrying N content characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
@@ -62,6 +70,62 @@ if (values["tool-invocations"]) {
   await measureToolInvocations();
   process.exit(0);
 }
+// A seeded catalog followed by a fresh session per turn exercises MCP materialization.
+// -1 holds tools/list forever; 3000 is the slow-server control. No timeout override.
+const mcpListDelayMs =
+  values["mcp-list-delay-ms"] === undefined ? undefined : Number(values["mcp-list-delay-ms"]);
+if (
+  mcpListDelayMs !== undefined &&
+  (!Number.isSafeInteger(mcpListDelayMs) || mcpListDelayMs < -1)
+) {
+  throw new Error("--mcp-list-delay-ms requires -1 or a non-negative integer");
+}
+let mcpLists = 0;
+const mcp =
+  mcpListDelayMs === undefined
+    ? undefined
+    : createServer((req, res) => {
+        void (async () => {
+          if (req.method !== "POST") {
+            res.writeHead(req.method === "DELETE" ? 204 : 405).end();
+            return;
+          }
+          const message = (await json(req)) as {
+            id?: number | string;
+            method: string;
+            params?: { protocolVersion?: string };
+          };
+          let result: unknown;
+          if (message.method === "initialize") {
+            result = {
+              protocolVersion: message.params?.protocolVersion,
+              capabilities: { tools: {} },
+              serverInfo: { name: "synthetic-catalog", version: "1" },
+            };
+          } else if (message.method === "tools/list") {
+            if (++mcpLists > 1 || values["mcp-first-ever"]) {
+              if (mcpListDelayMs === -1) {
+                return;
+              }
+              await delay(mcpListDelayMs);
+            }
+            result = {
+              tools: [
+                {
+                  name: "probe",
+                  description: "Read a synthetic fact.",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            };
+          } else {
+            res.writeHead(202).end();
+            return;
+          }
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+        })().catch(() => res.writeHead(500).end());
+      });
 const toolArgsChars = Number(values["tool-args-chars"]);
 if (!Number.isSafeInteger(toolArgsChars) || toolArgsChars < 0) {
   console.error("--tool-args-chars must be a non-negative integer");
@@ -73,8 +137,10 @@ const toolCallContent = toolCallSource
   .repeat(Math.ceil(toolArgsChars / toolCallSource.length))
   .slice(0, toolArgsChars);
 const output = mkdtempSync(path.join(tmpdir(), "sqlmeasure-channel-"));
-const fixture = path.join(output, "fixture");
-mkdirSync(fixture);
+const fixture = values["state-dir"]
+  ? path.resolve(values["state-dir"])
+  : path.join(output, "fixture");
+mkdirSync(fixture, { recursive: true });
 type TurnIdentity = { phase: string; turnId: string };
 type TurnEvidence = TurnIdentity & {
   key: string;
@@ -128,6 +194,8 @@ function cleanup() {
         children.map((child) => stopChild(child, { teardownGraceMs: 10000, killGraceMs: 2000 })),
       );
     } finally {
+      mcp?.closeAllConnections();
+      mcp?.close();
       await bus?.stop();
       evidence.phases.push({ phase, start: phaseStart, end: Date.now() });
       save();
@@ -185,6 +253,10 @@ function publish(file: string, value: unknown) {
 writeFileSync(path.join(output, "phase"), phase);
 console.log("OUTPUT", output);
 try {
+  mcp?.listen(0, "127.0.0.1");
+  if (mcp) {
+    await once(mcp, "listening");
+  }
   const port = await getFreePort();
   const mockPort = await getFreePort();
   evidence.ports = { port, mockPort };
@@ -192,6 +264,15 @@ try {
   bus = await startQaBusServer({ state });
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   cfg.tools = { codeMode: false };
+  const mcpAddress = mcp?.address();
+  if (mcpAddress && typeof mcpAddress !== "string") {
+    cfg.mcp = {
+      servers: {
+        fixture: { transport: "streamable-http", url: `http://127.0.0.1:${mcpAddress.port}/mcp` },
+      },
+    };
+    cfg.session = { dmScope: "per-peer" };
+  }
   applyMockOpenAiModelConfig(cfg, {
     mockPort,
     modelRef: toolArgsChars > 0 ? "mock-completions/gpt-4.1" : "openai/gpt-4.1",
@@ -211,8 +292,11 @@ try {
     ...cfg.agents,
     defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
   };
-  cfg.agents.entries = { main: { workspace: path.join(fixture, "workspace") } };
-  mkdirSync(path.join(fixture, "workspace"));
+  const workspace = values["workspace-dir"]
+    ? path.resolve(values["workspace-dir"])
+    : path.join(fixture, "workspace");
+  cfg.agents.entries = { main: { workspace } };
+  mkdirSync(workspace, { recursive: true });
   cfg.plugins = {
     ...cfg.plugins,
     entries: {
@@ -318,7 +402,7 @@ try {
           }
         : {}),
     });
-    const peer = toolArgsChars > 0 ? `sqlmeasure-peer-${i}` : "sqlmeasure-peer";
+    const peer = toolArgsChars > 0 || mcp ? `sqlmeasure-peer-${i}` : "sqlmeasure-peer";
     const start = Date.now();
     const cursor = state.getSnapshot().cursor;
     const firstOutbound = state
@@ -333,7 +417,7 @@ try {
       {
         accountId: "default",
         conversation: { kind: "direct", id: peer },
-        senderId: toolArgsChars > 0 ? `sqlmeasure-user-${i}` : "sqlmeasure-user",
+        senderId: toolArgsChars > 0 || mcp ? `sqlmeasure-user-${i}` : "sqlmeasure-user",
         senderName: "SQL measurement",
         text: `Please give a short synthetic status report for measurement turn ${i}.`,
         timestamp: 1800000000000 + i,
@@ -379,6 +463,9 @@ try {
       );
     if (!result) {
       throw new Error("No durable outbound reply after dispatch settled");
+    }
+    if (mcp) {
+      console.log("MCP_LISTS", mcpLists);
     }
     evidence.turns.push({
       phase,

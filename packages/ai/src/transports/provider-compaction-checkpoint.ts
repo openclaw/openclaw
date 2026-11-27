@@ -1,4 +1,4 @@
-import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, ProviderReplayState } from "@openclaw/llm-core";
 
 /** Undefined skips a row; null fences older checkpoints without selecting a source. */
 export function resolveNewestCompactionReplaySource<T, S>(
@@ -71,7 +71,7 @@ export function stripCompactionReplayCheckpointInPlace(message: {
 }
 
 /** Strip prefix-bound checkpoints after local history rewrites. */
-export function stripCompactionReplayCheckpoint(message: AssistantMessage): AssistantMessage {
+export function stripCompactionReplayCheckpoint<T extends AssistantHistoryMessage>(message: T): T {
   if (!isCompactionReplayCheckpoint(message.providerReplay)) {
     return message;
   }
@@ -81,10 +81,10 @@ export function stripCompactionReplayCheckpoint(message: AssistantMessage): Assi
 }
 
 /** Preserve the covered prefix and reindex checkpoints after known content removals. */
-export function replaceCompactionReplayOwnerContent(
-  message: AssistantMessage,
-  content: AssistantMessage["content"],
-): AssistantMessage {
+export function replaceCompactionReplayOwnerContent<T extends AssistantHistoryMessage>(
+  message: T,
+  content: AssistantHistoryMessage["content"],
+): T {
   const next = { ...message, content };
   const replay = message.providerReplay;
   if (!isCompactionReplayCheckpoint(replay)) {

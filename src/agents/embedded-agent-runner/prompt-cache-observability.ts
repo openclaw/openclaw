@@ -10,6 +10,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import type { Message } from "../../llm/types.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
 import {
@@ -26,6 +27,7 @@ import {
   fingerprintMessage,
   type PromptHistoryFingerprint,
 } from "./prompt-cache-history.js";
+import { describeProviderPrefix } from "./prompt-cache-provider-prefix.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
 type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
@@ -61,6 +63,8 @@ type PromptCacheTracker = {
   sessionKey?: string;
   history: PromptHistoryFingerprint[];
   historyBytes: number;
+  runtimeContextCarrierPositions: number[];
+  removedRuntimeContextKeys?: Set<string>;
   declaredRewrites?: Set<PromptHistoryRewriteReason>;
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
@@ -84,6 +88,10 @@ const toolFactSources = new WeakMap<
   readonly PromptCacheToolSnapshot[],
   Map<PromptCacheToolSnapshot, string>
 >();
+// Conversion precedes observation, including the first request. Weak keys carry only
+// removed-carrier identities to that exact request without retaining its payload.
+// Null records a conversion with no removals; absence cannot explain a history edit.
+const runtimeContextRemovals = new WeakMap<readonly Message[], readonly string[] | null>();
 const MAX_PROMPT_FACT_SOURCE_CHARS = 32_768;
 const MAX_TOOL_FACT_SOURCE_CHARS = 16_384;
 const trackers = new Map<string, PromptCacheTracker>();
@@ -112,7 +120,6 @@ const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
 const prefixChangeWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
-const MAX_HISTORY_DIFF_FIELDS = 8;
 const MAX_NAMED_SECTION_CHANGES = 8;
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
@@ -123,80 +130,6 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
     params.sessionId,
     params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId,
   ]);
-}
-
-function describeProviderFields(
-  beforeFields: Record<string, string>,
-  afterFields: Record<string, string> | undefined,
-): string {
-  if (!afterFields) {
-    return "removed";
-  }
-  const changed = [...new Set([...Object.keys(beforeFields), ...Object.keys(afterFields)])].filter(
-    (key) => beforeFields[key] !== afterFields[key],
-  );
-  return changed.length
-    ? changed.slice(0, MAX_HISTORY_DIFF_FIELDS).join("+") +
-        (changed.length > MAX_HISTORY_DIFF_FIELDS ? "+remaining" : "")
-    : Object.keys(beforeFields).length || Object.keys(afterFields).length
-      ? "order"
-      : "value";
-}
-
-function describeProviderPrefix(
-  previous: ProviderPromptState["lastAttempt"],
-  next: ProviderPromptState["lastAttempt"],
-): string {
-  if (!previous?.cachePrefix || !next?.cachePrefix) {
-    return "unavailable";
-  }
-  const before = previous.cachePrefix;
-  const after = next.cachePrefix;
-  if (previous.scopeDigest !== next.scopeDigest) {
-    return "provider-scope";
-  }
-  const continuation = before.continuation || after.continuation;
-  const segment = (["system", "tools"] as const).find((key) => before[key] !== after[key]);
-  let index = -1;
-  if (!after.messageDigests.startsWith(before.messageDigests)) {
-    for (let offset = 0; offset < before.messageDigests.length; offset += 32) {
-      if (
-        before.messageDigests.slice(offset, offset + 32) !==
-        after.messageDigests.slice(offset, offset + 32)
-      ) {
-        index = offset / 32;
-        break;
-      }
-    }
-  }
-  let prefix = segment ?? (continuation ? "wire-prefix-match" : "prefix-match");
-  if (!segment && index >= 0) {
-    const item = before.messageFields[index];
-    const fields = item ? `.${describeProviderFields(item, after.messageFields[index])}` : "";
-    prefix = `${continuation ? "wire-input" : "message"}:${index}${fields}`;
-  } else if (!segment && before.tail !== undefined) {
-    // A growing tail cannot establish equality of its earlier messages from one digest.
-    prefix =
-      before.messageCount !== after.messageCount
-        ? `unverified-after:${before.messageDigests.length / 32}`
-        : before.tail !== after.tail
-          ? `message-tail:${before.messageDigests.length / 32}`
-          : prefix;
-  }
-  const parameters =
-    before.parameters.digest !== after.parameters.digest
-      ? `parameters:${describeProviderFields(before.parameters.fields, after.parameters.fields)}`
-      : undefined;
-  const format = before.messageField !== after.messageField ? "input-format" : undefined;
-  const details = [
-    prefix.endsWith("prefix-match") && (parameters || format) ? undefined : prefix,
-    format,
-    parameters,
-  ]
-    .filter(Boolean)
-    .join(",");
-  // A delta request's wire input is not its logical conversation prefix.
-  return `${continuation ? "continuation:" : ""}${details}`;
 }
 
 function diffSnapshots(
@@ -319,6 +252,22 @@ export function beginPromptCacheObservation(
 ) {
   const key = buildTrackerKey(params);
   const previous = trackers.get(key);
+  const removedRuntimeContextKeys = runtimeContextRemovals.get(params.messages);
+  const runtimeContextCarrierPositions = params.messages.flatMap((message, index) =>
+    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+  );
+  if (
+    previous &&
+    removedRuntimeContextKeys !== undefined &&
+    (removedRuntimeContextKeys?.some(
+      (removedKey) => !previous.removedRuntimeContextKeys?.has(removedKey),
+    ) ||
+      previous.runtimeContextCarrierPositions.some(
+        (position, index) => runtimeContextCarrierPositions[index] !== position,
+      ))
+  ) {
+    (previous.declaredRewrites ??= new Set()).add("runtimeContextCarrier");
+  }
   const requestedAt = Date.now();
   const tools = sortPromptCacheToolsByName(params.tools);
   const descriptions = toolFactSources.get(params.tools);
@@ -450,6 +399,11 @@ export function beginPromptCacheObservation(
     sessionKey: params.sessionKey?.trim(),
     history,
     historyBytes,
+    // Projection facts follow this exact baseline through attempt teardown and eviction.
+    runtimeContextCarrierPositions,
+    removedRuntimeContextKeys: removedRuntimeContextKeys
+      ? new Set(removedRuntimeContextKeys)
+      : previous?.removedRuntimeContextKeys,
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
@@ -525,6 +479,17 @@ export function declarePromptHistoryRewrite(
   markSessionTrackers(params, (tracker) => {
     (tracker.declaredRewrites ??= new Set()).add(params.reason);
   });
+}
+
+/** Capture projection facts even before the first observation baseline exists. */
+export function recordRuntimeContextProjection(
+  removed: readonly AgentMessage[] | undefined,
+  converted: readonly Message[],
+): void {
+  runtimeContextRemovals.set(
+    converted,
+    removed?.map((message, index) => `${index}:${message.timestamp}`) ?? null,
+  );
 }
 
 export function declarePromptToolPin(params: PromptCacheIdentity): void {

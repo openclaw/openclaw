@@ -2,6 +2,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { buildGatewayProbeConnectionDetails } from "../gateway/call.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -23,6 +24,17 @@ export async function waitForGatewayDiagnostic(
     },
   });
   opts.signal?.throwIfAborted();
+  if (readiness?.waitOutcome === "connected-no-operator-scope") {
+    throw new GatewayClientRequestError({
+      code: "FORBIDDEN",
+      message: readiness.operatorScopeWarning,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+  }
   // RPC timeout fields require integer milliseconds.
   const remainingMs = Math.max(0, Math.ceil(deadlineMs - performance.now()));
   if (

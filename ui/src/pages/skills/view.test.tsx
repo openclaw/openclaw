@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred as createDeferredRead, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
@@ -22,6 +22,9 @@ import {
   normalizeText,
 } from "./view.test-support.ts";
 import { Skills } from "./view.tsx";
+
+// Keep short render waits scoped to UI state, after the lazy detail module is compiled.
+beforeAll(() => import("./skill-detail.tsx"));
 afterEach(cleanupSkillsViews);
 
 const dialogRestores: Array<() => void> = [];
@@ -397,7 +400,7 @@ describe("renderSkills", () => {
     expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
-  it("filters by status from a select that carries each count", async () => {
+  it("filters by status from the select", async () => {
     const { container, render } = createView(true);
     const onStatusFilterChange = vi.fn();
     render({
@@ -410,12 +413,6 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     const select = container.querySelector<HTMLSelectElement>(".skills-toolbar__status")!;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "All 2",
-      "Ready 1",
-      "Needs setup 0",
-      "Disabled 1",
-    ]);
     select.value = "needs-setup";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");

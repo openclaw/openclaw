@@ -80,6 +80,8 @@ export function getDoctorMigrationBackup(
 }
 
 export type UpdateSqliteMigrationOptions = {
+  /** Prepare the admitted connection after verifying its preimage, before native exclusion. */
+  beforeExclusive?: () => void;
   /** Close a one-shot native owner before publishing its final generation. */
   close?: () => void;
   retainExclusive?: boolean;

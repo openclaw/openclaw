@@ -7,6 +7,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -22,6 +24,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.lang.reflect.Field
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -45,6 +48,50 @@ class GatewaySummaryRuntimeTest {
   fun closeRuntimes() {
     runtimes.forEach(::closeNodeRuntimeTestFixture)
   }
+
+  @Test
+  fun pairedDeviceTokenCountsPreserveAdmittedRowsAndRevocationCoercion() =
+    runBlocking {
+      val runtime = createRuntime()
+      connect(runtime)
+      ReflectionHelpers.getField<MutableStateFlow<GatewayDevicePairingCapabilities>>(runtime, "_devicePairingCapabilities").value =
+        GatewayDevicePairingCapabilities(canList = true)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        when (method) {
+          "node.list" -> {
+            """{"nodes":[]}"""
+          }
+
+          "device.pair.list" -> {
+            """
+            {"pending":[],"paired":[
+              {"deviceId":"mixed","tokens":[
+                null,7,"row",{}, {"role":""},{"role":"  "},{"role":[]},
+                {"role":"operator"},{"role":"operator","revokedAtMs":null},
+                {"role":"node","revokedAtMs":" 0 "},{"role":"node","revokedAtMs":17},
+                {"role":"operator","revokedAtMs":"not a time"},{"role":"operator","revokedAtMs":false},
+                {"role":true,"revokedAtMs":{}},{"role":false,"revokedAtMs":-5},{"role":0,"revokedAtMs":" 3 "}
+              ]},
+              {"deviceId":"missing"},{"deviceId":"null","tokens":null},
+              {"deviceId":"malformed","tokens":{}},{"deviceId":"empty","tokens":[]},
+              {"deviceId":" "}
+            ]}
+            """.trimIndent()
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
+        }
+      }
+      runtime.refreshNodesDevices()
+      val summary = withTimeout(5_000) { runtime.nodesDevicesSummary.first { it.pairedDevices.size == 5 } }
+      assertTrue(summary.devicePairingAvailable)
+      assertEquals(
+        listOf(Triple("mixed", 9, 5), Triple("missing", 0, 0), Triple("null", 0, 0), Triple("malformed", 0, 0), Triple("empty", 0, 0)),
+        summary.pairedDevices.map { Triple(it.deviceId, it.tokenCount, it.activeTokenCount) },
+      )
+    }
 
   @Test
   fun summariesRemainUnknownUntilTheGatewayResponds() {

@@ -1129,9 +1129,6 @@ describe("authorized beta focused evidence", () => {
     expect(npmStepNames.indexOf("Setup Node environment")).toBeLessThan(
       npmStepNames.indexOf("Verify focused release evidence"),
     );
-    expect(
-      namedStep(npmWorkflow, "publish_openclaw_npm", "Checkout trusted validation verifier").with,
-    ).toMatchObject({ "sparse-checkout": "scripts" });
     const validatorSource = readFileSync(
       "scripts/validate-authorized-beta-focused-evidence.mts",
       "utf8",

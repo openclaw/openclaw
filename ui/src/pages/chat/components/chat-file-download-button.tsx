@@ -3,7 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { downloadBlobFile } from "../../../lib/download.ts";
+import { downloadBlobFile, downloadHref } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -74,10 +74,7 @@ export function FileDownloadButton(props: {
             return;
           }
           // The browser owns the byte stream and save progress, not a JavaScript Blob.
-          const link = document.createElement("a");
-          link.href = file.url;
-          link.download = file.filename;
-          link.click();
+          downloadHref(file.url, file.filename);
         }
       } catch (error) {
         failed(error);

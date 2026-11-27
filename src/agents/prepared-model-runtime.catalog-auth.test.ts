@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as authPaths from "./auth-profiles/paths.js";
+import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
+import {
+  createPreparedAccountCatalogAccess,
+  prepareInitialModelCatalogAuth,
+} from "./prepared-model-runtime.catalog-auth.js";
+import { ModelRegistry } from "./sessions/model-registry.core.js";
 
 const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
 const account = {
@@ -273,4 +280,36 @@ describe("prepared account catalog observations", () => {
     expect(owner.readServiceTierObservations({ ...route, modelId: "model-128" })).toEqual([]);
     expect(record({ ...firstRoute, ...tiers })).toBe(false);
   });
+});
+
+it("opens the initial catalog label source only for generations with profile candidates", async () => {
+  const error = new Error("profile source unavailable");
+  using pathRead = vi
+    .spyOn(authPaths, "withPreparedAuthStorePathForDisplay")
+    .mockRejectedValue(error);
+  const agentFacts = catalogAgentFacts({ config: {}, agentDir: "/synthetic/agent" }, {});
+  const input = {
+    agentFacts,
+    catalogFacts: {
+      templateModelRegistry: ModelRegistry.inMemory(agentFacts.templateAuthStorage),
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+    },
+    pluginGeneration: {
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      remoteCatalog: null,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    },
+  };
+  const capture = () => prepareInitialModelCatalogAuth(input, ["fixture"], () => {});
+  expect((await capture()).providerAuthLabels.get("fixture")).toEqual({
+    all: "missing",
+    apiKey: "missing",
+  });
+  expect(pathRead).not.toHaveBeenCalled();
+
+  agentFacts.input.config = { auth: { order: { fixture: ["fixture:account"] } } };
+  await expect(capture()).rejects.toBe(error);
+  expect(pathRead).toHaveBeenCalledOnce();
 });

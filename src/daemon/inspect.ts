@@ -37,14 +37,6 @@ import {
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import {
-  readScheduledTaskCommand,
-  readStartupEntryCommand,
-  resolveStartupEntryPath,
-  resolveStartupEntryPaths,
-  resolveTaskName,
-} from "./schtasks-layout.js";
-import { listScheduledTasks } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
@@ -212,7 +204,9 @@ async function scanLaunchdDir(params: {
   return results;
 }
 
-export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
+export async function findSystemGatewayServices(
+  includeEntry?: (entry: string) => boolean,
+): Promise<ExtraGatewayService[]> {
   if (process.platform !== "linux") {
     return [];
   }
@@ -220,14 +214,8 @@ export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]
   const results: ExtraGatewayService[] = [];
   try {
     for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      results.push(
-        ...(
-          await scanSystemdDir({
-            dir,
-            scope: "system",
-          })
-        ).map(projectService),
-      );
+      const services = await scanSystemdDir({ dir, scope: "system", includeEntry });
+      results.push(...services.map(projectService));
     }
   } catch {
     return [];
@@ -241,6 +229,13 @@ async function scanWindowsStartupEntries(
   errors: GatewayServiceInventory["errors"],
   deadline: number,
 ): Promise<InspectedGatewayService[]> {
+  const {
+    readScheduledTaskCommand,
+    readStartupEntryCommand,
+    resolveStartupEntryPath,
+    resolveStartupEntryPaths,
+    resolveTaskName,
+  } = await import("./schtasks-layout.js");
   let directory: string;
   let selected: Set<string>;
   try {
@@ -540,6 +535,9 @@ async function scanGatewayServices(
     if (!opts.deep) {
       return inventory;
     }
+    // Load Windows-only launchers before starting the native inventory deadline.
+    const [{ readScheduledTaskCommand, resolveTaskName }, { listScheduledTasks }] =
+      await Promise.all([import("./schtasks-layout.js"), import("./schtasks-state-probe.js")]);
     const deadline = performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
     const expired = () => deadline - performance.now() < 1;
     const deadlineError = {

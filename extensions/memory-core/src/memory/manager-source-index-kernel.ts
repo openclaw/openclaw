@@ -26,6 +26,8 @@ const MAX_VECTOR_POINT_DELETES = 32;
 
 export type MemorySourceIndexReplacement = {
   entry: { path: string; hash: string; mtimeMs: number; size: number };
+  /** Final file metadata when an atomic save superseded the discovery snapshot. */
+  verifiedFile?: { mtimeMs: number; size: number };
   chunks: IndexedMemoryChunk[];
   embeddings: number[][];
   model: string;
@@ -218,14 +220,37 @@ export class MemorySourceIndexKernel {
         flush();
       }
       this.replaceSourceRows(header, rows, writeRows);
-      const { entry, source } = header;
+      const { entry, source, verifiedFile } = header;
+      if (verifiedFile && verifiedFile.mtimeMs !== entry.mtimeMs) {
+        // A delta may omit unchanged chunks completely. Apply the file observation
+        // after pending inserts, to every surviving chunk in this same transaction.
+        flush();
+        const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
+        const observedAt = Math.max(0, Math.floor(verifiedFile.mtimeMs));
+        executeSqliteQuerySync(
+          this.database,
+          db
+            .updateTable("memory_index_chunk_provenance")
+            .set({ observed_at: observedAt })
+            .where("observed_at", "!=", observedAt)
+            .where(
+              "chunk_id",
+              "in",
+              db
+                .selectFrom("memory_index_chunks")
+                .select("id")
+                .where("source", "=", source)
+                .where("path", "=", entry.path),
+            ),
+        );
+      }
       const key = `${source}:${entry.path}`;
       const row = {
         path: entry.path,
         source,
         hash: entry.hash,
-        mtime: entry.mtimeMs,
-        size: entry.size,
+        mtime: verifiedFile?.mtimeMs ?? entry.mtimeMs,
+        size: verifiedFile?.size ?? entry.size,
       };
       const bytes = sizeOfHeader(row);
       const previous = headers.get(key);

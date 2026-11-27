@@ -15,7 +15,6 @@ import {
   acceptsCliLiveSession,
   closeCliLiveSession,
   createCliLiveSessionCapability,
-  getCliLiveSessionApprovalGrants,
   getCliLiveSessionGeneration,
   hasCliLiveSession,
   restartCliLiveSession,
@@ -167,14 +166,12 @@ describe("generic plugin-owned live session registry", () => {
           await held.promise;
         },
       });
-      getCliLiveSessionApprovalGrants(original.context)?.add("Read");
       const next = await createOwner({ sessionId: original.sessionId });
 
       let restarting: Promise<void> | undefined;
       try {
         expect(next.capability.current()).toBe(original.session);
         expect(next.capability.fingerprint).not.toBe(original.session.fingerprint);
-        expect(getCliLiveSessionApprovalGrants(next.context)).toBeUndefined();
         expect(() => next.capability.activate(original.session)).toThrow("admitted run");
         restarting = next.capability.restart();
         await entered.promise;
@@ -184,7 +181,6 @@ describe("generic plugin-owned live session registry", () => {
         await restarting;
       }
       next.register();
-      expect(getCliLiveSessionApprovalGrants(next.context)?.size).toBe(0);
       expect(original.capability.current()).toBe(next.session);
       expect(original.close).toHaveBeenCalledOnce();
     },

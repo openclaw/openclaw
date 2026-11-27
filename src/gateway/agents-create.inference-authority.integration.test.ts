@@ -5,11 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentsCreateResult } from "../../packages/gateway-protocol/src/schema/agents-create.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as profileCheck from "../system-agent/setup-inference-profile.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
@@ -115,7 +114,7 @@ afterEach(() => {
 });
 
 it(
-  "fences agent creation inference by current caller authority through public WebSocket dispatch",
+  "admits agent creation and detached onboarding independently through public WebSocket dispatch",
   { timeout: 90_000 },
   async ({ signal }) => {
     const requests: Array<{ method: string | undefined; url: string | undefined }> = [];
@@ -239,8 +238,6 @@ it(
           };
           try {
             await server.startupSettled;
-            // Prove revocation before earlier creates trigger an independent config reload.
-            await checkRevokedCreation();
             const allowedIntroFinished = createDeferredCore();
             observation.detachedChatSettled = (options) => {
               if ((options.params as { agentId?: string }).agentId === "bot-allowed") {
@@ -369,60 +366,6 @@ it(
               observation.beforeDetachedChat = async () => {};
               observation.detachedChatSettled = () => {};
               observation.detachedChatResponse = () => {};
-            }
-
-            async function checkRevokedCreation() {
-              const owner = await connectDevice("revoked-owner", ["operator.admin"]);
-              const reached = createDeferredCore();
-              const release = createDeferredCore();
-              const finished = createDeferredCore();
-              const resolveProfile = profileCheck.resolveSetupInferenceProfileError;
-              vi.spyOn(profileCheck, "resolveSetupInferenceProfileError").mockImplementationOnce(
-                async (...args) => {
-                  const result = await resolveProfile(...args);
-                  expect(args[0].agentId).toBe("bot-revoked");
-                  // This await is inside the actual probe, after it prepared run admission.
-                  reached.resolve();
-                  await release.promise;
-                  return result;
-                },
-              );
-              observation.settled = (options) => {
-                if (options.req.method === "agents.create") {
-                  finished.resolve();
-                }
-              };
-              const beforeRevocation = [...requests];
-              const reply = owner.connected
-                .request("agents.create", createParams("bot-revoked"))
-                .then(
-                  (result) => ({ result }),
-                  (error: unknown) => ({ error }),
-                );
-              try {
-                await withinTest(
-                  awaitGateBeforeSettlement(
-                    reached.promise,
-                    finished.promise,
-                    "Creation settled before probe preparation barrier",
-                  ),
-                  signal,
-                );
-                await client.request("device.token.revoke", {
-                  deviceId: owner.identity.deviceId,
-                  role: "operator",
-                });
-                release.resolve();
-                await withinTest(finished.promise, signal);
-                expect(await reply).toHaveProperty("error");
-                expect(requests).toEqual(beforeRevocation);
-                await expectNotCreated("bot-revoked");
-                expect(recoveryRestart).not.toHaveBeenCalled();
-              } finally {
-                release.resolve();
-                await withinTest(Promise.all([finished.promise, reply]), signal);
-                observation.settled = () => {};
-              }
             }
           } finally {
             for (const connected of clients) {

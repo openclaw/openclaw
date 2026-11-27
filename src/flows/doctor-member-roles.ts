@@ -91,7 +91,7 @@ export const memberRolesCheck: HealthCheck = {
     if (!enabled) {
       return findings;
     }
-    for (const name of listMissingMemberRolePresets(cfg)) {
+    for (const name of listMissingMemberRolePresetRepairs(cfg)) {
       warn(
         "missing-preset",
         `OpenClaw ID preset role "${name}" has no definition.`,
@@ -149,6 +149,20 @@ export const memberRolesCheck: HealthCheck = {
   },
 };
 
+/** Preset roles the check reports and the repair adds: only with roles and OpenClaw ID on. */
+function listMissingMemberRolePresetRepairs(cfg: DoctorHealthFlowContext["cfg"]) {
+  return cfg.gateway?.roles && isOpenClawIdEnabled(cfg.gateway.openclawId)
+    ? listMissingMemberRolePresets(cfg)
+    : [];
+}
+
+/** Read-only: whether {@link runMemberRolesHealth} would offer to add missing presets. */
+export function hasMemberRolePresetRepair(
+  ctx: Pick<DoctorHealthFlowContext, "cfg" | "sourceConfigValid">,
+): boolean {
+  return ctx.sourceConfigValid && listMissingMemberRolePresetRepairs(ctx.cfg).length > 0;
+}
+
 /** Stage an accepted preset repair for Doctor's normal revision-fenced config writer. */
 export async function runMemberRolesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   let findings = await memberRolesCheck.detect({
@@ -159,8 +173,7 @@ export async function runMemberRolesHealth(ctx: DoctorHealthFlowContext): Promis
   });
   const missing = findings.filter(({ requirement }) => requirement === "missing-preset");
   if (
-    missing.length &&
-    ctx.sourceConfigValid &&
+    hasMemberRolePresetRepair(ctx) &&
     (await ctx.prompter.confirmAutoFix({
       message: `Add missing OpenClaw ID role presets (${missing.map(({ target }) => target).join(", ")})? The config file is rewritten as JSON and comments are removed. Existing definitions, default, and assignments are preserved.`,
       initialValue: false,

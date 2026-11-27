@@ -243,9 +243,9 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 
 `gateway.sessionControl.publicationReadEnabled` permits restricted publication-reader
 connections only when set to `true`. It defaults to off and does not supply device
-or source-publication permissions. Disabling it retires existing reader admissions
-and pending disclosures, even across a subsequent re-enable. Reconnect after
-re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).
+or source-publication permissions. Each connection and read request checks the
+opt-in when it starts. Disabling denies new reads but does not revoke an admitted
+request; it may finish. Existing connections can read again after re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).
 
 ### Active steering opt-in
 

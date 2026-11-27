@@ -19,8 +19,6 @@ import {
 import { rm } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Readable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -29,6 +27,7 @@ import {
 } from "./lib/ci-node-test-groups-codec.mts";
 import type { NodeTestTargetVolume, NodeTestVolume } from "./lib/ci-node-test-inventory.mts";
 import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
+import { relayChildStream } from "./lib/ci-test-output.mts";
 import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
@@ -375,44 +374,6 @@ export function clonePersistentCacheSlots(
     }
   }
   return clonedSlots;
-}
-
-const MAX_PENDING_LINE_CHARS = 1_000_000;
-
-function relayChildStream(stream: Readable, label: string, recordLine: (line: string) => void) {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  const writeLine = (rawLine: string) => {
-    // Test names can contain NUL; keep the job log searchable as text.
-    const line = rawLine.replaceAll("\0", "\\0");
-    recordLine(line);
-    // Actions only parses workflow commands at the start of a line.
-    const workflowCommand = /^::(?:error|warning|notice|group|endgroup)(?: .*?)?::/u.test(line);
-    const output = workflowCommand ? line : `[shard:${label}] ${line}`;
-    if (!process.stdout.write(`${output}\n`)) {
-      stream.pause();
-      process.stdout.once("drain", () => stream.resume());
-    }
-  };
-  stream.on("data", (chunk: Buffer | string) => {
-    pending += decoder.write(chunk);
-    const lines = pending.split("\n");
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      writeLine(line);
-    }
-    if (pending.length > MAX_PENDING_LINE_CHARS) {
-      writeLine(pending);
-      pending = "";
-    }
-  });
-  return () => {
-    pending += decoder.end();
-    if (pending !== "") {
-      writeLine(pending);
-      pending = "";
-    }
-  };
 }
 
 const TEST_PROJECTS_ENTRYPOINTS = ["scripts/test-projects.mts", "scripts/test-projects.mjs"];

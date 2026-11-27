@@ -9,7 +9,7 @@ type FetchLike = ((input: string | URL, init?: RequestInit) => Promise<Response>
 };
 
 /** Fetch shape used by Browser integration test helpers. */
-export type BrowserTestFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type BrowserTestFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function isUsableFetch(value: unknown): value is FetchLike {
   return typeof value === "function" && !("mock" in (value as FetchLike));

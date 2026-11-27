@@ -69,7 +69,7 @@ export class DraftPreferenceState {
     },
   ) {}
 
-  static forChat(context: ApplicationContext, changed: () => void): DraftPreferenceState {
+  static forChat(context: ApplicationContext): DraftPreferenceState {
     return new DraftPreferenceState(
       () => {
         const gateway = context.gateway;
@@ -87,7 +87,7 @@ export class DraftPreferenceState {
           agentsHydrated: true,
         };
       },
-      { changed, onAdoptAgentDefaults: () => {} },
+      { changed: () => {}, onAdoptAgentDefaults: () => {} },
     );
   }
 

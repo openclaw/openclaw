@@ -45,10 +45,13 @@ type ModelRequest = {
   tools?: Array<{ function?: { name?: string } }>;
 };
 // Keep injected prompt/tool growth out of this pending-input test. Reported usage
-// still crosses preflight pressure once the approved input is added, while the
-// rendered request fits without a second, unrelated overflow-recovery compaction.
+// crosses the context window once the approved input is added, so reply-level
+// maintenance must compact before the request (below the window it defers to the
+// request boundary, which measures the rendered request). The rendered request still
+// fits without a second, unrelated overflow-recovery compaction.
 const contextTokens = 65_536;
-const priorInputTokens = 45_000;
+// Prior usage sits just below the window, above the shared compaction and flush triggers.
+const priorInputTokens = contextTokens - 4_152;
 
 const providerText = (content: unknown) =>
   extractTextFromChatContent(content, { joinWith: "\n", normalizeText: (text) => text }) ?? "";

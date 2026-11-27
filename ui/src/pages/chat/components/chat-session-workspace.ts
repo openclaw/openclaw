@@ -54,8 +54,16 @@ export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.t
 export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
-  if (refreshSessionWorkspaceState(state, refreshFiles)) {
-    state.sidebarContent = resolveSessionDiffSidebarContent(state);
+  const retired = refreshSessionWorkspaceState(state, refreshFiles);
+  if (retired) {
+    const next = resolveSessionDiffSidebarContent(state);
+    // The same workspace keeps its accepted totals until the replacement read lands.
+    if (next?.kind === "session-diff" && next.owner === retired.owner) {
+      next.uncommitted = retired.uncommitted;
+    }
+    if (state.sidebarContent === retired) {
+      state.sidebarContent = next;
+    }
   }
   sessionWorkspaceForHost(state).publish();
 }
@@ -202,7 +210,7 @@ export function openSessionWorkspaceFile(
 }
 
 /** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
-export function checkSessionWorkspaceFileLinks(
+function checkSessionWorkspaceFileLinks(
   state: SessionWorkspaceHost,
   links: HTMLElement[],
   scope: string,
@@ -217,7 +225,7 @@ export function checkSessionWorkspaceFileLinks(
 }
 
 /** Resolve a chat reference without moving the original attachment's history ownership. */
-export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
   if (!isManagedOutgoingMediaSource(href)) {
     return false;
   }
