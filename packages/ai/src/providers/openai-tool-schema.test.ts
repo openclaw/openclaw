@@ -1,12 +1,11 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
   findOpenAIStrictSchemaViolations,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIToolStrictFlag,
 } from "./openai-tool-schema.js";
 
 function objectSchema(properties: Record<string, unknown> = {}) {
@@ -79,8 +78,7 @@ describe("OpenAI strict tool schema normalization", () => {
     };
 
     expect(violations(schema)).toEqual([]);
-    const projection = projectOpenAITools([{ name: "lookup", parameters: schema }]);
-    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
+    expect(resolveOpenAIToolStrictFlag(schema, true)).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {
@@ -96,10 +94,24 @@ describe("OpenAI strict tool schema normalization", () => {
         ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
       ),
     );
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
+    // The strict projection closes these keyed objects, so the tool can still be strict.
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
   });
 
   it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
     expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+  });
+
+  // OpenAI rejected dispatch_action with "additionalProperties must be false" at args/type/0.
+  it("holds a nullable object key to the object rules", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["args"],
+      properties: { args: { type: ["object", "null"], patternProperties: { "^.*$": {} } } },
+    };
+    expect(findOpenAIStrictSchemaViolations(schema, "parameters")).toContain(
+      "parameters.properties.args.additionalProperties",
+    );
   });
 });

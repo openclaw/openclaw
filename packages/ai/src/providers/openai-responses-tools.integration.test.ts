@@ -58,27 +58,16 @@ function completedResponseEvents() {
 it.each(
   (["provider", "transport"] as const).flatMap((entrypoint) =>
     [
-      { native: false, supportsStrictMode: true, strict: false },
-      { native: false, supportsStrictMode: false, strict: undefined },
-      { native: false, supportsStrictMode: undefined, strict: undefined },
-      { native: true, supportsStrictMode: undefined, strict: true },
+      { supportsStrictMode: false, strict: undefined },
+      { supportsStrictMode: true, strict: true },
     ].map((settings) => Object.assign({ entrypoint }, settings)),
   ),
 )("serializes $entrypoint Responses tools with strict=$strict", async (scenario) => {
-  const { entrypoint, native, supportsStrictMode, strict } = scenario;
-  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
-  configureAiTransportHost({
-    resolveProviderRequestCapabilities: () => ({
-      ...capabilities,
-      endpointClass: native ? "openai-public" : "custom",
-    }),
-    resolveOpenAIStrictToolSetting: (_model, settings) =>
-      native ? true : settings?.supportsStrictMode ? false : undefined,
-  });
+  const { entrypoint, supportsStrictMode, strict } = scenario;
   const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
   const parameters = Object.freeze({
     ...schema(Object.freeze({ prompt: string, note: string })),
-    required: Object.freeze(native ? ["prompt", "note"] : ["prompt"]),
+    required: Object.freeze(["prompt", "note"]),
   });
   let descriptionReads = 0;
   const tools: Tool[] = [
@@ -130,45 +119,30 @@ it.each(
   expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
 });
 
-it.each([
-  { name: "regex lookaround", parameters: schema({ filename }) },
-  { name: "optional property", parameters: schema({ value: { type: "integer" } }, []) },
-])(
-  "reports one $name strict downgrade without changing either entrypoint's wire schema",
-  async ({ name, parameters }) => {
-    const diagnostics: Array<{ subsystem: string; message: string; data?: unknown }> = [];
-    configureAiTransportHost({
-      resolveOpenAIStrictToolSetting: () => true,
-      logDebug: (subsystem, build) => {
-        const entry = build();
-        if (entry?.message.includes("strict mode downgraded")) {
-          diagnostics.push({ subsystem, ...entry });
-        }
-      },
-    });
-    const model = { ...responsesLoopbackModel, id: `strict-diagnostic-${name}` };
-    const context = contextFor([{ name: "record_value", description: "Record", parameters }]);
-    for (const stream of [
-      () => owner.stream(model, context, options),
-      () => transport(model, context, options),
-    ]) {
-      expect((await (await stream()).result()).stopReason).toBe("stop");
-    }
-    expect(server.requests.map((request) => request.tools)).toEqual(
-      Array.from({ length: 2 }, () => [wireTool("record_value", parameters, false, "Record")]),
-    );
-    expect(diagnostics).toEqual([
-      {
-        subsystem: "openai-transport",
-        message: expect.stringContaining("OpenAI responses tool schema strict mode downgraded"),
-        data: expect.objectContaining({
-          transport: "responses",
-          provider: model.provider,
-          model: model.id,
-          incompatibleToolCount: 1,
-          sample: [expect.objectContaining({ tool: "record_value" })],
-        }),
-      },
-    ]);
-  },
-);
+// Strict is per tool: a schema strict mode cannot express stays non-strict on its own, and an
+// optional key is projected as required and nullable so its tool can still be strict.
+it("decides strict for each tool in one request", async () => {
+  const model = { ...responsesLoopbackModel, compat: { supportsStrictMode: true } };
+  const lookaround = schema({ filename });
+  const context = contextFor([
+    { name: "record_value", description: "Record", parameters: lookaround },
+    {
+      name: "set_value",
+      description: "Set",
+      parameters: schema({ value: { type: "integer" } }, []),
+    },
+  ]);
+  for (const stream of [
+    () => owner.stream(model, context, options),
+    () => transport(model, context, options),
+  ]) {
+    expect((await (await stream()).result()).stopReason).toBe("stop");
+  }
+  const nullableValue = schema({ value: { type: ["integer", "null"] } });
+  expect(server.requests.map((request) => request.tools)).toEqual(
+    Array.from({ length: 2 }, () => [
+      wireTool("record_value", lookaround, false, "Record"),
+      wireTool("set_value", nullableValue, true, "Set"),
+    ]),
+  );
+});

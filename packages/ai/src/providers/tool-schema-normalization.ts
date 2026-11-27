@@ -266,9 +266,32 @@ function normalizeToolSchemaRecursive(
     normalized.required = [];
     changed = true;
   }
+  if (profile === "strict" && normalized.type === "object" && isRecord(normalized.properties)) {
+    // Strict mode requires every key: an optional key becomes required and nullable, and the
+    // argument boundary drops those nulls again, so tool semantics do not change.
+    const properties = normalized.properties;
+    const required = new Set(
+      Array.isArray(normalized.required)
+        ? normalized.required.filter((key) => typeof key === "string")
+        : [],
+    );
+    const keys = Object.keys(properties);
+    if (keys.some((key) => !required.has(key))) {
+      normalized.properties = Object.fromEntries(
+        keys.map((key) => [
+          key,
+          required.has(key) ? properties[key] : nullableStrictSchema(properties[key]),
+        ]),
+      );
+      normalized.required = keys;
+      changed = true;
+    }
+  }
   if (
     normalized.type === "object" &&
-    (profile === "strict" ? depth === 0 : hasEmptyProperties) &&
+    (profile === "strict"
+      ? depth === 0 || (isRecord(normalized.properties) && !("patternProperties" in normalized))
+      : hasEmptyProperties) &&
     !("additionalProperties" in normalized)
   ) {
     normalized.additionalProperties = false;
@@ -276,6 +299,31 @@ function normalizeToolSchemaRecursive(
   }
 
   return changed ? normalized : schema;
+}
+
+/** Widens an optional key's schema to accept the null a strict model sends for "absent". */
+function nullableStrictSchema(schema: unknown): unknown {
+  if (!isRecord(schema) || isNullSchemaLike(schema)) {
+    return schema;
+  }
+  if (Array.isArray(schema.anyOf)) {
+    return { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
+  }
+  const { const: constValue, ...rest } = schema;
+  const next: Record<string, unknown> =
+    "const" in schema ? { ...rest, enum: [constValue] } : { ...schema };
+  if (typeof next.type === "string") {
+    next.type = [next.type, "null"];
+  } else if (Array.isArray(next.type)) {
+    next.type = [...next.type, "null"];
+  } else {
+    // An untyped schema already accepts null.
+    return schema;
+  }
+  if (Array.isArray(next.enum)) {
+    next.enum = [...next.enum, null];
+  }
+  return next;
 }
 
 export function normalizeToolSchema(

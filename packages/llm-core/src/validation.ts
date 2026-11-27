@@ -404,9 +404,46 @@ function introducesNullValue(previous: unknown, converted: unknown): boolean {
   );
 }
 
+function schemaAcceptsNull(schema: unknown): boolean {
+  if (!isObjectBackedRecord(schema)) {
+    return true;
+  }
+  const type = schema.type;
+  return (
+    type === undefined ||
+    type === "null" ||
+    (Array.isArray(type) && type.includes("null")) ||
+    (Array.isArray(schema.anyOf) && schema.anyOf.some(schemaAcceptsNull)) ||
+    (Array.isArray(schema.enum) && schema.enum.includes(null))
+  );
+}
+
+/**
+ * A strict tool schema makes every key required, so the model sends null for a key the tool
+ * leaves optional. Absent is what the tool means: drop those nulls before validation.
+ */
+function dropNullOptionalArguments(args: unknown, schema: unknown): void {
+  if (!isObjectBackedRecord(args) || !isObjectBackedRecord(schema)) {
+    return;
+  }
+  const properties = schema.properties;
+  if (!isObjectBackedRecord(properties)) {
+    return;
+  }
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  for (const [key, propertySchema] of Object.entries(properties)) {
+    if (args[key] === null && !required.has(key) && !schemaAcceptsNull(propertySchema)) {
+      delete args[key];
+    } else {
+      dropNullOptionalArguments(args[key], propertySchema);
+    }
+  }
+}
+
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
+  dropNullOptionalArguments(args, tool.parameters);
   const validator = getValidator(tool.parameters);
 
   if (isJsonSchemaObject(tool.parameters)) {
