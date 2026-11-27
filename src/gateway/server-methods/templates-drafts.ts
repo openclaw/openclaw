@@ -538,8 +538,6 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
           sourceSessionKey: params.sourceSessionKey,
           draftId: params.draftId,
           assertCurrent: () => {
-            authority.assertCurrent();
-            source.authorization?.assertCurrent();
             if (resolveClawHubBaseUrl() !== identity.baseUrl) {
               throw new TemplateProjectError(
                 "clawhub_registry_changed",
