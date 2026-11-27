@@ -68,7 +68,13 @@ describe("automation results after an ambiguous transport failure", () => {
   it("resends an automation result once instead of losing it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const channel = register();
-    const result = await send(true);
+    let settled = false;
+    const pending = send(true).finally(() => (settled = true));
+    // Skip the resend backoff.
+    while (!settled) {
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    const result = await pending;
     expect(result.status).toBe("sent");
     expect(channel.attempts()).toBe(2);
     expect(channel.visible).toEqual(["Backups finished: 3 of 3 hosts, 41 GB."]);
