@@ -332,7 +332,11 @@ export function buildSubagentSessionListReadIndex(
     (sessionKeys
       ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
       : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
-  return captureSubagentSessionListReadIndex(runs, now);
+  return captureSubagentSessionListReadIndex(
+    runs,
+    now,
+    sessionKeys ? undefined : subagentRuns.values(),
+  );
 }
 
 /** Direct-child discovery needs only its controllers, without building global topology. */

@@ -28,13 +28,14 @@ function captureRuntimeOwner(entry: SubagentRunRecord): SubagentRunReadRecord {
 export function captureSubagentSessionListReadIndex(
   runs: Map<string, SubagentRunReadRecord>,
   now = Date.now(),
+  residentRuns: Iterable<SubagentRunRecord> = [...runs.keys()].flatMap((id) => {
+    const entry = subagentRuns.get(id);
+    return entry ? [entry] : [];
+  }),
 ): SubagentRunReadIndex<SubagentRunReadRecord> {
   return buildSubagentRunReadIndexFromRuns({
     runs,
-    inMemoryRuns: [...runs.keys()].flatMap((id) => {
-      const entry = subagentRuns.get(id);
-      return entry ? [captureRuntimeOwner(entry)] : [];
-    }),
+    inMemoryRuns: Array.from(residentRuns, captureRuntimeOwner),
     now,
   });
 }
